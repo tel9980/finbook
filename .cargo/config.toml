@@ -1,0 +1,18 @@
+# FinBook 项目级 cargo 配置
+#
+# 1) 复用全局配置里的 rsproxy 镜像（全局配置会被自动合并）
+# 2) 交叉编译 Windows 时指定 mingw-w64 链接器与归档器
+#    依赖：apt install mingw-w64  /  brew install mingw-w64
+
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"
+# 使用 Windows 子系统，双击运行时不会弹出黑色控制台窗口
+rustflags = ["-C", "link-arg=-mwindows"]
+
+[target.i686-pc-windows-gnu]
+linker = "i686-w64-mingw32-gcc"
+ar = "i686-w64-mingw32-ar"
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/machine:ARM64"]

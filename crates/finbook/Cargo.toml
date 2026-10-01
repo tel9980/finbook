@@ -1,0 +1,20 @@
+[package]
+name = "finbook"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "FinBook 财务软件 - 桌面版可执行文件"
+
+[[bin]]
+name = "finbook"
+path = "src/main.rs"
+
+[dependencies]
+finui = { workspace = true }
+findb = { workspace = true }
+fincore = { workspace = true }
+eframe = "0.31"
+chrono = { workspace = true }
+env_logger = "0.11"
+log = "0.4"

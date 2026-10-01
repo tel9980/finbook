@@ -1,0 +1,18 @@
+# cargo-audit 配置（CI `.github/workflows/ci.yml` 的 audit 任务读取）
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0187 — lopdf 0.31（经 printpdf 0.7.0 传入）"深层嵌套 PDF 对象栈溢出"。
+    # 该漏洞需要**解析**不可信 PDF 才可触发；本项目 lopdf 仅用于**写出**报表 PDF
+    # （crates/finweb/src/pdf.rs），从不解析外部 PDF，攻击面不可达。
+    # 升级路径：printpdf 0.12 是 azul 重构、API 不兼容，需重写 pdf.rs（见 SECURITY_TODO L 系列跟踪）。
+    "RUSTSEC-2026-0187",
+
+    # RUSTSEC-2026-0194 / RUSTSEC-2026-0195 — quick-xml 0.30（二次复杂度 / NsReader 内存耗尽）。
+    # 残留实例来自 egui 桌面端 Linux 无障碍链：zbus_xml 4.0 ← atspi ← accesskit_unix ← egui-winit，
+    # 版本由上游 accesskit/zbus 锁死（quick-xml 0.x 语义化版本无法跨 0.30→0.41 升级），本地不可修；
+    # 解析对象是系统 AT-SPI D-Bus XML，非用户输入。
+    # 注：可升级的另一实例（calamine 0.26→0.36 的 quick-xml 0.31，xlsx 导入攻击面）已升级移除。
+    # 待 accesskit/egui 上游升级 zbus_xml 后删除本两条。
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]

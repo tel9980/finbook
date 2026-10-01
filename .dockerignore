@@ -1,0 +1,17 @@
+# 构建上下文排除项
+target/
+.git/
+.gitignore
+*.fbk
+*.fbk-journal
+*.fbk-wal
+*.fbk-shm
+.attachments/
+.github/
+.vscode/
+.idea/
+README.md
+index.html
+Dockerfile
+deploy/
+*.md

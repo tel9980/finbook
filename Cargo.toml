@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["crates/fincore", "crates/findb", "crates/finui", "crates/finbook", "crates/finweb"]
+
+[workspace.package]
+version = "1.0.2"
+edition = "2021"
+license = "MIT"
+authors = ["FinBook"]
+
+[workspace.dependencies]
+fincore = { path = "crates/fincore" }
+findb = { path = "crates/findb" }
+finui = { path = "crates/finui" }
+
+chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = { version = "1", features = ["serde-str", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# Web 服务端
+axum = { version = "0.7", features = ["multipart"] }
+axum-extra = { version = "0.9", features = ["cookie"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "trace", "catch-panic"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 4
+strip = true
+# panic 保持默认 unwind：Web 端靠 CatchPanicLayer 把单个请求的 panic 兜成 500，
+# abort 会让任何请求路径上的 unwrap 直接打挂整个进程（全租户下线）。
+# 桌面端不需要"一崩全崩"的语义，继续由 UI 层兜错即可。

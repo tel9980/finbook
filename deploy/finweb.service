@@ -1,0 +1,54 @@
+# FinBook Web 端 systemd 服务示例（多租户模式）
+#
+# 安装:
+#   1. 把编译产物 finweb 与 static/ 放到 /opt/finbook/
+#   2. 创建运行用户与数据目录:
+#        sudo useradd --system --home /opt/finbook --shell /usr/sbin/nologin finbook
+#        sudo mkdir -p /opt/finbook/data
+#        sudo chown -R finbook:finbook /opt/finbook
+#   3. 复制本文件到 /etc/systemd/system/finweb.service
+#   4. sudo systemctl daemon-reload && sudo systemctl enable --now finweb
+#
+# 数据布局（多租户）:
+#   /opt/finbook/data/realm.db      平台身份库（平台账号 + 账套目录）
+#   /opt/finbook/data/books/*.fbk   用户自建账套（每套一个 SQLite 文件）
+#   备份 = realm.db + books/ + 各账套同目录 .attachments/，见 DEPLOY.md §6
+#
+# 平台管理员: 首次启动自动引导，账号口令打印在 journalctl -u finweb 日志里；
+#   生产建议用 FINBOOK_ADMIN_USER / FINBOOK_ADMIN_PASS 环境变量预置。
+#
+# 反向代理（HTTPS）建议用 nginx/caddy 挂在本服务前面，
+# 本服务只监听 127.0.0.1，避免裸 HTTP 暴露到公网。
+[Unit]
+Description=FinBook 财务管理系统（Web 端）
+Documentation=https://github.com/rongyaoidea/finbook
+After=network.target
+
+[Service]
+Type=simple
+User=finbook
+Group=finbook
+WorkingDirectory=/opt/finbook
+Environment=FINBOOK_REALM=/opt/finbook/data/realm.db
+Environment=FINBOOK_BOOKS_DIR=/opt/finbook/data/books
+Environment=FINBOOK_LISTEN=127.0.0.1:8080
+Environment=FINWEB_STATIC_DIR=/opt/finbook/static
+# 可选：预置平台管理员口令（否则首次启动自动生成并打印一次）
+# Environment=FINBOOK_ADMIN_USER=admin
+# Environment=FINBOOK_ADMIN_PASS=ChangeMe123
+# 绝对路径：systemd 默认 PATH 不包含 /opt/finbook
+ExecStart=/opt/finbook/finweb
+Restart=on-failure
+RestartSec=5
+# 加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# 数据文件默认 0600，避免同机其他用户读到账套
+UMask=0077
+# 仅数据目录可写（二进制/静态资源保持只读）
+ReadWritePaths=/opt/finbook/data
+
+[Install]
+WantedBy=multi-user.target

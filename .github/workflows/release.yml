@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── 发布门禁：tag 与版本号一致 + 全量测试通过 ─────────────────────────
+  verify:
+    name: Verify tag & tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 校验 tag 与 Cargo.toml 版本一致
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          W=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "tag=$V workspace=$W"
+          if [ "$V" != "$W" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 Cargo.toml 版本 $W 不一致，拒绝发布"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 全量测试（发布门禁）
+        run: cargo test --workspace --locked
+
+  # ── 桌面版（Linux x64） ──────────────────────────────────────────────
+  desktop-linux:
+    name: Desktop (Linux x64)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build desktop
+        run: cargo build --release --locked -p finbook
+      - name: package
+        run: |
+          mkdir -p dist
+          tar -C target/release -czf "dist/finbook-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz" finbook
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux
+          path: dist/*
+
+  # ── 桌面版（Windows x64，mingw 交叉编译） ────────────────────────────
+  desktop-windows:
+    name: Desktop (Windows x64)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: build desktop
+        run: cargo build --release --locked --target x86_64-pc-windows-gnu -p finbook
+      - name: package
+        run: |
+          mkdir -p dist
+          zip -j "dist/finbook-${GITHUB_REF_NAME#v}-windows-x86_64.zip" \
+            target/x86_64-pc-windows-gnu/release/finbook.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist/*
+
+  # ── 服务器版（Linux x64：finweb + static + systemd 单元） ─────────────
+  server-linux:
+    name: Server (Linux x64)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build finweb
+        run: cargo build --release --locked -p finweb
+      - name: package
+        run: |
+          mkdir -p dist/server
+          cp target/release/finweb dist/server/
+          cp -r crates/finweb/static dist/server/static
+          rm -f dist/server/static/util.test.js
+          cp deploy/finweb.service dist/server/
+          tar -C dist/server -czf "dist/finweb-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-linux
+          path: dist/*
+
+  # ── 汇总并发布到 GitHub Release ─────────────────────────────────────
+  publish:
+    name: Publish
+    needs: [desktop-linux, desktop-windows, server-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 生成校验和
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: 创建或更新 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "FinBook ${GITHUB_REF_NAME}" \
+              --generate-notes \
+              dist/*
+          fi

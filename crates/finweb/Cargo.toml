@@ -1,0 +1,33 @@
+[package]
+name = "finweb"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+authors = ["FinBook"]
+
+[[bin]]
+name = "finweb"
+path = "src/main.rs"
+
+[dependencies]
+fincore = { workspace = true }
+findb = { workspace = true }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+tower-http = { workspace = true }
+tracing-subscriber = { workspace = true }
+rand = { workspace = true }
+chrono = { workspace = true }
+rust_decimal = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+printpdf = "0.7"
+rusqlite = { version = "0.32", features = ["bundled", "chrono", "serde_json"] }
+
+[dev-dependencies]
+# 集成测试用：tower util（oneshot 发请求）+ tempfile（临时账套目录）
+tower = { workspace = true, features = ["util"] }
+tempfile = "3"
