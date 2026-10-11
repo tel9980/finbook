@@ -144,6 +144,30 @@ impl NavItem {
         }
     }
 
+    /// 是否属于「日常财务」核心菜单（精简模式下侧栏只显示这些）。
+    ///
+    /// 选这 12 项的标准：一个不做生产、不管库存的普通记账人，日常真正会打开的页面。
+    /// 覆盖建账 → 录凭证 → 查账 → 出表 → 月末结账 → 备份 这条完整链路。
+    ///
+    /// **不是删功能**：被过滤掉的项取消勾选即全部回到侧栏。
+    pub fn daily_core(&self) -> bool {
+        matches!(
+            self,
+            NavItem::Dashboard
+                | NavItem::VoucherNew
+                | NavItem::VoucherList
+                | NavItem::Ledger
+                | NavItem::BalanceTable
+                | NavItem::Reports
+                | NavItem::PeriodEnd
+                | NavItem::BankRec
+                | NavItem::Settle
+                | NavItem::Account
+                | NavItem::BeginBalance
+                | NavItem::Backup
+        )
+    }
+
     /// 所属功能组（侧边栏分组标题）
     pub fn group(&self) -> &'static str {
         match self {
@@ -396,6 +420,8 @@ pub struct AppState {
     pub want_logout: bool,
     /// 登录成功但被口令策略要求立即改密
     pub must_change_pwd: bool,
+    /// 精简模式下临时展开全部菜单（只影响当前会话，不改持久化的开关）
+    pub show_all_hint: bool,
     /// 会话空闲计时（登录后启动，超时自动登出）
     pub session: findb::security::Session,
 }
@@ -417,6 +443,7 @@ impl Default for AppState {
             want_quit: false,
             want_logout: false,
             must_change_pwd: false,
+            show_all_hint: false,
             session: findb::security::Session::new(0),
         }
     }
@@ -574,5 +601,60 @@ impl<'a> AppCtx<'a> {
             action,
             dangerous,
         });
+    }
+}
+
+
+#[cfg(test)]
+mod simple_nav_tests {
+    use super::*;
+
+    /// 精简模式必须精确是 12 项：多一项少一项都会让「日常够用」这个说法失真，
+    /// 所以把个数钉死，改列表时必须同步改这里（并想清楚为什么）。
+    #[test]
+    fn simple_nav_has_exactly_12_items() {
+        let n = NavItem::menu()
+            .iter()
+            .filter(|i| i.daily_core())
+            .count();
+        assert_eq!(n, 12, "精简模式菜单项数变了，先确认这个改动是否还符合「日常财务够用」");
+    }
+
+    /// 日常链路不能断：建账 → 录凭证 → 查账 → 出表 → 月末 → 备份，一个都不能少。
+    #[test]
+    fn simple_nav_covers_daily_chain() {
+        for need in [
+            NavItem::Account,      // 科目
+            NavItem::BeginBalance, // 期初建账
+            NavItem::VoucherNew,   // 填制凭证
+            NavItem::VoucherList,  // 凭证查询
+            NavItem::Ledger,       // 账簿
+            NavItem::BalanceTable, // 余额表
+            NavItem::Reports,      // 报表
+            NavItem::PeriodEnd,    // 期末处理
+            NavItem::Backup,       // 备份
+        ] {
+            assert!(need.daily_core(), "{} 被精简模式藏起来了", need.label());
+        }
+    }
+
+    /// 重模块必须被藏起来 —— 否则勾了精简模式还是一长串菜单，等于没做。
+    #[test]
+    fn simple_nav_hides_heavy_modules() {
+        for hide in [
+            NavItem::Manufacturing,
+            NavItem::InventoryDeep,
+            NavItem::ScmDeep,
+            NavItem::Budget,
+            NavItem::DimProfit,
+        ] {
+            assert!(!hide.daily_core(), "{} 不该出现在精简模式里", hide.label());
+        }
+    }
+
+    /// 兜底：不得有「勾了精简模式却一个菜单都不剩」这种把用户锁死的情况。
+    #[test]
+    fn simple_nav_keeps_dashboard() {
+        assert!(NavItem::Dashboard.daily_core());
     }
 }

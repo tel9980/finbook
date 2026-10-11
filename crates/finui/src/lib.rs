@@ -18,11 +18,18 @@ use fincore::{AuxKind, Period, Perm};
 
 use state::{AppCtx, AppState, ConfirmAction, NavItem};
 
-/// 需要跨会话记住的东西：最近账套、上次登录名
+/// 需要跨会话记住的东西：最近账套、上次登录名、精简模式开关
 #[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
 pub struct Persist {
     pub recent: Vec<PathBuf>,
     pub last_user: String,
+    /// 精简模式：侧栏只显示日常财务要用的菜单，隐藏生产/供应链等重模块。
+    ///
+    /// 存在这里（而不是账套的 BookOptions）是因为它是**这台设备上我的界面偏好**，
+    /// 不是账套的属性 —— 存进 .fbk 会跟着备份走，换台电脑打开别人的账套也会被套上。
+    /// `Default` 是 false：老用户升级后行为不变，不会突然少一半菜单。
+    #[serde(default)]
+    pub simple_nav: bool,
 }
 
 /// 启动桌面应用
@@ -533,7 +540,7 @@ impl eframe::App for FinBookApp {
             .exact_width(168.0)
             .resizable(false)
             .show(ctx, |ui| {
-                side_bar(&mut self.st, ui);
+                side_bar(&mut self.st, ui, &mut self.persist.simple_nav);
             });
 
         // ---------------- 中央工作区 ----------------
@@ -610,7 +617,9 @@ fn period_selector(st: &mut AppState, views: &mut views::Views, ui: &mut Ui) {
         });
 }
 
-fn side_bar(st: &mut AppState, ui: &mut Ui) {
+fn side_bar(st: &mut AppState, ui: &mut Ui, simple_nav: &mut bool) {
+    // 借出来会和其他 &mut st 字段冲突，所以取局部副本，改完再写回
+    let mut show_all_hint = st.show_all_hint;
     egui::Frame::NONE
         .fill(theme::palette::SIDEBAR_BG)
         .show(ui, |ui| {
@@ -621,6 +630,11 @@ fn side_bar(st: &mut AppState, ui: &mut Ui) {
                 for item in NavItem::menu() {
                     // 管理员专属入口：非管理员连分组标题一起隐藏
                     if item.admin_only() && !st.user.as_ref().map(|u| u.is_admin()).unwrap_or(false) {
+                        continue;
+                    }
+                    // 精简模式：只留日常财务够用的菜单，其余（生产制造 / 供应链 / 成本 /
+                    // 预算 / 多维损益…）先藏起来。功能一项没少，取消勾选立刻全回来。
+                    if *simple_nav && !show_all_hint && !item.daily_core() {
                         continue;
                     }
                     let g = item.group();
@@ -664,6 +678,46 @@ fn side_bar(st: &mut AppState, ui: &mut Ui) {
                         }
                     }
                 }
+
+                // ---- 精简模式开关 ----
+                // 放在侧栏底部而不是「账套参数」里：这是个高频微调的界面偏好，
+                // 藏在深层设置里等于没有。勾上只显示日常财务那 12 项，取消即全回来。
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+                let mut simple = *simple_nav;
+                if ui
+                    .checkbox(&mut simple, "精简模式")
+                    .on_hover_text(
+                        "只显示日常财务要用的 12 个菜单\n\
+                         （工作台/填制凭证/凭证查询/账簿/余额表/报表/期末处理/\n\
+                           银行对账/往来核销/科目/期初建账/备份）\n\
+                         隐藏生产制造、供应链、成本等模块。功能一项没少，取消勾选即恢复。",
+                    )
+                    .changed()
+                {
+                    *simple_nav = simple;
+                    if simple && st.nav != NavItem::Dashboard && !st.nav.daily_core() {
+                        // 当前停在被藏起来的页面上：那页继续显示，但侧栏没有高亮项，
+                        // 用户会以为「界面坏了」。先把他带回工作台。
+                        st.nav = NavItem::Dashboard;
+                    }
+                }
+
+                // 勾上精简模式后，被藏起来的页面在侧栏就没有入口了（顶栏只有
+                // 填制凭证/凭证查询两个快捷键），那就等于「功能没了」。
+                // 给一个临时的「临时看全部」：只影响这一屏，不动开关本身。
+                if *simple_nav {
+                    if show_all_hint {
+                        if ui.link("← 回到精简模式").clicked() {
+                            show_all_hint = false;
+                        }
+                    } else if ui.link("临时看全部功能…").clicked() {
+                        show_all_hint = true;
+                    }
+                }
+                // 回写：勾选框与临时展开都改在同一帧里统一落盘
+                st.show_all_hint = show_all_hint;
                 ui.add_space(10.0);
             });
         });

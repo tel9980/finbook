@@ -80,7 +80,7 @@ impl LoginView {
     fn show_book_select(&mut self, ui: &mut Ui, st: &mut AppState, recent: &mut Vec<PathBuf>) {
         egui::Frame::NONE
             .fill(ui.visuals().faint_bg_color)
-            .stroke(egui::Stroke::new(1.0, palette::GRID))
+            .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
             .corner_radius(6.0)
             .inner_margin(16.0)
             .show(ui, |ui| {
@@ -163,7 +163,7 @@ impl LoginView {
     fn show_create(&mut self, ui: &mut Ui, st: &mut AppState, recent: &mut Vec<PathBuf>) {
         egui::Frame::NONE
             .fill(ui.visuals().faint_bg_color)
-            .stroke(egui::Stroke::new(1.0, palette::GRID))
+            .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
             .corner_radius(6.0)
             .inner_margin(16.0)
             .show(ui, |ui| {
@@ -200,21 +200,47 @@ impl LoginView {
                 });
                 labeled(ui, "纳税识别号", |ui| {
                     ui.add_sized([260.0, 22.0], egui::TextEdit::singleline(&mut self.new_tax));
+                    ui.label(RichText::new("选填。打印报表时会用到").weak());
                 });
                 labeled(ui, "启用期间", |ui| {
                     ui.add_sized(
                         [120.0, 22.0],
                         egui::TextEdit::singleline(&mut self.new_start).hint_text("2026-01"),
                     );
-                    ui.label(RichText::new("启用期间之前的业务通过「期初建账」录入").weak());
-                });
-                labeled(ui, "科目级长", |ui| {
-                    ui.add_sized(
-                        [120.0, 22.0],
-                        egui::TextEdit::singleline(&mut self.new_scheme).hint_text("4-2-2-2"),
+                    ui.label(
+                        RichText::new("填你要开始记账的那个月，格式 2026-01").weak(),
                     );
-                    ui.label(RichText::new("如 4-2-2-2 表示 1001 / 100101 / 10010101").weak());
+                    ui.label(
+                        RichText::new("这个月之前的账，进软件后在「期初建账」录余额").weak(),
+                    );
                 });
+
+                // ---- 进阶设置（默认收起）----
+                //
+                // 「科目级长」原来和「企业名称」平级摆着，但它不是新手该关心的东西：
+                // 系统已经预置好 199 个标准科目，级长保持默认就够用，问「4-2-2-2 是什么」
+                // 只会把人卡在建账这一步。折进默认收起的「进阶设置」——想改的人自己会点开，
+                // 不想理解的人一眼都不用看。
+                ui.add_space(4.0);
+                egui::CollapsingHeader::new(RichText::new("进阶设置（一般不用改）").weak())
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        labeled(ui, "科目级长", |ui| {
+                            ui.add_sized(
+                                [120.0, 22.0],
+                                egui::TextEdit::singleline(&mut self.new_scheme)
+                                    .hint_text("4-2-2-2"),
+                            );
+                            ui.label(
+                                RichText::new(
+                                    "会计科目的编码位数规则，默认 4-2-2-2：\n\
+                                     一级科目 4 位（1001），下级每级加 2 位（100101、10010101）\n\
+                                     保持默认即可，建账后不可更改。",
+                                )
+                                .weak(),
+                            );
+                        });
+                    });
 
                 ui.add_space(14.0);
                 ui.horizontal(|ui| {
@@ -270,7 +296,7 @@ impl LoginView {
 
         egui::Frame::NONE
             .fill(ui.visuals().faint_bg_color)
-            .stroke(egui::Stroke::new(1.0, palette::GRID))
+            .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
             .corner_radius(6.0)
             .inner_margin(16.0)
             .show(ui, |ui| {
