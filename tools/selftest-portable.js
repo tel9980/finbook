@@ -15,6 +15,12 @@ const P = path.join(ROOT, "tools", "selftest-design-doc.js");
 const C = path.join(ROOT, "tools", "check-portable.js");
 const orig = fs.readFileSync(P, "utf8");
 
+// 变异有没有被拦下。**不能就地 process.exit(1)** —— 那样会跳过下面的还原，
+// 把变异过的源码留在磁盘上，下一个人接手时看到的是一个脏工作区，
+// 而且脏在哪个文件都不好找（这里改的是别的文件）。
+// 所以只记结果，最后统一还原再退出。
+let missed = false;
+
 function run() {
   try {
     const o = execFileSync(process.execPath, [C], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -54,16 +60,45 @@ if (hasEol) {
   const r2 = run();
   console.log("  退出成功？ " + r2.ok + "   ← 必须 false");
   console.log(r2.out.split(/\r?\n/).filter((l) => /FAIL|修法/.test(l)).map((l) => "  " + l).join("\n"));
+  // 同上：这个变异的结论必须参与判定，否则探针形同虚设
+  if (r2.ok) {
+    console.log("FAIL CRLF 变异未被拦下 —— check-portable 漏了写死行尾");
+    missed = true;
+  }
 } else {
-  console.log("  （当前源码没有 scmeol 那行，跳过 —— 改用别的形状）");
-  const m3 = orig.replace('const ROOT = path.join(__dirname, "..");', 'const X = "D:\\\\tmp";');
-  fs.writeFileSync(P, m3, "utf8");
-  const r3 = run();
-  console.log("  改用 D:\\tmp 形状，退出成功？ " + r3.ok + "   ← 必须 false");
-  console.log(r3.out.split(/\r?\n/).filter((l) => /FAIL|修法/.test(l)).map((l) => "  " + l).join("\n"));
+  // 兜底形状：源码里没有 scmeol 那行时（代码演进过），换一个**同样该被拦**的形状。
+  //
+  // 第一版这里用 `const X = "D:\\tmp"` —— 两个问题：
+  //   ① 变异目标写成了一个新的、与被测代码无关的常量，check-portable 报出来的 FAIL
+  //      指向 selftest-design-doc.js，读日志的人会以为**基线本身**不干净
+  //      （第一版就踩过这个，见 check-ci 的 2c 段注释）；
+  //   ② 更要命的是它**没进第 69 行的退出条件**（那里只判了 r1 和 after），
+  //      也就是说变异 2 拦没拦住都算通过 —— 一个不被验证的探针等于没有探针。
+  // 现在：变异的是 ROOT 本身（这才是 check-portable 真正要守的东西），
+  // 并且把结论显式纳入判定。
+  console.log("  （当前源码没有 scmeol 那行，改用等效形状：ROOT 写死盘符路径）");
+  const m3 = orig.replace(
+    'const ROOT = path.join(__dirname, "..");',
+    'const ROOT = "D:\\\\tmp\\\\finbook";'
+  );
+  if (m3 === orig) {
+    console.log("FAIL 兜底变异没写进去（源码形态与预期不符）");
+    missed = true;
+  } else {
+    fs.writeFileSync(P, m3, "utf8");
+    const r3 = run();
+    console.log("  退出成功？ " + r3.ok + "   ← 必须 false");
+    console.log(r3.out.split(/\r?\n/).filter((l) => /FAIL|修法/.test(l)).map((l) => "  " + l).join("\n"));
+    // 让 r3 的结论参与最终判定（原来漏了，探针形同虚设）
+    if (r3.ok) {
+      console.log("FAIL 兜底变异未被拦下 —— check-portable 漏了盘符路径");
+      missed = true;
+    }
+  }
 }
 
 fs.writeFileSync(P, orig, "utf8");
 const after = run();
 console.log("\n还原后基线：" + (after.ok ? "OK（绿）" : "FAIL（仍红）"));
-process.exit(!b.ok || r1.ok || !after.ok ? 1 : 0);
+if (missed) console.log("有变异未被拦下 —— check-portable 存在漏网规则");
+process.exit(!b.ok || r1.ok || missed || !after.ok ? 1 : 0);

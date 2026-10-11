@@ -48,16 +48,34 @@ const base = run();
 console.log((base.ok ? "OK   基线通过" : "FAIL 基线就不通过，下面探针无意义"));
 if (!base.ok) { console.log(base.out); process.exit(1); }
 
-// 1. 行号漂移：在 scm.rs 的信用检查那一行**上面**插一行注释 → 真实代码挪到 1162
+// 1. 行号漂移：在 scm.rs 的信用检查那一行**上面**插一行 → 真实代码下移一行
+//
+// 行号**动态定位**，不写死。写死会有两个问题：
+//   ① 代码一演进（哪怕只是前面加了一行注释）这个探针就失效 —— 它会去找
+//      早已不存在的行号，于是「探针没生效」和「探针生效了」都看不出来；
+//   ② 上一版还把写回的行尾写成 "\r\n"，等于每跑一次就把整个 scm.rs 转成 CRLF。
+//      现在按原样 split/join，行尾跟着文件走。
+const ANCHOR = /credit_check\(db, &customer, period\)/;
+const anchorAt = scmOrig.split(/\r?\n/).findIndex((l) => ANCHOR.test(l));
+if (anchorAt < 0) {
+  console.log("FAIL 锚点没找到：scm.rs 里已无 credit_check(db, &customer, period)");
+  process.exit(1);
+}
+const driftAt = anchorAt; // 插在锚点**上面**一行 → 锚点下移一行
+
 all &= probe(
   "代码漂移：scm.rs 在信用检查上方插一行，文档行号失效",
   () => {
     const s = scmOrig.split(/\r?\n/);
-    s.splice(1160, 0, "// 漂移探针：这行注释会让真实代码下移一行");
-    fs.writeFileSync(SCM, s.join("\r\n"), "utf8");
+    s.splice(driftAt, 0, "// 漂移探针：这行注释会让真实代码下移一行");
+    // 行尾跟着原文件走：写死 "\r\n" 会把 LF 仓库整个转成 CRLF，
+    // 还原时又是另一个 EOL，一次自检就在仓库里留下两份脏文件。
+    const eol = scmOrig.indexOf("\r\n") >= 0 ? "\r\n" : "\n";
+    fs.writeFileSync(SCM, s.join(eol), "utf8");
   },
   () => fs.writeFileSync(SCM, scmOrig, "utf8"),
-  /scm\.rs:1161 不再匹配/
+  // 只认「不再匹配」这个信号，不认具体行号：行号本来就可能随代码演进变化
+  /scm\.rs:\d+ 不再匹配/
 );
 
 // 2. 约束声明被删
