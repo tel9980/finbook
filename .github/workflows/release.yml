@@ -42,10 +42,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: build desktop
         run: cargo build --release --locked -p finbook
+      - name: 生成示例账套
+        # 发布包里必须带一份**有数据**的示例账套：新手打开空白账套什么也
+        # 学不到，先看到「记完一个月账应该长什么样」才有参照。
+        run: |
+          cargo run --release --locked -p findb --example create -- dist/示例账套.fbk
+          cargo run --release --locked -p findb --example demo   -- dist/示例账套.fbk
       - name: package
         run: |
-          mkdir -p dist
-          tar -C target/release -czf "dist/finbook-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz" finbook
+          mkdir -p dist/pack
+          cp target/release/finbook docs/新手使用说明.txt dist/示例账套.fbk dist/pack/
+          tar -C dist/pack -czf "dist/finbook-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-linux
@@ -66,11 +73,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
       - name: build desktop
         run: cargo build --release --locked --target x86_64-pc-windows-gnu -p finbook
+      - name: 生成示例账套
+        run: |
+          cargo run --release --locked -p findb --example create -- dist/示例账套.fbk
+          cargo run --release --locked -p findb --example demo   -- dist/示例账套.fbk
       - name: package
         run: |
-          mkdir -p dist
-          zip -j "dist/finbook-${GITHUB_REF_NAME#v}-windows-x86_64.zip" \
-            target/x86_64-pc-windows-gnu/release/finbook.exe
+          mkdir -p dist/pack
+          cp target/x86_64-pc-windows-gnu/release/finbook.exe \
+             docs/新手使用说明.txt dist/示例账套.fbk dist/pack/
+          # 不能用 zip -j（会拍平目录名，中文文件名也容易在 Windows 下乱码）；
+          # 保持包内一层目录，解压出来就是一个能直接双击的文件夹。
+          (cd dist/pack && zip -r "../finbook-${GITHUB_REF_NAME#v}-windows-x86_64.zip" .)
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-windows
