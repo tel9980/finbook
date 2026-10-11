@@ -709,7 +709,7 @@ fn map_arap_opening(r: &rusqlite::Row) -> rusqlite::Result<ArapOpening> {
 }
 
 pub fn arap_opening_list(db: &Db, kind: Option<&str>) -> DbResult<Vec<ArapOpening>> {
-    let mut out = Vec::new();
+    let out;
     match kind {
         Some(k) => {
             let mut st = db.conn().prepare(&format!(

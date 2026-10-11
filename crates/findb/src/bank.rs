@@ -13,7 +13,7 @@
 //! → 审核 → 记账。见 [`gen_vouchers`]。
 
 use chrono::NaiveDate;
-use fincore::{AuxKind, AuxRef, Entry, Money, Period, Voucher, VoucherSource};
+use fincore::{AuxKind, Entry, Money, Period, Voucher, VoucherSource};
 
 use crate::{balances, Db, DbResult};
 
@@ -197,7 +197,7 @@ pub fn gen_vouchers(db: &Db, period: Period, account: &str, who: &str) -> DbResu
         // 银行/现金科目本身也带辅助（银行账户），不填过不了记账校验 ——
         // 「科目 100201 核算银行账户，必须填写银行账户」。取该科目下的第一个
         // 银行账户；一个都没有就跳过这一笔，不静默塞个假的。
-        let bank_aux = first_bank_aux(db, acct)?;
+        let bank_aux = first_bank_aux(db)?;
         let Some(bank_code) = bank_aux else {
             res.skipped.push(skip_of(
                 s,
@@ -233,7 +233,7 @@ pub fn gen_vouchers(db: &Db, period: Period, account: &str, who: &str) -> DbResu
 /// （「科目 100201 核算银行账户，必须填写银行账户」）。取第一个是有意的：
 /// 流水只带账号的少数情况才需要精确对应，绝大多数对账单不带账号，
 /// 按第一个挂上即可 —— 人工仍可在凭证上改。
-fn first_bank_aux(db: &Db, account: &str) -> DbResult<Option<String>> {
+fn first_bank_aux(db: &Db) -> DbResult<Option<String>> {
     Ok(crate::auxs::codes(db, AuxKind::Bank)?.into_iter().next())
 }
 

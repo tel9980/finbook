@@ -147,7 +147,7 @@ pub fn po_receipt_add(db: &Db, r: &PoReceipt) -> DbResult<i64> {
     if r.qty.is_negative() || r.qty.is_zero() {
         return Err(fincore::FinError::msg("到货数量必须为正数").into());
     }
-    let id = db.conn().execute(
+    db.conn().execute(
         "INSERT INTO po_receipt(po_id,period,date,qty,memo) VALUES(?1,?2,?3,?4,?5)",
         rusqlite::params![r.po_id, r.period.ymm(), r.date.format("%Y-%m-%d").to_string(), crate::exact_param(r.qty), r.memo],
     )?;
@@ -183,7 +183,7 @@ pub fn po_return_add(db: &Db, po_id: i64, period: Period, date: NaiveDate, qty: 
     if qty.is_negative() || qty.is_zero() {
         return Err(fincore::FinError::msg("退货数量必须为正数").into());
     }
-    let id = db.conn().execute(
+    db.conn().execute(
         "INSERT INTO po_receipt(po_id,period,date,qty,memo) VALUES(?1,?2,?3,?4,?5)",
         rusqlite::params![po_id, period.ymm(), date.format("%Y-%m-%d").to_string(), qty.negated().to_string(), format!("退货 {}", memo)],
     )?;
@@ -520,6 +520,7 @@ pub fn qc_save(
 
     // 受检量与结果：待检模式以待检量为准（忽略入参检验数，逐笔检验）；否则按入参（事后质检）
     let mut qc_wh = String::new();
+    #[allow(unused_assignments)]
     let (insp_qty, fail_qty, result) = if let Some((mid, m_qty, m_amt, m_wh)) = pending {
         qc_wh = m_wh.clone();
         if qty_fail > m_qty {

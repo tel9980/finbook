@@ -203,7 +203,7 @@ impl Dashboard {
             // ---- 试算平衡 ----
             ui.columns(2, |cols| {
                 egui::Frame::NONE
-                    .stroke(egui::Stroke::new(1.0, palette::GRID))
+                    .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
                     .corner_radius(6.0)
                     .inner_margin(12.0)
                     .show(&mut cols[0], |ui| {
@@ -251,7 +251,7 @@ impl Dashboard {
                     });
 
                 egui::Frame::NONE
-                    .stroke(egui::Stroke::new(1.0, palette::GRID))
+                    .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
                     .corner_radius(6.0)
                     .inner_margin(12.0)
                     .show(&mut cols[1], |ui| {
@@ -345,7 +345,7 @@ impl Dashboard {
 fn stat_card(ui: &mut Ui, title: &str, value: &str, sub: &str, color: Color32) {
     egui::Frame::NONE
         .fill(ui.visuals().faint_bg_color)
-        .stroke(egui::Stroke::new(1.0, palette::GRID))
+        .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
         .corner_radius(6.0)
         .inner_margin(12.0)
         .show(ui, |ui| {

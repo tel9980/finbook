@@ -112,7 +112,7 @@ impl VoucherList {
         self.dirty = false;
         self.sel.clear();
         self.paging.reset();
-        let mut q = self.query().with_data_scope(ctx.user());
+        let q = self.query().with_data_scope(ctx.user());
         // 科目范围（数据范围）：凭证可能横跨多科目，查询层只挡了制单人，
         // 这里对结果逐张过滤
         let u = ctx.user().clone();

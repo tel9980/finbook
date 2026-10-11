@@ -7,7 +7,7 @@ use fincore::{Money, Period};
 use rusqlite::OptionalExtension;
 
 use crate::{Db, DbError, DbResult, FinError};
-use crate::scm::{BomItem, ProdStatus, ProductionOrder};
+use crate::scm::{ProdStatus, ProductionOrder};
 
 // ===========================================================================
 // 成本归集

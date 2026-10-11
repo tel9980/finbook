@@ -74,7 +74,7 @@ pub fn po_get(db: &Db, id: i64) -> DbResult<Option<PurchaseOrder>> {
                 total_amount, total_tax, received_amount, prepared_by, memo
          FROM purchase_order WHERE id=?1",
     )?;
-    let mut po = stmt
+    let po = stmt
         .query_row([id], |r| {
             Ok(PurchaseOrder {
                 id: r.get(0)?,
@@ -386,7 +386,7 @@ pub fn po_delete(db: &Db, id: i64) -> DbResult<()> {
 }
 
 pub fn po_list(db: &Db, period: Period, status: Option<PoStatus>) -> DbResult<Vec<PurchaseOrder>> {
-    let sql = if let Some(s) = status {
+    let sql = if status.is_some() {
         format!(
             "SELECT id, period, no, date, supplier_code, supplier_name, status,
              total_amount, total_tax, received_amount, prepared_by, memo
@@ -547,8 +547,9 @@ pub fn atp(db: &Db, item: &str) -> DbResult<Atp> {
 
     // 在途：已下推但未完工的生产订单剩余量（草稿也算——草稿是已认领的产能）
     let mut incoming = Money::ZERO;
-    let (mut incoming_dated, mut incoming_undated) = (Money::ZERO, Money::ZERO);
-    let mut earliest_ready = String::new();
+    let incoming_dated;
+    let incoming_undated;
+    let earliest_ready;
     {
         let mut st = db.conn().prepare(
             "SELECT planned_qty, completed_qty, plan_end FROM production_order
@@ -906,7 +907,7 @@ pub fn so_delete(db: &Db, id: i64) -> DbResult<()> {
 }
 
 pub fn so_list(db: &Db, period: Period, status: Option<SoStatus>) -> DbResult<Vec<SalesOrder>> {
-    let sql = if let Some(s) = status {
+    let sql = if status.is_some() {
         format!(
             "SELECT id, period, no, date, customer_code, customer_name, status,
              total_amount, total_tax, shipped_amount, prepared_by, memo
@@ -1060,7 +1061,7 @@ pub fn so_get(db: &Db, id: i64) -> DbResult<Option<SalesOrder>> {
                 total_amount, total_tax, shipped_amount, prepared_by, memo
          FROM sales_order WHERE id=?1",
     )?;
-    let mut so = stmt
+    let so = stmt
         .query_row([id], |r| {
             Ok(SalesOrder {
                 id: r.get(0)?,

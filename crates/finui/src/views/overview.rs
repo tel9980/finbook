@@ -82,7 +82,6 @@ impl OverviewView {
 
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         self.reload(ctx);
-        let p = self.period(ctx);
         widgets::page_header(ui, "账目总览", |ui| {
             ui.label(RichText::new("管理员只读视角 · 账目全貌").weak());
         });
@@ -295,7 +294,7 @@ fn draw_bars(ui: &mut Ui, a: &FinancialAnalysis) {
         let gy = base - (v - min) / span * h;
         p.line_segment(
             [Pos2::new(plot.left(), gy as f32), Pos2::new(plot.right(), gy as f32)],
-            Stroke::new(1.0, palette::GRID),
+            Stroke::new(1.0_f32, palette::GRID),
         );
         p.text(
             Pos2::new(plot.left() - 4.0, gy as f32),
@@ -323,11 +322,11 @@ fn draw_bars(ui: &mut Ui, a: &FinancialAnalysis) {
                 let ay = if vy >= zero_y { vy - 8.0 } else { vy + 8.0 };
                 p.line_segment(
                     [Pos2::new(ax, ay as f32), Pos2::new(ax + 4.0, (ay + 7.0) as f32)],
-                    Stroke::new(1.6, C_ERR),
+                    Stroke::new(1.6_f32, C_ERR),
                 );
                 p.line_segment(
                     [Pos2::new(ax, ay as f32), Pos2::new(ax - 4.0, (ay + 7.0) as f32)],
-                    Stroke::new(1.6, C_ERR),
+                    Stroke::new(1.6_f32, C_ERR),
                 );
             }
         }
@@ -381,7 +380,7 @@ fn draw_lines(
         let gy = base - (v - min) / span * h;
         p.line_segment(
             [Pos2::new(plot.left(), gy as f32), Pos2::new(plot.right(), gy as f32)],
-            Stroke::new(1.0, palette::GRID),
+            Stroke::new(1.0_f32, palette::GRID),
         );
         p.text(
             Pos2::new(plot.left() - 4.0, gy as f32),
@@ -408,7 +407,7 @@ fn draw_lines(
                     Pos2::new(x_at(i - 1), y_at(vals[i - 1]) as f32),
                     Pos2::new(x_at(i), y_at(vals[i]) as f32),
                 ],
-                Stroke::new(2.0, *color),
+                Stroke::new(2.0_f32, *color),
             );
         }
         for (i, v) in vals.iter().enumerate() {
@@ -481,12 +480,12 @@ fn driver_panel(ui: &mut Ui, title: &str, items: &[findb::advanced::DriverItem],
         // 环比变化
         let change = if prev != 0.0 {
             let pct = (cur - prev) / prev.abs() * 100.0;
-            let (arrow, c) = if pct > 0.5 {
-                ("▲", palette::OK)
+            let arrow = if pct > 0.5 {
+                "▲"
             } else if pct < -0.5 {
-                ("▼", C_ERR)
+                "▼"
             } else {
-                ("—", SUBTLE)
+                "—"
             };
             format!("{arrow} {:.1}%", pct.abs())
         } else if cur != 0.0 {
@@ -519,7 +518,7 @@ fn ratio_chip(ui: &mut Ui, r: &findb::advanced::FinRatio) {
     };
     egui::Frame::NONE
         .fill(palette::SUBTOTAL_BG)
-        .stroke(Stroke::new(1.0, palette::GRID))
+        .stroke(Stroke::new(1.0_f32, palette::GRID))
         .corner_radius(8.0)
         .inner_margin(10.0)
         .show(ui, |ui| {

@@ -30,7 +30,7 @@ impl AboutView {
 
         ui.columns(2, |cols| {
             egui::Frame::NONE
-                .stroke(egui::Stroke::new(1.0, palette::GRID))
+                .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
                 .corner_radius(6.0)
                 .inner_margin(14.0)
                 .show(&mut cols[0], |ui| {
@@ -48,7 +48,7 @@ impl AboutView {
                 });
 
             egui::Frame::NONE
-                .stroke(egui::Stroke::new(1.0, palette::GRID))
+                .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
                 .corner_radius(6.0)
                 .inner_margin(14.0)
                 .show(&mut cols[1], |ui| {

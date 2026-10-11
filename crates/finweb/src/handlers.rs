@@ -1856,7 +1856,10 @@ async fn cost_overhead_ep(
 
 #[derive(Deserialize)]
 struct BudgetRowReq {
+    /// 客户端编辑时会回传，但 upsert 按「期间+科目+部门+版本」定位，
+    /// 真正的行 id 由 budget_upsert_version 决定，故这里只收不用。
     #[serde(default)]
+    #[allow(dead_code)]
     id: i64,
     period: i32,
     account_code: String,

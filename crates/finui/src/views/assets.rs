@@ -47,8 +47,12 @@ struct PlanRow {
     asset_id: i64,
     code: String,
     name: String,
+    /// 部门 / 费用科目 / 折旧科目：计提页备查用，当前后端已返回但 UI 未渲染
+    #[allow(dead_code)]
     dept: String,
+    #[allow(dead_code)]
     expense: String,
+    #[allow(dead_code)]
     dep_account: String,
     /// 本期应提
     amount: Money,

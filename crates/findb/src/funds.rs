@@ -1425,7 +1425,7 @@ pub fn advance_save(db: &Db, a: &mut Advance) -> DbResult<i64> {
 /// 幂等：已支付/已核销返回 Ok(None) 不重复出凭证。
 pub fn advance_pay(db: &Db, id: i64, date: NaiveDate, who: &str) -> DbResult<Option<i64>> {
     let tx = db.write_tx()?;
-    let mut a: Advance = tx
+    let a: Advance = tx
         .query_row(
             &format!("SELECT {A_COLS} FROM advance WHERE id=?1"),
             rusqlite::params![id],
@@ -1489,7 +1489,7 @@ pub fn advance_settle(
     who: &str,
 ) -> DbResult<Option<i64>> {
     let tx = db.write_tx()?;
-    let mut a: Advance = tx
+    let a: Advance = tx
         .query_row(
             &format!("SELECT {A_COLS} FROM advance WHERE id=?1"),
             rusqlite::params![id],

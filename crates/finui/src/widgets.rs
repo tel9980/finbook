@@ -98,7 +98,7 @@ pub fn toolbar<R>(ui: &mut Ui, content: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::NONE
         .fill(egui::Color32::from_rgb(246, 248, 250))
         .inner_margin(egui::Margin::symmetric(8, 6))
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(224, 228, 234)))
+        .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgb(224, 228, 234)))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
@@ -464,7 +464,7 @@ pub fn toasts(ctx: &Context, queue: &mut crate::state::ToastQueue, now: f64) {
                     };
                     egui::Frame::NONE
                         .fill(egui::Color32::from_rgb(252, 252, 253))
-                        .stroke(egui::Stroke::new(1.5, color))
+                        .stroke(egui::Stroke::new(1.5_f32, color))
                         .corner_radius(4.0)
                         .inner_margin(8.0)
                         .shadow(egui::epaint::Shadow {

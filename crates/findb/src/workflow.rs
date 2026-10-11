@@ -56,7 +56,10 @@ fn role_code(r: &Role) -> String {
         .unwrap_or_default()
 }
 
-use fincore::{Period, Role};
+use fincore::Role;
+
+#[cfg(test)]
+use fincore::Period;
 
 /// 画布节点
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -6,7 +6,7 @@
 use chrono::NaiveDate;
 use fincore::user::User;
 use fincore::{
-    AuxRef, Entry, FinError, Issues, Money, Period, Voucher, VoucherSource, VoucherStatus,
+    AuxRef, Entry, FinError, Money, Period, Voucher, VoucherSource, VoucherStatus,
 };
 use rusqlite::OptionalExtension;
 

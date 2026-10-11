@@ -7,8 +7,10 @@
 //!   统一为 `DocNode` 列表供前端渲染单据链面板。
 //! - 执行进度以子流水累计为准（`po_receipt` / `so_shipment`），不落冗余字段。
 
-use chrono::NaiveDate;
 use fincore::{Money, Period};
+
+#[cfg(test)]
+use chrono::NaiveDate;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 
@@ -33,10 +35,6 @@ pub struct DocNode {
     pub memo: String,
     /// up = 上游源单 / down = 下游或执行单据
     pub dir: String,
-}
-
-fn d(s: &NaiveDate) -> String {
-    s.format("%Y-%m-%d").to_string()
 }
 
 /// 记录一条下推勾稽（重复调用幂等：UNIQUE(src,dst)）
