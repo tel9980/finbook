@@ -28,6 +28,28 @@ impl EditRow {
         Self::blank_dir(code, Direction::Debit)
     }
 
+    /// 该行的金额方向是否与科目方向不一致。
+    ///
+    /// 试算不平时，本函数找出的行就是**最优先的嫌疑人**：它的金额被放在了
+    /// 与科目余额方向相反的一边。注意这不是「错误」—— 红字/负数、备抵科目
+    /// 的反方向余额都是合法的，所以只在**试算不平**时才标出来，平时不打扰。
+    ///
+    /// 逻辑：年初余额（yb）是用户填的「那个科目的数」，它的方向是 r.dir；
+    /// 科目的正常方向是 chart_dir。若两者相反，且累计借贷都是 0
+    /// （即这行没有「期初之前还有发生额」的复杂情况），就标出来。
+    fn dir_mismatch(&self, chart_dir: Option<Direction>) -> bool {
+        let Some(cd) = chart_dir else { return false };
+        // 累计借贷非空时，期初数是三项合成的，不能简单按方向判断
+        if !Money::parse_or_zero(&self.ad).is_zero() || !Money::parse_or_zero(&self.ac).is_zero() {
+            return false;
+        }
+        let amt = Money::parse_or_zero(&self.yb);
+        if amt.is_zero() {
+            return false;
+        }
+        self.dir != cd
+    }
+
     /// 按科目方向预填借贷。以前新建行一律借方 —— 资产确实是借，
     /// 但负债/权益/收入默认也是借，新手照着这个填，填完试算必不平，
     /// 他还不知道错在哪（方向错了，金额看着都对）。
@@ -161,6 +183,25 @@ impl BeginView {
         self.reload(ctx);
         let ectx = ui.ctx().clone();
         let can_edit = ctx.user().can(Perm::Opening);
+        self.recount();
+
+        // 方向异常行的下标（试算不平时才算）。放在表格渲染之前，
+        // 表格和试算区都要用它 —— 算一次，两处共用。
+        let diff_now = (self.debits - self.credits).round2();
+        let mismatched: Vec<usize> = if diff_now.is_zero() {
+            Vec::new()
+        } else {
+            let chart = ctx.chart();
+            self.rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| {
+                    let cd = chart.get(&r.code).map(|a| a.dir);
+                    r.dir_mismatch(cd)
+                })
+                .map(|(i, _)| i)
+                .collect()
+        };
 
         widgets::page_header(ui, "期初建账", |ui| {
             ui.label(
@@ -292,8 +333,14 @@ impl BeginView {
                     let k = row.index();
                     let i = indices[k];
                     let r = &mut self.rows[i];
+                    // 方向异常的行，编码框标红底 —— 200 行里一眼找到嫌疑人
+                    let is_mismatch = mismatched.contains(&i);
                     row.col(|ui| {
-                        ui.add_sized([ui.available_width(), 22.0], egui::TextEdit::singleline(&mut r.code));
+                        let mut ed = egui::TextEdit::singleline(&mut r.code);
+                        if is_mismatch {
+                            ed = ed.text_color(palette::CREDIT);
+                        }
+                        ui.add_sized([ui.available_width(), 22.0], ed);
                     });
                     row.col(|ui| {
                         let n = &names[k];
@@ -399,6 +446,7 @@ impl BeginView {
         ui.separator();
         self.recount();
         let diff = (self.debits - self.credits).round2();
+
         ui.horizontal(|ui| {
             ui.label(RichText::new("期初试算").strong());
             ui.add_space(16.0);
@@ -430,6 +478,40 @@ impl BeginView {
                 );
             });
         });
+
+        // 嫌疑人提示：有方向异常的行才显示，没找到就直说（别让用户白找）
+        if !diff.is_zero() && !mismatched.is_empty() {
+            ui.horizontal(|ui| {
+                ui.colored_label(
+                    palette::CREDIT,
+                    format!(
+                        "⚠ 下面 {} 行的金额方向和科目方向相反，最可能是它们造成的，先检查：",
+                        mismatched.len()
+                    ),
+                );
+                for (k, &i) in mismatched.iter().enumerate() {
+                    if k > 0 {
+                        ui.label("、");
+                    }
+                    let code = self.rows[i].code.clone();
+                    let name = ctx
+                        .chart()
+                        .get(&code)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_default();
+                    if ui.link(format!("{code} {name}")).clicked() {
+                        // 跳到那一行：把搜索框设成该编码，列表自动过滤出来
+                        self.kw = code.clone();
+                        self.only_nonzero = false;
+                    }
+                }
+            });
+            ui.label(
+                RichText::new("（备抵科目、红字余额等合法反方向也会被列出，请自行确认；点编码可直接跳到那一行）")
+                    .weak()
+                    .size(12.0),
+            );
+        }
 
         // ---------------- 科目选择 ----------------
         if let Some(code) = self.picker.show(&ectx, ctx.chart()) {
@@ -603,4 +685,58 @@ pub fn auto_fill_begin(ctx: &mut AppCtx<'_>) -> Result<usize, String> {
         n += 1;
     }
     Ok(n)
+}
+
+#[cfg(test)]
+mod mismatch_tests {
+    use super::*;
+
+    fn row(code: &str, dir: Direction, yb: &str) -> EditRow {
+        let mut e = EditRow::blank(code.to_string());
+        e.dir = dir;
+        e.yb = yb.to_string();
+        e
+    }
+
+    /// 方向与科目一致 → 不是嫌疑人
+    #[test]
+    fn 方向一致不标() {
+        let r = row("1001", Direction::Debit, "5000");
+        assert!(!r.dir_mismatch(Some(Direction::Debit)));
+        let r = row("2001", Direction::Credit, "3000");
+        assert!(!r.dir_mismatch(Some(Direction::Credit)));
+    }
+
+    /// 新手最常见的错：负债填到借方
+    #[test]
+    fn 方向相反标出() {
+        let r = row("2001", Direction::Debit, "3000");
+        assert!(r.dir_mismatch(Some(Direction::Credit)), "负债放借方必须被标出");
+        let r = row("1001", Direction::Credit, "5000");
+        assert!(r.dir_mismatch(Some(Direction::Debit)), "资产放贷方必须被标出");
+    }
+
+    /// 金额为 0 的行不标 —— 刚补全出来的空行全是 0，不该一上来就满屏红
+    #[test]
+    fn 零金额不标() {
+        let r = row("2001", Direction::Debit, "");
+        assert!(!r.dir_mismatch(Some(Direction::Credit)));
+        let r = row("2001", Direction::Debit, "0");
+        assert!(!r.dir_mismatch(Some(Direction::Credit)));
+    }
+
+    /// 有累计借贷时，期初数是三项合成的，不能简单按方向判断
+    #[test]
+    fn 有累计发生额时不误标() {
+        let mut r = row("2001", Direction::Debit, "3000");
+        r.ad = "100".to_string();
+        assert!(!r.dir_mismatch(Some(Direction::Credit)), "有累计数时不该按方向标");
+    }
+
+    /// 科目表里没有这个编码 → 不标（未知科目那一列已经是红字提示了）
+    #[test]
+    fn 未知科目不标() {
+        let r = row("9999", Direction::Debit, "100");
+        assert!(!r.dir_mismatch(None));
+    }
 }
