@@ -123,8 +123,50 @@ impl LoginView {
                 ui.separator();
                 ui.add_space(12.0);
 
+                // ---- 三个主入口 ----
+                //
+                // 原来只有两个小按钮并排：「新建账套」「打开已有账套」。
+                // 对新手来说这两个词都要先理解一遍才知道选哪个，而「打开已有账套」
+                // 会弹出文件选择框 —— 他此刻还不知道该选哪个文件。
+                //
+                // 现在补一个不用理解任何术语的入口：「先看示例账套」。
+                // 示例账套就在解压出来的同一个目录里，按文件名直接找、不弹窗，
+                // 点完直接进主界面。认知顺序因此变成「先看 → 再做」。
+                ui.label(RichText::new("第一次用？先看看示例账套").strong());
+                ui.label(
+                    RichText::new("里面是一家小商贸公司一个月的账，随手点几下就知道软件怎么用了。")
+                        .weak(),
+                );
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.button("  新建账套  ").clicked() {
+                    if ui
+                        .add_sized([230.0, 40.0], egui::Button::new(RichText::new("👀  先看示例账套")))
+                        .clicked()
+                    {
+                        match find_demo_book() {
+                            Some(p) if p.exists() => self.open_book(st, &p, recent),
+                            Some(p) => {
+                                self.err = format!(
+                                    "找不到示例账套（{}）。请确认解压时它和 finbook.exe 在同一个文件夹里。",
+                                    p.display()
+                                );
+                            }
+                            None => {
+                                self.err =
+                                    "找不到示例账套。请确认解压时它和 finbook.exe 在同一个文件夹里。"
+                                        .to_string();
+                            }
+                        }
+                    }
+                    ui.label(RichText::new("（免登录，随便点）").weak());
+                });
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("  建自己的账  ").clicked() {
                         self.creating = true;
                         self.err.clear();
                         if self.new_path.is_empty() {
@@ -359,6 +401,24 @@ impl LoginView {
     fn open_book(&mut self, st: &mut AppState, path: &PathBuf, recent: &mut Vec<PathBuf>) {
         match Db::open(path) {
             Ok(db) => {
+                // 发布包里的示例账套：免登录直接进主界面。
+                //
+                // 为什么只对它特殊：新手点「先看示例账套」时还不知道 admin/admin123
+                // 是什么，让他先登录等于在第一步就卡住。但**必须给只读身份**
+                // （Role::Viewer）—— 否则他随手一改就把发布包里的示例数据弄乱了，
+                // 别人下载到的包也跟着变。
+                //
+                // 判定用文件名而不是账套内标记：示例账套是发布时 cp 进去的固定文件名，
+                // 往 schema 里加标记要多一次迁移，而文件名无需迁移、对用户透明。
+                // 代价是用户若把自己的账套改名成「示例账套.fbk」，会拿到免登录只读 ——
+                // 这只影响他自己这台机器（顶栏「退出登录」仍可回到选择页），不构成越权。
+                if path.file_name().map(|n| n == DEMO_BOOK_FILE).unwrap_or(false) {
+                    st.user = Some(fincore::User::new(
+                        "demo",
+                        "示例账套（只读，随便点）",
+                        fincore::Role::Viewer,
+                    ));
+                }
                 match st.attach(Arc::new(db), Some(path.clone())) {
                     Ok(()) => {
                         self.err.clear();
@@ -498,3 +558,21 @@ fn push_recent(recent: &mut Vec<PathBuf>, p: PathBuf) {
 fn default_book_dir() -> Option<PathBuf> {
     directories::UserDirs::new().and_then(|d| d.document_dir().map(|p| p.to_path_buf()))
 }
+
+/// 找发布包里随附的示例账套。
+///
+/// 位置约定：和 `finbook.exe` 同一个目录（发布时就是 `cp` 进同一个文件夹），
+/// 也兼容 macOS 的 `.app/Contents/MacOS` 布局。用**当前可执行文件所在目录**找，
+/// 而不是当前工作目录 —— 用户双击 exe 启动时 cwd 是不确定的。
+fn find_demo_book() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut dir = exe.parent()?.to_path_buf();
+    // .app/Contents/MacOS/finbook → 上溯两级到 .app
+    if dir.ends_with("MacOS") {
+        dir = dir.parent()?.parent()?.to_path_buf();
+    }
+    Some(dir.join(DEMO_BOOK_FILE))
+}
+
+/// 示例账套文件名（与 release.yml 打包时 cp 的名字保持一致，改一处要同步）
+pub const DEMO_BOOK_FILE: &str = "示例账套.fbk";

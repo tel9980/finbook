@@ -19,17 +19,41 @@ use fincore::{AuxKind, Period, Perm};
 use state::{AppCtx, AppState, ConfirmAction, NavItem};
 
 /// 需要跨会话记住的东西：最近账套、上次登录名、精简模式开关
-#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Persist {
     pub recent: Vec<PathBuf>,
     pub last_user: String,
     /// 精简模式：侧栏只显示日常财务要用的菜单，隐藏生产/供应链等重模块。
     ///
-    /// 存在这里（而不是账套的 BookOptions）是因为它是**这台设备上我的界面偏好**，
+    /// 存这里（而不是账套的 BookOptions）是因为它是**这台设备上我的界面偏好**，
     /// 不是账套的属性 —— 存进 .fbk 会跟着备份走，换台电脑打开别人的账套也会被套上。
-    /// `Default` 是 false：老用户升级后行为不变，不会突然少一半菜单。
+    ///
+    /// 编码用 Option 而非裸 bool：要区分「用户没这个偏好」和「用户明确要关」。
+    /// 直接写 `#[serde(default = "…")] pub simple_nav: bool` 做不到 ——
+    /// 老版本升上来时字段缺失会落进默认值，而**全新安装**的用户同样落进这个分支，
+    /// 于是第一次打开就是 47 项菜单，恰恰是最需要精简的那批人看不到它。
+    ///
+    /// 所以：`None` = 还没决定，`Some(b)` = 用户明确的开/关。
+    /// None 时再看 recent：没打开过任何账套 = 新用户 → 开；
+    /// 有历史 = 老用户 → 保持原样（他们的菜单已经用熟，忽然少一半反而不适应）。
     #[serde(default)]
-    pub simple_nav: bool,
+    pub simple_nav: Option<bool>,
+}
+
+impl Default for Persist {
+    fn default() -> Self {
+        Self { recent: Vec::new(), last_user: String::new(), simple_nav: None }
+    }
+}
+
+/// 实际生效的精简模式取值。
+///
+/// 一句话规则：**新用户默认精简，老用户保持原样，用户的选择永远优先。**
+pub fn effective_simple_nav(p: &Persist) -> bool {
+    match p.simple_nav {
+        Some(b) => b,
+        None => p.recent.is_empty(),
+    }
 }
 
 /// 启动桌面应用
@@ -367,12 +391,19 @@ impl FinBookApp {
 
 impl eframe::App for FinBookApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        // 落盘时把推断值固化成 Some(b) —— 之后它就是「用户的明确选择」，
+        // 不再走新用户/老用户的推断。
+        self.persist.simple_nav = Some(effective_simple_nav(&self.persist));
         eframe::set_value(storage, eframe::APP_KEY, &self.persist);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
         self.st.toasts.retain(now);
+
+        // 精简模式的实际取值（Option → bool 的判定见 effective_simple_nav）。
+        // 每帧从 Persist 重算；勾选框改的是这个局部量，save() 时才写回 Persist。
+        let mut simple_nav = effective_simple_nav(&self.persist);
 
         if self.st.want_quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -540,7 +571,7 @@ impl eframe::App for FinBookApp {
             .exact_width(168.0)
             .resizable(false)
             .show(ctx, |ui| {
-                side_bar(&mut self.st, ui, &mut self.persist.simple_nav);
+                side_bar(&mut self.st, ui, &mut simple_nav);
             });
 
         // ---------------- 中央工作区 ----------------
@@ -770,4 +801,59 @@ fn restore_book_atomic(src: &std::path::Path, dst: &std::path::Path) -> Result<(
         let _ = std::fs::remove_file(p);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod onboarding_tests {
+    use super::*;
+
+    fn p(simple: Option<bool>, n_recent: usize) -> Persist {
+        Persist {
+            recent: std::iter::repeat_with(|| std::path::PathBuf::from("/x.fbk")).take(n_recent).collect(),
+            last_user: String::new(),
+            simple_nav: simple,
+        }
+    }
+
+    /// 新用户（没打开过任何账套）第一次进来就该是精简模式 ——
+    /// 47 项菜单正是「小白看不懂」的根因，不能等他自己去发现那个勾选框。
+    #[test]
+    fn new_user_gets_simple_nav_by_default() {
+        assert!(effective_simple_nav(&p(None, 0)), "新用户首次打开必须默认精简");
+    }
+
+    /// 老用户（升级前就有账套）不能突然少一半菜单 ——
+    /// 他们的使用习惯是基于完整菜单建立的。
+    #[test]
+    fn existing_user_keeps_full_nav() {
+        assert!(!effective_simple_nav(&p(None, 3)), "老用户升级后不该被突然精简");
+    }
+
+    /// 用户的明确选择永远优先，两个方向都要能覆盖默认推断。
+    #[test]
+    fn explicit_choice_overrides_inference() {
+        // 新用户主动关掉 → 保持关
+        assert!(!effective_simple_nav(&p(Some(false), 0)), "用户主动关掉后不能被默认值顶回来");
+        // 老用户主动打开 → 保持开
+        assert!(effective_simple_nav(&p(Some(true), 5)), "用户主动打开后要保持");
+    }
+
+    /// 反序列化老版本配置（没有 simple_nav 字段）不能崩，且落到 None。
+    /// 这是升级路径：老用户的 eframe 存储里根本没有这个键。
+    #[test]
+    fn legacy_config_without_field_still_loads() {
+        let legacy = r#"{"recent":["/a.fbk"],"last_user":"admin"}"#;
+        let got: Persist = serde_json::from_str(legacy).expect("老配置必须能读");
+        assert_eq!(got.simple_nav, None, "缺失字段应为 None（未决定）");
+        assert!(!effective_simple_nav(&got), "有历史的账号按老用户处理");
+    }
+
+    /// round-trip：存了再读，值不变。
+    #[test]
+    fn persist_roundtrip_keeps_choice() {
+        let saved = p(Some(false), 2);
+        let text = serde_json::to_string(&saved).unwrap();
+        let back: Persist = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.simple_nav, Some(false), "往返后不能丢用户的选择");
+    }
 }
