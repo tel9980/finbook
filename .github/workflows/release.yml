@@ -127,17 +127,40 @@ jobs:
           path: dist
           merge-multiple: true
       - name: 生成校验和
-        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+        # 不能写成 `sha256sum * > SHA256SUMS`：shell 先展开通配符，而此时
+        # SHA256SUMS 已被重定向创建（空文件），于是它把自己也算进去 ——
+        # 读一个正在被写的文件，结果不稳定。2026-10-12 的 v1.1.0 发布就是这么
+        # 红的：四个 job 里三个成功，Publish 卡在这一步。
+        # 显式列出要算的文件，绕开通配符。
+        run: |
+          cd dist
+          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
+          cat SHA256SUMS
       - name: 创建或更新 Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # 只上传归档与校验和：`download-artifact` 合并后 dist/ 下有子目录，
+          # 而 `dist/*` 会把子目录也匹配进来，gh release upload 遇到目录会失败
+          # （和上面 sha256sum 同一个坑）。
+          ASSETS=$(ls -1 ./*.tar.gz ./*.zip ./SHA256SUMS)
+          echo "将上传：$ASSETS"
+          # 发布说明按版本号取文件；没有对应文件就退回自动生成，
+          # 免得「说明文件没提交」直接把整个发布卡死。
+          NOTES="docs/releases/${GITHUB_REF_NAME}.md"
+          NOTES_ARGS=(--generate-notes)
+          if [ -f "$NOTES" ]; then
+            echo "使用发布说明：$NOTES"
+            NOTES_ARGS=(--notes-file "$NOTES")
+          else
+            echo "未找到 $NOTES，改用自动生成的提交列表"
+          fi
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$GITHUB_REF_NAME" $ASSETS --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
               --title "FinBook ${GITHUB_REF_NAME}" \
-              --generate-notes \
-              dist/*
+              "${NOTES_ARGS[@]}" \
+              $ASSETS
           fi
