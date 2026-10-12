@@ -140,27 +140,45 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 只上传归档与校验和：`download-artifact` 合并后 dist/ 下有子目录，
+          # 上一步已经 cd 到 dist/，但那只是那一个 step —— 每个 step 都是新 shell，
+          # 这里的工作目录是仓库根。上一版我在本 step 里找 docs/releases/*.md，
+          # 在 dist/ 下当然找不到，静默退回了 --generate-notes（没报错，所以更难发现）。
+          # 统一用 $GITHUB_WORKSPACE 显式定位，不再依赖当前目录。
+          cd "$GITHUB_WORKSPACE"
+
+          # 只上传归档与校验和：download-artifact 合并后 dist/ 下有子目录，
           # 而 `dist/*` 会把子目录也匹配进来，gh release upload 遇到目录会失败
           # （和上面 sha256sum 同一个坑）。
-          ASSETS=$(ls -1 ./*.tar.gz ./*.zip ./SHA256SUMS)
-          echo "将上传：$ASSETS"
+          ASSETS=()
+          for f in dist/*.tar.gz dist/*.zip dist/SHA256SUMS; do
+            [ -f "$f" ] && ASSETS+=("$f")
+          done
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "::error::dist/ 下没有找到任何发布产物，打包步骤可能全失败了"
+            ls -la dist/ || true
+            exit 1
+          fi
+          echo "将上传 ${#ASSETS[@]} 个文件："
+          printf '  %s\n' "${ASSETS[@]}"
+
           # 发布说明按版本号取文件；没有对应文件就退回自动生成，
           # 免得「说明文件没提交」直接把整个发布卡死。
-          NOTES="docs/releases/${GITHUB_REF_NAME}.md"
-          NOTES_ARGS=(--generate-notes)
+          NOTES="$GITHUB_WORKSPACE/docs/releases/${GITHUB_REF_NAME}.md"
           if [ -f "$NOTES" ]; then
-            echo "使用发布说明：$NOTES"
+            echo "使用发布说明：${NOTES#$GITHUB_WORKSPACE/}"
             NOTES_ARGS=(--notes-file "$NOTES")
           else
             echo "未找到 $NOTES，改用自动生成的提交列表"
+            NOTES_ARGS=(--generate-notes)
           fi
+
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" $ASSETS --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
               --title "FinBook ${GITHUB_REF_NAME}" \
               "${NOTES_ARGS[@]}" \
-              $ASSETS
+              "${ASSETS[@]}"
           fi
