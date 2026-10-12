@@ -59,12 +59,14 @@ pub fn code_prefix(kind: AuxKind) -> &'static str {
 }
 
 fn is_header_row(cols: &[&str]) -> bool {
-    // 表头通常是「编码 名称」或「名称 编码」，命中任意一个关键字就算
-    let hit = cols.iter().any(|c| {
+    // 只有首行才判表头（调用方保证 lineno == 0），且要求**整行全是**表头词。
+    // aux 这边名称列是纯中文（「杭州明远」），不可能撞上「编码/名称」，
+    // 所以 any/all 在此等价；但为与 begin_batch 一致、避免将来加了新写法
+    // （比如「编码,借/贷」）时重蹈 `1001,贷,5000` 被整行吞掉的覆辙，用 all。
+    cols.iter().all(|c| {
         let c = c.trim();
         c == "编码" || c == "代码" || c == "编号" || c == "code" || c == "名称" || c == "name"
-    });
-    hit
+    })
 }
 
 /// 把一行拆成若干列。

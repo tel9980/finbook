@@ -25,11 +25,18 @@ pub struct EditRow {
 
 impl EditRow {
     fn blank(code: String) -> Self {
+        Self::blank_dir(code, Direction::Debit)
+    }
+
+    /// 按科目方向预填借贷。以前新建行一律借方 —— 资产确实是借，
+    /// 但负债/权益/收入默认也是借，新手照着这个填，填完试算必不平，
+    /// 他还不知道错在哪（方向错了，金额看着都对）。
+    fn blank_dir(code: String, dir: Direction) -> Self {
         Self {
             id: 0,
             code,
             aux: AuxRef::default(),
-            dir: Direction::Debit,
+            dir,
             yb: String::new(),
             ad: String::new(),
             ac: String::new(),
@@ -68,6 +75,8 @@ pub struct BeginView {
     pub debits: Money,
     pub credits: Money,
     pub start_period: Period,
+    /// 批量粘贴窗口
+    pub batch: super::begin_batch::Ui,
 }
 
 impl Default for BeginView {
@@ -81,6 +90,7 @@ impl Default for BeginView {
             debits: Money::ZERO,
             credits: Money::ZERO,
             start_period: Period::default(),
+            batch: Default::default(),
         }
     }
 }
@@ -173,6 +183,10 @@ impl BeginView {
             }
             if ui.button("按科目表补全").clicked() && can_edit {
                 self.fill_from_chart(ctx);
+            }
+            if ui.button("批量粘贴").clicked() && can_edit {
+                self.batch = Default::default();
+                self.batch.open = true;
             }
             ui.separator();
             ui.label("查找");
@@ -419,8 +433,39 @@ impl BeginView {
 
         // ---------------- 科目选择 ----------------
         if let Some(code) = self.picker.show(&ectx, ctx.chart()) {
-            self.rows.push(EditRow::blank(code));
+            let dir = ctx.chart().get(&code).map(|a| a.dir).unwrap_or(Direction::Debit);
+            self.rows.push(EditRow::blank_dir(code, dir));
             self.recount();
+        }
+
+        // ---------------- 批量粘贴 ----------------
+        if self.batch.open {
+            let chart = ctx.chart().clone();
+            let dir_of = |code: &str| chart.get(code).map(|a| a.dir);
+            let leaf_codes: Vec<String> =
+                chart.all().into_iter().filter(|a| chart.is_leaf(&a.code)).map(|a| a.code.clone()).collect();
+            let existing: Vec<String> = self.rows.iter().map(|r| r.code.trim().to_string()).collect();
+            let rows = &mut self.rows;
+            let mut on_import = |items: Vec<super::begin_batch::ParsedRow>| {
+                let mut n = 0;
+                for it in items {
+                    // 同一科目已在草稿里就不重复加（改那一行即可）
+                    if rows.iter().any(|r| r.code.trim() == it.code) {
+                        continue;
+                    }
+                    let mut e = EditRow::blank(it.code.clone());
+                    e.dir = it.dir;
+                    e.yb = it.amount.fmt_money().trim().to_string();
+                    e.changed = true;
+                    rows.push(e);
+                    n += 1;
+                }
+                rows.sort_by(|a, b| a.code.cmp(&b.code));
+                n
+            };
+            if self.batch.window(&dir_of, &leaf_codes, &existing, &mut on_import, ui) {
+                self.recount();
+            }
         }
     }
 
@@ -472,7 +517,8 @@ impl BeginView {
         let mut n = 0;
         for c in codes {
             if !have.contains(&c) {
-                self.rows.push(EditRow::blank(c));
+                let dir = ctx.chart().get(&c).map(|a| a.dir).unwrap_or(Direction::Debit);
+                self.rows.push(EditRow::blank_dir(c, dir));
                 n += 1;
             }
         }
