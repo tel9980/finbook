@@ -7,10 +7,42 @@ use crate::state::{AppCtx, ConfirmAction};
 use crate::theme::palette;
 use crate::widgets;
 
+/// 科目列表排序方式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccountSort {
+    /// 按编码（默认）：层级结构天然有序，父科目永远在子科目前面
+    #[default]
+    ByCode,
+    /// 按名称：找「银行存款」比记编码快
+    ByName,
+    /// 按类别：资产/负债/权益/成本/损益分组看
+    ByCategory,
+}
+
+impl AccountSort {
+    fn label(self) -> &'static str {
+        match self {
+            AccountSort::ByCode => "按编码",
+            AccountSort::ByName => "按名称",
+            AccountSort::ByCategory => "按类别",
+        }
+    }
+    fn next(self) -> Self {
+        match self {
+            AccountSort::ByCode => AccountSort::ByName,
+            AccountSort::ByName => AccountSort::ByCategory,
+            AccountSort::ByCategory => AccountSort::ByCode,
+        }
+    }
+}
+
 pub struct AccountView {
     pub kw: String,
     pub leaf_only: bool,
     pub show_disabled: bool,
+    pub sort: AccountSort,
+    /// 只看有余额或有发生额的科目（199 个里大部分是 0，新手不知道哪些在用）
+    pub only_used: bool,
     pub rows: Vec<Account>,
     pub dirty: bool,
     /// 正在编辑的科目；None 表示未打开编辑窗
@@ -27,6 +59,8 @@ impl Default for AccountView {
             kw: String::new(),
             leaf_only: false,
             show_disabled: true,
+            sort: AccountSort::default(),
+            only_used: false,
             rows: Vec::new(),
             dirty: true,
             editing: None,
@@ -50,16 +84,23 @@ impl AccountView {
         self.rows = findb::accounts::list(ctx.db()).unwrap_or_default();
     }
 
-    fn filtered(&self, ctx: &AppCtx<'_>) -> Vec<&Account> {
+    fn filtered(&self, ctx: &AppCtx<'_>, used: &std::collections::HashSet<String>) -> Vec<&Account> {
         let kw = self.kw.trim().to_lowercase();
         let chart = ctx.chart();
-        self.rows
+        let mut out: Vec<&Account> = self
+            .rows
             .iter()
             .filter(|a| {
                 if !self.show_disabled && a.disabled {
                     return false;
                 }
-                if self.leaf_only && chart.is_leaf(&a.code) == false {
+                if self.leaf_only && !chart.is_leaf(&a.code) {
+                    return false;
+                }
+                // 「只看在用」：有分录、有期初余额，或任一子科目在用。
+                // 199 个科目里大部分是 0，新手打开看到满屏 0 会以为软件没装好；
+                // 先只看自己在用的，剩下的需要时再放出来。
+                if self.only_used && !used.contains(&a.code) {
                     return false;
                 }
                 if kw.is_empty() {
@@ -67,7 +108,62 @@ impl AccountView {
                 }
                 a.code.to_lowercase().contains(&kw) || a.name.to_lowercase().contains(&kw)
             })
-            .collect()
+            .collect();
+        match self.sort {
+            AccountSort::ByCode => out.sort_by(|a, b| a.code.cmp(&b.code)),
+            AccountSort::ByName => out.sort_by(|a, b| {
+                a.name.cmp(&b.name).then_with(|| a.code.cmp(&b.code))
+            }),
+            AccountSort::ByCategory => out.sort_by(|a, b| {
+                format!("{:?}", a.category)
+                    .cmp(&format!("{:?}", b.category))
+                    .then_with(|| a.code.cmp(&b.code))
+            }),
+        }
+        out
+    }
+
+    /// 算出「在用」的科目集合：有分录、有期初，或子科目在用（父级要留着撑结构）。
+    fn used_codes(&self, ctx: &AppCtx<'_>) -> std::collections::HashSet<String> {
+        use std::collections::HashSet;
+        if !self.only_used {
+            return HashSet::new();
+        }
+        let mut used: HashSet<String> = HashSet::new();
+        // 有分录的
+        for a in &self.rows {
+            if let Ok((n, _)) = findb::accounts::usage(ctx.db(), &a.code) {
+                if n > 0 {
+                    used.insert(a.code.clone());
+                }
+            }
+        }
+        // 有期初余额的
+        if let Ok(begins) = findb::balances::list_begin(ctx.db()) {
+            for b in begins {
+                // BeginRow 的期初口径：三项任一非零就算在用
+                if !b.year_begin.is_zero() || !b.debit_accum.is_zero() || !b.credit_accum.is_zero() {
+                    used.insert(b.account_code.clone());
+                }
+            }
+        }
+        // 子在用 → 父也留着，不然树断了
+        let chart = ctx.chart();
+        let mut extra: Vec<String> = Vec::new();
+        for code in used.iter() {
+            let mut cur = chart.parent_code(code);
+            while let Some(p) = cur {
+                if used.contains(&p) {
+                    break;
+                }
+                extra.push(p.clone());
+                cur = chart.parent_code(&p);
+            }
+        }
+        for p in extra {
+            used.insert(p);
+        }
+        used
     }
 
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
@@ -89,6 +185,18 @@ impl AccountView {
             }
             ui.checkbox(&mut self.leaf_only, "只看末级");
             ui.checkbox(&mut self.show_disabled, "显示停用");
+            // 「只看在用」：199 个里大部分是 0，先只看自己在用的
+            if ui.checkbox(&mut self.only_used, "只看在用").changed() {
+                self.dirty = false; // 过滤是纯内存操作，不用重查库
+            }
+            // 排序三档循环：编码（层级有序）→ 名称（找名字快）→ 类别（分组看）
+            if ui
+                .button(format!("排序：{}", self.sort.label()))
+                .on_hover_text("点一下换一种排序：编码 → 名称 → 类别")
+                .clicked()
+            {
+                self.sort = self.sort.next();
+            }
             if ui.button("刷新").clicked() {
                 self.dirty = true;
                 ctx.reload_chart();
@@ -117,7 +225,8 @@ impl AccountView {
             }
         });
 
-        let rows: Vec<Account> = self.filtered(ctx).into_iter().cloned().collect();
+        let used = self.used_codes(ctx);
+        let rows: Vec<Account> = self.filtered(ctx, &used).into_iter().cloned().collect();
         let leafs: Vec<bool> = rows.iter().map(|a| ctx.chart().is_leaf(&a.code)).collect();
         let cols = [
             widgets::TCol::new("科目编码", 110.0).fixed(),
@@ -146,9 +255,16 @@ impl AccountView {
                     ui.label(txt);
                 }
                 1 => {
-                    ui.label(RichText::new(&a.name).color(if a.disabled {
-                        ui.visuals().weak_text_color()
-                    } else {
+                    // 层级缩进：`100101` 是 `1001` 的下级，缩两格。
+                    // 以前是平铺的，`1001` 和 `100101` 看不出父子关系，
+                    // 新手不知道点哪个。level 从科目表来，1 级不缩。
+                    let lvl = ctx.chart().level(&a.code).saturating_sub(1) as usize;
+                    let indent = "　".repeat(lvl.min(3));
+                    let marker = if lvl > 0 && leaf { "└ " } else if lvl > 0 { "├ " } else { "" };
+                    ui.label(
+                        RichText::new(format!("{indent}{marker}{}", a.name)).color(if a.disabled {
+                            ui.visuals().weak_text_color()
+                        } else {
                         Color32::BLACK
                     }));
                 }
@@ -390,7 +506,8 @@ impl AccountView {
     }
 
     fn export(&mut self, ctx: &mut AppCtx<'_>, mode: crate::views::export::ExportMode) {
-        let rows = self.filtered(ctx);
+        let used = self.used_codes(ctx);
+        let rows = self.filtered(ctx, &used);
         if rows.is_empty() {
             ctx.error("没有可导出的数据");
             return;
@@ -445,4 +562,34 @@ pub fn guess_category(code: &str) -> Option<AcctCategory> {
 pub fn mask_from(flags: &[(AuxKind, bool)]) -> AuxMask {
     let kinds: Vec<AuxKind> = flags.iter().filter(|(_, on)| *on).map(|(k, _)| *k).collect();
     AuxMask::from_list(&kinds)
+}
+
+#[cfg(test)]
+mod sort_tests {
+    use super::*;
+
+    #[test]
+    fn 排序三档循环不断() {
+        let mut s = AccountSort::default();
+        assert_eq!(s, AccountSort::ByCode, "默认按编码（层级天然有序）");
+        s = s.next();
+        assert_eq!(s, AccountSort::ByName);
+        s = s.next();
+        assert_eq!(s, AccountSort::ByCategory);
+        s = s.next();
+        assert_eq!(s, AccountSort::ByCode, "三档循环要回到起点");
+    }
+
+    #[test]
+    fn 每档都有中文标签() {
+        for s in [AccountSort::ByCode, AccountSort::ByName, AccountSort::ByCategory] {
+            assert!(!s.label().is_empty(), "{:?} 缺标签", s);
+        }
+    }
+
+    /// 层级缩进的上限：再深也只缩 3 格，不然窄屏下名称列被吃光
+    #[test]
+    fn 缩进有上限() {
+        assert_eq!("　".repeat(10.min(3)).chars().count(), 3);
+    }
 }
