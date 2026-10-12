@@ -52,6 +52,11 @@ jobs:
         run: |
           mkdir -p dist/pack
           cp target/release/finbook docs/新手使用说明.txt dist/示例账套.fbk dist/pack/
+          # 发布说明随包一起上传：Publish job 只下载 artifact、不 checkout
+          # 仓库，工作目录里没有 docs/，说明文件必须搭这个便车。
+          mkdir -p dist/docs-releases
+          cp "docs/releases/${GITHUB_REF_NAME}.md" dist/docs-releases/ 2>/dev/null \
+            || echo "::warning::没有 docs/releases/${GITHUB_REF_NAME}.md，发布将用自动生成的说明"
           tar -C dist/pack -czf "dist/finbook-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
@@ -82,6 +87,9 @@ jobs:
           mkdir -p dist/pack
           cp target/x86_64-pc-windows-gnu/release/finbook.exe \
              docs/新手使用说明.txt dist/示例账套.fbk dist/pack/
+          # 说明文件跟着走（Publish 靠它生成 Release 正文，见 Linux job 同处注释）
+          mkdir -p dist/docs-releases
+          cp "docs/releases/${GITHUB_REF_NAME}.md" dist/docs-releases/ 2>/dev/null || true
           # 不能用 zip -j（会拍平目录名，中文文件名也容易在 Windows 下乱码）；
           # 保持包内一层目录，解压出来就是一个能直接双击的文件夹。
           (cd dist/pack && zip -r "../finbook-${GITHUB_REF_NAME#v}-windows-x86_64.zip" .)
@@ -161,14 +169,21 @@ jobs:
           echo "将上传 ${#ASSETS[@]} 个文件："
           printf '  %s\n' "${ASSETS[@]}"
 
-          # 发布说明按版本号取文件；没有对应文件就退回自动生成，
-          # 免得「说明文件没提交」直接把整个发布卡死。
-          NOTES="$GITHUB_WORKSPACE/docs/releases/${GITHUB_REF_NAME}.md"
-          if [ -f "$NOTES" ]; then
-            echo "使用发布说明：${NOTES#$GITHUB_WORKSPACE/}"
+          # 说明文件不能从工作目录读：download-artifact 只拉 artifact，
+          # 并不 checkout 仓库，所以 $GITHUB_WORKSPACE 里没有 docs/。
+          # （前两版分别栽在「相对路径 cd dist」和「目录里压根没源码」上，
+          #   两次都是被 [ -f ] 守卫静默吞掉，日志看起来一切正常。）
+          # 所以各打包 job 把说明文件一并塞进 artifact，这里从 dist/ 读。
+          NOTES=""
+          for cand in dist/docs-releases/*.md dist/*-release-notes.md; do
+            if [ -f "$cand" ]; then NOTES="$cand"; break; fi
+          done
+          if [ -n "$NOTES" ]; then
+            echo "使用发布说明：$NOTES"
             NOTES_ARGS=(--notes-file "$NOTES")
           else
-            echo "未找到 $NOTES，改用自动生成的提交列表"
+            echo "::warning::未找到发布说明文件，改用自动生成的提交列表"
+            echo "候选："; ls -la dist/ || true
             NOTES_ARGS=(--generate-notes)
           fi
 
