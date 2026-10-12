@@ -4,6 +4,7 @@ pub mod about;
 pub mod account;
 pub mod advanced;
 pub mod assets;
+pub mod aux_batch;
 pub mod aux_view;
 pub mod automation;
 pub mod backup;

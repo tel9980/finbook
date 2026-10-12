@@ -326,6 +326,47 @@ pub fn import_many(db: &Db, items: &[AuxEntity]) -> DbResult<usize> {
     Ok(n)
 }
 
+/// 批量导入（跳过已存在的编码，**不覆盖**）
+///
+/// 与 `import_many` 的区别就在那句 `INSERT OR REPLACE`：那个会**静默覆盖**同名档案 ——
+/// 用户从 Excel 粘一份名单进来，其中一条编码恰好和库里重了，名字被悄悄改掉，
+/// 而他毫无察觉地继续用（尤其当那份 Excel 是旧版本时）。
+/// 这里宁可少导一条、并在返回值里报告跳过了哪些，也不替用户做决定。
+///
+/// 返回 (成功条数, 跳过的编码列表)。
+pub fn insert_many_skip_existing(db: &Db, items: &[AuxEntity]) -> DbResult<(usize, Vec<String>)> {
+    let tx = db.write_tx()?;
+    let mut n = 0;
+    let mut skipped: Vec<String> = Vec::new();
+    for e in items {
+        let exists: i64 = tx.query_row(
+            "SELECT COUNT(1) FROM aux_entity WHERE kind=?1 AND code=?2",
+            rusqlite::params![kind_str(e.kind), e.code],
+            |r| r.get(0),
+        )?;
+        if exists > 0 {
+            skipped.push(e.code.clone());
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO aux_entity(kind,code,name,parent_code,disabled,props_json,memo)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            rusqlite::params![
+                kind_str(e.kind),
+                e.code,
+                e.name,
+                e.parent_code,
+                e.disabled as i64,
+                serde_json::to_string(&e.props)?,
+                e.memo
+            ],
+        )?;
+        n += 1;
+    }
+    tx.commit()?;
+    Ok((n, skipped))
+}
+
 /// 常用摘要
 pub fn list_summaries(db: &Db) -> DbResult<Vec<String>> {
     let mut stmt = db
@@ -478,6 +519,41 @@ mod parent_tests {
 mod tests {
     use super::*;
     use crate::tests::mem;
+
+    /// 批量导入的核心约定：**不覆盖**。
+    ///
+    /// `import_many` 用的是 `INSERT OR REPLACE`，同名档案会被静默改掉 ——
+    /// 用户粘一份旧 Excel 进来，其中一条编码和库里重了，客户名就悄悄变了，
+    /// 而凭证上的历史金额对不上任何东西，之后极难排查。
+    /// 所以这里必须保持「跳过并报告」。
+    #[test]
+    fn insert_many_skip_existing_不覆盖已有档案() {
+        let db = mem();
+        insert(&db, &AuxEntity::new(AuxKind::Customer, "C01", "原客户名")).unwrap();
+
+        let items = vec![
+            AuxEntity::new(AuxKind::Customer, "C01", "新客户名"),
+            AuxEntity::new(AuxKind::Customer, "C02", "新客户乙"),
+        ];
+        let (n, skipped) = insert_many_skip_existing(&db, &items).unwrap();
+
+        assert_eq!(n, 1, "只有 C02 该被导入");
+        assert_eq!(skipped, vec!["C01".to_string()]);
+        assert_eq!(
+            get(&db, AuxKind::Customer, "C01").unwrap().unwrap().name,
+            "原客户名",
+            "已有档案的名字不能被批量导入改掉"
+        );
+        assert_eq!(get(&db, AuxKind::Customer, "C02").unwrap().unwrap().name, "新客户乙");
+    }
+
+    #[test]
+    fn insert_many_skip_existing_空列表不报错() {
+        let db = mem();
+        let (n, skipped) = insert_many_skip_existing(&db, &[]).unwrap();
+        assert_eq!(n, 0);
+        assert!(skipped.is_empty());
+    }
 
     #[test]
     fn crud() {

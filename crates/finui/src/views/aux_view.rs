@@ -16,6 +16,8 @@ pub struct AuxView {
     pub editing_new: bool,
     pub dirty: bool,
     pub err: String,
+    /// 批量粘贴窗口
+    pub batch: super::aux_batch::Ui,
 }
 
 impl Default for AuxView {
@@ -29,6 +31,7 @@ impl Default for AuxView {
             editing_new: false,
             dirty: true,
             err: String::new(),
+            batch: Default::default(),
         }
     }
 }
@@ -67,6 +70,10 @@ impl AuxView {
                 self.editing = Some(AuxEntity::new(kind, String::new(), String::new()));
                 self.editing_new = true;
                 self.err.clear();
+            }
+            if ui.button("批量新增").clicked() && ctx.can(Perm::AuxEdit) {
+                self.batch = Default::default();
+                self.batch.open = true;
             }
             if ui.button("刷新").clicked() {
                 self.dirty = true;
@@ -154,6 +161,15 @@ impl AuxView {
         }
 
         self.edit_window(ctx, ui);
+
+        // 批量粘贴窗口：导入成功后要刷新列表
+        if self.batch.open {
+            let existing = findb::auxs::codes(ctx.db(), kind).unwrap_or_default();
+            if self.batch.window(ctx, kind, &existing, ui) {
+                self.dirty = true;
+                ctx.toast("批量导入完成，列表已刷新");
+            }
+        }
     }
 
     fn edit_window(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
