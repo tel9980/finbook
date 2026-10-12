@@ -779,13 +779,21 @@ cargo test --workspace
 | `finweb` REST API 集成 | 186 |
 | `finweb` 客户视图 API | 4 |
 | **小计** | **690** |
-| Playwright E2E | 85 |
+| Playwright E2E | 90 |
 
 > E2E 的条数只在 CI 里按**唯一权威来源**核对：
 > `npx playwright test --list` 的 `Total: N tests in M files`。
 > 不要数 `npx playwright test` 的输出行数 —— 那个输出把 `x … (retry #1)`
 > 也编了号，失败重试的用例会被数两遍。我就因为这个把基线写成 75，
 > 实际是 72。基线数字错了比没有数字更坏：它会让人以为少了两条用例。
+>
+> 85 → 90：同上，按 `npx playwright test --list` 的 `Total:` 核对（30 个文件）。
+> 这次特意是**跑通了才改的** —— 改之前先在 CI 上确认这 90 条全绿
+> （2026-10-12，Web E2E job success），而不是拿一个未经证实的数字去填。
+> 顺带说明为什么本地核不了：开发容器里没有 X11，CDP 发出的键盘/输入事件
+> 到不了渲染进程（`Input.insertText` 与 `dispatchKeyEvent` 两种路径都失效，
+> 换成 Chromium 140 也一样），所以 `fill()` 写入的值会丢失，登录页永远提交不了。
+> 降版本和 Xvfb 都绕不过去 —— 这是容器的输入通道限制，不是本项目的问题。
 >
 > 2026-10-01 补的 9 条（73 → 82）全部来自 `gap-7-views.spec.js`，
 > 补的是**此前 UI 层零覆盖的 7 个功能**：合并报表 / 批次库位 / 存货盘点 /
