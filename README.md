@@ -851,11 +851,11 @@ cargo test --workspace
 | `findb`（持久化 + DAO + 安全闸门） | 349 |
 | `findb` 端到端 `core_loop` | 21 |
 | `findb` 端到端 `ext_loop` | 7 |
-| `finui` | 36 |
+| `finui` | 38 |
 | `finweb` lib | 4 |
 | `finweb` REST API 集成 | 186 |
 | `finweb` 客户视图 API | 7 |
-| **小计** | **723** |
+| **小计** | **725** |
 | Playwright E2E | 90 |
 
 > 本轮一次性校准了整张表（此前 `findb` 还停在 340、客户视图还停在 4，

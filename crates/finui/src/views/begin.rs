@@ -238,13 +238,24 @@ impl BeginView {
             ui.checkbox(&mut self.only_nonzero, "只看有余额的");
             ui.separator();
             if ui.button("按期末余额倒推").clicked() && can_edit {
-                ctx.confirm_dangerous(
-                    "按期末余额倒推期初",
-                    "将用「当前期末余额 − 启用期以来发生额」重算并覆盖全部期初行。\n\
-                     该操作会覆盖现有期初数据，确定继续吗？",
-                    ConfirmAction::AutoFillBegin,
-                    true,
-                );
+                // 前置检查：新账套（启用期以来没有任何发生额、也没有余额）点这个
+                // 等于白点 —— auto_fill_begin 会算出 n=0，静默结束。
+                // 用户刚点了「确定」，结果什么都没发生，他会以为按钮坏了。
+                // 所以先数有没有可倒推的数据，没有就直接告诉他，别让他走确认流程。
+                if !has_reversible_data(ctx.db()) {
+                    ctx.error(
+                        "账套里还没有任何余额和发生额，没有可倒推的数据。\n\
+                         新账套请用「批量粘贴」从上期余额表导入，或逐行填写。",
+                    );
+                } else {
+                    ctx.confirm_dangerous(
+                        "按期末余额倒推期初",
+                        "将用「当前期末余额 − 启用期以来发生额」重算并覆盖全部期初行。\n\
+                         该操作会覆盖现有期初数据，确定继续吗？",
+                        ConfirmAction::AutoFillBegin,
+                        true,
+                    );
+                }
             }
             ui.separator();
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
@@ -654,6 +665,22 @@ impl BeginView {
 }
 
 /// 供确认动作调用：按当前期末余额倒推期初
+/// 账套里是否有可供「按期末余额倒推」的数据。
+///
+/// 倒推公式是 期末 − 本期发生 = 期初；两边都是 0 的行会被 auto_fill_begin 跳过。
+/// 若**所有**行都可跳过，点按钮等于白点 —— 用户刚点了「确定」却什么都没发生，
+/// 他会以为按钮坏了。所以点按钮时先调这个，没有就直接报错，别走确认流程。
+pub fn has_reversible_data(db: &findb::Db) -> bool {
+    let start = db.options().start_period;
+    findb::balances::BalanceSnapshot::load(db, &BalanceQuery::range(start, Period::default()))
+        .map(|snap| {
+            snap.raw_rows().iter().any(|r| {
+                !r.account_code.trim().is_empty() && (!r.end().is_zero() || !r.begin.is_zero())
+            })
+        })
+        .unwrap_or(false)
+}
+
 pub fn auto_fill_begin(ctx: &mut AppCtx<'_>) -> Result<usize, String> {
     let start = ctx.db().options().start_period;
     let snap = findb::balances::BalanceSnapshot::load(
@@ -738,5 +765,72 @@ mod mismatch_tests {
     fn 未知科目不标() {
         let r = row("9999", Direction::Debit, "100");
         assert!(!r.dir_mismatch(None));
+    }
+}
+
+#[cfg(test)]
+mod reversible_tests {
+    use super::*;
+
+    fn fresh_db(suffix: &str) -> findb::Db {
+        let path = std::env::temp_dir().join(format!(
+            "finui-reversible-test-{}-{}.fbk",
+            std::process::id(),
+            suffix
+        ));
+        let _ = std::fs::remove_file(&path);
+        let opts = fincore::BookOptions {
+            code_scheme: vec![4, 2, 2, 2],
+            start_period: Period::parse("2026-01").unwrap(),
+            base_currency: "CNY".into(),
+            company: "测试".into(),
+            tax_no: String::new(),
+            enable_qty: false,
+            enable_foreign: false,
+            enable_audit: false,
+            require_cashier: false,
+            biz_accounts: Default::default(),
+            budget_control: String::new(),
+            doc_prefixes: Default::default(),
+            require_audit: false,
+            voucher_words: fincore::chart::default_voucher_words(),
+        };
+        findb::Db::create(&path, &opts).expect("建测试账套")
+    }
+
+    /// 空账套：没有余额也没有发生额 → 点倒推等于白点，必须提前拦住
+    #[test]
+    fn 空账套无可倒推数据() {
+        let db = fresh_db("empty");
+        let path = db.path().to_path_buf();
+        let r = !has_reversible_data(&db);
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        assert!(
+            r,
+            "空账套点「按期末余额倒推」应该被前置检查拦住，而不是走确认后静默 n=0"
+        );
+    }
+
+    /// 有余额的账套 → 可以倒推，不该被拦
+    #[test]
+    fn 有余额时不拦() {
+        use fincore::AuxRef;
+        let db = fresh_db("withbal");
+        let br = findb::balances::BeginRow {
+            id: 0,
+            account_code: "1001".to_string(),
+            aux: AuxRef::default(),
+            year_begin: Money::parse_or_zero("5000"),
+            debit_accum: Money::ZERO,
+            credit_accum: Money::ZERO,
+            qty_begin: None,
+        };
+        findb::balances::upsert_begin(&db, &br).unwrap();
+        let r = has_reversible_data(&db);
+        let path = db.path().to_path_buf();
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        assert!(r, "有余额时点倒推应该放行");
     }
 }
