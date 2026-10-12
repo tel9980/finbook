@@ -187,13 +187,26 @@ jobs:
             NOTES_ARGS=(--generate-notes)
           fi
 
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          # 先 create 再 upload，不用 `gh release view` 探测。
+          # 原因：v1.1.0 第二次发布踩过——删除 tag 会连带删掉它指向的
+          # Release，而 `gh release view` 在「tag 存在但 Release 不存在」
+          # 时的退出码并不可靠，于是走进了 upload 分支。upload **不会创建**
+          # Release，于是 job 显示 success，Release 却根本没建出来
+          # （API 查 tag 得到 404）。这种「绿但没产物」比直接报错更难查。
+          #
+          # create 撞上已存在的 Release 会失败，此时再退回 upload 覆盖。
+          if gh release create "$GITHUB_REF_NAME" \
+               --repo "$GITHUB_REPOSITORY" \
+               --verify-tag \
+               --title "FinBook ${GITHUB_REF_NAME}" \
+               "${NOTES_ARGS[@]}" \
+               "${ASSETS[@]}"; then
+            echo "已创建 Release $GITHUB_REF_NAME"
           else
-            gh release create "$GITHUB_REF_NAME" \
-              --repo "$GITHUB_REPOSITORY" \
-              --verify-tag \
-              --title "FinBook ${GITHUB_REF_NAME}" \
-              "${NOTES_ARGS[@]}" \
-              "${ASSETS[@]}"
+            echo "Release 已存在，改为覆盖上传产物"
+            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+            # 正文也一并更新（upload 只换附件，不改正文）
+            if [ -n "$NOTES" ]; then
+              gh release edit "$GITHUB_REF_NAME" --notes-file "$NOTES" --repo "$GITHUB_REPOSITORY"
+            fi
           fi
