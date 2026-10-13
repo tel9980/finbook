@@ -664,6 +664,33 @@ try {
   console.log("可移植性检查未能运行：" + String((e && e.message) || e).split("\n")[0].slice(0, 100));
   bad++;
 }
+// ---- 2c-2. 精简模式的侧栏逻辑 ----
+//
+// 为什么单独立一条而不是并进 check-js.js：**E2E 才是它的主要验证手段，
+// 而 E2E 只在 CI 上跑**。本机 Playwright 的输入注入失效（`page.fill` 之后
+// `input.value` 是空的），所以开发者本地跑 E2E 只会看到「等不到 #new-book」，
+// 分不清是产品坏了还是环境不行 —— 本次 CI 上的 E2E 失败就是这样卡住的。
+//
+// 这条检查在 Node 里抽 app.js 的**真实源码片段**执行（抽不到就报错，不许
+// 静默用副本），验证三条不变量：默认只铺日常功能、搜索数据源是全量、
+// 账号分区互不污染。
+try {
+  const r = execFileSync(process.execPath, [path.join(__dirname, "check-simple-nav.js")], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  process.stdout.write(r);
+  if (/FAIL/.test(r)) {
+    console.log("精简模式侧栏：有 FAIL");
+    bad++;
+  }
+} catch (e) {
+  console.log(
+    "精简模式检查未能运行：" + String((e && e.message) || e).split("\n")[0].slice(0, 100)
+  );
+  bad++;
+}
+
 // ---- 2d. 客户视图的余额只能有一处算法 ----
 //
 // docs/客户管理模块设计.md §3.2①：客户视图的所有余额必须走

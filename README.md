@@ -994,6 +994,48 @@ body 是我们自己在 JS 里拼的，query 是从 URL 拼的，两处都很难
 而且结论看起来完全合理。我差点据此去改本来正确的代码。
 以后验证 HTTP 行为优先用现成的集成测试（`oneshot`），别拿手写脚本凑。
 
+### 4.68 本机 E2E 跑不动 → 给侧栏逻辑补一道 Node 检查
+
+CI 的 E2E 挂了，但我拿不到日志（只读 token 无 Actions 写权限）。本机按 CI 的
+方式起 finweb + `npx playwright install chromium` 居然真的跑起来了，但：
+
+```
+page.fill("#u", "admin")  →  input.value === ""     ← 输入根本没进去
+checkValidity() === false
+点击 / JS click 都没有触发 /api/login
+```
+
+于是连**没被我碰过**的 `smoke.spec.js` 都卡在「等不到 `#new-book`」。
+结论：本机浏览器输入注入失效，E2E 在本地**完全无法验证**——看到失败也
+分不清是产品坏了还是环境不行。CI 上那次 E2E 失败就是这样卡住的：
+我一度以为是产品 bug。
+
+**所以给侧栏逻辑补了一道能在本地跑的检查**：`tools/check-simple-nav.js`。
+
+关键设计是**抽 app.js 的真实源码片段执行**，而不是抄一份到检查里：
+
+```js
+function grab(re, what) {
+  const m = SRC.match(re);
+  if (!m) throw new Error(`抽不到 ${what}，源码形状变了？`);
+  return m[0];
+}
+const LISTED_SRC = grab(/const listed = [\s\S]*?;/, "listed");
+const listed = eval(LISTED_SRC.replace("const listed = ", ""));
+```
+
+抄一份的话，产品改了检查还在跑，报「全绿」，而实际行为早变了 —— 那才是
+真正危险的检查。抽不到就抛错，至少不会**假装通过**。
+
+验证三条不变量：默认只铺 16 项（生产/预算/库存那一片必须不在）、**搜索数据
+源是全量 70 项**（藏起来≠拿掉的根据）、账号分区互不污染、`rest` 只排 favs
+不排 recents。已接进 `check-ci.js`。
+
+**还有个教训**：这条检查第一版报了个假失败「cashier 的 false 没生效」。
+原因是我 `lsSet("nav_simple@cashier", false)` 之后**没切 session** ——
+`acctKey` 拼的是当前登录账号，session 还在 admin 上，等于在测 admin 的 key。
+探针自己也会有 bug，报红不等于产品有问题，得先确认探针测的是它声称的东西。
+
 ---
 
 ## 5. 关键设计约定
