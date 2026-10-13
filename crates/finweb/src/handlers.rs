@@ -688,6 +688,9 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/templates/:id", put(update_template).delete(delete_template))
         .route("/api/templates/:id/generate", post(generate_template))
         .route("/api/aux", get(list_aux).post(create_aux))
+        // 路径刻意用 `aux-presets` 而不是 `aux/presets`：上面那条
+        // `/api/aux/:id` 会把 `presets` 当成 id 吃掉。
+        .route("/api/aux-presets", get(get_aux_presets).post(preset_aux))
         .route("/api/item-plan", get(get_item_plan).post(save_item_plan))
         .route("/api/aux/:id", put(update_aux).delete(delete_aux))
         .route("/api/payroll", get(list_payroll).post(save_payroll))
@@ -13546,6 +13549,59 @@ async fn create_aux(
     let id = auxs::insert(&db, &e)?;
     db.log(user.username(), "档案", "新建档案", &format!("{} {}", e.kind.label(), e.name))?;
     Ok(Json(json!({"id": id})))
+}
+
+/// 预置档案端点的入参：只要类别
+#[derive(serde::Deserialize)]
+struct KindReq {
+    kind: AuxKind,
+}
+
+/// `?kind=` 查询串，缺省按部门处理（`AuxKind` 的 from_str 失败时）
+#[derive(serde::Deserialize)]
+struct KindQuery {
+    kind: String,
+}
+
+/// 该类别可预置的常用档案清单（只读，不落库）
+///
+/// 前端据此决定要不要显示「预置常用档案」按钮、以及把条目名列在按钮旁边 ——
+/// 清单只有 fincore 一份（`AuxPreset`），前端不自己硬编码，改一处就够。
+async fn get_aux_presets(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<KindQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _ = (state, &user);
+    let kind = AuxKind::from_code(&q.kind).unwrap_or(AuxKind::Dept);
+    let items: Vec<serde_json::Value> = fincore::auxiliary::preset_aux(kind)
+        .iter()
+        .map(|p| json!({"code": p.code, "name": p.name, "memo": p.memo}))
+        .collect();
+    Ok(Json(json!({
+        "kind": kind,
+        "label": kind.label(),
+        "items": items,
+        "available": !items.is_empty(),
+    })))
+}
+
+/// 一键预置常用档案（跳过已存在，不覆盖）
+async fn preset_aux(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(q): Json<KindReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::AuxEdit)?;
+    let db = state.db_for(&user.book_key)?;
+    let (n, skipped) = auxs::insert_presets(&db, q.kind)?;
+    db.log(
+        user.username(),
+        "档案",
+        &format!("预置{}常用档案", q.kind.label()),
+        &format!("{n} 条"),
+    )?;
+    Ok(Json(json!({"inserted": n, "skipped": skipped})))
 }
 
 async fn update_aux(

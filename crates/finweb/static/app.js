@@ -10491,8 +10491,10 @@ function renderAux(main, rows, kind) {
     <div class="toolbar">
       ${AUX_KINDS.map((k) => `<button class="btn sm ${kind === k.code ? "primary" : "ghost"}" data-kind="${k.code}">${k.label}</button>`).join("")}
       <div class="spacer"></div>
+      ${can("aux_edit") ? `<button class="btn" id="aux-preset" hidden>预置常用档案</button>` : ""}
       ${can("aux_edit") ? `<button class="btn primary" id="aux-new">新增${esc(AUX_KINDS.find((k) => k.code === kind).label)}</button>` : ""}
     </div>
+    <div id="aux-hint" class="muted" style="font-size:12px;margin-bottom:6px"></div>
     <div class="panel" style="padding:0;overflow:auto;max-height:65vh">
       <table class="grid">
         <thead><tr><th>编码</th><th>名称</th><th>上级编码</th><th>状态</th><th>备注</th><th></th></tr></thead>
@@ -10510,6 +10512,10 @@ function renderAux(main, rows, kind) {
         </tbody>
       </table>
     </div>`;
+  // 空档案引导 + 预置按钮都从后端拿清单，不在前端硬编码：
+  // 只有 fincore 的 AuxPreset 一份来源，改一处就够；也避免前端说
+  // 「有预置」而后端返回空，按钮点了没反应。
+  loadAuxPreset(main, rows, kind);
   $all("[data-kind]", main).forEach((b) => b.addEventListener("click", () => { state.auxKind = b.dataset.kind; viewAux(main); }));
   if ($("#aux-new")) $("#aux-new").addEventListener("click", () => openAuxEditor(main, null, kind));
   $all("[data-act]", main).forEach((b) => b.addEventListener("click", async () => {
@@ -10523,6 +10529,59 @@ function renderAux(main, rows, kind) {
       catch (e2) { toast(e2.message, "err"); }
     }
   }));
+}
+
+/// 拉该类别的预置清单，按「有 / 无预置」×「库空 / 不空」给不同提示。
+async function loadAuxPreset(main, rows, kind) {
+  const hint = $("#aux-hint", main);
+  const btn = $("#aux-preset", main);
+  let p;
+  try { p = await api(`/aux-presets?kind=${encodeURIComponent(kind)}`); }
+  catch (e) { return; } // 端点不可用不影响主流程
+
+  if (!p.available) {
+    // 这一类没有通用档案名。与其藏起按钮让用户到处找，不如说清楚为什么。
+    if (hint) {
+      hint.innerHTML = `没有可预置的${esc(p.label)}。${["客户", "供应商", "存货", "职员", "项目"].indexOf(p.label) >= 0
+        ? "这几类的名字没有通用值，预置一个假的会跟着凭证进报表 —— 请点右上「新增」填你自己的。"
+        : ""}`;
+    }
+    if (btn) btn.remove();
+    return;
+  }
+
+  const names = p.items.map((x) => `${x.code} ${x.name}`).join("、");
+  if (hint) {
+    if (!rows.length) {
+      hint.innerHTML = `还没有任何${esc(p.label)}。带${esc(p.label)}核算的科目<b>必须</b>填这一项才能记凭证，
+        没有档案就一张凭证也存不了。点「预置常用档案」建出通用条目：${esc(names)}（建完请按你公司的情况改名）。`;
+    } else {
+      hint.textContent = `可预置：${names}（编码相同的已有档案不会被覆盖）`;
+    }
+  }
+  if (btn) {
+    btn.hidden = false;
+    btn.title = `将新建：${names}。已有的编码不会被覆盖。`;
+    btn.addEventListener("click", async () => {
+      if (!(await confirmDialog(`预置${p.label}常用档案？`,
+        `将新建 ${p.items.length} 条：${names}\n这些都是通用占位，建完请按你公司的情况改名或补全。编码相同的已有档案不会被覆盖。`,
+        true))) return;
+      try {
+        const r = await api("/aux-presets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind }),
+        });
+        let msg = r.inserted ? `已预置 ${r.inserted} 条${p.label}档案，请按你公司的情况改名。`
+                             : `${p.label}档案已经都有对应的了，没有新增。`;
+        if (r.skipped && r.skipped.length) {
+          msg += ` 已有 ${r.skipped.length} 条被跳过（编码相同）：${r.skipped.join("、")}。你的原档案没动。`;
+        }
+        toast(msg, "ok");
+        rerenderView("aux", main);
+      } catch (e) { toast(e.message, "err"); }
+    });
+  }
 }
 
 function openAuxEditor(main, ent, kind) {
