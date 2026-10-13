@@ -16,6 +16,7 @@
 
 pub mod account;
 pub mod auxiliary;
+pub mod batch;
 pub mod balance;
 pub mod chart;
 pub mod engine;

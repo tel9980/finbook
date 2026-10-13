@@ -1,190 +1,16 @@
-//! 辅助档案批量粘贴解析
+//! 辅助档案批量粘贴的**界面部分**（解析逻辑在 `fincore::batch::aux`）。
 //!
-//! 为什么要它：一家公司 50 个客户 + 30 个供应商 + 20 个员工，按「新增」按钮
-//! 一个个敲是 100 次点开、填编码、填名称、保存。而财务手上几乎一定已经有一份
-//! Excel/WPS 的名单 —— 让他们把两列复制过来粘贴一次，比让他们重打一遍便宜得多。
+//! 为什么解析不在这个文件里：Web 端也要同一套解析。若各写一份，桌面端支持了
+//! 某种写法而 Web 没支持，用户会得出「这软件有的地方能用有的不能用」。
+//! 解析下沉到 `fincore::batch`，两端共用；这里只管窗口与「预览 → 确认导入」两步。
 //!
-//! 支持两种写法（都能从 Excel 直接复制）：
-//!   1. `编码,名称` 两列 —— 有自己的编码体系时用
-//!   2. 只写名称      —— 编码按类型前缀自动递增（C01/C02…、S01/S02…），
-//!      小白多半不知道怎么给档案编编码，让他自己填反而是个坎
-//!
-//! 分隔符容忍逗号/中文逗号/制表符/全角空格：Excel 复制出来的是 `\t`，
-//! WPS 有时给中文逗号，全角逗号也见过。标题行（含「编码」「名称」等）自动跳过。
+//! 两步是强制的：直接点确认会把一坨文本当数据写库 —— 粘贴错位（多带表头、
+//! 带上了合计行）会静默变成脏档案，而用户毫无察觉。
 
 use egui::RichText;
-use fincore::{AuxEntity, AuxKind};
+use fincore::AuxKind;
 
-/// 解析结果里的一行
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParsedRow {
-    pub code: String,
-    pub name: String,
-    /// 该行被跳过的原因（None = 可导入）
-    pub skip: Option<SkipReason>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum SkipReason {
-    /// 与本批次里前面的行重复
-    DuplicateInBatch,
-    /// 库里已有这个编码
-    ExistsInBook,
-}
-
-/// 解析结果
-pub struct Parsed {
-    pub rows: Vec<ParsedRow>,
-    /// 没能解析出任何内容的行（比如空行已被清理，但整段都是垃圾）
-    pub empty: bool,
-}
-
-impl Parsed {
-    pub fn importable(&self) -> Vec<ParsedRow> {
-        self.rows.iter().filter(|r| r.skip.is_none()).cloned().collect()
-    }
-}
-
-/// 各类档案的编码前缀。与项目里既有惯例一致（示例账套就是 C01/S01/D01/E01/B01）。
-pub fn code_prefix(kind: AuxKind) -> &'static str {
-    match kind {
-        AuxKind::Customer => "C",
-        AuxKind::Supplier => "S",
-        AuxKind::Dept => "D",
-        AuxKind::Employee => "E",
-        AuxKind::Item => "I",
-        AuxKind::Bank => "B",
-        _ => "X",
-    }
-}
-
-fn is_header_row(cols: &[&str]) -> bool {
-    // 只有首行才判表头（调用方保证 lineno == 0），且要求**整行全是**表头词。
-    // aux 这边名称列是纯中文（「杭州明远」），不可能撞上「编码/名称」，
-    // 所以 any/all 在此等价；但为与 begin_batch 一致、避免将来加了新写法
-    // （比如「编码,借/贷」）时重蹈 `1001,贷,5000` 被整行吞掉的覆辙，用 all。
-    cols.iter().all(|c| {
-        let c = c.trim();
-        c == "编码" || c == "代码" || c == "编号" || c == "code" || c == "名称" || c == "name"
-    })
-}
-
-/// 把一行拆成若干列。
-///
-/// 优先用 tab（Excel 复制的真实分隔符），没有 tab 再退到逗号/中文逗号/顿号，
-/// 最后按连续空格切 —— 这样从记事本贴「C01 杭州明远贸易」也能work。
-fn split_cols(line: &str) -> Vec<String> {
-    if line.contains('\t') {
-        return line.split('\t').map(|s| s.trim().to_string()).collect();
-    }
-    if line.contains(',') || line.contains('，') || line.contains('、') {
-        return line
-            .split([',', '，', '、'])
-            .map(|s| s.trim().to_string())
-            .collect();
-    }
-    line.split_whitespace().map(|s| s.to_string()).collect()
-}
-
-/// 解析粘贴文本。
-///
-/// `existing` 是库里已有的编码集合，用来标出「这个编码已经有了」；
-/// 传空集合就只做批次内去重（便于纯解析的单元测试）。
-pub fn parse(text: &str, kind: AuxKind, existing: &[String]) -> Parsed {
-    let prefix = code_prefix(kind);
-    let mut rows: Vec<ParsedRow> = Vec::new();
-    let mut seen_in_batch: Vec<String> = Vec::new();
-    // 自动编号从「库里最大号 +1」接着往下走，避免撞上已有的 C01
-    let mut next_num = 1 + existing
-        .iter()
-        .filter_map(|c| {
-            let rest = c.strip_prefix(prefix)?;
-            rest.parse::<u32>().ok()
-        })
-        .max()
-        .unwrap_or(0);
-    // 批次内自动生成的编码也要接着排，别和显式写的 C05 撞车
-    let mut auto_taken: Vec<String> = Vec::new();
-
-    for (lineno, raw) in text.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let cols = split_cols(line);
-        let cols: Vec<&str> = cols.iter().map(|s| s.as_str()).collect();
-        if cols.is_empty() {
-            continue;
-        }
-        // 首个非空行像表头就跳过（编码/名称 名称/编码）
-        if lineno == 0 && is_header_row(&cols) {
-            continue;
-        }
-
-        // 只有一列 → 名称，编码自动生成
-        // 两列 → 编码,名称（容忍顺序反了：纯中文的一律当名称）
-        let (code, name) = match cols.len() {
-            1 => {
-                let name = cols[0].to_string();
-                let mut code = format!("{}{:02}", prefix, next_num);
-                while auto_taken.iter().any(|c| *c == code) || existing.iter().any(|c| *c == code) {
-                    next_num += 1;
-                    code = format!("{}{:02}", prefix, next_num);
-                }
-                next_num += 1;
-                auto_taken.push(code.clone());
-                (code, name)
-            }
-            _ => {
-                let (a, b) = (cols[0], cols[1]);
-                let looks_like_code = |s: &str| {
-                    !s.is_empty()
-                        && s.chars().count() <= 12
-                        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-                        && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-                };
-                if looks_like_code(a) && !looks_like_code(b) {
-                    (a.to_string(), b.to_string())
-                } else if looks_like_code(b) && !looks_like_code(a) {
-                    (b.to_string(), a.to_string())
-                } else {
-                    // 两列都不是编码形状 → 当成「名称,名称」，仍自动编号
-                    (String::new(), cols.join(" "))
-                }
-            }
-        };
-
-        if name.trim().is_empty() {
-            continue;
-        }
-        let code = if code.trim().is_empty() {
-            format!("{}{:02}", prefix, next_num)
-        } else {
-            code.trim().to_string()
-        };
-
-        let skip = if seen_in_batch.iter().any(|c| *c == code) {
-            Some(SkipReason::DuplicateInBatch)
-        } else if existing.iter().any(|c| *c == code) {
-            Some(SkipReason::ExistsInBook)
-        } else {
-            seen_in_batch.push(code.clone());
-            None
-        };
-
-        rows.push(ParsedRow { code, name: name.trim().to_string(), skip });
-    }
-
-    Parsed { empty: rows.is_empty(), rows }
-}
-
-/// 把可导入的行转成待写入的实体
-pub fn to_entities(kind: AuxKind, rows: &[ParsedRow]) -> Vec<AuxEntity> {
-    rows.iter()
-        .filter(|r| r.skip.is_none())
-        .map(|r| AuxEntity::new(kind, r.code.clone(), r.name.clone()))
-        .collect()
-}
+pub use fincore::batch::aux::{code_prefix, parse, to_entities, Parsed, ParsedRow, SkipReason};
 
 // ---------------------------------------------------------------------------
 // 批量粘贴窗口的 UI 状态
@@ -261,7 +87,7 @@ impl Ui {
 
                 if do_preview {
                     let p = parse(&self.text, kind, existing);
-                    if p.empty {
+                    if p.is_empty() {
                         self.preview = None;
                         self.err =
                             "没解析出内容。每行一条，编码和名称之间用逗号或 Tab 隔开就行。".to_string();
@@ -301,8 +127,8 @@ impl Ui {
                             _ => {
                                 let txt = match &rows[i].skip {
                                     None => "将导入",
-                                    Some(SkipReason::ExistsInBook) => "跳过：已存在",
-                                    Some(SkipReason::DuplicateInBatch) => "跳过：本批内重复",
+                                    // 文案统一走 fincore 的 label()，两端共用一份
+                                    Some(reason) => reason.label(),
                                 };
                                 ui.label(RichText::new(txt).weak());
                             }
@@ -446,7 +272,7 @@ mod tests {
     #[test]
     fn 全空输入不报错() {
         let p = parse("", AuxKind::Customer, &[]);
-        assert!(p.empty);
+        assert!(p.is_empty());
         assert_eq!(p.importable().len(), 0);
     }
 }

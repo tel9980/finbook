@@ -1,279 +1,15 @@
-//! 期初余额批量粘贴解析
+//! 期初余额批量粘贴的**界面部分**（解析逻辑在 `fincore::batch::begin`）。
 //!
-//! 和 `aux_batch` 是姐妹模块，解决同一个问题：
-//! 期初有 199 个末级科目，一个个点「添加科目」再填数是灾难；
-//! 而财务手上通常已经有一份上期期末的科目余额表（Excel，编码+金额两列）。
+//! 为什么解析不在这个文件里：Web 端也要同一套解析。若各写一份，桌面端支持了
+//! 某种写法而 Web 没支持，用户会得出「这软件有的地方能用有的不能用」。
+//! 所以解析下沉到 `fincore::batch`，两端共用；这里只管窗口长什么样、
+//! 「预览 → 并入草稿」两步怎么走。
 //!
-//! 三种写法都收：
-//!   1. `编码,金额` —— 最常见，从余额表直接复制两列
-//!   2. `编码,借/贷,金额` —— 金额恒为正，自己声明方向
-//!   3. `编码,借方金额,贷方金额` —— 和 UI 表格同一布局（两列各放一边）
-//!
-//! **方向判定规则**（省掉新手最容易错的那一步）：
-//!   - 只给金额时，方向从**科目的余额方向**来：资产类记借，负债/权益/收入记贷。
-//!     用户从余额表抄来的数天然就是带方向的，但余额表上通常只有一列「期末余额」
-//!     不区分借贷符号 —— 按科目方向自动归位就是在这里做的。
-//!   - 金额带负号：`-5000` 表示反方向（贷方余额的资产、借方余额的负债）。
-//!     余额表里红字/负数就是这个意思。
-//!   - 显式写 `借/贷` 时，用户声明优先。
+//! 两步是强制的：直接点确认会把一坨文本当数据写库 —— 粘贴错位（多带表头、
+//! 带上了合计行）会静默变成脏数据，而用户毫无察觉。
 
+pub use fincore::batch::begin::{parse, Parsed, ParsedRow, SkipReason};
 use fincore::{Direction, Money};
-
-/// 解析出来的一行
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParsedRow {
-    pub code: String,
-    pub dir: Direction,
-    /// 年初余额（恒为正 ———— 方向由 dir 单独记录，UI 上也是这么填的）
-    pub amount: Money,
-    /// 跳过原因（None = 可导入）
-    pub skip: Option<SkipReason>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum SkipReason {
-    /// 科目编码不在科目表里（抄错码了，这是新手期初最常见的错误）
-    UnknownCode { suggestion: Option<String> },
-    /// 本批次内重复
-    DuplicateInBatch,
-    /// 库里已有期初数（覆盖要用户明确同意，不在这里做）
-    ExistsInBook,
-    /// 金额解析失败
-    BadAmount,
-}
-
-pub struct Parsed {
-    pub rows: Vec<ParsedRow>,
-    pub empty: bool,
-}
-
-impl Parsed {
-    pub fn importable(&self) -> Vec<ParsedRow> {
-        self.rows.iter().filter(|r| r.skip.is_none()).cloned().collect()
-    }
-}
-
-fn split_cols(line: &str) -> Vec<String> {
-    if line.contains('\t') {
-        return line.split('\t').map(|s| s.trim().to_string()).collect();
-    }
-    if line.contains(',') || line.contains('，') || line.contains('、') {
-        return line
-            .split([',', '，', '、'])
-            .map(|s| s.trim().to_string())
-            .collect();
-    }
-    line.split_whitespace().map(|s| s.to_string()).collect()
-}
-
-fn is_header(cols: &[String]) -> bool {
-    // 整行**全是**表头词才算表头（「编码,金额」「编码,借方,贷方」）。
-    // 不能用 any：一行真实数据 `1001,贷,5000` 里也有个「贷」，
-    // any 会把它整行吞掉 —— 这正是 2026-10-12 写测试时踩到的。
-    cols.iter().all(|c| {
-        let c = c.trim();
-        matches!(
-            c,
-            "编码" | "科目编码" | "代码" | "编号" | "code" | "金额" | "余额" | "期末余额"
-                | "借方" | "贷方" | "借" | "贷" | "借方余额" | "贷方余额" | "名称" | "科目名称"
-        )
-    })
-}
-
-/// 科目方向查找。`dir_of` 是调用方给的科目编码 → 余额方向映射。
-fn sign_of_dir(dir: Direction) -> i8 {
-    match dir {
-        Direction::Debit => 1,
-        Direction::Credit => -1,
-    }
-}
-
-fn parse_amount(s: &str) -> Option<Money> {
-    let s = s.replace(',', "").replace('，', "").trim().to_string();
-    if s.is_empty() || s == "-" || s == "—" || s == "--" {
-        return None;
-    }
-    // 括号表示负数：会计报表里 (5000) 即 -5000
-    let (s, neg) = if s.starts_with('(') && s.ends_with(')') {
-        (&s[1..s.len() - 1], true)
-    } else {
-        (s.as_str(), false)
-    };
-    let mut m = Money::parse_or_zero(s);
-    if m.is_zero() && !s.trim_matches('0').trim_matches('.').is_empty() {
-        return None;
-    }
-    if neg {
-        m = m.negated();
-    }
-    Some(m)
-}
-
-fn dir_word(s: &str) -> Option<Direction> {
-    match s.trim() {
-        "借" | "借方" | "D" | "Dr" | "debit" | "借方余额" => Some(Direction::Debit),
-        "贷" | "贷方" | "C" | "Cr" | "credit" | "贷方余额" => Some(Direction::Credit),
-        _ => None,
-    }
-}
-
-/// 找最接近的编码（抄错一两个字符时给提示）。只考虑长度接近的同前缀码。
-pub fn suggest<'a>(code: &str, leaf_codes: impl Iterator<Item = &'a str>) -> Option<String> {
-    let mut best: Option<(usize, &str)> = None;
-    for c in leaf_codes {
-        if (c.len() as i32 - code.len() as i32).abs() > 2 {
-            continue;
-        }
-        let d = edit_distance(code, c);
-        if d <= 2 && best.map(|(b, _)| d < b).unwrap_or(true) {
-            best = Some((d, c));
-        }
-    }
-    best.map(|(_, c)| c.to_string())
-}
-
-fn edit_distance(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut dp = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-    for (i, row) in dp.iter_mut().enumerate().take(a.len() + 1) {
-        row[0] = i;
-    }
-    for (j, v) in dp[0].iter_mut().enumerate().take(b.len() + 1) {
-        *v = j;
-    }
-    for i in 1..=a.len() {
-        for j in 1..=b.len() {
-            dp[i][j] = (dp[i - 1][j] + 1)
-                .min(dp[i][j - 1] + 1)
-                .min(dp[i - 1][j - 1] + usize::from(a[i - 1] != b[j - 1]));
-        }
-    }
-    dp[a.len()][b.len()]
-}
-
-/// 解析粘贴文本。
-///
-/// `dir_of`: 科目编码 → 该科目的余额方向（用来自动归位）；
-/// `leaf_codes`: 全部末级科目编码（用来校验 + 找抄错的提示）；
-/// `existing`: 库里已有期初数的编码。
-pub fn parse(
-    text: &str,
-    dir_of: &dyn Fn(&str) -> Option<Direction>,
-    leaf_codes: &[String],
-    existing: &[String],
-) -> Parsed {
-    let mut rows: Vec<ParsedRow> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-
-    for (lineno, raw) in text.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let cols = split_cols(line);
-        if cols.is_empty() {
-            continue;
-        }
-        if lineno == 0 && is_header(&cols) {
-            continue;
-        }
-
-        // 编码必须是第一列；容忍「名称,编码」倒序（纯中文的那列是名称）
-        let (code_raw, rest): (&str, &[String]) = {
-            if cols.len() >= 2
-                && !cols[0].chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
-            {
-                (cols[0].as_str(), &cols[1..])
-            } else if cols.len() >= 2
-                && !cols[1].chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
-            {
-                (cols[1].as_str(), &[cols[0].clone()])
-            } else {
-                continue;
-            }
-        };
-        let code = code_raw.trim().to_string();
-        if code.is_empty() {
-            continue;
-        }
-
-        // 按列数分三种写法
-        let (dir, amount): (Option<Direction>, Option<Money>) = match rest.len() {
-            0 => (None, None),
-            1 => {
-                if let Some(d) = dir_word(&rest[0]) {
-                    (Some(d), None)
-                } else {
-                    (None, parse_amount(&rest[0]))
-                }
-            }
-            2 => {
-                // 写法2：借/贷,金额
-                if let Some(d) = dir_word(&rest[0]) {
-                    (Some(d), parse_amount(&rest[1]))
-                // 写法3：借方金额,贷方金额
-                } else {
-                    let dr = parse_amount(&rest[0]).unwrap_or(Money::ZERO);
-                    let cr = parse_amount(&rest[1]).unwrap_or(Money::ZERO);
-                    if dr.is_zero() && cr.is_zero() {
-                        (None, None)
-                    } else if !dr.is_zero() && cr.is_zero() {
-                        (Some(Direction::Debit), Some(dr.abs()))
-                    } else if dr.is_zero() && !cr.is_zero() {
-                        (Some(Direction::Credit), Some(cr.abs()))
-                    } else {
-                        // 两边都有数：这行本身就有问题，标出来
-                        (None, None)
-                    }
-                }
-            }
-            _ => (None, None),
-        };
-
-        let Some(amount) = amount else {
-            rows.push(ParsedRow {
-                code: code.clone(),
-                dir: Direction::Debit,
-                amount: Money::ZERO,
-                skip: Some(SkipReason::BadAmount),
-            });
-            continue;
-        };
-
-        // 负数表示反方向
-        let (mut dir, mut amount) = (dir, amount);
-        if amount.is_negative() {
-            amount = amount.abs();
-            dir = Some(match dir.unwrap_or(Direction::Debit) {
-                Direction::Debit => Direction::Credit,
-                Direction::Credit => Direction::Debit,
-            });
-        }
-        // 没声明方向 → 按科目的余额方向自动归位
-        let dir = dir.or_else(|| dir_of(&code)).unwrap_or(Direction::Debit);
-
-        // 借/贷口径归一：余额符号按科目方向折算
-        // （正=借、负=贷是 fincore 全引擎的约定；此处年初数恒为正+方向）
-        let skip = if seen.iter().any(|c| *c == code) {
-            Some(SkipReason::DuplicateInBatch)
-        } else if existing.iter().any(|c| *c == code) {
-            Some(SkipReason::ExistsInBook)
-        } else if dir_of(&code).is_none() {
-            let sg = suggest(&code, leaf_codes.iter().map(|s| s.as_str()));
-            Some(SkipReason::UnknownCode { suggestion: sg })
-        } else {
-            seen.push(code.clone());
-            None
-        };
-        // sign_of_dir 供调用方做试算口径折算，这里留着以备调试断言
-        let _ = sign_of_dir(dir);
-
-        rows.push(ParsedRow { code, dir, amount, skip });
-    }
-
-    Parsed { empty: rows.is_empty(), rows }
-}
 
 // ---------------------------------------------------------------------------
 // 批量粘贴窗口的 UI 状态
@@ -361,7 +97,7 @@ impl Ui {
 
                 if do_preview {
                     let p = parse(&self.text, dir_of, leaf_codes, existing);
-                    if p.empty {
+                    if p.is_empty() {
                         self.preview = None;
                         self.err =
                             "没解析出内容。每行一条：编码,金额（方向按科目自动归位）。".to_string();
@@ -424,13 +160,9 @@ impl Ui {
                             _ => {
                                 let txt = match &r.skip {
                                     None => "将并入".to_string(),
-                                    Some(SkipReason::ExistsInBook) => "跳过：已填过".to_string(),
-                                    Some(SkipReason::DuplicateInBatch) => "跳过：本批内重复".to_string(),
-                                    Some(SkipReason::BadAmount) => "跳过：金额看不懂".to_string(),
-                                    Some(SkipReason::UnknownCode { suggestion }) => match suggestion {
-                                        Some(sg) => format!("跳过：无此科目，像不像 {sg}？"),
-                                        None => "跳过：无此科目".to_string(),
-                                    },
+                                    // 文案统一走 fincore 的 label()，两端共用一份，
+                                    // 免得桌面端改了 Web 端没改
+                                    Some(reason) => reason.label(),
                                 };
                                 ui.label(RichText::new(txt).weak());
                             }
@@ -572,7 +304,7 @@ mod tests {
     #[test]
     fn 空输入不报错() {
         let p = parse("   \n\n ", &mixed, &leaves(), &[]);
-        assert!(p.empty);
+        assert!(p.is_empty());
     }
 
     /// 千分位逗号是余额表复制过来的真实噪音
