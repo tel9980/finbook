@@ -1108,11 +1108,13 @@ impl VoucherEdit {
                     ui.label(RichText::new("该科目未启用辅助核算。").weak());
                 }
                 for k in dims {
+                    // opts 要在 horizontal 闭包外取：下面的空档案提示也要用
+                    let opts = findb::auxs::codes(ctx.db(), k).unwrap_or_default();
+                    let no_opts = opts.is_empty();
                     ui.horizontal(|ui| {
                         ui.set_min_width(90.0);
                         ui.label(format!("{}：", k.label()));
                         let cur = new_aux.get(k).cloned();
-                        let opts = findb::auxs::codes(ctx.db(), k).unwrap_or_default();
                         let mut sel = cur.clone().unwrap_or_default();
                         let label = match &cur {
                             Some(c) => format!("{} {}", c, aux_name(ctx.db(), k, c)),
@@ -1137,6 +1139,54 @@ impl VoucherEdit {
                             new_aux.set(k, Some(sel));
                         }
                     });
+
+                    // 空档案的死路提示。
+                    //
+                    // 这个科目启用了辅助核算（validate_entry 会**强制**要求填），
+                    // 但库里一条档案都没有 —— 下拉框里只剩「（不核算）」，
+                    // 用户只能选它，然后保存时被拒：「第 N 行…必须填写客户」。
+                    // 他此刻正站在凭证窗口里，不知道档案页在导航栏哪一层，
+                    // 于是只能把整张凭证丢掉去翻菜单。
+                    //
+                    // 这里直接告诉他：还差什么、怎么补。部门/银行账户能一键预置，
+                    // 客户/供应商/存货的名字没有通用值，只能自己去建。
+                    if no_opts {
+                        ui.colored_label(
+                            crate::theme::palette::CREDIT,
+                            format!(
+                                "还没有任何{}档案 —— 这张凭证保存不了。",
+                                k.label()
+                            ),
+                        );
+                        ui.horizontal(|ui| {
+                            if fincore::auxiliary::has_preset(k) {
+                                if ui.button(format!("一键预置{}档案", k.label())).clicked() {
+                                    let r = findb::auxs::insert_presets(ctx.db(), k);
+                                    match r {
+                                        Ok((n, _)) => {
+                                            ctx.info(format!(
+                                                "已预置 {n} 条{}档案（通用占位，可改名）。",
+                                                k.label()
+                                            ));
+                                        }
+                                        Err(e) => ctx.error(e.to_string()),
+                                    }
+                                }
+                            }
+                            ui.label(
+                                RichText::new(if fincore::auxiliary::has_preset(k) {
+                                    format!("（也可以关掉凭证，去「基础资料 › {}档案」改）", k.label())
+                                } else {
+                                    format!(
+                                        "（{}的名字没有通用值，得去「基础资料 › {}档案」自己新建）",
+                                        k.label(),
+                                        k.label()
+                                    )
+                                })
+                                .weak(),
+                            );
+                        });
+                    }
                 }
                 // 现金流量项目
                 if acct.as_ref().map(|a| a.is_cash || a.is_bank).unwrap_or(false) {

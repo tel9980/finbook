@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use egui::{Align, Layout, RichText, Ui};
 use findb::Db;
-use fincore::{BookOptions, Period};
+use fincore::{AuxKind, BookOptions, Period};
 
 use crate::state::AppState;
 use crate::theme::palette;
@@ -22,6 +22,8 @@ pub struct LoginView {
     pub new_tax: String,
     pub new_start: String,
     pub new_scheme: String,
+    /// 建账时预置常用档案（部门 / 银行账户）。默认开。
+    pub new_preset: bool,
 
     pub err: String,
     /// 已载入用户列表的账套（切换账套后要重新拉用户）
@@ -40,6 +42,7 @@ impl Default for LoginView {
             new_tax: String::new(),
             new_start: Period::default().code(),
             new_scheme: "4-2-2-2".to_string(),
+            new_preset: true,
             err: String::new(),
             loaded_book: None,
         }
@@ -257,13 +260,55 @@ impl LoginView {
                     );
                 });
 
+                // ---- 预置常用档案（默认开）----
+                //
+                // 为什么必须默认开：`validate_entry` 要求启用了辅助核算的科目
+                // **必须**填辅助核算。而默认科目表里 100201~100207 全部要银行账户、
+                // 6601/6602/6603 全部要部门 —— 不预置的话，新用户录第一张凭证
+                // 就会撞上「第 N 行科目 100201 核算银行账户，必须填写银行账户」，
+                // 而档案页在哪他根本不知道，只能把凭证丢掉去翻菜单。
+                //
+                // 只预置部门（销售/管理/财务）和银行账户（基本户/一般户）——
+                // 这两类名字有通用值。客户、供应商、存货的名字没有，预置假数据
+                // 反而会跟着凭证流进报表，事后自己都想不起来要回来改。
+                egui::Frame::NONE
+                    .fill(ui.visuals().faint_bg_color)
+                    .corner_radius(4.0)
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .checkbox(&mut self.new_preset, "预置常用档案（推荐）")
+                                .changed()
+                            {
+                                // nothing: 勾选即时生效，无外部状态
+                            }
+                            ui.label(
+                                RichText::new(format!(
+                                    "部门：{}｜银行账户：{}",
+                                    preset_names(AuxKind::Dept),
+                                    preset_names(AuxKind::Bank)
+                                ))
+                                .weak(),
+                            );
+                        });
+                        ui.label(
+                            RichText::new(
+                                "银行账户不会带账号 —— 账号要你自己补。\n\
+                                 客户、供应商、存货不预置：那几类名字没有通用值，\
+                                 填假的会跟着凭证进报表。",
+                            )
+                            .weak()
+                            .size(12.0),
+                        );
+                    });
+
                 // ---- 进阶设置（默认收起）----
                 //
                 // 「科目级长」原来和「企业名称」平级摆着，但它不是新手该关心的东西：
                 // 系统已经预置好 199 个标准科目，级长保持默认就够用，问「4-2-2-2 是什么」
                 // 只会把人卡在建账这一步。折进默认收起的「进阶设置」——想改的人自己会点开，
                 // 不想理解的人一眼都不用看。
-                ui.add_space(4.0);
                 egui::CollapsingHeader::new(RichText::new("进阶设置（一般不用改）").weak())
                     .default_open(false)
                     .show(ui, |ui| {
@@ -483,6 +528,18 @@ impl LoginView {
         // 内置默认管理员 admin（口令 admin123，首次登录强制改密），与 Web 端口径一致
         match Db::create(&path, &opts) {
             Ok(db) => {
+                // 预置常用档案（默认开）。必须在 attach **之前**做 ——
+                // attach 之后 db 的所有权进了 st，这里就拿不到了。
+                let preset_n = if self.new_preset {
+                    match findb::auxs::insert_all_presets(&db) {
+                        Ok((n, _)) => n,
+                        // 预置失败不该挡住建账：账号是建出来了的，
+                        // 用户还能在辅助档案页手动点「预置常用档案」
+                        Err(_) => 0,
+                    }
+                } else {
+                    0
+                };
                 if let Err(e) = st.attach(Arc::new(db), Some(path.clone())) {
                     self.err = e;
                     return;
@@ -490,6 +547,18 @@ impl LoginView {
                 push_recent(recent, path);
                 self.creating = false;
                 self.password.clear();
+                if preset_n > 0 {
+                    st.toasts.push(
+                        format!(
+                            "已预置 {preset_n} 条常用档案（部门、银行账户），\
+                             可在「基础资料」里改名或删除。"
+                        ),
+                        false,
+                        // 建账这一刻还没有时钟（还没进主循环），用 0 基点；
+                        // 下一帧 retain(now) 时 now 会远大于 0，不会被立刻清掉
+                        0.0,
+                    );
+                }
             }
             Err(e) => self.err = e.to_string(),
         }
@@ -576,3 +645,45 @@ fn find_demo_book() -> Option<PathBuf> {
 
 /// 示例账套文件名（与 release.yml 打包时 cp 的名字保持一致，改一处要同步）
 pub const DEMO_BOOK_FILE: &str = "示例账套.fbk";
+
+/// 把某个类别的预置档案列成一句话（「D01 销售部、D02 管理部…」），给建账页用
+fn preset_names(kind: AuxKind) -> String {
+    let names: Vec<String> = fincore::auxiliary::preset_aux(kind)
+        .iter()
+        .map(|p| p.name.to_string())
+        .collect();
+    if names.is_empty() {
+        "无".to_string()
+    } else {
+        names.join("、")
+    }
+}
+
+#[cfg(test)]
+mod preset_ui_tests {
+    use super::*;
+
+    /// 建账页要如实列出预置了哪几条 —— 用户在这里决定要不要勾
+    #[test]
+    fn 建账页列出预置条目() {
+        assert_eq!(preset_names(AuxKind::Dept), "销售部、管理部、财务部");
+        assert_eq!(preset_names(AuxKind::Bank), "基本户、一般户");
+    }
+
+    /// 没预置清单的类别显示「无」，而不是空白（空白看着像 bug）
+    #[test]
+    fn 无预置的类别显示无() {
+        for k in [AuxKind::Customer, AuxKind::Supplier, AuxKind::Item] {
+            assert_eq!(preset_names(k), "无");
+        }
+    }
+
+    /// 新账套默认勾预置：录第一张凭证才不会撞「必须填写银行账户」
+    #[test]
+    fn 默认勾选预置() {
+        assert!(
+            LoginView::default().new_preset,
+            "默认必须勾上 —— 默认科目表里 100201~100207 全部核算银行账户"
+        );
+    }
+}

@@ -394,6 +394,38 @@ pub fn list_settle_types(db: &Db) -> DbResult<Vec<String>> {
     Ok(rows)
 }
 
+/// 一键预置某个类别的常用档案。返回 (新增条数, 已存在被跳过的编码)。
+///
+/// 沿用 `insert_many_skip_existing` 的约定：**跳过已存在，不覆盖**。
+/// 用户的账套跑久了才想起点这个按钮时，库里往往已有自己的 D01/销售部 ——
+/// 那时静默覆盖就是把他半年来的记账口径改掉，比少加一条严重得多。
+pub fn insert_presets(db: &Db, kind: AuxKind) -> DbResult<(usize, Vec<String>)> {
+    let items: Vec<AuxEntity> = fincore::auxiliary::preset_aux(kind)
+        .into_iter()
+        .map(|p| {
+            let mut e = AuxEntity::new(p.kind, p.code, p.name);
+            e.memo = p.memo.to_string();
+            e
+        })
+        .collect();
+    if items.is_empty() {
+        return Ok((0, Vec::new()));
+    }
+    insert_many_skip_existing(db, &items)
+}
+
+/// 一键预置全部类别的常用档案（新建账套时调用）。返回 (新增条数, 跳过的编码)。
+pub fn insert_all_presets(db: &Db) -> DbResult<(usize, Vec<String>)> {
+    let mut total = 0usize;
+    let mut skipped = Vec::new();
+    for k in AuxKind::ALL {
+        let (n, s) = insert_presets(db, *k)?;
+        total += n;
+        skipped.extend(s);
+    }
+    Ok((total, skipped))
+}
+
 #[cfg(test)]
 mod parent_tests {
     use super::*;
@@ -667,5 +699,89 @@ mod tests {
         add_summary(&db, "测试摘要").unwrap(); // 重复只增加计数
         assert_eq!(list_summaries(&db).unwrap().len(), before + 1);
         assert!(!list_settle_types(&db).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::*;
+    use crate::tests::mem;
+
+    fn count(db: &Db, kind: AuxKind) -> usize {
+        list(db, &AuxQuery::kind(kind))
+            .unwrap()
+            .len()
+    }
+
+    /// 部门 + 银行账户各能预置进来，其余类别一条不加
+    #[test]
+    fn 预置只落在有通用值的类别() {
+        let db = mem();
+        let (n, skipped) = insert_all_presets(&db).unwrap();
+        assert_eq!(n, 5, "3 部门 + 2 银行账户");
+        assert!(skipped.is_empty());
+        assert_eq!(count(&db, AuxKind::Dept), 3);
+        assert_eq!(count(&db, AuxKind::Bank), 2);
+        for k in [AuxKind::Customer, AuxKind::Supplier, AuxKind::Item, AuxKind::Employee] {
+            assert_eq!(count(&db, k), 0, "{} 不该被预置", k.label());
+        }
+    }
+
+    /// 核心约定：**不覆盖**。用户自己建的 D01 不能被预置的「销售部」改掉。
+    #[test]
+    fn 已存在的编码不覆盖() {
+        let db = mem();
+        let mut mine = AuxEntity::new(AuxKind::Dept, "D01", "我的部门");
+        mine.memo = "我自己建的".into();
+        insert(&db, &mine).unwrap();
+
+        let (n, skipped) = insert_presets(&db, AuxKind::Dept).unwrap();
+        assert_eq!(n, 2, "只应新增 D02/D03");
+        assert_eq!(skipped, vec!["D01".to_string()], "D01 要报告为跳过");
+
+        let got: Vec<AuxEntity> = list(&db, &AuxQuery::kind(AuxKind::Dept)).unwrap();
+        let d01 = got.iter().find(|e| e.code == "D01").unwrap();
+        assert_eq!(d01.name, "我的部门", "已有档案被覆盖了");
+        assert_eq!(d01.memo, "我自己建的", "已有档案的备注被覆盖了");
+    }
+
+    /// 没有预置清单的类别：调用不应报错，也不该建出任何东西
+    #[test]
+    fn 无预置的类别是空操作() {
+        let db = mem();
+        for k in [AuxKind::Customer, AuxKind::Item, AuxKind::CashFlow] {
+            let (n, skipped) = insert_presets(&db, k).unwrap();
+            assert_eq!(n, 0);
+            assert!(skipped.is_empty());
+        }
+        assert_eq!(count(&db, AuxKind::Customer), 0);
+    }
+
+    /// 预置条目要带上说明，用户才知道这是通用占位、该改成自己的
+    #[test]
+    fn 预置条目带备注() {
+        let db = mem();
+        insert_presets(&db, AuxKind::Bank).unwrap();
+        let got: Vec<AuxEntity> = list(&db, &AuxQuery::kind(AuxKind::Bank)).unwrap();
+        assert!(!got.is_empty());
+        for e in &got {
+            assert!(!e.memo.trim().is_empty(), "{} 缺备注", e.code);
+            assert!(e.memo.contains("预置"), "备注要说明这是预置的：{}", e.memo);
+        }
+    }
+
+    /// 预置的银行账户账上号为空 —— 用户必须自己补，不能编一个假账号
+    #[test]
+    fn 银行账户不带编造账号() {
+        let db = mem();
+        insert_presets(&db, AuxKind::Bank).unwrap();
+        let got: Vec<AuxEntity> = list(&db, &AuxQuery::kind(AuxKind::Bank)).unwrap();
+        for e in &got {
+            assert!(
+                e.prop(fincore::auxiliary::prop::BANK_ACCOUNT).is_none(),
+                "{} 不该带账号 —— 编造的账号会被打进报表",
+                e.code
+            );
+        }
     }
 }

@@ -75,6 +75,58 @@ impl AuxView {
                 self.batch = Default::default();
                 self.batch.open = true;
             }
+            // 一键预置：把「通用名」的那几条直接建出来，省得一个个手填。
+            // 只对部门/银行账户显示 —— 客户、供应商、存货的名字没有通用值，
+            // 预置一个假的比空着更糟（凭证里带出去就成脏数据了）。
+            if fincore::auxiliary::has_preset(kind) {
+                let already = self.rows.len();
+                if ui
+                    .button("预置常用档案")
+                    .on_hover_text(format!(
+                        "建{}：{}。已有的编码不会被覆盖。",
+                        kind.label(),
+                        fincore::auxiliary::preset_aux(kind)
+                            .iter()
+                            .map(|p| format!("{} {}", p.code, p.name))
+                            .collect::<Vec<_>>()
+                            .join("、")
+                    ))
+                    .clicked()
+                    && ctx.can(Perm::AuxEdit)
+                {
+                    if already == 0 {
+                        // 第一次建：直接做，不用再点一次确认 —— 内容在 hover 里写着
+                        ctx.confirm(
+                            &format!("预置{}常用档案", kind.label()),
+                            &format!(
+                                "将新建 {} 条：{}\n\
+                                 这些是通用占位，建完请按你公司的情况改名或补全。",
+                                fincore::auxiliary::preset_aux(kind).len(),
+                                fincore::auxiliary::preset_aux(kind)
+                                    .iter()
+                                    .map(|p| format!("{} {}", p.code, p.name))
+                                    .collect::<Vec<_>>()
+                                    .join("、")
+                            ),
+                            ConfirmAction::PresetAux(kind),
+                        );
+                    } else {
+                        // 已经有档案了：这一步可能覆盖，跳过确认直接做的风险更大，
+                        // 走危险确认（会把「不覆盖」也说清楚）
+                        ctx.confirm_dangerous(
+                            &format!("预置{}常用档案", kind.label()),
+                            &format!(
+                                "当前{}档案已有 {already} 条，将补充缺少的 {} 条。\n\
+                                 编码相同的已有档案不会被覆盖。",
+                                kind.label(),
+                                fincore::auxiliary::preset_aux(kind).len()
+                            ),
+                            ConfirmAction::PresetAux(kind),
+                            true,
+                        );
+                    }
+                }
+            }
             if ui.button("刷新").clicked() {
                 self.dirty = true;
             }

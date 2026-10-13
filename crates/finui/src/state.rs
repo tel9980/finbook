@@ -349,6 +349,8 @@ pub enum ConfirmAction {
     ImportAccounts,
     /// 导入内置现金流量项目
     ImportCashFlowItems,
+    /// 一键预置某类别的常用档案（部门 / 银行账户）
+    PresetAux(AuxKind),
     /// 删除固定资产卡片
     DeleteAsset(i64),
     /// 删除某期间折旧记录

@@ -294,6 +294,41 @@ impl FinBookApp {
                     views.reports.invalidate();
                 }
             }
+            ConfirmAction::PresetAux(kind) => {
+                let label = kind.label().to_string();
+                let r = findb::auxs::insert_presets(ctx.db(), kind);
+                match r {
+                    Ok((n, skipped)) => {
+                        if n > 0 {
+                            ctx.log(
+                                "基础资料",
+                                &format!("预置{label}常用档案"),
+                                &format!("{n} 条"),
+                            );
+                        }
+                        // 全跳过也要说话 —— 用户点了按钮却什么提示都没有，
+                        // 他会以为按钮坏了，去反复点。
+                        let mut msg = if n == 0 {
+                            format!("{label}档案已经都有对应的了，没有新增。")
+                        } else {
+                            format!("已预置 {n} 条{label}档案。")
+                        };
+                        if !skipped.is_empty() {
+                            msg.push_str(&format!(
+                                "\n已有 {} 条被跳过（编码相同）：{}。你的原档案没动。",
+                                skipped.len(),
+                                skipped.join("、")
+                            ));
+                        }
+                        if n > 0 {
+                            msg.push_str("\n这些都是通用占位，请按你公司的情况改名或补全。");
+                        }
+                        ctx.info(msg);
+                        views.data_changed(crate::state::DataKind::Aux);
+                    }
+                    Err(e) => ctx.error(e.to_string()),
+                }
+            }
             ConfirmAction::DeleteAsset(id) => {
                 // 资产清理：置状态 + 同事务生成清理转销凭证（历史折旧记录保留）
                 let p = ctx.st.period;

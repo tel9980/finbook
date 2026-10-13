@@ -161,6 +161,81 @@ pub fn validate_aux(e: &AuxEntity, existing_codes: &[String]) -> Vec<String> {
     v
 }
 
+/// 一键预置的常用档案条目（纯数据，不含存储）
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AuxPreset {
+    pub kind: AuxKind,
+    pub code: &'static str,
+    pub name: &'static str,
+    /// 备注：写清这条是「通用占位」，提醒用户按自己情况改
+    pub memo: &'static str,
+}
+
+/// 某个类别可预置的常用档案。返回空 Vec 表示该类别不预置。
+///
+/// **只预置「任何公司都成立」的条目**，见 `all_preset_aux` 的注释。
+pub fn preset_aux(kind: AuxKind) -> Vec<AuxPreset> {
+    match kind {
+        // 6601 销售费用 / 6602 管理费用 / 6603 财务费用 三个科目的
+        // aux 都是 Dept，validate_entry 又要求「必须填写」——
+        // 没有部门档案就一行费用都记不了。这三个部门任何公司都有。
+        AuxKind::Dept => vec![
+            AuxPreset {
+                kind: AuxKind::Dept,
+                code: "D01",
+                name: "销售部",
+                memo: "预置的通用部门，可改名或删除后填自己的",
+            },
+            AuxPreset {
+                kind: AuxKind::Dept,
+                code: "D02",
+                name: "管理部",
+                memo: "预置的通用部门，可改名或删除后填自己的",
+            },
+            AuxPreset {
+                kind: AuxKind::Dept,
+                code: "D03",
+                name: "财务部",
+                memo: "预置的通用部门，可改名或删除后填自己的",
+            },
+        ],
+        // 100201~100207 全部 aux=Bank，同样必填。
+        // 只给两个：基本户（对应 100201）+ 一般户（对应 100202），
+        // 多了是猜用户开几家银行。
+        AuxKind::Bank => vec![
+            AuxPreset {
+                kind: AuxKind::Bank,
+                code: "B01",
+                name: "基本户",
+                memo: "预置的通用账户，请点开补填开户行和账号",
+            },
+            AuxPreset {
+                kind: AuxKind::Bank,
+                code: "B02",
+                name: "一般户",
+                memo: "预置的通用账户，请点开补填开户行和账号",
+            },
+        ],
+        // 客户/供应商/存货/职员/项目**一律不预置**：这些名字没有通用值。
+        // 预置一个「待填客户」会让用户以为它是真客户，凭证里带出去
+        // 变成脏数据，而且他自己想不起来要回来改 —— 比空着更糟。
+        _ => Vec::new(),
+    }
+}
+
+/// 全部可预置条目（新建账套时一次性灌进去用）
+pub fn all_preset_aux() -> Vec<AuxPreset> {
+    AuxKind::ALL
+        .iter()
+        .flat_map(|k| preset_aux(*k))
+        .collect()
+}
+
+/// 该类别有没有可预置的常用档案（界面据此隐藏按钮）
+pub fn has_preset(kind: AuxKind) -> bool {
+    !preset_aux(kind).is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +258,68 @@ mod tests {
         assert_eq!(validate_aux(&bad, &[]).len(), 2);
         let item = AuxEntity::new(AuxKind::Item, "I001", "钢板");
         assert!(validate_aux(&item, &[]).iter().any(|s| s.contains("计量单位")));
+    }
+
+    /// 只预置部门 + 银行账户：这两类的名字有通用值，其余的是用户自己的数据
+    #[test]
+    fn 只预置有通用值的类别() {
+        assert_eq!(preset_aux(AuxKind::Dept).len(), 3);
+        assert_eq!(preset_aux(AuxKind::Bank).len(), 2);
+        for k in [
+            AuxKind::Customer,
+            AuxKind::Supplier,
+            AuxKind::Item,
+            AuxKind::Employee,
+            AuxKind::Project,
+            AuxKind::CashFlow,
+        ] {
+            assert!(
+                preset_aux(k).is_empty(),
+                "{} 没有通用档案名，不该预置 —— 预置假客户会变成脏数据",
+                k.label()
+            );
+            assert!(!has_preset(k));
+        }
+        assert!(has_preset(AuxKind::Dept) && has_preset(AuxKind::Bank));
+    }
+
+    /// all_preset_aux 要等于各类别之和，且编码在本类别内不重复
+    #[test]
+    fn 全量清单与分类一致且编码不重复() {
+        let all = all_preset_aux();
+        assert_eq!(all.len(), 5, "3 个部门 + 2 个银行账户");
+        for k in AuxKind::ALL {
+            let sub = preset_aux(*k);
+            assert_eq!(
+                all.iter().filter(|p| p.kind == *k).count(),
+                sub.len(),
+                "{} 数量对不上",
+                k.label()
+            );
+            let mut codes: Vec<&str> = sub.iter().map(|p| p.code).collect();
+            let n = codes.len();
+            codes.sort_unstable();
+            codes.dedup();
+            assert_eq!(codes.len(), n, "{} 内部编码重复了", k.label());
+        }
+    }
+
+    /// 预置条目本身要能通过档案校验（编码/名称非空）
+    #[test]
+    fn 预置条目合法() {
+        for p in all_preset_aux() {
+            assert!(!p.code.trim().is_empty() && !p.name.trim().is_empty());
+            let e = AuxEntity::new(p.kind, p.code, p.name);
+            assert!(
+                validate_aux(&e, &[]).is_empty(),
+                "{} {} 没过自身校验",
+                p.code,
+                p.name
+            );
+            assert!(
+                !p.memo.is_empty(),
+                "预置条目必须带说明，提醒用户这是通用占位"
+            );
+        }
     }
 }
