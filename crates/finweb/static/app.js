@@ -234,6 +234,164 @@ function openQuickSearch() {
   };
 }
 
+// ---- 批量粘贴弹窗（辅助档案 / 期初余额共用）--------------------------------
+//
+// 为什么是「先预览再导入」而不是一点就写库：粘贴几乎一定带偏差 —— 多一行表头、
+// 带上合计行、金额列粘成了两列。直接写库的后果是**静默的脏数据**：用户粘完
+// 关掉窗口，几周后对账才发现多了个「合计」科目。预览让用户在落库前看见
+// 「哪几行会被导入、哪几行会被跳过、为什么跳过」。
+//
+// 解析在后端（fincore::batch），与桌面端**同一份代码** —— 两端解析结果必须
+// 一致，否则用户会发现「桌面上能粘的，网页上粘不了」。
+//
+// `opts`:
+//   title      弹窗标题
+//   hint       说明文案（数组，每行一段）
+//   example    写法示例（放进等宽块）
+//   placeholder  文本框占位符
+//   parse      POST 解析 → { rows, total, importable, skipped, empty, trial? }
+//   importRows PUT 导入，参数是 rows 里 skip 为空的那些
+//   cols       预览表格列定义 [{ key, label, cls }]
+//   trial      是否显示试算区（期初要，档案不要）
+//   onDone     导入成功后回调（刷新列表）
+function batchPasteDialog(opts) {
+  let preview = null;
+  let busy = false;
+
+  const mask = modal(render(), true);
+  const root = $(".modal", mask);
+
+  function render() {
+    const hint = (opts.hint || []).map((h) => `<p class="muted" style="margin:0 0 10px;line-height:1.7">${esc(h)}</p>`).join("");
+    return `
+      <h3>${esc(opts.title)}</h3>
+      ${hint}
+      ${opts.example ? `<pre style="background:var(--z-050,#f7f7f8);padding:10px 12px;border-radius:4px;font-size:12px;line-height:1.8;margin:0 0 12px;overflow-x:auto">${esc(opts.example)}</pre>` : ""}
+      <textarea id="bp-text" rows="9" style="width:100%;font-family:var(--mono,monospace);font-size:12.5px;line-height:1.7"
+        placeholder="${esc(opts.placeholder || "")}"></textarea>
+      <div id="bp-msg" style="margin-top:10px"></div>
+      <div id="bp-preview"></div>
+      <div class="foot">
+        <button class="btn ghost" id="bp-cancel">关闭</button>
+        <span class="grow"></span>
+        <button class="btn" id="bp-preview-btn" disabled>预览</button>
+        <button class="btn primary" id="bp-ok" disabled>导入</button>
+      </div>`;
+  }
+
+  function setMsg(html) { $("#bp-msg", root).innerHTML = html; }
+  function setBusy(on) {
+    busy = on;
+    ["bp-preview-btn", "bp-ok"].forEach((id) => {
+      const b = $("#" + id, root);
+      if (b) b.disabled = on || (id === "bp-ok" && !previewHasImportable());
+    });
+  }
+  function previewHasImportable() {
+    return !!preview && preview.rows.some((r) => !r.skip);
+  }
+
+  function renderPreview() {
+    const box = $("#bp-preview", root);
+    if (!preview) { box.innerHTML = ""; return; }
+    const imp = preview.rows.filter((r) => !r.skip);
+    const skip = preview.rows.length - imp.length;
+
+    let head = `<div style="margin:8px 0 6px"><b>解析到 ${preview.total} 条，其中 ${imp.length} 条将导入</b>`;
+    if (skip > 0) {
+      head += `<span style="color:var(--err);margin-left:10px">${skip} 条会跳过（不会覆盖已有档案）</span>`;
+    }
+    head += `</div>`;
+
+    let body = "";
+    // 期初要试算：Web 端是「粘贴后立刻提交」，没有草稿区慢慢看，
+    // 不给试算用户就完全不知道平不平
+    if (opts.trial && preview.trial) {
+      const t = preview.trial;
+      const col = t.balanced ? "var(--ok, #16a34a)" : "var(--err)";
+      body += `<div style="font-size:12.5px;margin-bottom:8px">
+        本次借方合计 <b>${esc(t.debit)}</b> ／ 贷方合计 <b>${esc(t.credit)}</b> ／
+        差额 <b style="color:${col}">${esc(t.diff)}</b>
+        ${t.balanced ? "（平）" : "（不平 —— 请检查是否漏了对方科目）"}
+      </div>`;
+    }
+    const cols = (opts.cols || []).map((c) =>
+      `<th class="${c.cls || ""}">${esc(c.label)}</th>`).join("");
+    const rows = preview.rows.map((r) => {
+      const bad = !!r.skip;
+      return `<tr${bad ? ' style="color:var(--err)"' : ""}>${(opts.cols || []).map((c) =>
+        `<td class="${c.cls || ""}">${esc(r[c.key] == null ? "" : r[c.key])}</td>`).join("")}</tr>`;
+    }).join("");
+    body += `<div style="max-height:260px;overflow:auto"><table class="grid">
+      <thead><tr>${cols}</tr></thead><tbody>${rows}</tbody></table></div>`;
+
+    box.innerHTML = head + body;
+  }
+
+  $("#bp-cancel", root).addEventListener("click", () => closeModal());
+
+  $("#bp-preview-btn", root).addEventListener("click", async () => {
+    if (busy) return;
+    const text = $("#bp-text", root).value;
+    if (!text.trim()) { setMsg('<span style="color:var(--err)">先粘贴内容再点预览</span>'); return; }
+    setBusy(true); setMsg('<span class="muted">解析中…</span>');
+    try {
+      const r = await opts.parse(text);
+      if (r.empty || !r.rows.length) {
+        preview = null;
+        setMsg('<span style="color:var(--err)">没解析出内容。每行一条，列之间用逗号或 Tab 隔开就行。</span>');
+      } else {
+        preview = r;
+        setMsg("");
+      }
+      renderPreview();
+    } catch (e) {
+      preview = null;
+      setMsg(`<span style="color:var(--err)">${esc(e.message)}</span>`);
+    } finally {
+      setBusy(false);
+    }
+  });
+
+  $("#bp-ok", root).addEventListener("click", async () => {
+    if (busy || !previewHasImportable()) return;
+    const rows = preview.rows.filter((r) => !r.skip);
+    if (!rows.length) return;
+    setBusy(true); setMsg('<span class="muted">导入中…</span>');
+    try {
+      const r = await opts.importRows(rows);
+      const skipped = r.skipped || 0;
+      let msg = r.inserted ? `已导入 ${r.inserted} 条` : "没有可导入的新档案（编码都已存在）";
+      if (skipped) msg += `，跳过 ${skipped} 条（编码已存在）`;
+      toast(msg, "ok");
+      closeModal();
+      if (opts.onDone) opts.onDone(r);
+    } catch (e) {
+      setMsg(`<span style="color:var(--err)">${esc(e.message)}</span>`);
+      setBusy(false);
+    }
+  });
+
+  // ⌘/Ctrl+Enter 直接导入：预览之后不用再移开手去点按钮
+  root.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && previewHasImportable()) {
+      $("#bp-ok", root).click();
+    }
+  });
+
+  // 文本一变，之前那份预览就**过期**了。继续点「导入」会导入他已经改掉的文本
+  // 解析出来的行 —— 正是这个两步流程要防的那类错。所以直接清掉预览并禁用导入。
+  $("#bp-text", root).addEventListener("input", () => {
+    if (!preview) return;
+    preview = null;
+    renderPreview();
+    setMsg('<span class="muted">内容改过了，请重新点「预览」</span>');
+    setBusy(false);
+  });
+
+  return mask;
+}
+
 function modal(html, wide) {
   const root = document.getElementById("modal-root");
   const mask = document.createElement("div");
@@ -4496,6 +4654,55 @@ async function loadLedger() {
 // ===========================================================================
 // 报表中心（打印 vs 导出 权限区分）
 // ===========================================================================
+/// 期初余额的批量粘贴窗口。
+///
+/// 与桌面端 `views/begin_batch.rs` 同一套解析（后端 `fincore::batch::begin`），
+/// **方向不用填**：只给金额时按科目表的余额方向自动归位（资产记借、负债权益记贷），
+/// 负数/红字括号自动转成反方向。新手最不懂的就是这一步，而它恰恰是期初不平的
+/// 头号原因 —— 让用户自己判方向，等于把最容易错的一步交出去了。
+function openBeginBatch(main) {
+  batchPasteDialog({
+    title: "批量粘贴期初余额",
+    hint: [
+      "把上期期末的科目余额表复制过来，每行一条。<b>先预览再导入</b> —— 粘错位（多带表头、带上合计行）会让你先看见。",
+      "<b>方向不用你填</b>：只给金额时按科目自动归位（资产记借、负债权益记贷）；负数或红字括号自动转成反方向。",
+      "科目编码抄错时预览会给出「像不像 XXX」的提示；已经填过该科目期初数的会跳过，<b>不会覆盖</b>。",
+    ],
+    example:
+      "科目编码, 金额\n" +
+      "1001,58000\n" +
+      "1002,125000\n" +
+      "2001,80000\n" +
+      "也可以带方向或借贷两列：\n" +
+      "1001,借,58000        ← 编码,方向,金额\n" +
+      "1001,58000,0         ← 编码,借方,贷方（和表格同一布局）",
+    placeholder: "科目编码, 金额\n1001,58000\n1002,125000\n2001,80000",
+    trial: true,
+    parse: (text) => api("/begin-batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    }),
+    importRows: (rows) => api("/begin-batch", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        rows: rows.map((r) => ({ code: r.code, dir: r.dir, amount: r.amount })),
+        // 草稿里已有的编码要避开：解析时看到的是库里的期初数，
+        // 看不到用户**正在编辑还没保存**的那些行
+        existing: (state.beginDraft || []).map((d) => d.account_code).filter(Boolean),
+      }),
+    }),
+    cols: [
+      { key: "code", label: "科目编码" },
+      { key: "dir_label", label: "方向" },
+      { key: "amount", label: "金额", cls: "num" },
+      { key: "skip", label: "状态" },
+    ],
+    onDone: () => { state.beginDraft = null; viewBegin(main); },
+  });
+}
+
 async function viewReports(main) {
   main.innerHTML = `
     <h2>报表中心</h2>
@@ -10464,6 +10671,7 @@ function renderBegin(main, rows) {
       <h2>期初建账</h2>
       <div class="toolbar">
         <button class="btn" id="bg-add">添加科目行</button>
+        ${can("opening") ? `<button class="btn" id="bg-batch">批量粘贴期初</button>` : ""}
         <div class="spacer"></div>
         ${can("opening") ? `<button class="btn primary" id="bg-save">保存全部</button>` : ""}
       </div>
@@ -10514,6 +10722,7 @@ function renderBegin(main, rows) {
       render();
     });
     $("#bg-add").onclick = () => { draft.push({ id: 0, account_code: "", orig_code: "", dir: "debit", yb: "", ad: "", ac: "", qty: "" }); render(); };
+    if ($("#bg-batch")) $("#bg-batch").onclick = () => openBeginBatch(main);
     $("#bg-save").onclick = async () => {
       // 改了编码的已有行 = 删旧行 + 按新编码插入。upsert 的键是 (account_code,
       // aux_key)，只提交新编码的话旧行会留在库里，变成"同一个科目两笔期初"。
@@ -10566,6 +10775,7 @@ function renderAux(main, rows, kind) {
     <div class="toolbar">
       ${AUX_KINDS.map((k) => `<button class="btn sm ${kind === k.code ? "primary" : "ghost"}" data-kind="${k.code}">${k.label}</button>`).join("")}
       <div class="spacer"></div>
+      ${can("aux_edit") ? `<button class="btn" id="aux-batch">批量粘贴</button>` : ""}
       ${can("aux_edit") ? `<button class="btn" id="aux-preset" hidden>预置常用档案</button>` : ""}
       ${can("aux_edit") ? `<button class="btn primary" id="aux-new">新增${esc(AUX_KINDS.find((k) => k.code === kind).label)}</button>` : ""}
     </div>
@@ -10593,6 +10803,7 @@ function renderAux(main, rows, kind) {
   loadAuxPreset(main, rows, kind);
   $all("[data-kind]", main).forEach((b) => b.addEventListener("click", () => { state.auxKind = b.dataset.kind; viewAux(main); }));
   if ($("#aux-new")) $("#aux-new").addEventListener("click", () => openAuxEditor(main, null, kind));
+  if ($("#aux-batch")) $("#aux-batch").addEventListener("click", () => openAuxBatch(main, kind));
   $all("[data-act]", main).forEach((b) => b.addEventListener("click", async () => {
     const id = parseInt(b.dataset.id, 10);
     if (b.dataset.act === "edit") {
@@ -10604,6 +10815,43 @@ function renderAux(main, rows, kind) {
       catch (e2) { toast(e2.message, "err"); }
     }
   }));
+}
+
+/// 辅助档案的批量粘贴窗口。
+///
+/// 与桌面端 `views/aux_batch.rs` 同一套解析（在后端 `fincore::batch::aux`），
+/// 两边的写法支持必须一致 —— 用户会发现「桌面上能粘的，网页上粘不了」。
+function openAuxBatch(main, kind) {
+  const label = AUX_KINDS.find((k) => k.code === kind).label;
+  const body = (text) => api("/aux-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, text }),
+  });
+  const jsonBody = (payload) => ({
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  batchPasteDialog({
+    title: `批量粘贴${label}`,
+    hint: [
+      `把 Excel 里的${label}名单复制过来粘贴，每行一条。<b>先预览再导入</b> —— 粘错位（多带表头、带上合计行）会让你先看见，不会直接变成脏档案。`,
+      `两种写法都行：<b>两列「编码,名称」</b>（有自己的编码体系时用）；<b>只写名称</b>（编码自动编号 C01、C02…，不用自己想编码）。`,
+      `编码已存在的会<b>跳过，不会覆盖</b>你原来的档案。`,
+    ],
+    example: `${label}编码\t${label}名称\nC01\t杭州明远贸易有限公司\nC02\t宁波华信电子有限公司`,
+    placeholder: `${label}编码,${label}名称\nC01,杭州明远贸易有限公司\nC02,宁波华信电子有限公司`,
+    parse: body,
+    importRows: (rows) => api("/aux-batch", jsonBody({ kind, rows })),
+    cols: [
+      { key: "code", label: "编码" },
+      { key: "name", label: "名称" },
+      { key: "skip", label: "状态", cls: "num" },
+    ],
+    onDone: () => rerenderView("aux", main),
+  });
 }
 
 /// 拉该类别的预置清单，按「有 / 无预置」×「库空 / 不空」给不同提示。

@@ -196,6 +196,53 @@ async fn 辅助档案预览标出库中已有的() {
     assert!(v["rows"][1]["skip"].is_null());
 }
 
+/// 回归：`inserted + skipped` 必须等于请求的行数。
+///
+/// 第一版把「本批已处理过」（用来防重复）和「库里已有的」放在同一个数组里，
+/// 导入成功后把前者也当 skipped 报出去 —— 用户看到「已导入 2 条，跳过 2 条」，
+/// 2 + 2 ≠ 2。数字对不上时用户第一反应是「这软件出 bug 了」，而真正的错只在
+/// 一个返回字段里，肉眼极难发现。所以这条断言盯的是**恒等式**，不是某个具体值。
+#[tokio::test]
+async fn 导入与跳过之和等于请求行数() {
+    let (state, _d, _t) = test_state();
+    let sid = boss_in_b1(&state).await;
+    post(
+        &state,
+        &sid,
+        "/api/aux",
+        serde_json::json!({
+            "id": 0, "kind": "employee", "code": "E01", "name": "老员工",
+            "parent_code": null, "disabled": false, "props": {}, "memo": ""
+        }),
+    )
+    .await;
+
+    // 4 行：1 行库里已有、1 行批次内重复、2 行新
+    let rows: Vec<serde_json::Value> = vec![
+        serde_json::json!({"code": "E01", "name": "改名了"}),
+        serde_json::json!({"code": "E02", "name": "新员工A"}),
+        serde_json::json!({"code": "E02", "name": "新员工A重复"}),
+        serde_json::json!({"code": "E03", "name": "新员工B"}),
+    ];
+    let (st, v) = put(
+        &state,
+        &sid,
+        "/api/aux-batch",
+        serde_json::json!({"kind": "employee", "rows": rows}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let ins = v["inserted"].as_i64().unwrap_or(-1);
+    let skip = v["skipped"].as_i64().unwrap_or(-1);
+    assert_eq!(
+        ins + skip,
+        4,
+        "插入 {ins} + 跳过 {skip} ≠ 请求的 4 行 —— 用户会以为数字对不上、软件坏了"
+    );
+    assert_eq!(ins, 2, "两条新的应进");
+    assert_eq!(skip, 2, "一条库里已有 + 一条批内重复");
+}
+
 // ---------------- 期初余额 ----------------
 
 #[tokio::test]

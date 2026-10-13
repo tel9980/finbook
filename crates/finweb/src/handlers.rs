@@ -13879,32 +13879,39 @@ async fn import_aux_batch(
     // insert_many_skip_existing 本身也会跳过，但那份结果只给「跳过了哪些」，
     // 不给「有多少行本该导入却没进」—— 前端就报不出「你以为导了 10 条，
     // 实际只进了 8 条」。这里自己先筛，好把差额说清楚。
+    //
+    // ⚠️ 两个集合必须分开：`in_book` 是「真的没进去」，`seen` 是「本批已经处理过
+    // 这个编码，用来防重复」。第一版只用一个数组，装成功后被当成 skipped 报出去，
+    // 用户看到「已导入 2 条，跳过 2 条」—— 2 + 2 ≠ 2，数字对不上，
+    // 第一反应是「这软件出 bug 了」。
     let existing = auxs::codes(&db, req.kind)?;
     let mut items: Vec<AuxEntity> = Vec::new();
-    let mut already: Vec<String> = Vec::new();
+    let mut in_book: Vec<String> = Vec::new();
     let mut dup_in_batch: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
     for r in &req.rows {
         let code = r.code.trim().to_string();
         let name = r.name.trim().to_string();
         if code.is_empty() || name.is_empty() {
             continue;
         }
-        if already.iter().any(|c| *c == code) || dup_in_batch.iter().any(|c| *c == code) {
+        if seen.iter().any(|c| *c == code) {
             dup_in_batch.push(code);
             continue;
         }
+        seen.push(code.clone());
         if existing.iter().any(|c| *c == code) {
-            already.push(code);
+            in_book.push(code);
             continue;
         }
-        already.push(code.clone());
         items.push(AuxEntity::new(req.kind, code, name));
     }
     if items.is_empty() {
         return Ok(Json(json!({
             "inserted": 0,
-            "skipped": already.len() + dup_in_batch.len(),
-            "already": already,
+            "skipped": in_book.len() + dup_in_batch.len(),
+            "already": in_book,
+            "duplicate_in_batch": dup_in_batch,
         })));
     }
     let (n, skipped) = auxs::insert_many_skip_existing(&db, &items)?;
@@ -13914,11 +13921,11 @@ async fn import_aux_batch(
         &format!("批量导入{}档案", req.kind.label()),
         &format!("{n} 条"),
     )?;
-    let mut all_skipped = already;
+    let mut all_skipped = in_book;
     all_skipped.extend(skipped);
     Ok(Json(json!({
         "inserted": n,
-        "skipped": all_skipped.len(),
+        "skipped": all_skipped.len() + dup_in_batch.len(),
         "already": all_skipped,
         "duplicate_in_batch": dup_in_batch,
     })))
