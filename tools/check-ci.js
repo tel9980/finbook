@@ -570,6 +570,39 @@ if (FIX_ROOT) {
     if (impBad === 0) {
       console.log(`e2e spec：${exported.length} 个 helpers，用到的都在 import 里`);
     }
+
+    // ---- 绕过 newBook 的 spec 必须自己关掉精简模式 ----
+    //
+    // 精简模式默认只铺 16 项，而 90 条 E2E 里有 70 个视图靠**点侧栏**进去。
+    // 凡是绕开 `newBook(page, …)`（自己手写登录+建账）的 spec，都拿不到
+    // newBook 里的 setSimpleNav，侧栏就只剩 16 项 —— 后面点不到的视图会一路
+    // 超时（60s × retries 1），一个文件能拖掉几十分钟。
+    //
+    // 本次就是漏了 `smoke.spec.js` 和 `aux-attach-reports.spec.js` 两个文件，
+    // 症状是 CI 的 E2E 跑了 50 分钟才挂（正常 16-20），而日志要 Actions 写
+    // 权限才拿得到，只能靠这条检查提前拦住。
+    //
+    // 判据是「文件里出现 `page.goto("/")` 就必须提到 setSimpleNav 或 newBook」。
+    // 宁可多报：真出现了误报，一眼就能看出该文件其实不需要。
+    let navBad = 0;
+    const testsDir2 = path.join(FIX_ROOT, "e2e", "tests");
+    for (const f of fs.readdirSync(testsDir2)) {
+      if (!f.endsWith(".js")) continue;
+      const src = fs.readFileSync(path.join(testsDir2, f), "utf8");
+      if (!/page\.goto\(\s*"\/"\s*\)/.test(src)) continue; // 没自己 goto 的不用管
+      if (/newBook\s*\(/.test(src)) continue; // 走 newBook 的自带开关
+      if (/setSimpleNav\s*\(/.test(src)) continue; // 自己处理了
+      navBad++;
+      bad++;
+      console.log(
+        `FAIL e2e/tests/${f} 自己 page.goto("/") 登录，但既没用 newBook 也没调 setSimpleNav` +
+          `\n    精简模式默认只铺 16 项，没关掉的话点不到的视图会一路超时（60s×retries），` +
+          `\n    一个文件就能拖掉几十分钟。在 page.goto 之前加一行 setSimpleNav(page, false)。`
+      );
+    }
+    if (navBad === 0) {
+      console.log("e2e spec：自己 goto 的都处理了精简模式开关");
+    }
   }
 }
 

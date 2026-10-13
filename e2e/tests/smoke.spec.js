@@ -1,9 +1,12 @@
 const { test, expect } = require("@playwright/test");
+const { setSimpleNav } = require("../helpers");
 
 test("会计月度闭环：建账→录凭证→记账→结账→报表", async ({ page }) => {
   const company = `E2E公司${Date.now()}`;
 
-  // 登录（平台管理员）
+  // 登录（平台管理员）。本文件绕过 newBook（自己手写建账），所以必须自己
+  // 关掉精简模式 —— 否则侧栏只有 16 项，点不到的视图会一路超时。
+  await setSimpleNav(page, false);
   await page.goto("/");
   await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
   await page.fill("#u", "admin");

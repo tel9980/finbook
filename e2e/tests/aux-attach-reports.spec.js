@@ -1,10 +1,13 @@
 const { test, expect } = require("@playwright/test");
-const { auditSignPost } = require("../helpers");
+const { auditSignPost, setSimpleNav } = require("../helpers");
 
 test("辅助/数量凭证、附件上传与数量金额账", async ({ page }) => {
   const company = `E2E辅${Date.now()}`;
 
   // 登录 + 建账
+  // 本文件绕过 newBook（自己手写登录+建账），所以必须自己关掉精简模式 ——
+  // 否则侧栏只有 16 项，后面点不到的视图会一路超时。见 helpers.js 的说明。
+  await setSimpleNav(page, false);
   await page.goto("/");
   await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
   await page.fill("#u", "admin");

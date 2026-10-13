@@ -27,6 +27,11 @@ const BOOK_PREFIX = `E2E${WORKER_TAG}///`;
 // ⚠️ 必须用 addInitScript（每次导航前执行），不能只在登录后 setItem 一次 ——
 // 侧栏在**首屏**就渲染了，那时读到的是「没设置过」= 默认开。
 //
+// 注入的是**字符串**而不是 (fn, arg)：写成字符串后不依赖 addInitScript 是否
+// 支持第二个参数，每个 Playwright 版本行为一致 —— 那种「本机版本支持、
+// CI 版本不支持」的差异极难查，而且症状是「侧栏莫名其妙只有 16 项」，
+// 看不出跟这行有关。
+//
 // `mode` 三态，覆盖要测的全部情形：
 //   false（默认）→ 显式关：绝大多数用例要的就是「侧栏铺全量」
 //   true         → 显式开：测精简态
@@ -34,9 +39,11 @@ const BOOK_PREFIX = `E2E${WORKER_TAG}///`;
 //                  用来测「从没设置过 → 默认开」这条新用户路径
 async function setSimpleNav(page, mode, username) {
   if (mode === null) return;
-  await page.addInitScript(([u, v]) => {
-    try { localStorage.setItem(`nav_simple@${u}`, v ? "true" : "false"); } catch (e) {}
-  }, [username || "admin", mode ? "true" : "false"]);
+  const u = username || "admin";
+  const v = mode ? "true" : "false";
+  await page.addInitScript(
+    `try { localStorage.setItem("nav_simple@${u}", ${JSON.stringify(v)}); } catch (e) {}`
+  );
 }
 
 /// 删掉本 worker 名下所有账套（含上一次尝试泄漏的）
