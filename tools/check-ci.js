@@ -603,6 +603,48 @@ if (FIX_ROOT) {
     if (navBad === 0) {
       console.log("e2e spec：自己 goto 的都处理了精简模式开关");
     }
+
+    // ---- setSimpleNav(page, null) 之后不能再声称测了「持久化」 ----
+    //
+    // **addInitScript 不能注销**。一旦 newBook(…, {simpleNav: true/false}) 注册过
+    // 写 localStorage 的脚本，后面 `setSimpleNav(page, null)` 只是「不再新增」，
+    // 已注册的那个照样在每次导航前执行、照样覆写值。所以「null 之后 reload 看值
+    // 还在不在」测到的不是持久化，是脚本又写了一遍 —— 永远绿或永远红，都没意义。
+    //
+    // 本次 CI 的真实报错就是它：Expected: not checked / Received: checked。
+    // 症状极像产品 bug（开关没存住），实际是探针自己写错了。
+    //
+    // 判据按 **test 块**判断，不按文件：同一个 spec 里不同 test 用不同模式是正常的
+    // （「精简不拦路由」用 simpleNav:true 完全合理，它不测持久化）。
+    // 第一版按文件判，立刻把 simple-nav.spec.js 误报了 —— 一个新增的检查如果
+    // 在真实代码上就误报，它会很快被人注释掉，那还不如不写。
+    let nullBad = 0;
+    for (const f of fs.readdirSync(testsDir2)) {
+      if (!f.endsWith(".js")) continue;
+      const src = fs.readFileSync(path.join(testsDir2, f), "utf8");
+      if (!/setSimpleNav\s*\([^)]*null/.test(src)) continue;
+      // 按 test( 切开，逐块判；块首之前是文件头（require/常量），一并算第 0 块
+      const blocks = src.split(/(?=\ntest\s*\()/);
+      blocks.forEach((blk, bi) => {
+        if (!/setSimpleNav\s*\([^)]*null/.test(blk)) return;
+        const m = blk.match(/newBook\s*\(([\s\S]{0,300}?)\)\s*;/g) || [];
+        if (!m.some((call) => /simpleNav\s*:\s*(true|false)/.test(call))) return;
+        const name = (blk.match(/test\s*\(\s*["'`]([^"'`]+)/) || [])[1] || `第 ${bi} 块`;
+        nullBad++;
+        bad++;
+        console.log(
+          `FAIL e2e/tests/${f} 的「${name}」既用 setSimpleNav(…, null) ` +
+            `又在同一个用例里传了 newBook(…, {simpleNav: true/false})` +
+            `\n    addInitScript 不能注销：先注册的那个每次导航前照样覆写 localStorage，` +
+            `\n    「null 之后 reload 看持久化」测到的不是持久化（症状极像产品 bug：` +
+            `\n    开关没存住）。改成 newBook(page, name, { simpleNav: null }) 起步，` +
+            `\n    全程只用真实点击改状态。`
+        );
+      });
+    }
+    if (nullBad === 0) {
+      console.log("e2e spec：没有「null 之后却注册过覆写脚本」的组合");
+    }
   }
 }
 

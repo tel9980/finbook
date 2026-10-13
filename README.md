@@ -1036,6 +1036,55 @@ const listed = eval(LISTED_SRC.replace("const listed = ", ""));
 `acctKey` 拼的是当前登录账号，session 还在 admin 上，等于在测 admin 的 key。
 探针自己也会有 bug，报红不等于产品有问题，得先确认探针测的是它声称的东西。
 
+### 4.69 `addInitScript` 不能注销 —— 一个会伪装成产品 bug 的测试写法
+
+CI 的 E2E 挂了，证据从 **`playwright-trace` artifact** 里拿到（`trace:
+"retain-on-failure"` + `upload-artifact`；只有失败用例才有，所以 artifact 很小）。
+读法要注意一个坑：artifact 下载是 302 到 S3，带上 `Authorization` 会被 S3
+拒 401 —— 必须先拿到 `Location` 再用**不带 auth** 的请求去取。
+
+报错只有一条：
+
+```
+Error: expect(locator).not.toBeChecked() failed
+  Locator:  locator('#nav-simple')
+  Expected: not checked
+  Received: checked
+```
+
+**症状极像产品 bug**（开关没存住），实际是我的探针写错了：
+
+```js
+await newBook(page, name, { simpleNav: true });   // 注册了写 "true" 的 addInitScript
+...
+await page.uncheck("#nav-simple");                // 用户关掉，写 false
+await setSimpleNav(page, null);                   // ← 只是「不再新增」
+await page.reload();                              // 旧脚本照样执行，写回 "true"
+```
+
+**`page.addInitScript` 没有对应的 unregister。** `setSimpleNav(page, null)`
+只保证「这一次不新增注册」，已注册的那个会**在每次导航前执行**。所以
+「null 之后 reload 看值还在不在」测到的根本不是持久化，是脚本又写了一遍。
+
+**正确写法**：`newBook(page, name, { simpleNav: null })` 起步，全程不注入任何
+脚本，只靠用户真实的点击改变状态，reload 后看值还在不在。这才是持久化该有
+的测法 —— 而且顺带把 `uncheck → check` 的完整用户路径也覆盖了。
+
+**加了两条静态检查**（都在 `check-ci.js`）：
+
+1. 绕过 `newBook` 自己 `page.goto("/")` 的 spec，必须用 `newBook` 或
+   `setSimpleNav`。本次就漏了 `smoke.spec.js` 和 `aux-attach-reports.spec.js`
+   两个文件，症状是 E2E 跑了 50 分钟才挂（正常 16-20）。
+2. 同一用例里既用 `setSimpleNav(null)` 又在 `newBook` 传 `simpleNav: true/false`
+   的，报红。
+
+**第 2 条的判据按 test 块切分，不按文件**：同一个 spec 里不同 test 用不同模式
+是正常的（「精简不拦路由」用 `simpleNav: true` 完全合理，它不测持久化）。第一版
+按文件判，立刻把 `simple-nav.spec.js` 误报了 —— **一个在真实代码上就误报的新
+检查，会很快被人注释掉，那还不如不写**。
+
+两条都做了变异验证：坏写法报红、正确写法不误报。
+
 ---
 
 ## 5. 关键设计约定

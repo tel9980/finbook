@@ -44,25 +44,34 @@ test("精简默认开：只铺日常功能，其余的搜得到", async ({ page 
   await expect(page.locator('.nav-item[data-view="inv-batch"]')).toHaveCount(1);
 });
 
-// ---- 不变量②：显式关掉后不会被自己开回来（账号分区）----
+// ---- 不变量②：显式关掉后不会被自己开回来 ----
+//
+// ⚠️ 这条**绝不能用 `newBook(…, {simpleNav: true})`**：那会注册一个往
+// localStorage 写 "true" 的 addInitScript，而 **addInitScript 不能注销** ——
+// 后面再调 `setSimpleNav(page, null)` 只是「不再新增」，已注册的那个照样每次
+// 导航前执行，值被写回 "true"。于是断言测到的根本不是持久化，而是「脚本又写
+// 了一遍」。我第一版就是这么写的，CI 报 "Expected: not checked / Received: checked"。
+//
+// 正确做法：`simpleNav: null` 起步，全程不注入任何脚本，只靠用户真实的点击
+// 改变状态，reload 后看值还在不在。这才是持久化该有的测法。
 test("精简开关：关掉后刷新仍是关的，切回来也保持", async ({ page }) => {
-  await newBook(page, `E2E精简开关${Date.now()}`, { simpleNav: true });
+  await newBook(page, `E2E精简开关${Date.now()}`, { simpleNav: null });
+
+  // 起点：没设置过 → 默认开
   await expect(page.locator("#nav-simple")).toBeChecked();
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(0);
 
-  // 关掉 → 全量
+  // 用户关掉 → 全量
   await page.uncheck("#nav-simple");
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(1);
-  // 刷新后仍然是关的。用 null 重建：addInitScript 不注册，localStorage 里
-  // 是用户上一次交互真正写下的 false —— 这才测到「持久化」而不是「脚本又写了一遍」。
-  await setSimpleNav(page, null);
+
+  // 刷新后仍然是关的 —— 此时 localStorage 里是用户上一次点击真正写下的 false
   await page.reload();
   await expect(page.locator("#nav-simple")).not.toBeChecked();
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(1);
 
   // 再切回精简，也是持久的
   await page.check("#nav-simple");
-  await setSimpleNav(page, null);
   await page.reload();
   await expect(page.locator("#nav-simple")).toBeChecked();
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(0);
@@ -72,7 +81,8 @@ test("精简开关：关掉后刷新仍是关的，切回来也保持", async ({
 });
 
 // ---- 不变量③：精简只管侧栏画不画，不管路由 ----
-// 独立成一条：万一以后有人在 goView 里也加了精简判断，只有这条能抓住。
+// 独立成条：万一以后有人在 goView 里也加了精简判断，只有这条能抓住。
+// 这里可以用 simpleNav:true —— 它只要求「精简态下能敲 URL 进去」，不涉及持久化。
 test("精简不拦路由：直接访问 URL 仍能进到未铺开的页面", async ({ page }) => {
   await newBook(page, `E2E精简路由${Date.now()}`, { simpleNav: true });
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(0);
