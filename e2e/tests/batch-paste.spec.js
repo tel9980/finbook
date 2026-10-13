@@ -18,13 +18,19 @@ const BEGIN_TEXT = "科目编码\t金额\n1001\t58000\n1002\t125000\n2001\t80000
 test("辅助档案批量粘贴：先预览再导入，已存在的跳过不覆盖", async ({ page }) => {
   await newBook(page, `E2E粘档案${Date.now()}`);
 
-  // 先手工建一个 C01，用来验证「已存在」这条
+  // 先建一个 C01，用来验证「已存在」这条。走 API 而不是点「新增」弹编辑器 ——
+  // 前置数据的准备方式不是被测对象，用 API 又快又稳（本仓库其它 spec 也都这么干）。
+  // 注意编辑器的输入框是 #au-code，不是 #ae-code（那是另一个存货编辑器的）。
+  const res = await page.request.post("/api/aux", {
+    data: {
+      id: 0, kind: "customer", code: "C01", name: "我的老客户",
+      parent_code: null, disabled: false, props: {}, memo: "",
+    },
+  });
+  expect(res.ok(), "前置档案 C01 应建成功").toBeTruthy();
+
   await page.click('.nav-item[data-view="aux"]');
   await page.click('[data-kind="customer"]');
-  await page.click("#aux-new");
-  await page.fill("#ae-code", "C01");
-  await page.fill("#ae-name", "我的老客户");
-  await page.click("#ae-save");
   await expect(page.locator("table.grid tbody")).toContainText("我的老客户");
 
   await page.click("#aux-batch");
@@ -39,11 +45,13 @@ test("辅助档案批量粘贴：先预览再导入，已存在的跳过不覆�
   // 表头被跳过，剩下 3 行：1 条已存在 + 2 条新
   await expect(page.locator("#bp-preview")).toContainText("其中 2 条将导入");
   await expect(page.locator("#bp-preview")).toContainText("编码已存在");
-  // 预览阶段**没有写库**
+  // 预览阶段**没有写库**（写没写库由 HTTP 层集成测试钉，这里只看预览行数）
   await expect(page.locator("#bp-preview .grid tbody tr")).toHaveCount(3);
 
   await page.click("#bp-ok");
-  await expect(page.locator("#modal-root")).toHaveCount(0);
+  // 弹窗关掉 = .modal-mask 消失。不能断言 #modal-root 为 0 —— 它是常驻容器，
+  // 关了弹窗它还在（本仓库其它 spec 都是这么断言的）。
+  await expect(page.locator(".modal-mask")).toHaveCount(0);
   await expect(page.locator("table.grid tbody tr")).toHaveCount(3);
   await expect(page.locator("table.grid tbody")).toContainText("杭州明远贸易");
   // 已存在的那条**不能被改名** —— 「不覆盖」是这个功能的硬约定
@@ -75,25 +83,21 @@ test("期初批量粘贴：方向按科目自动归位，预览带试算", async
   await page.click("#bp-preview-btn");
 
   // 试算：Web 端粘贴后立刻提交，没有草稿区慢慢看，不给试算用户就完全不知道平不平
-  await expect(page.locator("#bp-preview")).toContainText("借方合计");
-  await expect(page.locator("#bp-preview")).toContainText("贷方合计");
-  await expect(page.locator("#bp-preview")).toContainText("差额");
+  await expect(page.locator("#bp-trial")).toContainText("借方合计");
+  await expect(page.locator("#bp-trial")).toContainText("贷方合计");
+  await expect(page.locator("#bp-trial")).toContainText("差额");
   // 方向不用填：1001/1002 是资产（借）、2001 是负债（贷），由科目表决定
-  await expect(page.locator("#bp-preview")).toContainText("借方合计");
-  const trial = await page.locator("#bp-preview").innerText();
+  const trial = await page.locator("#bp-trial").innerText();
   expect(trial).toContain("183,000.00"); // 58000 + 125000
-  expect(trial).toContain("80,000.00");  // 2001
+  expect(trial).toContain("80,000.00"); // 2001
   expect(trial).toContain("103,000.00"); // 差额，不平要看得见
 
   await page.click("#bp-ok");
-  await expect(page.locator("#modal-root")).toHaveCount(0);
-  await page.waitForTimeout(800);
+  await expect(page.locator(".modal-mask")).toHaveCount(0);
   await expect(page.locator("table.grid tbody tr")).toHaveCount(3);
-  // 导入后必须点「保存全部」才落库 —— 弹窗文案里说了这件事
-  await page.click("#bg-save");
-  await page.waitForTimeout(800);
+  // 导入直接写库（Web 端没有草稿区），刷新后行还在 —— 这才是「进了库」的证据
   await page.reload();
-  await page.waitForTimeout(800);
+  await page.click('.nav-item[data-view="begin"]');
   await expect(page.locator("table.grid tbody tr")).toHaveCount(3);
 });
 
@@ -108,8 +112,10 @@ test("期初批量粘贴：未知科目给提示，不静默丢行", async ({ pa
   await expect(page.locator("#bp-preview")).toContainText("无此科目");
   await expect(page.locator("#bp-preview")).toContainText("像不像 1001");
   await expect(page.locator("#bp-preview")).toContainText("其中 1 条将导入");
-  // 抄错那行不该进试算（否则用户会以为「差一点」）
-  const trial = await page.locator("#bp-preview").innerText();
+  // 抄错那行不该进试算（否则用户会以为「差一点」）。
+  // 必须只看 #bp-trial：预览表格里坏行照样渲染金额（让用户看见它），
+  // 对整个 #bp-preview 断言 not.toContain 会被表格里的 3,000.00 误伤。
+  const trial = await page.locator("#bp-trial").innerText();
   expect(trial).toContain("5,000.00");
   expect(trial).not.toContain("3,000.00");
 });

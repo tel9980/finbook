@@ -274,7 +274,11 @@ function batchPasteDialog(opts) {
       <div class="foot">
         <button class="btn ghost" id="bp-cancel">关闭</button>
         <span class="grow"></span>
-        <button class="btn" id="bp-preview-btn" disabled>预览</button>
+        // 「预览」默认可用，「导入」默认禁用 —— 启用逻辑在 setBusy 里。
+        // 两个都写 disabled 的话，预览按钮永远点不动（setBusy 只在预览/导入
+        // 动作里被调用，而点预览正是第一个动作）。实测：E2E 里 #bp-preview-btn
+        // 一直是 disabled，4 条全挂在这里。
+        <button class="btn" id="bp-preview-btn">预览</button>
         <button class="btn primary" id="bp-ok" disabled>导入</button>
       </div>`;
   }
@@ -309,7 +313,9 @@ function batchPasteDialog(opts) {
     if (opts.trial && preview.trial) {
       const t = preview.trial;
       const col = t.balanced ? "var(--ok, #16a34a)" : "var(--err)";
-      body += `<div style="font-size:12.5px;margin-bottom:8px">
+      // 试算区用 bp-trial 做标识单独定位。预览表格里坏行也渲染金额，
+// 断言「坏行不进试算」时必须只看试算区，否则表格里的金额会误伤断言。
+      body += `<div id="bp-trial" style="font-size:12.5px;margin-bottom:8px">
         本次借方合计 <b>${esc(t.debit)}</b> ／ 贷方合计 <b>${esc(t.credit)}</b> ／
         差额 <b style="color:${col}">${esc(t.diff)}</b>
         ${t.balanced ? "（平）" : "（不平 —— 请检查是否漏了对方科目）"}
