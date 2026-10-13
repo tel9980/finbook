@@ -861,9 +861,9 @@
   才能记凭证，没有档案就一张凭证也存不了 —— 直接把这句话写在页面上。
 - **无预置的类别明说为什么**：客户/供应商/存货/职员/项目不显示按钮，并在提示里
   写「这几类的名字没有通用值，预置一个假的会跟着凭证进报表」。
-- **E2E 1 条**（`e2e/tests/aux-preset.spec.js`，基线数字待 CI 跑通后再改）：
-  预置建出 3 部门 + 2 银行账户、**再点一次不新增不覆盖**（防 `INSERT OR REPLACE`
-  悄悄改掉 D01）、客户/供应商/存货按钮不存在。
+- **E2E 1 条**（`e2e/tests/aux-preset.spec.js`）：预置建出 3 部门 + 2 银行账户、
+  **再点一次不新增不覆盖**（防 `INSERT OR REPLACE` 悄悄改掉 D01）、
+  客户/供应商/存货按钮不存在。
 
 **路由避坑**：`/api/aux/:id` 会把 `presets` 当成 id 吃掉，所以路径用
 `/api/aux-presets` 而不是 `/api/aux/presets`。
@@ -991,7 +991,7 @@ cargo test --workspace
 | `finweb` REST API 集成 | 186 |
 | `finweb` 客户视图 API | 7 |
 | **小计** | **750** |
-| Playwright E2E | 90 |
+| Playwright E2E | 91 |
 
 > 本轮一次性校准了整张表（此前 `findb` 还停在 340、客户视图还停在 4，
 > 是历次补测试没回头更新）。核对方式：跑一次 `cargo test --workspace`，
@@ -1026,6 +1026,9 @@ cargo test --workspace
 > 实际是 72。基线数字错了比没有数字更坏：它会让人以为少了两条用例。
 >
 > 85 → 90：同上，按 `npx playwright test --list` 的 `Total:` 核对（30 个文件）。
+>
+> 90 → 91：新增 `e2e/tests/aux-preset.spec.js`（§4.63），共 31 个文件。
+> `--list` 报 `Total: 91 tests in 31 files`，CI 的 Web E2E job 全绿。
 
 > 这次特意是**跑通了才改的** —— 改之前先在 CI 上确认这 90 条全绿
 > （2026-10-12，Web E2E job success），而不是拿一个未经证实的数字去填。
