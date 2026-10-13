@@ -965,6 +965,35 @@ CI 挂在 `CI 配置与变异清单自检` —— 这次不是工具坏了，是
 **这不是放宽检查，是把判据对准它真正要守的不变量。** 变异测试仍然是
 「排掉 recents 必须报红」，且变异串已同步更新，验证力没减。
 
+### 4.67 Query 少字段会 422 —— 一整条链路静默消失
+
+**事故**：`GET /api/aux-presets?kind=dept` 返回 **422**，
+因为 `KindQuery.kind` 没写 `#[serde(default)]`。
+
+axum 对查询串反序列化失败直接 422，**根本不会进 handler** —— 处理函数里那行
+`AuxKind::from_code(&q.kind).unwrap_or(AuxKind::Dept)` 是够不到的。结果前端
+`loadAuxPreset` catch 到错误直接 `return`：按钮保持 hidden、提示区空白，
+整条预置链路**静默消失**，而且编译期和 Rust 单元测试都发现不了
+（Rust 侧那只 handler 逻辑是对的，错的是「框架在进 handler 之前就拒了」）。
+
+body 少字段会 422 这件事本身不新鲜，新鲜的是它发生在 **query** 上：
+body 是我们自己在 JS 里拼的，query 是从 URL 拼的，两处都很难在本地顺手测到。
+
+**修法**：给 `kind` 加 `#[serde(default)]`。
+
+**更重要的修法是补上回归网**：`crates/finweb/tests/aux_preset.rs` 4 条，
+每一条都发**真的带查询串的 HTTP 请求**（`oneshot(authed_get(uri))`）。
+已做变异验证：去掉 `#[serde(default)]` → 立刻变红；还原 → 恢复绿。
+
+顺带说明为什么这类 bug 必须有 HTTP 层测试而不是单元测试：单元测 handler 函数
+签名时，`Query<T>` 只是一个类型参数，反序列化发生在框架里。**必须真的发请求。**
+
+**另一个教训（我自己踩的）**：验证时用 Python `urllib` 发「GET」却带了
+`data=b"{}"` —— 有 body 就必须是 POST，于是 urllib 悄悄发成了 POST，
+测的是 `KindReq` 缺 `kind` → 422。工具用错会得出「产品有 bug」的错误结论，
+而且结论看起来完全合理。我差点据此去改本来正确的代码。
+以后验证 HTTP 行为优先用现成的集成测试（`oneshot`），别拿手写脚本凑。
+
 ---
 
 ## 5. 关键设计约定
@@ -1053,9 +1082,10 @@ cargo test --workspace
 | `findb` 端到端 `ext_loop` | 7 |
 | `finui` | 55 |
 | `finweb` lib | 4 |
+| `finweb` `aux_preset.rs` | 4 |
 | `finweb` REST API 集成 | 186 |
 | `finweb` 客户视图 API | 7 |
-| **小计** | **750** |
+| **小计** | **754** |
 | Playwright E2E | 93 |
 
 > 本轮一次性校准了整张表（此前 `findb` 还停在 340、客户视图还停在 4，
@@ -1081,6 +1111,8 @@ cargo test --workspace
 >
 > 739 → 750 的 11 条来自试算不平的解法计算（§4.62），全在 `finui` 的
 > `begin_diag` 模块，另有 §4.59 的 5 条方向语义检查不受影响。
+>
+> 750 → 754 的 4 条是 `finweb` 的 `aux_preset.rs`（§4.67），HTTP 层集成测试。
 > 方向按科目自动归位 / 负数与括号转反方向 / 显式声明优先 /
 > 借贷两列写法 / 抄错码给提示 / 已有跳过 / 表头 / 空输入 / 千分位逗号。
 

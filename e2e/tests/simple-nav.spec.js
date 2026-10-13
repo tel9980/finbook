@@ -1,34 +1,23 @@
 const { test, expect } = require("@playwright/test");
-const { newBook } = require("../helpers");
+const { newBook, setSimpleNav } = require("../helpers");
 
 // 精简模式：69 个功能平铺 16 组，新用户建完账第一眼看到的是 MRP、工艺路线、
 // 预算预警这类跟他完全无关的东西。桌面端已经这么做了，这里对齐。
 //
 // 这个模式最容易**做坏**，坏法有三个，全都在下面被钉住：
 //   ① 藏起来变成了拿掉 —— 搜「MRP」搜不到了，用户永远进不去那个页面
-//   ② 默认开 → 老用户/测试全炸 —— 90 条 E2E 里有 70 个视图靠点侧栏进去
-//   ③ 用户关掉后下次进来又自己开回来（没区分「没设置过」和「显式关掉」）
+//   ② 用户关掉后下次进来又自己开回来（没区分「没设置过」和「显式关掉」）
+//   ③ 精简顺手拦了路由 —— 直接敲 URL 也进不去，那才是真的功能没了
 //
-// 这条用例**不开** newBook 的精简关闭（那正是被测对象），所以自己注入
-// localStorage 控制状态。
+// ⚠️ 三种状态必须用 `newBook(page, name, {simpleNav: …})` 的三态来构造，
+// 不能靠「先建账再 localStorage.removeItem 再 reload」：
+// setSimpleNav 用的是 addInitScript，**每次导航前都会重写**一遍，
+// removeItem 的效果在 reload 时就被它抹掉了 —— 测到的是「显式关掉」，
+// 不是「从没设置过」。这两种是不同的代码路径，混起来测等于没测。
 
-test.beforeEach(async ({ page }) => {
-  await newBook(page, `E2E精简${Date.now()}`);
-});
-
-// 点开侧栏里的「显示全部功能」，好让下面的断言都在全量状态下做（1）以外的事
-async function setSimple(page, on) {
-  await page.evaluate((v) => {
-    localStorage.setItem("nav_simple@admin", JSON.stringify(v));
-  }, on);
-  await page.reload();
-  await expect(page.locator(".nav-item[data-view]").first()).toBeVisible();
-}
-
-test("精简模式：默认只铺日常功能，其余的搜得到、开关能来回切", async ({ page }) => {
-  // ---- 默认开（newBook 之后 localStorage 里没有这个 key）----
-  await page.evaluate(() => localStorage.removeItem("nav_simple@admin"));
-  await page.reload();
+// ---- 默认开：localStorage 里根本没有这个 key（新用户路径）----
+test("精简默认开：只铺日常功能，其余的搜得到", async ({ page }) => {
+  await newBook(page, `E2E精简默认${Date.now()}`, { simpleNav: null });
   await expect(page.locator(".nav-item[data-view]").first()).toBeVisible();
 
   const laidOut = await page.locator(".nav-body .nav-item").evaluateAll((els) =>
@@ -42,47 +31,57 @@ test("精简模式：默认只铺日常功能，其余的搜得到、开关能�
   for (const shown of ["vouchers", "begin", "accounts", "aux", "ledger", "reports"]) {
     expect(laidOut, `${shown} 应该出现在默认侧栏`).toContain(shown);
   }
+  expect(laidOut.length, "默认侧栏应该是精简后的一小撮").toBeLessThanOrEqual(20);
 
-  // ---- 不变量 ①：藏起来 ≠ 拿掉。搜「MRP」必须搜得到并能跳进去 ----
+  // 不变量①：藏起来 ≠ 拿掉。打「MRP」必须搜得到并能跳进去。
   await page.fill("#nav-q", "MRP");
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(1);
   await page.click('.nav-item[data-view="mrp"]');
   await expect(page).toHaveURL(/#\/mrp/);
 
-  // 换个更冷门的也照样搜得到 —— 证明这不是只对第一页生效
+  // 换个冷门的也照样搜得到 —— 证明这不是只对第一页生效
   await page.fill("#nav-q", "批次");
   await expect(page.locator('.nav-item[data-view="inv-batch"]')).toHaveCount(1);
+});
 
-  // ---- 开关能切回全量 ----
-  await page.fill("#nav-q", "");
+// ---- 不变量②：显式关掉后不会被自己开回来（账号分区）----
+test("精简开关：关掉后刷新仍是关的，切回来也保持", async ({ page }) => {
+  await newBook(page, `E2E精简开关${Date.now()}`, { simpleNav: true });
+  await expect(page.locator("#nav-simple")).toBeChecked();
+  await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(0);
+
+  // 关掉 → 全量
   await page.uncheck("#nav-simple");
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(1);
-
-  // ---- 不变量 ③：显式关掉后刷新仍然是关的 ----
+  // 刷新后仍然是关的。用 null 重建：addInitScript 不注册，localStorage 里
+  // 是用户上一次交互真正写下的 false —— 这才测到「持久化」而不是「脚本又写了一遍」。
+  await setSimpleNav(page, null);
   await page.reload();
   await expect(page.locator("#nav-simple")).not.toBeChecked();
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(1);
 
-  // ---- 再切回精简，也是持久的 ----
+  // 再切回精简，也是持久的
   await page.check("#nav-simple");
+  await setSimpleNav(page, null);
   await page.reload();
   await expect(page.locator("#nav-simple")).toBeChecked();
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(0);
-  // 但搜索仍然找得到
+  // 切回精简后搜索仍然找得到（不变量①在两种状态下都成立）
   await page.fill("#nav-q", "MRP");
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(1);
 });
 
-// 精简只该改侧栏**画不画出**，不该拦路由：直接敲 URL 必须照常进去。
-// 这条独立于上一条 —— 万一以后有人在 goView 里也加了精简判断，只有这条能抓住。
-test("精简模式不拦路由：直接访问 URL 仍能进到未铺开的页面", async ({ page }) => {
-  await setSimple(page, true);
+// ---- 不变量③：精简只管侧栏画不画，不管路由 ----
+// 独立成一条：万一以后有人在 goView 里也加了精简判断，只有这条能抓住。
+test("精简不拦路由：直接访问 URL 仍能进到未铺开的页面", async ({ page }) => {
+  await newBook(page, `E2E精简路由${Date.now()}`, { simpleNav: true });
   await expect(page.locator('.nav-item[data-view="mrp"]')).toHaveCount(0);
 
   await page.goto("/#/mrp");
   await expect(page).toHaveURL(/#\/mrp/);
   await expect(page.locator("h2").first()).toBeVisible();
-  // 到了页面，侧栏要把它标成「当前页」—— 即便那一项没画出来。
+
+  // 到了未铺开的页面，侧栏里已铺开的当前页仍要标 .active ——
   // 不标的话用户在精简侧栏里会失去「我在哪」的位置感。
   await page.goto("/#/vouchers");
   await expect(page.locator('.nav-item[data-view="vouchers"].active')).toHaveCount(1);

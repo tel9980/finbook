@@ -13557,9 +13557,17 @@ struct KindReq {
     kind: AuxKind,
 }
 
-/// `?kind=` 查询串，缺省按部门处理（`AuxKind` 的 from_str 失败时）
-#[derive(serde::Deserialize)]
+/// `?kind=` 查询串。
+///
+/// **`kind` 必须有 `#[serde(default)]`**：axum 对查询串反序列化失败时返回 422，
+/// 而不是交给处理函数里那行 `unwrap_or(Dept)`。少写这一个属性，
+/// 前端 `loadAuxPreset` 就会 catch 到 422 直接 return —— 按钮保持 hidden、
+/// 提示区空白，整条预置链路静默消失，而且**编译期和 Rust 测试都发现不了**
+/// （E2E 才暴露）。这是「参数从 URL 进来」比「从 body 进来」更危险的地方：
+/// body 少字段会 422，query 少字段也会 422，两者都很难在本地顺手测到。
+#[derive(serde::Deserialize, Default)]
 struct KindQuery {
+    #[serde(default)]
     kind: String,
 }
 

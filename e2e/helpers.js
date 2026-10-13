@@ -24,12 +24,19 @@ const BOOK_PREFIX = `E2E${WORKER_TAG}///`;
 // 不碰路由、不碰权限、不碰任何页面逻辑。这里关掉它，测的仍然是全量功能；
 // 精简模式本身另有 `simple-nav.spec.js` 专门覆盖（含「藏起来≠拿掉」那条断言）。
 //
-// ⚠️ 必须在 goto("/") **之前**注入：侧栏在首屏就渲染了，登录后再写 localStorage
-// 已经晚一步（第一次 renderSidebar 时读到的是「没设置过」= 默认开）。
-async function turnOffSimpleNav(page) {
-  await page.addInitScript(() => {
-    try { localStorage.setItem("nav_simple@admin", "false"); } catch (e) {}
-  });
+// ⚠️ 必须用 addInitScript（每次导航前执行），不能只在登录后 setItem 一次 ——
+// 侧栏在**首屏**就渲染了，那时读到的是「没设置过」= 默认开。
+//
+// `mode` 三态，覆盖要测的全部情形：
+//   false（默认）→ 显式关：绝大多数用例要的就是「侧栏铺全量」
+//   true         → 显式开：测精简态
+//   null         → **不注册任何脚本**，localStorage 里没有这个 key，
+//                  用来测「从没设置过 → 默认开」这条新用户路径
+async function setSimpleNav(page, mode, username) {
+  if (mode === null) return;
+  await page.addInitScript(([u, v]) => {
+    try { localStorage.setItem(`nav_simple@${u}`, v ? "true" : "false"); } catch (e) {}
+  }, [username || "admin", mode ? "true" : "false"]);
 }
 
 /// 删掉本 worker 名下所有账套（含上一次尝试泄漏的）
@@ -52,9 +59,10 @@ async function purgeOwnBooks(page) {
 /// 返回值不是多余的：一个 realm 里会攒下多本书（前面测试建的、别的 worker 建的），
 /// `loginAs` 不按名字选就会进错账套 —— 症状是「上一段刚拿到的凭证 id 一访问就 404」，
 /// 排查方向会被带偏到"凭证被删了"。我为此白查了一轮。
-async function newBook(page, company) {
-  // 见 turnOffSimpleNav 的注释：必须先于 goto，否则首屏侧栏已经按默认「精简」渲染了
-  await turnOffSimpleNav(page);
+/// `opts.simpleNav` 见 setSimpleNav 的注释（false / true / null，默认 false）
+async function newBook(page, company, opts) {
+  const o = opts || {};
+  await setSimpleNav(page, o.simpleNav === undefined ? false : o.simpleNav);
   await page.goto("/");
   await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
   await page.fill("#u", "admin");
@@ -263,11 +271,8 @@ async function addBookUser(page, { username, password, role, display }) {
 async function loginAs(page, username, password, book) {
   await page.request.post("/api/logout", { data: {} }).catch(() => {});
   // 同 newBook：换账号后侧栏重新渲染，精简默认开会让后续点不到非 16 项的视图。
-  // 注意 key 按登录账号分区（acctKey），所以这里写当前账号的 key，
-  // 不是 admin 的 —— 否则 loginAs 切到出纳后又回到默认精简。
-  await page.addInitScript((u) => {
-    try { localStorage.setItem(`nav_simple@${u}`, "false"); } catch (e) {}
-  }, username);
+  // key 按**登录账号**分区（acctKey）—— 写 admin 的等于没写。
+  await setSimpleNav(page, false, username);
   await page.goto("/");
   await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
   await page.fill("#u", username);
@@ -285,7 +290,7 @@ async function loginAs(page, username, password, book) {
 
 module.exports = {
   newBook,
-  turnOffSimpleNav,
+  setSimpleNav,
   postVoucher,
   postAllDrafts,
   auditAllDrafts,
