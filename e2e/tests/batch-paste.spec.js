@@ -41,18 +41,18 @@ test("辅助档案批量粘贴：先预览再导入，已存在的跳过不覆�
   await expect(page.locator("#bp-ok")).toBeDisabled();
 
   await page.click("#bp-preview-btn");
-  await expect(page.locator("#bp-preview")).toContainText("解析到 3 条");
-  // 表头被跳过，剩下 3 行：1 条已存在 + 2 条新
-  await expect(page.locator("#bp-preview")).toContainText("其中 2 条将导入");
+  // AUX_TEXT 是表头 + 2 行数据（C01、C02），其中 C01 已存在、C02 是新的
+  await expect(page.locator("#bp-preview")).toContainText("解析到 2 条");
+  await expect(page.locator("#bp-preview")).toContainText("其中 1 条将导入");
   await expect(page.locator("#bp-preview")).toContainText("编码已存在");
   // 预览阶段**没有写库**（写没写库由 HTTP 层集成测试钉，这里只看预览行数）
-  await expect(page.locator("#bp-preview .grid tbody tr")).toHaveCount(3);
+  await expect(page.locator("#bp-preview .grid tbody tr")).toHaveCount(2);
 
   await page.click("#bp-ok");
   // 弹窗关掉 = .modal-mask 消失。不能断言 #modal-root 为 0 —— 它是常驻容器，
   // 关了弹窗它还在（本仓库其它 spec 都是这么断言的）。
   await expect(page.locator(".modal-mask")).toHaveCount(0);
-  await expect(page.locator("table.grid tbody tr")).toHaveCount(3);
+  await expect(page.locator("table.grid tbody tr")).toHaveCount(2);
   await expect(page.locator("table.grid tbody")).toContainText("杭州明远贸易");
   // 已存在的那条**不能被改名** —— 「不覆盖」是这个功能的硬约定
   await expect(page.locator("table.grid tbody")).toContainText("我的老客户");
