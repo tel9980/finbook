@@ -604,6 +604,45 @@ if (FIX_ROOT) {
       console.log("e2e spec：自己 goto 的都处理了精简模式开关");
     }
 
+    // ---- 建账必须走 newBook ----
+    //
+    // 账套上限是**每账号 10 个**。`newBook` 里的 `purgeOwnBooks` 会把本套件建的
+    // 书清掉，而它认的是 `E2E` 前缀。自己手写建账的 spec 建出来的名字没有
+    // worker 段 → 清不掉 → 额度逐轮累积 → 某天 `POST /api/books` 全 400 →
+    // **整个套件失败**。
+    //
+    // 实测：98 条里 65 条一起挂，每条都报「等不到 .nav-item[data-view=vouchers]」，
+    // 与它们各自的测试内容毫无关系。一个额度问题被放大成 65 个假失败，
+    // 而真因（额度满）只出现在第一条失败里，中间隔了几十行不相干的堆栈。
+    //
+    // 判据：spec 里出现 `#cb-save`（自己点「创建」按钮）就报红。建账这件事的
+    // 全部知识（命名、清理、精简开关、默认期间、出厂配置回读）都在 newBook 里，
+    // 绕过它没有任何好处，只有漏清理的风险。
+    let bookBad = 0;
+    for (const f of fs.readdirSync(testsDir2)) {
+      if (!f.endsWith(".js")) continue;
+      const src = fs.readFileSync(path.join(testsDir2, f), "utf8");
+      if (!/#cb-save/.test(src)) continue;
+      if (/newBook\s*\(/.test(src)) {
+        console.log(
+          `WARN e2e/tests/${f} 同时用了 newBook 和 #cb-save —— 若确实是绕过 newBook 自建账套，` +
+            `那本账套 purgeOwnBooks 清不掉，额度满时全套件一起挂。确认是有意的就在这里留个说明。`
+        );
+        continue;
+      }
+      bookBad++;
+      bad++;
+      console.log(
+        `FAIL e2e/tests/${f} 自己点 #cb-save 建账，没走 newBook` +
+          `\n    账套上限每账号 10 个。newBook 里的 purgeOwnBooks 按 E2E 前缀清理，` +
+          `\n    自己建的名字没有那个前缀 → 清不掉 → 额度占满后 POST /api/books 全 400，` +
+          `\n    整个套件一起挂（实测 98 条里 65 条假失败）。改成 newBook(page, \`名称\`)。`
+      );
+    }
+    if (bookBad === 0) {
+      console.log("e2e spec：建账都走 newBook（账套能按前缀清理）");
+    }
+
     // ---- setSimpleNav(page, null) 之后不能再声称测了「持久化」 ----
     //
     // **addInitScript 不能注销**。一旦 newBook(…, {simpleNav: true/false}) 注册过

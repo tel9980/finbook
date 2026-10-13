@@ -1,24 +1,14 @@
 const { test, expect } = require("@playwright/test");
-const { auditSignPost, setSimpleNav } = require("../helpers");
+const { auditSignPost, newBook } = require("../helpers");
 
 test("辅助/数量凭证、附件上传与数量金额账", async ({ page }) => {
-  const company = `E2E辅${Date.now()}`;
-
-  // 登录 + 建账
-  // 本文件绕过 newBook（自己手写登录+建账），所以必须自己关掉精简模式 ——
-  // 否则侧栏只有 16 项，后面点不到的视图会一路超时。见 helpers.js 的说明。
-  await setSimpleNav(page, false);
-  await page.goto("/");
-  await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
-  await page.fill("#u", "admin");
-  await page.fill("#p", "Admin!2026");
-  await page.click('#login-form button[type="submit"]');
-  await expect(page.locator("#new-book")).toBeVisible({ timeout: 15_000 });
-  await page.click("#new-book");
-  await page.fill("#cb-company", company);
-  await page.fill("#cb-start", "2026-01");
-  await page.click("#cb-save");
-  await expect(page.locator('.nav-item[data-view="vouchers"]')).toBeVisible({ timeout: 15_000 });
+  // 曾经绕过 newBook 自己手写登录+建账。两个后果：
+  //   ① 账套名没有 worker 段 → purgeOwnBooks 清不掉 → 额度被占满，
+  //      实测 98 条里 65 条一起挂，每条都报「等不到 .nav-item[data-view=vouchers]」，
+  //      与各自的测试内容毫无关系；
+  //   ② 拿不到 newBook 里的 setSimpleNav → 精简模式下侧栏只有 16 项。
+  // 这里跟 newBook 的行为本来一模一样，直接用它。
+  await newBook(page, `辅${Date.now()}`);
 
   // 借 140301（存货辅助 + 数量核算）5×20=100 / 贷 1001 100
   await page.click('.nav-item[data-view="vouchers"]');

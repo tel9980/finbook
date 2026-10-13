@@ -14,8 +14,25 @@ const { expect } = require("@playwright/test");
 // 现在的做法：给每个 worker 的账套名加**固定前缀**（取自 TEST_WORKER_INDEX），
 // 清理时按前缀扫。不依赖任何进程内状态，重试换进程照样能找回上次的账套。
 // 只改这一个文件，16 个 spec 一个都不用动。
+// 清理范围用**公共前缀 `E2E`** 而不是 worker 前缀。
+//
+// 原来按 worker 前缀（`E2Ew0///`）扫，漏了两类书：
+//   ① `smoke.spec.js` / `aux-attach-reports.spec.js` 这两个**绕过 newBook**
+//      自己手写建账的，名字是 `E2E公司1757…` / `E2E辅1757…`，**没有 worker 段**，
+//      于是永远清不掉；
+//   ② worker 索引是全局递增的（`w0`…`w9`），每个前缀下各攒一本，一次
+//      `purgeOwnBooks` 只清得掉其中 1 本。
+//
+// 结果就是**额度被占满 → `POST /api/books` 全 400 → 整个套件失败**。
+// 实测 98 条里 65 条一起挂，日志里每条都是「等不到 .nav-item[data-view=vouchers]」，
+// 与它们各自的测试内容毫无关系 —— 一个额度问题被放大成 65 个假失败。
+//
+// 串行跑（`workers: 1`，见 playwright.config.js）时不存在「别人的书」，
+// 所以按公共前缀全清是安全的：E2E 专用数据目录里除这些书之外没有别的。
+const BOOK_PREFIX = "E2E";
 const WORKER_TAG = `w${process.env.TEST_WORKER_INDEX || "0"}`;
-const BOOK_PREFIX = `E2E${WORKER_TAG}///`;
+// 账套名仍带 worker 段：区分是谁建的，出问题时能一眼看出是哪条用例漏了
+const bookName = (company) => `${BOOK_PREFIX}${WORKER_TAG}///${company}`;
 
 // 90 条 E2E 里有 70 个视图是**点侧栏**进去的（`.nav-item[data-view=x]`）。
 // 精简模式默认只铺 16 项，不先关掉的话，剩下 54 个视图全部点不到 → 全套件超时。
@@ -83,7 +100,7 @@ async function newBook(page, company, opts) {
 
   await purgeOwnBooks(page);
 
-  const name = `${BOOK_PREFIX}${company}`;
+  const name = bookName(company);
   await page.click("#new-book");
   await page.fill("#cb-company", name);
   await page.fill("#cb-start", "2026-01");

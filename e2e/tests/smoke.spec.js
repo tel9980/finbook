@@ -1,24 +1,11 @@
 const { test, expect } = require("@playwright/test");
-const { setSimpleNav } = require("../helpers");
+const { newBook } = require("../helpers");
 
 test("会计月度闭环：建账→录凭证→记账→结账→报表", async ({ page }) => {
-  const company = `E2E公司${Date.now()}`;
-
-  // 登录（平台管理员）。本文件绕过 newBook（自己手写建账），所以必须自己
-  // 关掉精简模式 —— 否则侧栏只有 16 项，点不到的视图会一路超时。
-  await setSimpleNav(page, false);
-  await page.goto("/");
-  await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
-  await page.fill("#u", "admin");
-  await page.fill("#p", "Admin!2026");
-  await page.click('#login-form button[type="submit"]');
-
-  // 选账套页 → 新建账套
-  await expect(page.locator("#new-book")).toBeVisible({ timeout: 15_000 });
-  await page.click("#new-book");
-  await page.fill("#cb-company", company);
-  await page.fill("#cb-start", "2026-01");
-  await page.click("#cb-save");
+  // 曾经绕过 newBook 自己手写登录+建账。后果同 aux-attach-reports.spec.js：
+  // 账套名没有 worker 段 → purgeOwnBooks 清不掉 → 额度占满 → 全套件失败。
+  // 行为与 newBook 一致，直接用它。
+  await newBook(page, `闭环${Date.now()}`);
 
   // 进入账套后录制一张凭证：借 1001 100 / 贷 2001 100
   await expect(page.locator('.nav-item[data-view="vouchers"]')).toBeVisible({ timeout: 15_000 });
