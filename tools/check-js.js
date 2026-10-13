@@ -559,11 +559,27 @@ if (appSrc) {
     bad++;
     rule("renderSidebar() 不见了 —— 侧栏分组与「最近」的渲染都在它里面，改名请同步改本检查");
   } else {
-    if (!/const rest = all\.filter\(\(n\) => !favs\.includes\(n\)\);/.test(rs)) {
+    // 判据是**语义**「rest 的过滤条件里只有 favs，没有 recents」，不是字面
+    // `all.filter(…)`。原来写死了字面量，于是给 rest 加任何一层包装
+    // （比如精简模式下改成 listed.filter(…)）都会被当成缺陷 —— 而那种改动
+    // 本来是完全正确的。字面匹配会把「正确的重构」判成「行为变了」，
+    // 逼着改动者要么放弃改进、要么去改这个检查，越改越僵。
+    //
+    // 反过来也不能太松：只要 rest 的谓词里出现了 recents 就必须报红。
+    const restLine = rs.split("\n").find((l) => l.indexOf("const rest =") >= 0) || "";
+    if (!restLine) {
+      bad++;
+      rule("renderSidebar() 里找不到 `const rest =` —— 铺开分组的过滤行没了");
+    } else if (restLine.indexOf("recents") >= 0) {
       bad++;
       rule(
-        "renderSidebar() 铺开分组的 `rest` 不再是「只排收藏」—— 最近访问过的页面被从" +
+        "renderSidebar() 铺开分组的 `rest` 把 recents 也排掉了 —— 最近访问过的页面被从" +
           "\n    原分组里搬走了（点一下菜单项，菜单项就没了）。修法：rest 只排 favs。"
+      );
+    } else if (restLine.indexOf("favs") < 0) {
+      bad++;
+      rule(
+        "renderSidebar() 铺开分组的 `rest` 不排 favs —— 「常用」会在原分组里出现第二份。"
       );
     }
     const recLine = rs.split("\n").find((l) => l.indexOf('secHtml("recent"') >= 0) || "";

@@ -105,9 +105,13 @@ const cases = [
     "已签字的凭证仍显示「出纳签字」按钮（与「取消签字」并排）",
   ],
   // ⑳ 侧栏「最近」是追加不是搬家（2026-10-06 反馈：点过之后就从原分组里消失了）
+  // from 串跟着 app.js 实际写法走：精简模式那层把 all 换成了 listed（all 的子集），
+  // 谓词本身没变 —— 变的只是数据源。写 from 时要对齐源码，否则这条变异
+  // 「匹配 0 次」会静默失效，而 mutate-check 自己会报「失效」——
+  // 但没人会因为一条变异失效去看它到底护着什么。
   [
-    "    const rest = all.filter((n) => !favs.includes(n));",
-    "    const rest = all.filter((n) => !favs.includes(n) && !recents.includes(n));",
+    "    const rest = listed.filter((n) => !favs.includes(n));",
+    "    const rest = listed.filter((n) => !favs.includes(n) && !recents.includes(n));",
     "⑳ 最近从原分组搬走（rest 排掉 recents）",
   ],
   [

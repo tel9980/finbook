@@ -1291,6 +1291,20 @@ td.cell-editing input {
   color: var(--z-500);
   padding: 2px 2px 0;
 }
+/* 精简模式开关：藏在搜索框下面，跟搜索框同一块「找东西」的区域。
+   放顶上工具栏不行 —— 那是给功能用的，塞个显示偏好进去会干扰视线。 */
+.side-search .ss-simple {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--z-500);
+  cursor: pointer;
+  user-select: none;
+}
+.side-search .ss-simple input { margin: 0; width: 13px; height: 13px; accent-color: var(--primary); }
+.side-search .ss-simple:hover { color: var(--z-400); }
 /* 收藏 / 最近分组：可折叠，折叠状态本身也持久化 */
 .sidebar .nav-fav-row {
   display: flex;

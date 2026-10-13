@@ -17,6 +17,21 @@ const { expect } = require("@playwright/test");
 const WORKER_TAG = `w${process.env.TEST_WORKER_INDEX || "0"}`;
 const BOOK_PREFIX = `E2E${WORKER_TAG}///`;
 
+// 90 条 E2E 里有 70 个视图是**点侧栏**进去的（`.nav-item[data-view=x]`）。
+// 精简模式默认只铺 16 项，不先关掉的话，剩下 54 个视图全部点不到 → 全套件超时。
+//
+// 这不是在「把测试改成配合实现」：精简模式只决定**侧栏画不画出这一项**，
+// 不碰路由、不碰权限、不碰任何页面逻辑。这里关掉它，测的仍然是全量功能；
+// 精简模式本身另有 `simple-nav.spec.js` 专门覆盖（含「藏起来≠拿掉」那条断言）。
+//
+// ⚠️ 必须在 goto("/") **之前**注入：侧栏在首屏就渲染了，登录后再写 localStorage
+// 已经晚一步（第一次 renderSidebar 时读到的是「没设置过」= 默认开）。
+async function turnOffSimpleNav(page) {
+  await page.addInitScript(() => {
+    try { localStorage.setItem("nav_simple@admin", "false"); } catch (e) {}
+  });
+}
+
 /// 删掉本 worker 名下所有账套（含上一次尝试泄漏的）
 async function purgeOwnBooks(page) {
   let d;
@@ -38,6 +53,8 @@ async function purgeOwnBooks(page) {
 /// `loginAs` 不按名字选就会进错账套 —— 症状是「上一段刚拿到的凭证 id 一访问就 404」，
 /// 排查方向会被带偏到"凭证被删了"。我为此白查了一轮。
 async function newBook(page, company) {
+  // 见 turnOffSimpleNav 的注释：必须先于 goto，否则首屏侧栏已经按默认「精简」渲染了
+  await turnOffSimpleNav(page);
   await page.goto("/");
   await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
   await page.fill("#u", "admin");
@@ -245,6 +262,12 @@ async function addBookUser(page, { username, password, role, display }) {
 /// 会被误读成"凭证被删了"。不传就退化成"第一个"，并在这里说明为什么不能这么用。
 async function loginAs(page, username, password, book) {
   await page.request.post("/api/logout", { data: {} }).catch(() => {});
+  // 同 newBook：换账号后侧栏重新渲染，精简默认开会让后续点不到非 16 项的视图。
+  // 注意 key 按登录账号分区（acctKey），所以这里写当前账号的 key，
+  // 不是 admin 的 —— 否则 loginAs 切到出纳后又回到默认精简。
+  await page.addInitScript((u) => {
+    try { localStorage.setItem(`nav_simple@${u}`, "false"); } catch (e) {}
+  }, username);
   await page.goto("/");
   await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
   await page.fill("#u", username);
@@ -262,6 +285,7 @@ async function loginAs(page, username, password, book) {
 
 module.exports = {
   newBook,
+  turnOffSimpleNav,
   postVoucher,
   postAllDrafts,
   auditAllDrafts,

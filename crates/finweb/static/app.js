@@ -1348,6 +1348,60 @@ function applyHashOnBoot() {
 const LS_SEC = "nav_sec_collapsed";
 const MAX_RECENT = 8;
 
+// ---- 精简模式：默认只铺「日常真用得到」的十几个功能 -----------------------
+//
+// 69 个功能平铺 16 组，新用户建完账打开软件，第一眼看到的是 MRP、工艺路线、
+// 预算预警这类跟他完全无关的东西 —— 他要找「期初建账」得在一屏文字里翻。
+// 桌面端已经这么做了（NavItem::daily_core），这里对齐。
+//
+// **三条不变量**，少一条这个模式就变成了「功能被删了」：
+//
+//   1. **搜索框永远搜全部**。69 项里挑 12 项出来靠的是「藏起来，不是拿掉」：
+//      任何人打任意功能名都能搜到并跳过去。搜索时的数据源是全量 NAV_ITEMS，
+//      不看这个开关 —— 否则精简模式就成了功能阉割。
+//   2. **路由完全不受影响**。goView(hash) 该去哪去哪，精简只决定侧栏画不画出来。
+//   3. **开关随时可切**，且按账号分区（跟收藏/最近一致）—— 一个会计用精简，
+//      不该影响同一台电脑上出纳看到的菜单。
+//
+// 默认开：新用户受益最大。老用户不清空 localStorage 就维持原样（见 simpleNav）。
+// key 用 acctKey() 分区，和收藏/最近一致。
+
+// 日常真正会用到的功能，与桌面端 state.rs 的 NavItem::daily_core 对齐。
+//
+// 这里是 16 项而不是桌面端的 12 项，差异来自 Web 端把报表拆成了多个导航项
+// （balance-sheet / income-statement / cash-flow / reports 各占一项），
+// 只留「报表中心」一个的话，新手进利润表得点两次。两边覆盖的功能集合是
+// 等价的，只是切分粒度不同 —— 别为了凑数字把报表藏起来。
+//
+// 另外多留了 aux / imports / templates 三项：建账期和日常都要反复进，
+// 藏起来等于让新手每次都去搜索框里打「辅助」两个字。
+const SIMPLE_NAV = [
+  "dashboard",      // 工作台
+  "vouchers",       // 记账凭证（录凭证 + 查询）
+  "begin",          // 期初建账
+  "accounts",       // 会计科目
+  "aux",            // 辅助档案
+  "ledger",         // 明细账
+  "reports",        // 报表中心
+  "balance-sheet",  // 资产负债表
+  "income-statement", // 利润表
+  "cash-flow",      // 现金流量表
+  "period-end",     // 期末处理
+  "bank",           // 银行对账
+  "settle",         // 往来核销
+  "imports",        // 数据导入
+  "templates",      // 凭证模板
+  "backup",         // 备份恢复
+];
+
+/** 精简模式是否开启。**没有存过就默认开**（新用户），存过就按用户的选择。
+ *  用 null 而不是 false 区分「从没设置过」和「用户显式关掉了」——
+ *  后者必须被尊重，否则用户每次关掉刷新后又自己开回来。 */
+function simpleNav() {
+  const v = lsGet(acctKey("nav_simple"), null);
+  return v === null ? true : !!v;
+}
+
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 // 账号分区的 key：`nav_fav@acc` / `nav_recent@cash`。未登录时退回匿名分区，
@@ -1398,7 +1452,14 @@ function renderSidebar() {
   if (!box) return;
   const q = navQuery.trim();
   const all = NAV_ITEMS.filter(isNavVisible);
+  // 搜索结果**永远来自全量** all，不受精简模式影响。
+  // 这是精简模式的第 1 条不变量：藏起来 ≠ 拿掉。打「MRP」必须搜得到，
+  // 否则这个模式就成了功能阉割（而不是「新手少看到无关的东西」）。
   const hit = all.filter((n) => navMatches(n, q));
+  const simple = !q && simpleNav();
+  // 铺开列表：精简态只铺 16 项，非精简态铺全量。
+  const listed = simple ? all.filter((n) => SIMPLE_NAV.includes(n.id)) : all;
+  const hiddenCount = all.length - listed.length;
   const favs = getFavs().map((id) => NAV_INDEX[id]).filter((n) => n && navMatches(n, q));
   const recents = getRecent().map((id) => NAV_INDEX[id]).filter((n) => n && navMatches(n, q));
   const collapsed = lsGet(LS_SEC, {});
@@ -1429,6 +1490,12 @@ function renderSidebar() {
         ${q ? `<button class="ss-clear" id="nav-q-clear" title="清空" aria-label="清空搜索">✕</button>` : ""}
       </div>
       ${q ? `<div class="ss-count">匹配 ${hit.length} / ${all.length} 个功能</div>` : ""}
+      <label class="ss-simple" title="${simple
+        ? "精简模式：只铺日常用得到的功能，其余 ${hiddenCount} 个仍可用上方搜索框找到"
+        : "已显示全部 ${all.length} 个功能"}">
+        <input type="checkbox" id="nav-simple" ${simple ? "checked" : ""} />
+        <span>${simple ? `精简模式（${all.length} 个里只显示 ${listed.length} 个）` : `显示全部功能（${all.length} 个）`}</span>
+      </label>
     </div>`;
 
   if (favs.length) html += secHtml("fav", "常用", favs.map((n) => itemHtml(n)).join(""), favs.length);
@@ -1449,7 +1516,7 @@ function renderSidebar() {
     // 的相邻选择器生效——所以项必须在 body 内部，不能平铺在 header 后面。
     // 只排「收藏」：常用是用户显式的置顶，移出原分组说得通；「最近」是**被动**记的，
     // 把它从原分组排掉就等于「点一下菜单项，菜单项就没了」（2026-10-06 用户反馈）。
-    const rest = all.filter((n) => !favs.includes(n));
+    const rest = listed.filter((n) => !favs.includes(n));
     const groups = [];
     const gmap = {};
     rest.forEach((n) => {
@@ -1486,6 +1553,14 @@ function renderSidebar() {
     });
   }
   const clr = document.getElementById("nav-q-clear");
+  const simpleBox = document.getElementById("nav-simple");
+  if (simpleBox) {
+    simpleBox.addEventListener("change", () => {
+      lsSet(acctKey("nav_simple"), simpleBox.checked);
+      // 不重载整个应用：只重画侧栏。切换显示偏好不该打断正在填的表单。
+      renderSidebar();
+    });
+  }
   if (clr) clr.onclick = () => { navQuery = ""; renderSidebar(); const f = document.getElementById("nav-q"); if (f) f.focus(); };
   // 分组折叠 / 收藏：事件委托挂在侧栏容器上（每次重绘只绑一次）
   $all("[data-sec]", box).forEach((el) => {
