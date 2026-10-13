@@ -53,9 +53,14 @@ test("辅助档案批量粘贴：先预览再导入，已存在的跳过不覆�
   // 关了弹窗它还在（本仓库其它 spec 都是这么断言的）。
   await expect(page.locator(".modal-mask")).toHaveCount(0);
   await expect(page.locator("table.grid tbody tr")).toHaveCount(2);
-  await expect(page.locator("table.grid tbody")).toContainText("杭州明远贸易");
-  // 已存在的那条**不能被改名** —— 「不覆盖」是这个功能的硬约定
+  // 新的 C02（宁波华信电子）进了库 —— 它是 AUX_TEXT 里唯一不重复的那行
+  await expect(page.locator("table.grid tbody")).toContainText("宁波华信电子");
+  // 已存在的那条**不能被改名** —— 「不覆盖」是这个功能的硬约定。
+  // 注意不能断言「杭州明远贸易」出现：它是贴在 C01 那行的名字，而 C01 整行被
+  // 跳过了 —— 它**不该**出现在库里任何地方。上一版同时断言「C01 没被改名」
+  // 和「杭州明远贸易出现了」，自相矛盾，挂得理所当然。
   await expect(page.locator("table.grid tbody")).toContainText("我的老客户");
+  await expect(page.locator("table.grid tbody")).not.toContainText("杭州明远贸易");
 });
 
 test("辅助档案批量粘贴：改文本后预览作废，必须重新预览", async ({ page }) => {
