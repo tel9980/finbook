@@ -927,7 +927,7 @@ CI 挂在 `CI 配置与变异清单自检` —— 这次不是工具坏了，是
 只留「报表中心」的话新手进利润表得点两次。两边覆盖的功能集合等价，只是切分
 粒度不同 —— 别为了凑数字把报表藏起来。
 
-**E2E 2 条**（`e2e/tests/simple-nav.spec.js`）：
+**E2E 3 条**（`e2e/tests/simple-nav.spec.js`）：
 
 - 默认只铺日常功能（生产/预算/库存那一片必须不在）、**搜「MRP」「批次」仍搜得到**、
   开关来回切且**刷新后保持**
@@ -1177,7 +1177,7 @@ cargo test --workspace
 | `finweb` REST API 集成 | 186 |
 | `finweb` 客户视图 API | 7 |
 | **小计** | **754** |
-| Playwright E2E | 93 |
+| Playwright E2E | 94 |
 
 > 本轮一次性校准了整张表（此前 `findb` 还停在 340、客户视图还停在 4，
 > 是历次补测试没回头更新）。核对方式：跑一次 `cargo test --workspace`，
@@ -1217,8 +1217,9 @@ cargo test --workspace
 >
 > 90 → 91：新增 `e2e/tests/aux-preset.spec.js`（§4.63），共 31 个文件。
 >
-> 91 → 93：新增 `e2e/tests/simple-nav.spec.js` 2 条（§4.65），共 32 个文件。
-> `--list` 报 `Total: 93 tests in 32 files`。
+> 91 → 94：新增 `e2e/tests/simple-nav.spec.js` 3 条（§4.65），共 32 个文件。
+> `--list` 报 `Total: 94 tests in 32 files`，CI 的 Web E2E job 全绿
+> （run 38365476187）。
 
 > 这次特意是**跑通了才改的** —— 改之前先在 CI 上确认这 90 条全绿
 > （2026-10-12，Web E2E job success），而不是拿一个未经证实的数字去填。
