@@ -61,8 +61,10 @@ async function purgeOwnBooks(page) {
 /// 排查方向会被带偏到"凭证被删了"。我为此白查了一轮。
 /// `opts.simpleNav` 见 setSimpleNav 的注释（false / true / null，默认 false）
 async function newBook(page, company, opts) {
-  const o = opts || {};
-  await setSimpleNav(page, o.simpleNav === undefined ? false : o.simpleNav);
+  // 变量名不能叫 o —— 函数下半段已有 `const o = …options.json()`（回读账套参数），
+  // 同名会直接报 "Identifier 'o' has already been declared"，整个 helpers.js
+  // 语法检查不过、连带 90 条 E2E 全跑不起来。
+  await setSimpleNav(page, opts && opts.simpleNav !== undefined ? opts.simpleNav : false);
   await page.goto("/");
   await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
   await page.fill("#u", "admin");
