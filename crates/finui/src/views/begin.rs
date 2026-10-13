@@ -7,6 +7,7 @@ use fincore::{dir_amount_to_signed, signed_to_dir_amount, AuxRef, Direction, Mon
 
 use crate::state::{AppCtx, ConfirmAction};
 use crate::theme::palette;
+use crate::views::begin_diag;
 use crate::widgets::{self, AccountPickerState};
 
 #[derive(Clone)]
@@ -24,7 +25,7 @@ pub struct EditRow {
 }
 
 impl EditRow {
-    fn blank(code: String) -> Self {
+    pub(super) fn blank(code: String) -> Self {
         Self::blank_dir(code, Direction::Debit)
     }
 
@@ -37,7 +38,7 @@ impl EditRow {
     /// 逻辑：年初余额（yb）是用户填的「那个科目的数」，它的方向是 r.dir；
     /// 科目的正常方向是 chart_dir。若两者相反，且累计借贷都是 0
     /// （即这行没有「期初之前还有发生额」的复杂情况），就标出来。
-    fn dir_mismatch(&self, chart_dir: Option<Direction>) -> bool {
+    pub(super) fn dir_mismatch(&self, chart_dir: Option<Direction>) -> bool {
         let Some(cd) = chart_dir else { return false };
         // 累计借贷非空时，期初数是三项合成的，不能简单按方向判断
         if !Money::parse_or_zero(&self.ad).is_zero() || !Money::parse_or_zero(&self.ac).is_zero() {
@@ -66,8 +67,9 @@ impl EditRow {
             changed: true,
         }
     }
-    /// 启用期期初余额（带符号）
-    fn begin_signed(&self) -> Money {
+    /// 启用期期初余额（带符号）。begin_diag 模块要用，改这行的方向/累计数
+    /// 后它会变，所以只在内存里算，不落库。
+    pub(super) fn begin_signed(&self) -> Money {
         let yb = dir_amount_to_signed(self.dir, Money::parse_or_zero(&self.yb));
         yb + Money::parse_or_zero(&self.ad) - Money::parse_or_zero(&self.ac)
     }
@@ -519,6 +521,104 @@ impl BeginView {
             });
             ui.label(
                 RichText::new("（备抵科目、红字余额等合法反方向也会被列出，请自行确认；点编码可直接跳到那一行）")
+                    .weak()
+                    .size(12.0),
+            );
+        }
+
+        // ---------------- 不平的解法 ----------------
+        //
+        // 上面那条是「按科目表语义猜」的，命中不了几种情况：有累计数的行、
+        // 科目表本身标错方向、压根不是方向问题（漏填了对方科目）。
+        // 下面这层换成解方程 —— 只报**改完一定能平**的改法，用户改完当场验证，
+        // 不用再猜。试算平了整块都不显示。
+        let fixes = begin_diag::explain(diff, &self.rows);
+        if !fixes.is_empty() {
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new("照下面改，试算就平了（这些改法都算过了，改完一定平）")
+                    .color(palette::OK),
+            );
+            for f in fixes.iter() {
+                if f.row >= self.rows.len() {
+                    continue;
+                }
+                let code = self.rows[f.row].code.clone();
+                let name = ctx
+                    .chart()
+                    .get(&code)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default();
+                let label = if name.is_empty() {
+                    code.clone()
+                } else {
+                    format!("{code} {name}")
+                };
+                ui.horizontal(|ui| {
+                    let act = f.kind.action_label();
+                    let clicked = if act.is_empty() {
+                        false
+                    } else if ui.button(format!("{label} — {act}")).clicked() {
+                        true
+                    } else {
+                        ui.link(format!("{label}")).clicked()
+                    };
+                    if clicked {
+                        match f.kind {
+                            begin_diag::FixKind::FlipDir => {
+                                let r = &mut self.rows[f.row];
+                                r.dir = match r.dir {
+                                    Direction::Debit => Direction::Credit,
+                                    Direction::Credit => Direction::Debit,
+                                };
+                                r.changed = true;
+                                self.recount();
+                            }
+                            begin_diag::FixKind::SwapAccum => {
+                                let r = &mut self.rows[f.row];
+                                std::mem::swap(&mut r.ad, &mut r.ac);
+                                r.changed = true;
+                                self.recount();
+                            }
+                            begin_diag::FixKind::MissingCounterpart => {
+                                self.kw = code.clone();
+                                self.only_nonzero = false;
+                            }
+                        }
+                    }
+                    ui.label(RichText::new(format!("：{}", f.detail)).weak());
+                });
+            }
+        }
+
+        // 兜底：上面解不出来时的通用出路 —— 补一行对方科目。
+        // 金额和方向由差额直接算出，用户只需选科目，不用自己算该填多少。
+        if let Some((dir, amt)) = begin_diag::counterpart_fill(diff) {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(if fixes.is_empty() {
+                    "没找到能解释差额的行。通常是只填了一边 —— 补上对方科目："
+                } else {
+                    "都不对？补一笔对方的："
+                })
+                .weak());
+                if ui
+                    .button(format!(
+                        "新增一行{} {}",
+                        begin_diag::dir_word(dir),
+                        amt.fmt_money()
+                    ))
+                    .on_hover_text("只是加一行空的，方向和金额已按差额填好，选个科目即可")
+                    .clicked()
+                {
+                    // 预填好金额和方向，用户打开行时直接选科目就行
+                    self.rows.push(EditRow::blank_dir(String::new(), dir));
+                    self.recount();
+                    self.kw = String::new();
+                    self.only_nonzero = false;
+                }
+            });
+            ui.label(
+                RichText::new("（多填/漏填科目、数字抄错也会导致不平 —— 补完记得再看一眼试算）")
                     .weak()
                     .size(12.0),
             );

@@ -486,9 +486,6 @@ mod tests {
     fn debit(_code: &str) -> Option<Direction> {
         Some(Direction::Debit)
     }
-    fn credit(_code: &str) -> Option<Direction> {
-        Some(Direction::Credit)
-    }
     fn mixed(code: &str) -> Option<Direction> {
         match code {
             "1001" => Some(Direction::Debit),

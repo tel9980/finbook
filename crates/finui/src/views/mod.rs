@@ -7,6 +7,7 @@ pub mod assets;
 pub mod aux_batch;
 pub mod aux_view;
 pub mod begin_batch;
+pub mod begin_diag;
 pub mod automation;
 pub mod backup;
 pub mod balance_table;

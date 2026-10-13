@@ -371,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn 解析Excel制表符() {
+    fn 解析excel制表符() {
         // Excel 复制两列出来就是 tab 分隔
         let p = parse("C01\t杭州明远\nC02\t宁波华信", AuxKind::Customer, &[]);
         assert_eq!(codes(&p), vec!["C01", "C02"]);
