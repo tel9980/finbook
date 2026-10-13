@@ -221,6 +221,17 @@ pub fn authed_post(uri: &str, sid: &str, body: serde_json::Value) -> Request<Bod
         .unwrap()
 }
 
+/// 带会话 cookie 的 PUT（批量导入用 PUT 与解析区分：解析不写库，导入写库）
+pub fn authed_put(uri: &str, sid: &str, body: serde_json::Value) -> Request<Body> {
+    Request::builder()
+        .method("PUT")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, sid)
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
 pub async fn body_string(resp: axum::http::Response<Body>) -> String {
     let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
         .await

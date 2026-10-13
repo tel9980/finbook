@@ -680,6 +680,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/accounts", post(create_account).put(update_account))
         .route("/api/accounts/:code", delete(delete_account))
         .route("/api/begin", get(list_begin).post(save_begin))
+        .route("/api/begin-batch", post(parse_begin_batch).put(import_begin_batch))
         .route("/api/logs", get(list_logs))
         .route("/api/backups", get(list_backups).post(create_backup))
         .route("/api/restore", post(restore_backup))
@@ -688,6 +689,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/templates/:id", put(update_template).delete(delete_template))
         .route("/api/templates/:id/generate", post(generate_template))
         .route("/api/aux", get(list_aux).post(create_aux))
+        .route("/api/aux-batch", post(parse_aux_batch).put(import_aux_batch))
         // 路径刻意用 `aux-presets` 而不是 `aux/presets`：上面那条
         // `/api/aux/:id` 会把 `presets` 当成 id 吃掉。
         .route("/api/aux-presets", get(get_aux_presets).post(preset_aux))
@@ -13090,6 +13092,193 @@ enum BeginSaveReq {
     Rows(Vec<BeginRowInput>),
 }
 
+// ---------------- 期初余额批量粘贴 ----------------
+
+/// 解析请求
+#[derive(Deserialize)]
+struct BeginBatchParseReq {
+    text: String,
+}
+
+/// 导入请求（前端回传确认过的行）
+#[derive(Deserialize)]
+struct BeginBatchImportReq {
+    rows: Vec<BeginBatchRow>,
+    /// 前端草稿里已有的行也要避开 —— 与桌面的 `existing` 口径一致
+    #[serde(default)]
+    existing: Vec<String>,
+}
+
+#[derive(Deserialize, serde::Serialize, Clone)]
+struct BeginBatchRow {
+    code: String,
+    /// "debit" / "credit"（前端不自己判断方向，只回传解析结果里的值）
+    dir: String,
+    amount: String,
+}
+
+/// 期末余额上下文：方向 + 末级编码（解析要靠它）
+///
+/// **每次都从库里现取**，不接受前端传 —— 方向是「归位」的依据，
+/// 让前端传等于让前端决定借贷方向，那正是期初不平的头号原因。
+fn chart_ctx(
+    db: &findb::Db,
+) -> Result<(std::collections::HashMap<String, String>, Vec<String>), findb::DbError> {
+    let chart = findb::accounts::chart(db)?;
+    let all = chart.all(); // Vec<&Account>
+    let dirs: std::collections::HashMap<String, String> = all
+        .iter()
+        .map(|a| {
+            (
+                a.code.clone(),
+                match a.dir {
+                    Direction::Debit => "debit".to_string(),
+                    Direction::Credit => "credit".to_string(),
+                },
+            )
+        })
+        .collect();
+    let leaves: Vec<String> = all
+        .iter()
+        .filter(|a| chart.is_leaf(&a.code))
+        .map(|a| a.code.clone())
+        .collect();
+    Ok((dirs, leaves))
+}
+
+/// 期初批量粘贴：解析（预览）
+async fn parse_begin_batch(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<BeginBatchParseReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let db = state.db_for(&user.book_key)?;
+    let (dirs, leaves) = chart_ctx(&db)?;
+    let dir_of = |code: &str| -> Option<Direction> {
+        match dirs.get(code).map(|s| s.as_str()) {
+            Some("debit") => Some(Direction::Debit),
+            Some("credit") => Some(Direction::Credit),
+            _ => None,
+        }
+    };
+    // 库里已有期初数的编码 —— 别覆盖用户填过的
+    let existing: Vec<String> = balances::list_begin(&db)?
+        .into_iter()
+        .map(|r| r.account_code)
+        .collect();
+    let parsed = fincore::batch::begin::parse(&req.text, &dir_of, &leaves, &existing);
+
+    // 数据范围：范围外的科目连「能导入」都不该出现在预览里 ——
+    // 否则用户会看到一条他无权写、点了才报错的行
+    let rows: Vec<serde_json::Value> = parsed
+        .rows
+        .iter()
+        .filter(|r| user.user.can_see_account(&r.code))
+        .map(|r| {
+            json!({
+                "code": r.code,
+                "dir": match r.dir { Direction::Debit => "debit", Direction::Credit => "credit" },
+                "dir_label": r.dir.label(),
+                "amount": r.amount.fmt_money(),
+                "skip": r.skip.as_ref().map(|s| s.label()),
+            })
+        })
+        .collect();
+    let importable = parsed
+        .rows
+        .iter()
+        .filter(|r| r.skip.is_none() && user.user.can_see_account(&r.code))
+        .count();
+    let (d, c, diff) = parsed.trial();
+    Ok(Json(json!({
+        "rows": rows,
+        "total": rows.len(),
+        "importable": importable,
+        "skipped": rows.len() - importable,
+        "empty": parsed.is_empty(),
+        "trial": {
+            "debit": d.fmt_money(),
+            "credit": c.fmt_money(),
+            "diff": diff.fmt_money(),
+            "balanced": diff.is_zero(),
+        },
+    })))
+}
+
+/// 期初批量粘贴：导入前端确认过的行
+///
+/// 走和「保存」一样的校验路径（`upsert_begin` + 越权检查），而不是直接写 ——
+/// 批量导入的量更大，但它并不比手工一行行填更特殊，特殊的是**一次能错几百行**。
+async fn import_begin_batch(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<BeginBatchImportReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Opening)?;
+    let db = state.db_for(&user.book_key)?;
+    let (dirs, leaves) = chart_ctx(&db)?;
+    let mut seen: Vec<String> = Vec::new();
+    let mut to_save: Vec<BeginRow> = Vec::new();
+    let mut skipped: Vec<serde_json::Value> = Vec::new();
+
+    for r in &req.rows {
+        let code = r.code.trim().to_string();
+        if code.is_empty() {
+            continue;
+        }
+        if !user.user.can_see_account(&code) {
+            return Err(AppError::forbidden(format!("无权维护科目 {code} 的期初余额")));
+        }
+        if !leaves.iter().any(|l| *l == code) && !dirs.contains_key(&code) {
+            skipped.push(json!({"code": code, "why": "无此科目"}));
+            continue;
+        }
+        if seen.iter().any(|c| *c == code) || req.existing.iter().any(|c| *c == code) {
+            skipped.push(json!({"code": code, "why": "已填过"}));
+            continue;
+        }
+        seen.push(code.clone());
+        let dir = if r.dir == "credit" { Direction::Credit } else { Direction::Debit };
+        let amt = Money::parse_or_zero(&r.amount);
+        if amt.is_zero() {
+            skipped.push(json!({"code": code, "why": "金额为零"}));
+            continue;
+        }
+        to_save.push(BeginRow {
+            id: 0,
+            account_code: code,
+            aux: AuxRef::default(),
+            year_begin: fincore::dir_amount_to_signed(dir, amt),
+            debit_accum: Money::ZERO,
+            credit_accum: Money::ZERO,
+            qty_begin: None,
+        });
+    }
+
+    if to_save.is_empty() {
+        return Ok(json!({
+            "ok": true, "inserted": 0, "skipped": skipped.len(), "detail": skipped
+        })
+        .into());
+    }
+
+    let n = to_save.len();
+    for br in &to_save {
+        balances::upsert_begin(&db, br)?;
+    }
+    db.log(
+        user.username(),
+        "期初",
+        "批量粘贴期初余额",
+        &format!("{n} 行"),
+    )?;
+    Ok(json!({
+        "ok": true, "inserted": n, "skipped": skipped.len(), "detail": skipped
+    })
+    .into())
+}
+
 async fn save_begin(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -13610,6 +13799,129 @@ async fn preset_aux(
         &format!("{n} 条"),
     )?;
     Ok(Json(json!({"inserted": n, "skipped": skipped})))
+}
+
+/// 辅助档案批量粘贴：解析（预览）
+#[derive(Deserialize)]
+struct AuxBatchParseReq {
+    kind: AuxKind,
+    text: String,
+}
+
+/// 辅助档案批量粘贴：真正落库
+#[derive(Deserialize)]
+struct AuxBatchImportReq {
+    kind: AuxKind,
+    /// 只导入前端回传的这些行。**不接受「重新解析一遍文本」**：
+    /// 用户在预览之后可能改过文本（比如去掉一行），若后端重新解析，
+    /// 实际导入的就不是他看到并确认过的那批 —— 正是「确认了 A 写进去 B」
+/// 这类最难查的错。
+    rows: Vec<AuxBatchRow>,
+}
+
+#[derive(Deserialize, serde::Serialize, Clone)]
+struct AuxBatchRow {
+    code: String,
+    name: String,
+}
+
+/// 解析结果里的一行（给前端渲染预览表格）
+#[derive(serde::Serialize)]
+struct AuxBatchRowView {
+    code: String,
+    name: String,
+    /// None = 可导入；Some = 跳过原因（中文文案）
+    skip: Option<String>,
+}
+
+/// 解析并返回预览。不写库 —— 前端把预览给用户看，确认后再调 PUT 导入。
+///
+/// 解析逻辑复用 `fincore::batch::aux`，与桌面端**同一份代码**：两端解析结果
+/// 必须一致，否则用户会发现「桌面上能粘的，网页上粘不了」。
+async fn parse_aux_batch(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<AuxBatchParseReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let db = state.db_for(&user.book_key)?;
+    // 库里已有的编码 —— 用来标「这个编码已经有了」，避免用户以为导进去了
+    let existing = auxs::codes(&db, req.kind)?;
+    let parsed = fincore::batch::aux::parse(&req.text, req.kind, &existing);
+    let rows: Vec<AuxBatchRowView> = parsed
+        .rows
+        .iter()
+        .map(|r| AuxBatchRowView {
+            code: r.code.clone(),
+            name: r.name.clone(),
+            skip: r.skip.as_ref().map(|s| s.label().to_string()),
+        })
+        .collect();
+    let importable = parsed.importable().len();
+    Ok(Json(json!({
+        "rows": rows,
+        "total": rows.len(),
+        "importable": importable,
+        "skipped": rows.len() - importable,
+        "empty": parsed.is_empty(),
+    })))
+}
+
+/// 导入前端确认过的那些行
+async fn import_aux_batch(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<AuxBatchImportReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::AuxEdit)?;
+    let db = state.db_for(&user.book_key)?;
+    // 再查一遍已存在的编码：解析到导入之间可能有人新增了档案。
+    // insert_many_skip_existing 本身也会跳过，但那份结果只给「跳过了哪些」，
+    // 不给「有多少行本该导入却没进」—— 前端就报不出「你以为导了 10 条，
+    // 实际只进了 8 条」。这里自己先筛，好把差额说清楚。
+    let existing = auxs::codes(&db, req.kind)?;
+    let mut items: Vec<AuxEntity> = Vec::new();
+    let mut already: Vec<String> = Vec::new();
+    let mut dup_in_batch: Vec<String> = Vec::new();
+    for r in &req.rows {
+        let code = r.code.trim().to_string();
+        let name = r.name.trim().to_string();
+        if code.is_empty() || name.is_empty() {
+            continue;
+        }
+        if already.iter().any(|c| *c == code) || dup_in_batch.iter().any(|c| *c == code) {
+            dup_in_batch.push(code);
+            continue;
+        }
+        if existing.iter().any(|c| *c == code) {
+            already.push(code);
+            continue;
+        }
+        already.push(code.clone());
+        items.push(AuxEntity::new(req.kind, code, name));
+    }
+    if items.is_empty() {
+        return Ok(Json(json!({
+            "inserted": 0,
+            "skipped": already.len() + dup_in_batch.len(),
+            "already": already,
+        })));
+    }
+    let (n, skipped) = auxs::insert_many_skip_existing(&db, &items)?;
+    db.log(
+        user.username(),
+        "档案",
+        &format!("批量导入{}档案", req.kind.label()),
+        &format!("{n} 条"),
+    )?;
+    let mut all_skipped = already;
+    all_skipped.extend(skipped);
+    Ok(Json(json!({
+        "inserted": n,
+        "skipped": all_skipped.len(),
+        "already": all_skipped,
+        "duplicate_in_batch": dup_in_batch,
+    })))
 }
 
 async fn update_aux(
