@@ -33,9 +33,11 @@ pub struct Persist {
     /// 老版本升上来时字段缺失会落进默认值，而**全新安装**的用户同样落进这个分支，
     /// 于是第一次打开就是 47 项菜单，恰恰是最需要精简的那批人看不到它。
     ///
-    /// 所以：`None` = 还没决定，`Some(b)` = 用户明确的开/关。
-    /// None 时再看 recent：没打开过任何账套 = 新用户 → 开；
-    /// 有历史 = 老用户 → 保持原样（他们的菜单已经用熟，忽然少一半反而不适应）。
+    /// 所以：`None` = 还没决定（默认精简），`Some(b)` = 用户明确的开/关。
+    /// 曾经按新老用户分流（有 `recent` 历史的老用户默认完整菜单），
+    /// 但个人/小白财务用户打开看到 47 项正是要解决的问题 ——
+    /// 开关和「临时看全部」都在侧栏底部，一键即回，不存在丢功能的损失，
+    /// 所以未决定的统一默认精简，不再看历史。
     #[serde(default)]
     pub simple_nav: Option<bool>,
 }
@@ -48,11 +50,11 @@ impl Default for Persist {
 
 /// 实际生效的精简模式取值。
 ///
-/// 一句话规则：**新用户默认精简，老用户保持原样，用户的选择永远优先。**
+/// 一句话规则：**没明确关掉就精简，用户的明确选择永远优先。**
 pub fn effective_simple_nav(p: &Persist) -> bool {
     match p.simple_nav {
         Some(b) => b,
-        None => p.recent.is_empty(),
+        None => true,
     }
 }
 
@@ -427,7 +429,8 @@ impl FinBookApp {
 impl eframe::App for FinBookApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         // 落盘时把推断值固化成 Some(b) —— 之后它就是「用户的明确选择」，
-        // 不再走新用户/老用户的推断。
+        // 不再走默认推断。注意这意味着「没动过开关」的用户退出后会留下
+        // Some(true)：等价于默认值，无害；他一旦取消勾选即记为 Some(false)。
         self.persist.simple_nav = Some(effective_simple_nav(&self.persist));
         eframe::set_value(storage, eframe::APP_KEY, &self.persist);
     }
@@ -850,26 +853,22 @@ mod onboarding_tests {
         }
     }
 
-    /// 新用户（没打开过任何账套）第一次进来就该是精简模式 ——
-    /// 47 项菜单正是「小白看不懂」的根因，不能等他自己去发现那个勾选框。
+    /// 没明确关掉就精简 —— 不分新老用户。
+    /// 曾经按 recent 历史分流（老用户默认完整菜单），但个人/小白财务用户打开
+    /// 看到 47 项正是要解决的问题；开关与「临时看全部」一键即回，无功能损失。
     #[test]
-    fn new_user_gets_simple_nav_by_default() {
+    fn undecided_user_gets_simple_nav_by_default() {
         assert!(effective_simple_nav(&p(None, 0)), "新用户首次打开必须默认精简");
-    }
-
-    /// 老用户（升级前就有账套）不能突然少一半菜单 ——
-    /// 他们的使用习惯是基于完整菜单建立的。
-    #[test]
-    fn existing_user_keeps_full_nav() {
-        assert!(!effective_simple_nav(&p(None, 3)), "老用户升级后不该被突然精简");
+        assert!(effective_simple_nav(&p(None, 3)), "有历史但没明确关过也要精简");
     }
 
     /// 用户的明确选择永远优先，两个方向都要能覆盖默认推断。
     #[test]
     fn explicit_choice_overrides_inference() {
-        // 新用户主动关掉 → 保持关
+        // 主动关掉 → 保持关（含老用户：关了就是关了，不会被默认值顶回来）
         assert!(!effective_simple_nav(&p(Some(false), 0)), "用户主动关掉后不能被默认值顶回来");
-        // 老用户主动打开 → 保持开
+        assert!(!effective_simple_nav(&p(Some(false), 5)), "老用户明确关掉后也要保持完整菜单");
+        // 主动打开 → 保持开
         assert!(effective_simple_nav(&p(Some(true), 5)), "用户主动打开后要保持");
     }
 
@@ -880,7 +879,7 @@ mod onboarding_tests {
         let legacy = r#"{"recent":["/a.fbk"],"last_user":"admin"}"#;
         let got: Persist = serde_json::from_str(legacy).expect("老配置必须能读");
         assert_eq!(got.simple_nav, None, "缺失字段应为 None（未决定）");
-        assert!(!effective_simple_nav(&got), "有历史的账号按老用户处理");
+        assert!(effective_simple_nav(&got), "未决定的统一默认精简，不看历史");
     }
 
     /// round-trip：存了再读，值不变。
