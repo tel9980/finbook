@@ -10,7 +10,9 @@
 use egui::RichText;
 use fincore::AuxKind;
 
-pub use fincore::batch::aux::{code_prefix, parse, to_entities, Parsed, ParsedRow, SkipReason};
+pub use fincore::batch::aux::{
+    code_prefix, parse, template, to_entities, Parsed, ParsedRow, SkipReason,
+};
 
 // ---------------------------------------------------------------------------
 // 批量粘贴窗口的 UI 状态
@@ -62,6 +64,13 @@ impl Ui {
                     .weak(),
                 );
                 ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "嫌格式难整理？点下面的「下载 Excel 模板」拿空表去 Excel 里填，\n\
+                         填完点「从 Excel 文件载入」直接读进来，一样要过预览。",
+                    )
+                    .weak(),
+                );
                 ui.label(RichText::new("粘贴到这里：").strong());
                 ui.add(
                     egui::TextEdit::multiline(&mut self.text)
@@ -79,6 +88,48 @@ impl Ui {
                     }
                     if ui.button("确认导入").clicked() {
                         do_import = true;
+                    }
+                    if ui
+                        .button("下载 Excel 模板")
+                        .on_hover_text("保存 .xlsx 空表（带示例和填表说明）")
+                        .clicked()
+                    {
+                        let sheets = crate::views::export::batch_template_sheets(
+                            &format!("{}档案", kind.label()),
+                            &template(kind),
+                        );
+                        match crate::views::export::save_template(
+                            &sheets,
+                            &format!("{}档案导入模板", kind.label()),
+                        ) {
+                            Ok(Some(m)) => {
+                                self.done = Some(m);
+                                self.err.clear();
+                            }
+                            Ok(None) => {}
+                            Err(e) => self.err = e,
+                        }
+                    }
+                    if ui
+                        .button("从 Excel 文件载入")
+                        .on_hover_text("选择填好的 .xlsx，直接读进来预览")
+                        .clicked()
+                    {
+                        if let Some(path) =
+                            crate::views::export::pick_open(&["xlsx", "xls", "ods"])
+                        {
+                            match findb::imports::read_xlsx(&path) {
+                                Ok(rows) => {
+                                    self.text = findb::imports::xlsx_to_csv_text(&rows);
+                                    self.preview = None;
+                                    self.done = None;
+                                    self.err.clear();
+                                    // 载入后直接走一遍预览，条数对不对立刻看见
+                                    do_preview = true;
+                                }
+                                Err(e) => self.err = format!("读取 Excel 失败：{e}"),
+                            }
+                        }
                     }
                     if ui.button("关闭").clicked() {
                         close = true;

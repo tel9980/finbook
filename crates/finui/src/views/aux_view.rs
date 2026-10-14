@@ -75,6 +75,26 @@ impl AuxView {
                 self.batch = Default::default();
                 self.batch.open = true;
             }
+            if ui
+                .button("下载模板")
+                .on_hover_text("保存一个 .xlsx 空表（带示例和填表说明），用 Excel 填好后再载入")
+                .clicked()
+                && ctx.can(Perm::AuxEdit)
+            {
+                let tpl = fincore::batch::aux::template(kind);
+                let sheets = crate::views::export::batch_template_sheets(
+                    &format!("{}档案", kind.label()),
+                    &tpl,
+                );
+                match crate::views::export::save_template(
+                    &sheets,
+                    &format!("{}档案导入模板", kind.label()),
+                ) {
+                    Ok(Some(m)) => ctx.info(m),
+                    Ok(None) => {}
+                    Err(e) => ctx.error(e),
+                }
+            }
             // 一键预置：把「通用名」的那几条直接建出来，省得一个个手填。
             // 只对部门/银行账户显示 —— 客户、供应商、存货的名字没有通用值，
             // 预置一个假的比空着更糟（凭证里带出去就成脏数据了）。

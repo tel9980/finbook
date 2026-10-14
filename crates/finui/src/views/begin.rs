@@ -231,6 +231,22 @@ impl BeginView {
                 self.batch = Default::default();
                 self.batch.open = true;
             }
+            if ui
+                .button("下载模板")
+                .on_hover_text("保存一个 .xlsx 空表（带示例和填表说明），用 Excel 填好后再载入")
+                .clicked()
+                && can_edit
+            {
+                let sheets = crate::views::export::batch_template_sheets(
+                    "期初余额",
+                    &fincore::batch::begin::template(),
+                );
+                match crate::views::export::save_template(&sheets, "期初余额导入模板") {
+                    Ok(Some(m)) => ctx.info(m),
+                    Ok(None) => {}
+                    Err(e) => ctx.error(e),
+                }
+            }
             ui.separator();
             ui.label("查找");
             ui.add_sized(

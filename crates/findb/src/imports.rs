@@ -1983,6 +1983,20 @@ mod tests {
     }
 
     #[test]
+    fn xlsx转文本可喂给粘贴解析() {
+        // 桌面端「从 Excel 文件载入」链路：读 xlsx → 转 CSV 文本 → 粘贴解析。
+        // 转出来的文本必须是行列完整的 CSV，首行是表头、后跟数据行。
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/yonyou_begin.xlsx");
+        let rows = read_xlsx(std::path::Path::new(path)).expect("读取 fixture xlsx 应成功");
+        let text = xlsx_to_csv_text(&rows);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 3, "应为表头 + 2 行数据：{text}");
+        assert!(lines[0].starts_with("科目编码"), "表头行应在：{text}");
+        assert!(lines[1].starts_with("1001,"), "数据行列不能错位：{text}");
+        assert!(lines[1].contains("10000"), "金额不能丢：{text}");
+    }
+
+    #[test]
     fn import_begin_from_excel_bytes() {
         let db = mem();
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/yonyou_begin.xlsx");

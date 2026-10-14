@@ -298,6 +298,31 @@ pub fn parse(
     Parsed { rows }
 }
 
+/// 期初余额的 Excel 导入模板（桌面端「下载模板」用）。
+///
+/// 布局必须是 [`parse`] 认得的写法 —— 这里用最省事的「编码,金额」两列，
+/// 方向按科目自动归位；示例行特意一借一贷，下载后直接预览能看到试算是平的。
+pub fn template() -> super::Template {
+    super::Template {
+        headers: vec!["科目编码".to_string(), "金额".to_string()],
+        examples: vec![
+            vec!["1001".to_string(), "58000".to_string()],
+            vec!["2001".to_string(), "58000".to_string()],
+        ],
+        help: vec![
+            "第一页第一行是表头，从第二行开始填你自己的数据。".to_string(),
+            "先把两行示例删掉，再填。".to_string(),
+            "方向不用填：资产自动记借、负债权益自动记贷；负数/红字括号自动转反方向。".to_string(),
+            "想自己写方向也行：加一列，写成「编码,方向,金额」（方向填 借/贷）。"
+                .to_string(),
+            "填完后回软件：点「从 Excel 文件载入」直接读进来，或复制粘贴到输入框。"
+                .to_string(),
+            "载入后先看预览里的试算（借方合计/贷方合计/差额），平了再点「并入草稿」。"
+                .to_string(),
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,5 +532,28 @@ mod tests {
     #[test]
     fn 差太远不给建议() {
         assert_eq!(suggest("9999", leaves().iter().map(|s| s.as_str())), None);
+    }
+
+    /// 模板出去的列，解析必须能认回来 —— 否则用户填完表导不进来。
+    /// 模板改了列布局却没改解析（或反过来），这条先挂。
+    #[test]
+    fn 模板列能被自家解析认回来() {
+        let t = template();
+        let mut text = t.headers.join(",");
+        for r in &t.examples {
+            text.push('\n');
+            text.push_str(&r.join(","));
+        }
+        let parsed = parse(&text, &dir_of, &leaves(), &[]);
+        assert_eq!(parsed.rows.len(), t.examples.len(), "表头应被跳过，只剩示例行");
+        assert_eq!(
+            parsed.importable().len(),
+            t.examples.len(),
+            "示例行都该是可并入的"
+        );
+        assert_eq!(parsed.rows[0].dir, Direction::Debit, "1001 资产应归借方");
+        assert_eq!(parsed.rows[1].dir, Direction::Credit, "2001 负债应归贷方");
+        let (_, _, diff) = parsed.trial();
+        assert!(diff.is_zero(), "示例一借一贷，试算应该是平的");
     }
 }

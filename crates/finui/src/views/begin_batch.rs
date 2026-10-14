@@ -8,7 +8,7 @@
 //! 两步是强制的：直接点确认会把一坨文本当数据写库 —— 粘贴错位（多带表头、
 //! 带上了合计行）会静默变成脏数据，而用户毫无察觉。
 
-pub use fincore::batch::begin::{parse, Parsed, ParsedRow, SkipReason};
+pub use fincore::batch::begin::{parse, template, Parsed, ParsedRow, SkipReason};
 use fincore::{Direction, Money};
 
 // ---------------------------------------------------------------------------
@@ -71,6 +71,13 @@ impl Ui {
                     )
                     .weak(),
                 );
+                ui.label(
+                    RichText::new(
+                        "嫌格式难整理？点下面的「下载 Excel 模板」拿空表去 Excel 里填，\n\
+                         填完点「从 Excel 文件载入」直接读进来，一样要过预览。",
+                    )
+                    .weak(),
+                );
                 ui.add_space(6.0);
                 ui.label(RichText::new("粘贴到这里：").strong());
                 ui.add(
@@ -89,6 +96,45 @@ impl Ui {
                     }
                     if ui.button("并入草稿").clicked() {
                         do_import = true;
+                    }
+                    if ui
+                        .button("下载 Excel 模板")
+                        .on_hover_text("保存 .xlsx 空表（带示例和填表说明）")
+                        .clicked()
+                    {
+                        let sheets = crate::views::export::batch_template_sheets(
+                            "期初余额",
+                            &template(),
+                        );
+                        match crate::views::export::save_template(&sheets, "期初余额导入模板") {
+                            Ok(Some(m)) => {
+                                self.done = Some(m);
+                                self.err.clear();
+                            }
+                            Ok(None) => {}
+                            Err(e) => self.err = e,
+                        }
+                    }
+                    if ui
+                        .button("从 Excel 文件载入")
+                        .on_hover_text("选择填好的 .xlsx，直接读进来预览")
+                        .clicked()
+                    {
+                        if let Some(path) =
+                            crate::views::export::pick_open(&["xlsx", "xls", "ods"])
+                        {
+                            match findb::imports::read_xlsx(&path) {
+                                Ok(rows) => {
+                                    self.text = findb::imports::xlsx_to_csv_text(&rows);
+                                    self.preview = None;
+                                    self.done = None;
+                                    self.err.clear();
+                                    // 载入后直接走一遍预览，试算平不平立刻看见
+                                    do_preview = true;
+                                }
+                                Err(e) => self.err = format!("读取 Excel 失败：{e}"),
+                            }
+                        }
                     }
                     if ui.button("关闭").clicked() {
                         close = true;

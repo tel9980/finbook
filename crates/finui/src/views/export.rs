@@ -173,6 +173,39 @@ pub fn export_sheet(sheet: &Sheet, default_name: &str, xlsx: bool) -> Result<Str
     Ok(format!("已导出 {n} 行到 {}", path.display()))
 }
 
+/// 保存导入模板（.xlsx）。
+///
+/// 与 [`export_sheet`] 不同：模板是"空架子 + 示例行 + 填表说明"，不含账套数据，
+/// 所以不走导出权限那一套 —— 调用方按旁边「批量粘贴」按钮同权限放行即可。
+/// 返回 `Ok(None)` 表示用户在保存对话框点了取消（不算错，调用方直接无视）。
+pub fn save_template(sheets: &[Sheet], default_name: &str) -> Result<Option<String>, String> {
+    let Some(path) = pick_save(default_name, true) else {
+        return Ok(None);
+    };
+    write_xlsx(sheets, &path)?;
+    Ok(Some(format!(
+        "模板已保存到 {}：用 Excel 填好后，回来点「从 Excel 文件载入」或复制粘贴导入",
+        path.display()
+    )))
+}
+
+/// 把 fincore 的批量模板转成两页 xlsx：第一页是数据区（表头 + 示例行），
+/// 第二页是填表说明。
+///
+/// 分页是刻意的：Excel 读取只读第一页（见 `findb::imports::read_xlsx`），
+/// 说明文字放第二页就不会被当成数据解析。
+pub fn batch_template_sheets(data_name: &str, tpl: &fincore::batch::Template) -> Vec<Sheet> {
+    let mut data = Sheet::new(data_name, tpl.headers.clone());
+    for r in &tpl.examples {
+        data.push(r.clone());
+    }
+    let mut help = Sheet::new("填表说明", vec!["填表说明（本页不用导入，只看）".to_string()]);
+    for h in &tpl.help {
+        help.push(vec![h.clone()]);
+    }
+    vec![data, help]
+}
+
 /// 生成可打印的 HTML（自带打印样式，自动唤起打印对话框）
 fn sheet_to_html(sheet: &Sheet, title: &str) -> String {
     let title = escape_html(title);

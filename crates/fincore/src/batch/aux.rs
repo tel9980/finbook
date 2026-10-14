@@ -236,6 +236,32 @@ pub fn to_entities(kind: AuxKind, rows: &[ParsedRow]) -> Vec<AuxEntity> {
         .collect()
 }
 
+/// 辅助档案的 Excel 导入模板（桌面端「下载模板」用）。
+///
+/// 布局必须是 [`parse`] 认得的写法 —— 「编码,名称」两列；示例编码按该类别的
+/// 前缀发号（客户 C01…、供应商 S01…），用户照着填就行。
+pub fn template(kind: AuxKind) -> super::Template {
+    let p = code_prefix(kind);
+    let label = kind.label();
+    super::Template {
+        headers: vec!["编码".to_string(), "名称".to_string()],
+        examples: vec![
+            vec![format!("{p}01"), format!("示例{label}甲")],
+            vec![format!("{p}02"), format!("示例{label}乙")],
+        ],
+        help: vec![
+            "第一页第一行是表头，从第二行开始填你自己的数据。".to_string(),
+            "先把两行示例删掉，再填。".to_string(),
+            "只写名称也行（不用填编码）：编码会自动编号，不会撞上已有的。"
+                .to_string(),
+            "编码已存在的那行会被跳过，不会覆盖你原来的档案。".to_string(),
+            "填完后回软件：点「从 Excel 文件载入」直接读进来，或复制粘贴到输入框。"
+                .to_string(),
+            "载入后先预览，确认条数对了再点「确认导入」。".to_string(),
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,5 +411,22 @@ mod tests {
         assert_eq!(ents.len(), 1);
         assert_eq!(ents[0].code, "C02");
         assert_eq!(ents[0].kind, AuxKind::Supplier);
+    }
+
+    /// 模板出去的列，解析必须能认回来 —— 否则用户填完表导不进来。
+    #[test]
+    fn 模板列能被自家解析认回来() {
+        for kind in [AuxKind::Customer, AuxKind::Supplier, AuxKind::Employee] {
+            let t = template(kind);
+            let mut text = t.headers.join(",");
+            for r in &t.examples {
+                text.push('\n');
+                text.push_str(&r.join(","));
+            }
+            let p = parse(&text, kind, &[]);
+            assert_eq!(p.rows.len(), t.examples.len(), "{kind:?}：表头应被跳过");
+            assert_eq!(p.importable().len(), t.examples.len(), "{kind:?}：示例行都该可导入");
+            assert!(p.rows[0].code.starts_with(code_prefix(kind)));
+        }
     }
 }
