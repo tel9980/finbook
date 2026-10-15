@@ -6,10 +6,10 @@
 
 use chrono::NaiveDate;
 use egui::{Align2, RichText, Ui};
-use findb::business::{self, StockKind, StockMove, StockSummary};
 use fincore::engine::costing::CostMethod;
 use fincore::money::QTY_DP;
 use fincore::{Money, Period, Perm};
+use findb::business::{self, StockKind, StockMove, StockSummary};
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -168,7 +168,10 @@ impl InventoryView {
             }
             ui.separator();
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -232,13 +235,11 @@ impl InventoryView {
                     ui.label(m.biz_date.format("%Y-%m-%d").to_string());
                 }
                 1 => {
-                    ui.label(
-                        RichText::new(m.kind.label()).color(if m.kind.is_inbound() {
-                            palette::OK
-                        } else {
-                            palette::CREDIT
-                        }),
-                    );
+                    ui.label(RichText::new(m.kind.label()).color(if m.kind.is_inbound() {
+                        palette::OK
+                    } else {
+                        palette::CREDIT
+                    }));
                 }
                 2 => {
                     ui.label(&m.item);
@@ -326,10 +327,11 @@ impl InventoryView {
     }
 
     fn open_new(&mut self, p: Period) {
-        let date = p
-            .contains(chrono::Local::now().date_naive())
-            .then(|| chrono::Local::now().date_naive())
-            .unwrap_or_else(|| p.last_day());
+        let date = if p.contains(chrono::Local::now().date_naive()) {
+            chrono::Local::now().date_naive()
+        } else {
+            p.last_day()
+        };
         self.editing = Some(MoveDraft {
             id: 0,
             date: date.format("%Y-%m-%d").to_string(),
@@ -427,72 +429,81 @@ impl InventoryView {
             if price.is_zero() {
                 "（出库单价留空时由系统按计价方式计算）".to_string()
             } else {
-                format!("金额 {}（{} × {}）", (qty * price).round2().fmt_money(), qty.fmt_qty(), price.fmt_qty())
+                format!(
+                    "金额 {}（{} × {}）",
+                    (qty * price).round2().fmt_money(),
+                    qty.fmt_qty(),
+                    price.fmt_qty()
+                )
             }
         };
 
-        egui::Window::new(if is_new { "新增出入库单" } else { "修改出入库单" })
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                if !err.is_empty() {
-                    ui.colored_label(palette::CREDIT, &err);
-                }
-                egui::Grid::new("inv_move_edit")
-                    .num_columns(2)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("日期：");
-                        ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut d.date));
-                        ui.end_row();
-                        ui.label("单据类型：");
-                        egui::ComboBox::from_id_salt("inv_move_kind")
-                            .selected_text(&kind_label)
-                            .width(140.0)
-                            .show_ui(ui, |ui| {
-                                for k in StockKind::ALL {
-                                    ui.selectable_value(&mut d.kind, *k, k.label());
-                                }
-                            });
-                        ui.end_row();
-                        ui.label("存货：");
-                        ui.horizontal(|ui| {
-                            widgets::text_input(ui, &mut d.item, 180.0, "存货名称");
-                            // 已有项目做补全下拉，避免同一存货录出多个名字
-                            widgets::combo(ui, "inv_move_item", &mut d.item, &items, 100.0);
+        egui::Window::new(if is_new {
+            "新增出入库单"
+        } else {
+            "修改出入库单"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ui.ctx(), |ui| {
+            if !err.is_empty() {
+                ui.colored_label(palette::CREDIT, &err);
+            }
+            egui::Grid::new("inv_move_edit")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("日期：");
+                    ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut d.date));
+                    ui.end_row();
+                    ui.label("单据类型：");
+                    egui::ComboBox::from_id_salt("inv_move_kind")
+                        .selected_text(&kind_label)
+                        .width(140.0)
+                        .show_ui(ui, |ui| {
+                            for k in StockKind::ALL {
+                                ui.selectable_value(&mut d.kind, *k, k.label());
+                            }
                         });
-                        ui.end_row();
-                        ui.label("仓库：");
-                        widgets::text_input(ui, &mut d.warehouse, 180.0, "可留空");
-                        ui.end_row();
-                        ui.label("批次：");
-                        widgets::text_input(ui, &mut d.batch_no, 120.0, "可留空");
-                        ui.end_row();
-                        ui.label("数量：");
-                        widgets::money_input(ui, &mut d.qty, 120.0);
-                        ui.end_row();
-                        ui.label("单价：");
-                        widgets::money_input(ui, &mut d.price, 120.0);
-                        ui.end_row();
-                        ui.label("备注：");
-                        widgets::text_input(ui, &mut d.memo, 260.0, "可留空");
-                        ui.end_row();
+                    ui.end_row();
+                    ui.label("存货：");
+                    ui.horizontal(|ui| {
+                        widgets::text_input(ui, &mut d.item, 180.0, "存货名称");
+                        // 已有项目做补全下拉，避免同一存货录出多个名字
+                        widgets::combo(ui, "inv_move_item", &mut d.item, &items, 100.0);
                     });
-                ui.label(RichText::new(preview).weak());
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("取消").clicked() {
-                            close = true;
-                        }
-                        if ui.button("保存").clicked() {
-                            save = true;
-                        }
-                    });
+                    ui.end_row();
+                    ui.label("仓库：");
+                    widgets::text_input(ui, &mut d.warehouse, 180.0, "可留空");
+                    ui.end_row();
+                    ui.label("批次：");
+                    widgets::text_input(ui, &mut d.batch_no, 120.0, "可留空");
+                    ui.end_row();
+                    ui.label("数量：");
+                    widgets::money_input(ui, &mut d.qty, 120.0);
+                    ui.end_row();
+                    ui.label("单价：");
+                    widgets::money_input(ui, &mut d.price, 120.0);
+                    ui.end_row();
+                    ui.label("备注：");
+                    widgets::text_input(ui, &mut d.memo, 260.0, "可留空");
+                    ui.end_row();
+                });
+            ui.label(RichText::new(preview).weak());
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                    if ui.button("保存").clicked() {
+                        save = true;
+                    }
                 });
             });
+        });
 
         if close || !open {
             self.editing = None;
@@ -525,13 +536,25 @@ impl InventoryView {
                     Ok(()) => {
                         ctx.log(
                             "存货",
-                            if self.editing_new { "新增出入库单" } else { "修改出入库单" },
-                            &format!("{} {} {}", m.biz_date.format("%Y-%m-%d"), m.kind.label(), m.item),
+                            if self.editing_new {
+                                "新增出入库单"
+                            } else {
+                                "修改出入库单"
+                            },
+                            &format!(
+                                "{} {} {}",
+                                m.biz_date.format("%Y-%m-%d"),
+                                m.kind.label(),
+                                m.item
+                            ),
                         );
                         ctx.info("已保存");
                         // 单据日期可能落在别的期间，提示一声免得用户以为没存上
                         if m.period != p {
-                            ctx.info(format!("单据已按日期归入 {}，不在当前查看期间", m.period.label()));
+                            ctx.info(format!(
+                                "单据已按日期归入 {}，不在当前查看期间",
+                                m.period.label()
+                            ));
                         }
                         self.dirty = true;
                         self.editing = None;
@@ -563,8 +586,10 @@ impl InventoryView {
                         if ui.button("取消").clicked() {
                             cancel = true;
                         }
-                        let b = egui::Button::new(RichText::new("确定删除").color(egui::Color32::WHITE))
-                            .fill(palette::CREDIT);
+                        let b = egui::Button::new(
+                            RichText::new("确定删除").color(egui::Color32::WHITE),
+                        )
+                        .fill(palette::CREDIT);
                         if ui.add(b).clicked() {
                             ok = true;
                         }
@@ -644,12 +669,15 @@ impl InventoryView {
         let to: Money = rows.iter().map(|s| s.out_amount).sum();
         let te: Money = rows.iter().map(|s| s.end_amount).sum();
         ui.separator();
-        ui.label(RichText::new(format!(
-            "合计：收入 {} ／ 发出 {} ／ 结存 {}",
-            ti.fmt_money(),
-            to.fmt_money(),
-            te.fmt_money()
-        )).strong());
+        ui.label(
+            RichText::new(format!(
+                "合计：收入 {} ／ 发出 {} ／ 结存 {}",
+                ti.fmt_money(),
+                to.fmt_money(),
+                te.fmt_money()
+            ))
+            .strong(),
+        );
         ui.label(
             RichText::new(
                 "说明：切换计价方式后出库成本会按新方式重算，并把单价与金额回写到本期出库流水。",
@@ -689,7 +717,10 @@ impl InventoryView {
                 .spacing([10.0, 8.0])
                 .show(ui, |ui| {
                     ui.label("凭证日期：");
-                    ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut self.cost_date));
+                    ui.add_sized(
+                        [120.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.cost_date),
+                    );
                     ui.end_row();
                     ui.label("成本科目：");
                     widgets::account_combo(
@@ -724,15 +755,7 @@ impl InventoryView {
             .unwrap_or_else(|_| p.last_day());
         let who = ctx.user().display_name.clone();
         let (cost, asset) = (self.cost_account.clone(), self.asset_account.clone());
-        let r = business::stock_cost_voucher(
-            ctx.db(),
-            p,
-            date,
-            self.method,
-            &cost,
-            &asset,
-            &who,
-        );
+        let r = business::stock_cost_voucher(ctx.db(), p, date, self.method, &cost, &asset, &who);
         match r {
             Ok(Some(id)) => {
                 let no = voucher_no(ctx.db(), id);

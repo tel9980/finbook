@@ -220,9 +220,9 @@ fn map(r: &rusqlite::Row) -> rusqlite::Result<Template> {
 const COLS: &str = "id,name,memo,entries_json,freq,start_period,end_period,last_period,active";
 
 pub fn list(db: &Db) -> DbResult<Vec<Template>> {
-    let mut st = db
-        .conn()
-        .prepare(&format!("SELECT {COLS} FROM voucher_template ORDER BY name"))?;
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {COLS} FROM voucher_template ORDER BY name"
+    ))?;
     let rows = st.query_map([], map)?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -282,8 +282,10 @@ pub fn update(db: &Db, t: &Template) -> DbResult<()> {
 }
 
 pub fn delete(db: &Db, id: i64) -> DbResult<()> {
-    db.conn()
-        .execute("DELETE FROM voucher_template WHERE id=?1", rusqlite::params![id])?;
+    db.conn().execute(
+        "DELETE FROM voucher_template WHERE id=?1",
+        rusqlite::params![id],
+    )?;
     Ok(())
 }
 
@@ -363,7 +365,10 @@ mod tests {
         assert!(!t2.due_in(Period::new(2026, 3).unwrap()));
         assert!(t2.due_in(Period::new(2026, 6).unwrap()));
 
-        assert_eq!(due_list(&db, Period::new(2026, 6).unwrap()).unwrap().len(), 1);
+        assert_eq!(
+            due_list(&db, Period::new(2026, 6).unwrap()).unwrap().len(),
+            1
+        );
     }
 
     #[test]

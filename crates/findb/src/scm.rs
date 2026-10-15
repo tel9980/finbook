@@ -26,13 +26,21 @@ pub fn status_from<T: serde::de::DeserializeOwned>(stored: &str) -> Option<T> {
 // ===========================================================================
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum PoStatus { Draft, Confirmed, PartialIn, Completed, Cancelled }
+pub enum PoStatus {
+    Draft,
+    Confirmed,
+    PartialIn,
+    Completed,
+    Cancelled,
+}
 
 impl PoStatus {
     pub fn label(self) -> &'static str {
         match self {
-            PoStatus::Draft => "草稿", PoStatus::Confirmed => "已确认",
-            PoStatus::PartialIn => "部分入库", PoStatus::Completed => "已完成",
+            PoStatus::Draft => "草稿",
+            PoStatus::Confirmed => "已确认",
+            PoStatus::PartialIn => "部分入库",
+            PoStatus::Completed => "已完成",
             PoStatus::Cancelled => "已作废",
         }
     }
@@ -40,29 +48,58 @@ impl PoStatus {
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PoLine {
-    pub id: i64, pub po_id: i64,
-    pub item_code: String, pub item_name: String,
-    pub qty_ordered: Money, pub qty_received: Money,
-    pub unit_price: Money, pub tax_rate: Money,
-    pub amount: Money, pub tax_amount: Money, pub memo: String,
+    pub id: i64,
+    pub po_id: i64,
+    pub item_code: String,
+    pub item_name: String,
+    pub qty_ordered: Money,
+    pub qty_received: Money,
+    pub unit_price: Money,
+    pub tax_rate: Money,
+    pub amount: Money,
+    pub tax_amount: Money,
+    pub memo: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PurchaseOrder {
-    pub id: i64, pub period: Period, pub no: String, pub date: NaiveDate,
-    pub supplier_code: String, pub supplier_name: String,
+    pub id: i64,
+    pub period: Period,
+    pub no: String,
+    pub date: NaiveDate,
+    pub supplier_code: String,
+    pub supplier_name: String,
     pub status: PoStatus,
-    pub total_amount: Money, pub total_tax: Money, pub received_amount: Money,
-    pub prepared_by: String, pub memo: String, pub lines: Vec<PoLine>,
+    pub total_amount: Money,
+    pub total_tax: Money,
+    pub received_amount: Money,
+    pub prepared_by: String,
+    pub memo: String,
+    pub lines: Vec<PoLine>,
 }
 
 impl PurchaseOrder {
-    pub fn new(period: Period, date: NaiveDate, supplier_code: &str, supplier_name: &str, prepared_by: &str) -> Self {
-        Self { id: 0, period, no: String::new(), date,
-            supplier_code: supplier_code.to_string(), supplier_name: supplier_name.to_string(),
-            status: PoStatus::Draft, total_amount: Money::ZERO, total_tax: Money::ZERO,
-            received_amount: Money::ZERO, prepared_by: prepared_by.to_string(),
-            memo: String::new(), lines: Vec::new(),
+    pub fn new(
+        period: Period,
+        date: NaiveDate,
+        supplier_code: &str,
+        supplier_name: &str,
+        prepared_by: &str,
+    ) -> Self {
+        Self {
+            id: 0,
+            period,
+            no: String::new(),
+            date,
+            supplier_code: supplier_code.to_string(),
+            supplier_name: supplier_name.to_string(),
+            status: PoStatus::Draft,
+            total_amount: Money::ZERO,
+            total_tax: Money::ZERO,
+            received_amount: Money::ZERO,
+            prepared_by: prepared_by.to_string(),
+            memo: String::new(),
+            lines: Vec::new(),
         }
     }
 }
@@ -145,7 +182,9 @@ fn po_transition_ok(from: PoStatus, to: PoStatus) -> bool {
 pub fn po_set_status(db: &Db, id: i64, to: PoStatus) -> DbResult<()> {
     let from: String = db
         .conn()
-        .query_row("SELECT status FROM purchase_order WHERE id=?1", [id], |r| r.get(0))
+        .query_row("SELECT status FROM purchase_order WHERE id=?1", [id], |r| {
+            r.get(0)
+        })
         .optional()?
         .ok_or_else(|| FinError::not_found("采购订单"))?;
     let cur = status_from::<PoStatus>(&from).unwrap_or(PoStatus::Draft);
@@ -159,7 +198,7 @@ pub fn po_set_status(db: &Db, id: i64, to: PoStatus) -> DbResult<()> {
     }
     let n = db.conn().execute(
         "UPDATE purchase_order SET status=?2 WHERE id=?1 AND status=?3",
-        rusqlite::params![id, serde_json::to_value(&to)?.as_str().unwrap(), from],
+        rusqlite::params![id, serde_json::to_value(to)?.as_str().unwrap(), from],
     )?;
     if n == 0 {
         return Err(FinError::state("采购订单状态已被他人变更，请刷新后重试").into());
@@ -172,13 +211,21 @@ pub fn po_set_status(db: &Db, id: i64, to: PoStatus) -> DbResult<()> {
 // ===========================================================================
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum SoStatus { Draft, Confirmed, PartialShip, Completed, Cancelled }
+pub enum SoStatus {
+    Draft,
+    Confirmed,
+    PartialShip,
+    Completed,
+    Cancelled,
+}
 
 impl SoStatus {
     pub fn label(self) -> &'static str {
         match self {
-            SoStatus::Draft => "草稿", SoStatus::Confirmed => "已确认",
-            SoStatus::PartialShip => "部分发货", SoStatus::Completed => "已完成",
+            SoStatus::Draft => "草稿",
+            SoStatus::Confirmed => "已确认",
+            SoStatus::PartialShip => "部分发货",
+            SoStatus::Completed => "已完成",
             SoStatus::Cancelled => "已作废",
         }
     }
@@ -186,29 +233,58 @@ impl SoStatus {
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SoLine {
-    pub id: i64, pub so_id: i64,
-    pub item_code: String, pub item_name: String,
-    pub qty_ordered: Money, pub qty_shipped: Money,
-    pub unit_price: Money, pub tax_rate: Money,
-    pub amount: Money, pub tax_amount: Money, pub memo: String,
+    pub id: i64,
+    pub so_id: i64,
+    pub item_code: String,
+    pub item_name: String,
+    pub qty_ordered: Money,
+    pub qty_shipped: Money,
+    pub unit_price: Money,
+    pub tax_rate: Money,
+    pub amount: Money,
+    pub tax_amount: Money,
+    pub memo: String,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SalesOrder {
-    pub id: i64, pub period: Period, pub no: String, pub date: NaiveDate,
-    pub customer_code: String, pub customer_name: String,
+    pub id: i64,
+    pub period: Period,
+    pub no: String,
+    pub date: NaiveDate,
+    pub customer_code: String,
+    pub customer_name: String,
     pub status: SoStatus,
-    pub total_amount: Money, pub total_tax: Money, pub shipped_amount: Money,
-    pub prepared_by: String, pub memo: String, pub lines: Vec<SoLine>,
+    pub total_amount: Money,
+    pub total_tax: Money,
+    pub shipped_amount: Money,
+    pub prepared_by: String,
+    pub memo: String,
+    pub lines: Vec<SoLine>,
 }
 
 impl SalesOrder {
-    pub fn new(period: Period, date: NaiveDate, customer_code: &str, customer_name: &str, prepared_by: &str) -> Self {
-        Self { id: 0, period, no: String::new(), date,
-            customer_code: customer_code.to_string(), customer_name: customer_name.to_string(),
-            status: SoStatus::Draft, total_amount: Money::ZERO, total_tax: Money::ZERO,
-            shipped_amount: Money::ZERO, prepared_by: prepared_by.to_string(),
-            memo: String::new(), lines: Vec::new(),
+    pub fn new(
+        period: Period,
+        date: NaiveDate,
+        customer_code: &str,
+        customer_name: &str,
+        prepared_by: &str,
+    ) -> Self {
+        Self {
+            id: 0,
+            period,
+            no: String::new(),
+            date,
+            customer_code: customer_code.to_string(),
+            customer_name: customer_name.to_string(),
+            status: SoStatus::Draft,
+            total_amount: Money::ZERO,
+            total_tax: Money::ZERO,
+            shipped_amount: Money::ZERO,
+            prepared_by: prepared_by.to_string(),
+            memo: String::new(),
+            lines: Vec::new(),
         }
     }
 }
@@ -228,13 +304,21 @@ pub struct BomItem {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
-pub enum ProdStatus { Draft, Released, InProgress, Completed, Cancelled }
+pub enum ProdStatus {
+    Draft,
+    Released,
+    InProgress,
+    Completed,
+    Cancelled,
+}
 
 impl ProdStatus {
     pub fn label(self) -> &'static str {
         match self {
-            ProdStatus::Draft => "草稿", ProdStatus::Released => "已下达",
-            ProdStatus::InProgress => "生产中", ProdStatus::Completed => "已完工",
+            ProdStatus::Draft => "草稿",
+            ProdStatus::Released => "已下达",
+            ProdStatus::InProgress => "生产中",
+            ProdStatus::Completed => "已完工",
             ProdStatus::Cancelled => "已作废",
         }
     }
@@ -298,12 +382,18 @@ pub struct ProductionOrder {
 pub fn po_next_no(db: &Db, period: Period) -> DbResult<String> {
     let year = period.year();
     let month = period.month();
-    let prefix = format!("{}{:04}{:02}", crate::doc_prefix(db, "po", "CG"), year, month);
+    let prefix = format!(
+        "{}{:04}{:02}",
+        crate::doc_prefix(db, "po", "CG"),
+        year,
+        month
+    );
     let sql = format!(
         "SELECT COALESCE(MAX(CAST(SUBSTR(no, {}) AS INTEGER)), 0) + 1 FROM purchase_order WHERE no LIKE ?",
         prefix.len() + 1
     );
-    let n: i64 = db.conn()
+    let n: i64 = db
+        .conn()
         .query_row(&sql, [format!("{}%", prefix)], |r| r.get(0))
         .unwrap_or(0);
     Ok(format!("{}{:04}", prefix, n))
@@ -312,12 +402,18 @@ pub fn po_next_no(db: &Db, period: Period) -> DbResult<String> {
 pub fn so_next_no(db: &Db, period: Period) -> DbResult<String> {
     let year = period.year();
     let month = period.month();
-    let prefix = format!("{}{:04}{:02}", crate::doc_prefix(db, "so", "XS"), year, month);
+    let prefix = format!(
+        "{}{:04}{:02}",
+        crate::doc_prefix(db, "so", "XS"),
+        year,
+        month
+    );
     let sql = format!(
         "SELECT COALESCE(MAX(CAST(SUBSTR(no, {}) AS INTEGER)), 0) + 1 FROM sales_order WHERE no LIKE ?",
         prefix.len() + 1
     );
-    let n: i64 = db.conn()
+    let n: i64 = db
+        .conn()
         .query_row(&sql, [format!("{}%", prefix)], |r| r.get(0))
         .unwrap_or(0);
     Ok(format!("{}{:04}", prefix, n))
@@ -328,7 +424,7 @@ pub fn po_save(db: &Db, po: &mut PurchaseOrder) -> DbResult<i64> {
     po.total_amount = po.lines.iter().map(|l| l.amount).sum();
     po.total_tax = po.lines.iter().map(|l| l.tax_amount).sum();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    
+
     let id = if po.id > 0 {
         tx.execute(
             "UPDATE purchase_order SET period=?, date=?, supplier_code=?, supplier_name=?,
@@ -336,7 +432,7 @@ pub fn po_save(db: &Db, po: &mut PurchaseOrder) -> DbResult<i64> {
              WHERE id=?",
             rusqlite::params![
                 po.period.ymm(), po.date, po.supplier_code, po.supplier_name,
-                serde_json::to_value(&po.status)?.as_str().unwrap(),
+                serde_json::to_value(po.status)?.as_str().unwrap(),
                 crate::money_param(po.total_amount), crate::money_param(po.total_tax),
                 crate::money_param(po.received_amount), po.prepared_by, po.memo, now, po.id
             ],
@@ -349,7 +445,7 @@ pub fn po_save(db: &Db, po: &mut PurchaseOrder) -> DbResult<i64> {
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12)",
             rusqlite::params![
                 po.period.ymm(), po.no, po.date, po.supplier_code, po.supplier_name,
-                serde_json::to_value(&po.status)?.as_str().unwrap(),
+                serde_json::to_value(po.status)?.as_str().unwrap(),
                 crate::money_param(po.total_amount), crate::money_param(po.total_tax),
                 crate::money_param(po.received_amount), po.prepared_by, po.memo, now
             ],
@@ -357,7 +453,7 @@ pub fn po_save(db: &Db, po: &mut PurchaseOrder) -> DbResult<i64> {
         tx.last_insert_rowid()
     };
     po.id = id;
-    
+
     tx.execute("DELETE FROM po_line WHERE po_id=?", [id])?;
     for line in &po.lines {
         tx.execute(
@@ -365,10 +461,16 @@ pub fn po_save(db: &Db, po: &mut PurchaseOrder) -> DbResult<i64> {
              unit_price, tax_rate, amount, tax_amount, memo)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             rusqlite::params![
-                id, line.item_code, line.item_name, crate::exact_param(line.qty_ordered),
-                crate::exact_param(line.qty_received), crate::exact_param(line.unit_price),
-                crate::exact_param(line.tax_rate), crate::money_param(line.amount),
-                crate::money_param(line.tax_amount), line.memo
+                id,
+                line.item_code,
+                line.item_name,
+                crate::exact_param(line.qty_ordered),
+                crate::exact_param(line.qty_received),
+                crate::exact_param(line.unit_price),
+                crate::exact_param(line.tax_rate),
+                crate::money_param(line.amount),
+                crate::money_param(line.tax_amount),
+                line.memo
             ],
         )?;
     }
@@ -387,50 +489,61 @@ pub fn po_delete(db: &Db, id: i64) -> DbResult<()> {
 
 pub fn po_list(db: &Db, period: Period, status: Option<PoStatus>) -> DbResult<Vec<PurchaseOrder>> {
     let sql = if status.is_some() {
-        format!(
-            "SELECT id, period, no, date, supplier_code, supplier_name, status,
+        "SELECT id, period, no, date, supplier_code, supplier_name, status,
              total_amount, total_tax, received_amount, prepared_by, memo
              FROM purchase_order WHERE period=? AND status=? ORDER BY date DESC, id DESC"
-        )
+            .to_string()
     } else {
-        format!(
-            "SELECT id, period, no, date, supplier_code, supplier_name, status,
+        "SELECT id, period, no, date, supplier_code, supplier_name, status,
              total_amount, total_tax, received_amount, prepared_by, memo
              FROM purchase_order WHERE period=? ORDER BY date DESC, id DESC"
-        )
+            .to_string()
     };
-    
+
     let mut stmt = db.conn().prepare(&sql)?;
     let rows = if let Some(s) = status {
-        stmt.query_map(rusqlite::params![period.ymm(), serde_json::to_value(&s)?.as_str().unwrap()], |r| {
-            Ok(PurchaseOrder {
-                id: r.get(0)?, period: Period::from_ymm(r.get(1)?),
-                no: r.get(2)?, date: r.get(3)?,
-                supplier_code: r.get(4)?, supplier_name: r.get(5)?,
-                status: status_from(&r.get::<_, String>(6)?).unwrap_or(PoStatus::Draft),
-                total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
-                total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                received_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                prepared_by: r.get(10)?, memo: r.get(11)?,
-                lines: Vec::new(),
-            })
-        })?.collect::<Result<Vec<_>, _>>()?
+        stmt.query_map(
+            rusqlite::params![period.ymm(), serde_json::to_value(s)?.as_str().unwrap()],
+            |r| {
+                Ok(PurchaseOrder {
+                    id: r.get(0)?,
+                    period: Period::from_ymm(r.get(1)?),
+                    no: r.get(2)?,
+                    date: r.get(3)?,
+                    supplier_code: r.get(4)?,
+                    supplier_name: r.get(5)?,
+                    status: status_from(&r.get::<_, String>(6)?).unwrap_or(PoStatus::Draft),
+                    total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                    total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
+                    received_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
+                    prepared_by: r.get(10)?,
+                    memo: r.get(11)?,
+                    lines: Vec::new(),
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?
     } else {
         stmt.query_map([period.ymm()], |r| {
             Ok(PurchaseOrder {
-                id: r.get(0)?, period: Period::from_ymm(r.get(1)?),
-                no: r.get(2)?, date: r.get(3)?,
-                supplier_code: r.get(4)?, supplier_name: r.get(5)?,
+                id: r.get(0)?,
+                period: Period::from_ymm(r.get(1)?),
+                no: r.get(2)?,
+                date: r.get(3)?,
+                supplier_code: r.get(4)?,
+                supplier_name: r.get(5)?,
                 status: status_from(&r.get::<_, String>(6)?).unwrap_or(PoStatus::Draft),
                 total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
                 total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
                 received_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                prepared_by: r.get(10)?, memo: r.get(11)?,
+                prepared_by: r.get(10)?,
+                memo: r.get(11)?,
                 lines: Vec::new(),
             })
-        })?.collect::<Result<Vec<_>, _>>()?
+        })?
+        .collect::<Result<Vec<_>, _>>()?
     };
-    
+
     // 一次取回本期间所有到货流水，Rust 侧按订单分组累加（不在 SQL 里 SUM——
     // 金额/数量列全库按 TEXT 存，SQLite 对 TEXT 的 SUM 返回 Integer/Real）
     let recv_by_po = po_receipt_qty_map(db, period)?;
@@ -440,19 +553,25 @@ pub fn po_list(db: &Db, period: Period, status: Option<PoStatus>) -> DbResult<Ve
         let mut stmt = db.conn().prepare(
             "SELECT id, item_code, item_name, qty_ordered, qty_received,
              unit_price, tax_rate, amount, tax_amount, memo
-             FROM po_line WHERE po_id=? ORDER BY id"
+             FROM po_line WHERE po_id=? ORDER BY id",
         )?;
-        let lines = stmt.query_map([po.id], |r| Ok(PoLine {
-            id: r.get(0)?, po_id: po.id,
-            item_code: r.get(1)?, item_name: r.get(2)?,
-            qty_ordered: Money::parse_or_zero(&r.get::<_, String>(3)?),
-            qty_received: Money::parse_or_zero(&r.get::<_, String>(4)?),
-            unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
-            tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
-            amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
-            tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
-            memo: r.get(9)?,
-        }))?.collect::<Result<Vec<_>, _>>()?;
+        let lines = stmt
+            .query_map([po.id], |r| {
+                Ok(PoLine {
+                    id: r.get(0)?,
+                    po_id: po.id,
+                    item_code: r.get(1)?,
+                    item_name: r.get(2)?,
+                    qty_ordered: Money::parse_or_zero(&r.get::<_, String>(3)?),
+                    qty_received: Money::parse_or_zero(&r.get::<_, String>(4)?),
+                    unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
+                    tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
+                    amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                    tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
+                    memo: r.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         po.lines = lines;
         // 执行进度（已收数量/金额）从 po_receipt 实时汇总，不读冗余列。
         //
@@ -470,14 +589,13 @@ pub fn po_list(db: &Db, period: Period, status: Option<PoStatus>) -> DbResult<Ve
 }
 
 /// 本期间各采购订单的累计已收数量（Rust 侧累加，不在 SQL 里 SUM）
-fn po_receipt_qty_map(
-    db: &Db,
-    period: Period,
-) -> DbResult<std::collections::HashMap<i64, Money>> {
+fn po_receipt_qty_map(db: &Db, period: Period) -> DbResult<std::collections::HashMap<i64, Money>> {
     let mut st = db
         .conn()
         .prepare("SELECT po_id, qty FROM po_receipt WHERE period=?1")?;
-    let rows = st.query_map([period.ymm()], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let rows = st.query_map([period.ymm()], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })?;
     let mut map: std::collections::HashMap<i64, Money> = std::collections::HashMap::new();
     for r in rows {
         let (po_id, qty) = r?;
@@ -719,8 +837,7 @@ pub fn prod_from_so(
     want: Option<Money>,
     who: &str,
 ) -> DbResult<i64> {
-    let so = so_get(db, so_id)?
-        .ok_or_else(|| fincore::FinError::not_found("销售订单不存在"))?;
+    let so = so_get(db, so_id)?.ok_or_else(|| fincore::FinError::not_found("销售订单不存在"))?;
     if matches!(so.status, SoStatus::Draft | SoStatus::Cancelled) {
         return Err(fincore::FinError::state(format!(
             "订单 {} 是「{}」，先确认才能下推生产",
@@ -849,7 +966,7 @@ pub fn so_save(db: &Db, so: &mut SalesOrder) -> DbResult<i64> {
     }
     let tx = db.write_tx()?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    
+
     let id = if so.id > 0 {
         tx.execute(
             "UPDATE sales_order SET period=?, date=?, customer_code=?, customer_name=?,
@@ -857,7 +974,7 @@ pub fn so_save(db: &Db, so: &mut SalesOrder) -> DbResult<i64> {
              WHERE id=?",
             rusqlite::params![
                 so.period.ymm(), so.date, so.customer_code, so.customer_name,
-                serde_json::to_value(&so.status)?.as_str().unwrap(),
+                serde_json::to_value(so.status)?.as_str().unwrap(),
                 crate::money_param(so.total_amount), crate::money_param(so.total_tax),
                 crate::money_param(so.shipped_amount), so.prepared_by, so.memo, now, so.id
             ],
@@ -870,7 +987,7 @@ pub fn so_save(db: &Db, so: &mut SalesOrder) -> DbResult<i64> {
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12)",
             rusqlite::params![
                 so.period.ymm(), so.no, so.date, so.customer_code, so.customer_name,
-                serde_json::to_value(&so.status)?.as_str().unwrap(),
+                serde_json::to_value(so.status)?.as_str().unwrap(),
                 crate::money_param(so.total_amount), crate::money_param(so.total_tax),
                 crate::money_param(so.shipped_amount), so.prepared_by, so.memo, now
             ],
@@ -878,7 +995,7 @@ pub fn so_save(db: &Db, so: &mut SalesOrder) -> DbResult<i64> {
         tx.last_insert_rowid()
     };
     so.id = id;
-    
+
     tx.execute("DELETE FROM so_line WHERE so_id=?", [id])?;
     for line in &so.lines {
         tx.execute(
@@ -886,10 +1003,16 @@ pub fn so_save(db: &Db, so: &mut SalesOrder) -> DbResult<i64> {
              unit_price, tax_rate, amount, tax_amount, memo)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             rusqlite::params![
-                id, line.item_code, line.item_name, crate::exact_param(line.qty_ordered),
-                crate::exact_param(line.qty_shipped), crate::exact_param(line.unit_price),
-                crate::exact_param(line.tax_rate), crate::money_param(line.amount),
-                crate::money_param(line.tax_amount), line.memo
+                id,
+                line.item_code,
+                line.item_name,
+                crate::exact_param(line.qty_ordered),
+                crate::exact_param(line.qty_shipped),
+                crate::exact_param(line.unit_price),
+                crate::exact_param(line.tax_rate),
+                crate::money_param(line.amount),
+                crate::money_param(line.tax_amount),
+                line.memo
             ],
         )?;
     }
@@ -908,50 +1031,61 @@ pub fn so_delete(db: &Db, id: i64) -> DbResult<()> {
 
 pub fn so_list(db: &Db, period: Period, status: Option<SoStatus>) -> DbResult<Vec<SalesOrder>> {
     let sql = if status.is_some() {
-        format!(
-            "SELECT id, period, no, date, customer_code, customer_name, status,
+        "SELECT id, period, no, date, customer_code, customer_name, status,
              total_amount, total_tax, shipped_amount, prepared_by, memo
              FROM sales_order WHERE period=? AND status=? ORDER BY date DESC, id DESC"
-        )
+            .to_string()
     } else {
-        format!(
-            "SELECT id, period, no, date, customer_code, customer_name, status,
+        "SELECT id, period, no, date, customer_code, customer_name, status,
              total_amount, total_tax, shipped_amount, prepared_by, memo
              FROM sales_order WHERE period=? ORDER BY date DESC, id DESC"
-        )
+            .to_string()
     };
-    
+
     let mut stmt = db.conn().prepare(&sql)?;
     let rows = if let Some(s) = status {
-        stmt.query_map(rusqlite::params![period.ymm(), serde_json::to_value(&s)?.as_str().unwrap()], |r| {
-            Ok(SalesOrder {
-                id: r.get(0)?, period: Period::from_ymm(r.get(1)?),
-                no: r.get(2)?, date: r.get(3)?,
-                customer_code: r.get(4)?, customer_name: r.get(5)?,
-                status: status_from(&r.get::<_, String>(6)?).unwrap_or(SoStatus::Draft),
-                total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
-                total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                shipped_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                prepared_by: r.get(10)?, memo: r.get(11)?,
-                lines: Vec::new(),
-            })
-        })?.collect::<Result<Vec<_>, _>>()?
+        stmt.query_map(
+            rusqlite::params![period.ymm(), serde_json::to_value(s)?.as_str().unwrap()],
+            |r| {
+                Ok(SalesOrder {
+                    id: r.get(0)?,
+                    period: Period::from_ymm(r.get(1)?),
+                    no: r.get(2)?,
+                    date: r.get(3)?,
+                    customer_code: r.get(4)?,
+                    customer_name: r.get(5)?,
+                    status: status_from(&r.get::<_, String>(6)?).unwrap_or(SoStatus::Draft),
+                    total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                    total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
+                    shipped_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
+                    prepared_by: r.get(10)?,
+                    memo: r.get(11)?,
+                    lines: Vec::new(),
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?
     } else {
         stmt.query_map([period.ymm()], |r| {
             Ok(SalesOrder {
-                id: r.get(0)?, period: Period::from_ymm(r.get(1)?),
-                no: r.get(2)?, date: r.get(3)?,
-                customer_code: r.get(4)?, customer_name: r.get(5)?,
+                id: r.get(0)?,
+                period: Period::from_ymm(r.get(1)?),
+                no: r.get(2)?,
+                date: r.get(3)?,
+                customer_code: r.get(4)?,
+                customer_name: r.get(5)?,
                 status: status_from(&r.get::<_, String>(6)?).unwrap_or(SoStatus::Draft),
                 total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
                 total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
                 shipped_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                prepared_by: r.get(10)?, memo: r.get(11)?,
+                prepared_by: r.get(10)?,
+                memo: r.get(11)?,
                 lines: Vec::new(),
             })
-        })?.collect::<Result<Vec<_>, _>>()?
+        })?
+        .collect::<Result<Vec<_>, _>>()?
     };
-    
+
     // 一次取回本期间所有发货流水，Rust 侧按订单分组累加。
     //
     // 刻意**不在 SQL 里 SUM 金额/数量列**：全库约定是「金额存 TEXT、不在 SQL 里
@@ -965,19 +1099,25 @@ pub fn so_list(db: &Db, period: Period, status: Option<SoStatus>) -> DbResult<Ve
         let mut stmt = db.conn().prepare(
             "SELECT id, item_code, item_name, qty_ordered, qty_shipped,
              unit_price, tax_rate, amount, tax_amount, memo
-             FROM so_line WHERE so_id=? ORDER BY id"
+             FROM so_line WHERE so_id=? ORDER BY id",
         )?;
-        let lines = stmt.query_map([so.id], |r| Ok(SoLine {
-            id: r.get(0)?, so_id: so.id,
-            item_code: r.get(1)?, item_name: r.get(2)?,
-            qty_ordered: Money::parse_or_zero(&r.get::<_, String>(3)?),
-            qty_shipped: Money::parse_or_zero(&r.get::<_, String>(4)?),
-            unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
-            tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
-            amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
-            tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
-            memo: r.get(9)?,
-        }))?.collect::<Result<Vec<_>, _>>()?;
+        let lines = stmt
+            .query_map([so.id], |r| {
+                Ok(SoLine {
+                    id: r.get(0)?,
+                    so_id: so.id,
+                    item_code: r.get(1)?,
+                    item_name: r.get(2)?,
+                    qty_ordered: Money::parse_or_zero(&r.get::<_, String>(3)?),
+                    qty_shipped: Money::parse_or_zero(&r.get::<_, String>(4)?),
+                    unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
+                    tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
+                    amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                    tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
+                    memo: r.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         so.lines = lines;
         // 执行进度（已发数量/金额）从 so_shipment 实时汇总，不读冗余列。
         //
@@ -997,14 +1137,13 @@ pub fn so_list(db: &Db, period: Period, status: Option<SoStatus>) -> DbResult<Ve
 }
 
 /// 某期间各销售订单的累计已发数量（Rust 侧累加，不在 SQL 里 SUM）
-fn so_shipment_qty_map(
-    db: &Db,
-    period: Period,
-) -> DbResult<std::collections::HashMap<i64, Money>> {
+fn so_shipment_qty_map(db: &Db, period: Period) -> DbResult<std::collections::HashMap<i64, Money>> {
     let mut st = db
         .conn()
         .prepare("SELECT so_id, qty FROM so_shipment WHERE period=?1")?;
-    let rows = st.query_map([period.ymm()], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let rows = st.query_map([period.ymm()], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })?;
     let mut map: std::collections::HashMap<i64, Money> = std::collections::HashMap::new();
     for r in rows {
         let (so_id, qty) = r?;
@@ -1050,7 +1189,9 @@ pub fn so_shipment_progress(db: &Db, so: &SalesOrder) -> DbResult<(Money, Money)
     }
     let gross = so.total_amount + so.total_tax;
     // 不用除法直接乘：先算比例再乘，避免整数除法把金额抹成 0
-    let amount = (gross * shipped_qty).checked_div(ordered).unwrap_or(Money::ZERO);
+    let amount = (gross * shipped_qty)
+        .checked_div(ordered)
+        .unwrap_or(Money::ZERO);
     Ok((shipped_qty, amount.round2()))
 }
 
@@ -1176,7 +1317,7 @@ pub fn so_set_status(db: &Db, id: i64, to: SoStatus) -> DbResult<()> {
     }
     let n = db.conn().execute(
         "UPDATE sales_order SET status=?2 WHERE id=?1 AND status=?3",
-        rusqlite::params![id, serde_json::to_value(&to)?.as_str().unwrap(), from],
+        rusqlite::params![id, serde_json::to_value(to)?.as_str().unwrap(), from],
     )?;
     if n == 0 {
         return Err(FinError::state("销售订单状态已被他人变更，请刷新后重试").into());
@@ -1189,7 +1330,10 @@ pub fn so_progress_update(db: &Db, id: i64) -> DbResult<()> {
     let Some(so) = so_get(db, id)? else {
         return Ok(());
     };
-    if !matches!(so.status, SoStatus::Confirmed | SoStatus::PartialShip | SoStatus::Completed) {
+    if !matches!(
+        so.status,
+        SoStatus::Confirmed | SoStatus::PartialShip | SoStatus::Completed
+    ) {
         return Ok(());
     }
     let total_qty: Money = so.lines.iter().map(|l| l.qty_ordered).sum();
@@ -1230,18 +1374,22 @@ pub fn bom_list(db: &Db, parent_code: &str) -> DbResult<Vec<BomItem>> {
 pub fn bom_list_version(db: &Db, parent_code: &str, version: &str) -> DbResult<Vec<BomItem>> {
     let mut stmt = db.conn().prepare(
         "SELECT id, parent_code, child_code, qty, loss_rate, seq
-         FROM bom WHERE parent_code=?1 AND version=?2 ORDER BY seq"
+         FROM bom WHERE parent_code=?1 AND version=?2 ORDER BY seq",
     )?;
-    let rows = stmt.query_map(rusqlite::params![parent_code, version], |r| Ok(BomItem {
-        id: r.get(0)?,
-        parent_code: r.get(1)?,
-        child_code: r.get(2)?,
-        qty: Money::parse_or_zero(&r.get::<_, String>(3)?),
-        loss_rate: Money::parse_or_zero(&r.get::<_, String>(4)?),
-        seq: r.get(5)?,
-    }))?;
+    let rows = stmt.query_map(rusqlite::params![parent_code, version], |r| {
+        Ok(BomItem {
+            id: r.get(0)?,
+            parent_code: r.get(1)?,
+            child_code: r.get(2)?,
+            qty: Money::parse_or_zero(&r.get::<_, String>(3)?),
+            loss_rate: Money::parse_or_zero(&r.get::<_, String>(4)?),
+            seq: r.get(5)?,
+        })
+    })?;
     let mut items = Vec::new();
-    for item in rows { items.push(item?); }
+    for item in rows {
+        items.push(item?);
+    }
     Ok(items)
 }
 
@@ -1250,29 +1398,59 @@ pub fn bom_save(db: &Db, parent_code: &str, children: &[(String, Money, Money)])
 }
 
 /// 带版本保存 BOM，并记录变更历史
-pub fn bom_save_version(db: &Db, parent_code: &str, version: &str, children: &[(String, Money, Money)], who: &str) -> DbResult<()> {
+pub fn bom_save_version(
+    db: &Db,
+    parent_code: &str,
+    version: &str,
+    children: &[(String, Money, Money)],
+    who: &str,
+) -> DbResult<()> {
     let tx = db.write_tx()?;
-    tx.execute("DELETE FROM bom WHERE parent_code=?1 AND version=?2", rusqlite::params![parent_code, version])?;
+    tx.execute(
+        "DELETE FROM bom WHERE parent_code=?1 AND version=?2",
+        rusqlite::params![parent_code, version],
+    )?;
     for (i, (child_code, qty, loss_rate)) in children.iter().enumerate() {
         tx.execute(
             "INSERT INTO bom(parent_code, child_code, version, qty, loss_rate, seq) VALUES(?1,?2,?3,?4,?5,?6)",
             rusqlite::params![parent_code, child_code, version, crate::exact_param(*qty), crate::exact_param(*loss_rate), i as i32]
         )?;
     }
-    bom_log_tx(&tx, parent_code, "save", &format!("版本 {}，{} 个子件", version, children.len()), who)?;
+    bom_log_tx(
+        &tx,
+        parent_code,
+        "save",
+        &format!("版本 {}，{} 个子件", version, children.len()),
+        who,
+    )?;
     tx.commit()?;
     Ok(())
 }
 
 pub fn bom_delete(db: &Db, parent_code: &str, version: &str, who: &str) -> DbResult<()> {
     let tx = db.write_tx()?;
-    tx.execute("DELETE FROM bom WHERE parent_code=?1 AND version=?2", rusqlite::params![parent_code, version])?;
-    bom_log_tx(&tx, parent_code, "delete", &format!("版本 {}", version), who)?;
+    tx.execute(
+        "DELETE FROM bom WHERE parent_code=?1 AND version=?2",
+        rusqlite::params![parent_code, version],
+    )?;
+    bom_log_tx(
+        &tx,
+        parent_code,
+        "delete",
+        &format!("版本 {}", version),
+        who,
+    )?;
     tx.commit()?;
     Ok(())
 }
 
-fn bom_log_tx(tx: &rusqlite::Transaction, parent_code: &str, action: &str, detail: &str, who: &str) -> DbResult<()> {
+fn bom_log_tx(
+    tx: &rusqlite::Transaction,
+    parent_code: &str,
+    action: &str,
+    detail: &str,
+    who: &str,
+) -> DbResult<()> {
     tx.execute(
         "INSERT INTO bom_change_log(parent_code, action, detail, changed_by, changed_at)
          VALUES(?1,?2,?3,?4,?5)",
@@ -1288,16 +1466,21 @@ fn bom_log_tx(tx: &rusqlite::Transaction, parent_code: &str, action: &str, detai
 }
 
 /// BOM 变更历史
-pub fn bom_change_log(db: &Db, parent_code: &str) -> DbResult<Vec<(String, String, String, String)>> {
+pub fn bom_change_log(
+    db: &Db,
+    parent_code: &str,
+) -> DbResult<Vec<(String, String, String, String)>> {
     let mut stmt = db.conn().prepare(
         "SELECT action, detail, changed_by, changed_at FROM bom_change_log
-         WHERE parent_code=?1 ORDER BY id DESC"
+         WHERE parent_code=?1 ORDER BY id DESC",
     )?;
     let rows = stmt.query_map([parent_code], |r| {
         Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
     })?;
     let mut out = Vec::new();
-    for r in rows { out.push(r?); }
+    for r in rows {
+        out.push(r?);
+    }
     Ok(out)
 }
 
@@ -1318,18 +1501,22 @@ pub struct Substitute {
 pub fn bom_substitutes(db: &Db, parent_code: &str, child_code: &str) -> DbResult<Vec<Substitute>> {
     let mut stmt = db.conn().prepare(
         "SELECT id, parent_code, child_code, substitute, ratio, priority
-         FROM bom_substitute WHERE parent_code=?1 AND child_code=?2 ORDER BY priority"
+         FROM bom_substitute WHERE parent_code=?1 AND child_code=?2 ORDER BY priority",
     )?;
-    let rows = stmt.query_map(rusqlite::params![parent_code, child_code], |r| Ok(Substitute {
-        id: r.get(0)?,
-        parent_code: r.get(1)?,
-        child_code: r.get(2)?,
-        substitute: r.get(3)?,
-        ratio: Money::parse_or_zero(&r.get::<_, String>(4)?),
-        priority: r.get(5)?,
-    }))?;
+    let rows = stmt.query_map(rusqlite::params![parent_code, child_code], |r| {
+        Ok(Substitute {
+            id: r.get(0)?,
+            parent_code: r.get(1)?,
+            child_code: r.get(2)?,
+            substitute: r.get(3)?,
+            ratio: Money::parse_or_zero(&r.get::<_, String>(4)?),
+            priority: r.get(5)?,
+        })
+    })?;
     let mut out = Vec::new();
-    for r in rows { out.push(r?); }
+    for r in rows {
+        out.push(r?);
+    }
     Ok(out)
 }
 
@@ -1340,21 +1527,39 @@ pub fn bom_substitute_save(db: &Db, s: &Substitute, who: &str) -> DbResult<i64> 
          VALUES(?1,?2,?3,?4,?5)
          ON CONFLICT(parent_code, child_code, substitute) DO UPDATE SET
              ratio=excluded.ratio, priority=excluded.priority",
-        rusqlite::params![s.parent_code, s.child_code, s.substitute, crate::exact_param(s.ratio), s.priority],
+        rusqlite::params![
+            s.parent_code,
+            s.child_code,
+            s.substitute,
+            crate::exact_param(s.ratio),
+            s.priority
+        ],
     )?;
     let id: i64 = tx.query_row(
         "SELECT id FROM bom_substitute WHERE parent_code=?1 AND child_code=?2 AND substitute=?3",
         rusqlite::params![s.parent_code, s.child_code, s.substitute],
         |r| r.get(0),
     )?;
-    bom_log_tx(&tx, &s.parent_code, "add_sub", &format!("{}/{} → {}", s.child_code, s.substitute, s.ratio.fmt_qty()), who)?;
+    bom_log_tx(
+        &tx,
+        &s.parent_code,
+        "add_sub",
+        &format!("{}/{} → {}", s.child_code, s.substitute, s.ratio.fmt_qty()),
+        who,
+    )?;
     tx.commit()?;
     Ok(id)
 }
 
 pub fn bom_substitute_delete(db: &Db, id: i64, who: &str) -> DbResult<()> {
-    let parent: Option<String> = db.conn().query_row(
-        "SELECT parent_code FROM bom_substitute WHERE id=?1", [id], |r| r.get(0)).optional()?;
+    let parent: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT parent_code FROM bom_substitute WHERE id=?1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?;
     let tx = db.write_tx()?;
     tx.execute("DELETE FROM bom_substitute WHERE id=?1", [id])?;
     if let Some(p) = parent {
@@ -1389,7 +1594,11 @@ pub fn bom_explode(db: &Db, top_code: &str, top_qty: Money) -> DbResult<Vec<BomN
         if guard > 10_000 {
             return Err(fincore::FinError::msg("BOM 展开超过 10000 节点，疑似循环引用").into());
         }
-        let e = out.entry(code.clone()).or_insert(BomNode { code: code.clone(), level, qty: Money::ZERO });
+        let e = out.entry(code.clone()).or_insert(BomNode {
+            code: code.clone(),
+            level,
+            qty: Money::ZERO,
+        });
         e.qty += qty;
         let children = bom_list(db, &code)?;
         if children.is_empty() {
@@ -1421,17 +1630,23 @@ pub fn bom_cost_rollup(db: &Db, top_code: &str, top_qty: Money) -> DbResult<Mone
 }
 
 fn item_ref_cost(db: &Db, item_code: &str) -> DbResult<Money> {
-    let props: Option<String> = db.conn().query_row(
-        "SELECT props_json FROM aux_entity WHERE kind='item' AND code=?1",
-        [item_code],
-        |r| r.get(0),
-    ).optional()?;
+    let props: Option<String> = db
+        .conn()
+        .query_row(
+            "SELECT props_json FROM aux_entity WHERE kind='item' AND code=?1",
+            [item_code],
+            |r| r.get(0),
+        )
+        .optional()?;
     let Some(props) = props else {
         return Ok(Money::ZERO);
     };
     let map: std::collections::BTreeMap<String, String> =
         serde_json::from_str(&props).unwrap_or_default();
-    Ok(map.get("ref_cost").map(|s| Money::parse_or_zero(s)).unwrap_or(Money::ZERO))
+    Ok(map
+        .get("ref_cost")
+        .map(|s| Money::parse_or_zero(s))
+        .unwrap_or(Money::ZERO))
 }
 
 #[cfg(test)]
@@ -1442,7 +1657,7 @@ mod tests {
     fn m(s: &str) -> Money {
         Money::parse(s).unwrap()
     }
-    
+
     /// 采购订单的执行进度（已收数量/金额）必须从 po_receipt 汇总，不能读冗余列
     ///
     /// 回归背景：`purchase_order.received_amount` / `po_line.qty_received` 建表后
@@ -1455,14 +1670,25 @@ mod tests {
     fn po_list_progress_comes_from_receipts() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut po = PurchaseOrder::new(p, NaiveDate::from_ymd(2026, 1, 5), "S001", "供应商A", "u1");
+        let mut po = PurchaseOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S001",
+            "供应商A",
+            "u1",
+        );
         po.no = po_next_no(&db, p).unwrap();
         po.lines.push(PoLine {
-            id: 0, po_id: 0,
-            item_code: "140301".to_string(), item_name: "原材料A".to_string(),
-            qty_ordered: m("100"), qty_received: Money::ZERO,
-            unit_price: m("10"), tax_rate: m("0.13"),
-            amount: m("1000"), tax_amount: m("130"),
+            id: 0,
+            po_id: 0,
+            item_code: "140301".to_string(),
+            item_name: "原材料A".to_string(),
+            qty_ordered: m("100"),
+            qty_received: Money::ZERO,
+            unit_price: m("10"),
+            tax_rate: m("0.13"),
+            amount: m("1000"),
+            tax_amount: m("130"),
             memo: String::new(),
         });
         let id = po_save(&db, &mut po).unwrap();
@@ -1470,7 +1696,11 @@ mod tests {
 
         // 未到货：进度必须是 0（不是「未初始化」）
         let got = po_list(&db, p, None).unwrap();
-        assert_eq!(got[0].received_amount, Money::ZERO, "没到货时不该有已收金额");
+        assert_eq!(
+            got[0].received_amount,
+            Money::ZERO,
+            "没到货时不该有已收金额"
+        );
         assert_eq!(got[0].lines[0].qty_received, Money::ZERO);
 
         // 到货 40 件 → 已收 40，已收金额 = 1130 × 40% = 452
@@ -1482,13 +1712,21 @@ mod tests {
             .unwrap();
         crate::procurement::refresh_po_status(&db, id).unwrap();
         let got = po_list(&db, p, None).unwrap();
-        assert_eq!(got[0].lines[0].qty_received, m("40"), "行级已收数量应汇总到 40");
+        assert_eq!(
+            got[0].lines[0].qty_received,
+            m("40"),
+            "行级已收数量应汇总到 40"
+        );
         assert_eq!(
             got[0].received_amount,
             m("452"),
             "已收金额 = 价税合计 1130 × 40% = 452"
         );
-        assert_eq!(got[0].status, PoStatus::PartialIn, "部分到货应是「部分入库」");
+        assert_eq!(
+            got[0].status,
+            PoStatus::PartialIn,
+            "部分到货应是「部分入库」"
+        );
 
         // 再到 60 → 累计 100 = 全量
         db.conn()
@@ -1500,7 +1738,11 @@ mod tests {
         crate::procurement::refresh_po_status(&db, id).unwrap();
         let got = po_list(&db, p, None).unwrap();
         assert_eq!(got[0].lines[0].qty_received, m("100"));
-        assert_eq!(got[0].received_amount, m("1130"), "全量到货金额 = 订单价税合计");
+        assert_eq!(
+            got[0].received_amount,
+            m("1130"),
+            "全量到货金额 = 订单价税合计"
+        );
         assert_eq!(got[0].status, PoStatus::Completed);
     }
 
@@ -1513,14 +1755,25 @@ mod tests {
     fn po_over_receipt_is_reflected_not_truncated() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut po = PurchaseOrder::new(p, NaiveDate::from_ymd(2026, 1, 5), "S001", "供应商A", "u1");
+        let mut po = PurchaseOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S001",
+            "供应商A",
+            "u1",
+        );
         po.no = po_next_no(&db, p).unwrap();
         po.lines.push(PoLine {
-            id: 0, po_id: 0,
-            item_code: "140301".to_string(), item_name: "原材料A".to_string(),
-            qty_ordered: m("100"), qty_received: Money::ZERO,
-            unit_price: m("10"), tax_rate: m("0.13"),
-            amount: m("1000"), tax_amount: m("130"),
+            id: 0,
+            po_id: 0,
+            item_code: "140301".to_string(),
+            item_name: "原材料A".to_string(),
+            qty_ordered: m("100"),
+            qty_received: Money::ZERO,
+            unit_price: m("10"),
+            tax_rate: m("0.13"),
+            amount: m("1000"),
+            tax_amount: m("130"),
             memo: String::new(),
         });
         let id = po_save(&db, &mut po).unwrap();
@@ -1548,7 +1801,7 @@ mod tests {
     fn atp_is_onhand_plus_incoming_minus_committed() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let d = NaiveDate::from_ymd(2026, 1, 5);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
 
         // 现有库存 20
         for _ in 0..2 {
@@ -1556,11 +1809,18 @@ mod tests {
             crate::business::stock_insert(
                 &db,
                 &crate::business::StockMove {
-                    id: 0, period: p, biz_date: d,
+                    id: 0,
+                    period: p,
+                    biz_date: d,
                     kind: crate::business::StockKind::Purchase,
-                    item: "A".into(), warehouse: String::new(), batch_no: String::new(),
-                    qty: q, price: m("1"), amount: m("10"),
-                    voucher_id: None, memo: String::new(),
+                    item: "A".into(),
+                    warehouse: String::new(),
+                    batch_no: String::new(),
+                    qty: q,
+                    price: m("1"),
+                    amount: m("10"),
+                    voucher_id: None,
+                    memo: String::new(),
                 },
             )
             .unwrap();
@@ -1587,21 +1847,31 @@ mod tests {
     fn atp_excludes_qc_pending_stock() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let d = NaiveDate::from_ymd(2026, 1, 5);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         let id = crate::business::stock_insert(
             &db,
             &crate::business::StockMove {
-                id: 0, period: p, biz_date: d,
+                id: 0,
+                period: p,
+                biz_date: d,
                 kind: crate::business::StockKind::Purchase,
-                item: "A".into(), warehouse: String::new(), batch_no: String::new(),
-                qty: m("50"), price: m("1"), amount: m("50"),
-                voucher_id: None, memo: String::new(),
+                item: "A".into(),
+                warehouse: String::new(),
+                batch_no: String::new(),
+                qty: m("50"),
+                price: m("1"),
+                amount: m("50"),
+                voucher_id: None,
+                memo: String::new(),
             },
         )
         .unwrap();
         assert_eq!(atp(&db, "A").unwrap().on_hand, m("50"));
         db.conn()
-            .execute("UPDATE stock_move SET qc_status='pending' WHERE id=?1", [id])
+            .execute(
+                "UPDATE stock_move SET qc_status='pending' WHERE id=?1",
+                [id],
+            )
             .unwrap();
         let a = atp(&db, "A").unwrap();
         assert_eq!(a.on_hand, Money::ZERO, "待检不可领用，不能算进可承诺量");
@@ -1613,7 +1883,7 @@ mod tests {
     fn atp_excludes_terminal_states() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let d = NaiveDate::from_ymd(2026, 1, 5);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         mk_prod(&db, p, d, "20", ProdStatus::Completed);
         mk_prod(&db, p, d, "30", ProdStatus::Cancelled);
         // Completed 的订单必须已发完（否则夹具本身不真实：状态说发完了、
@@ -1633,7 +1903,7 @@ mod tests {
     fn prod_push_from_sales_order_is_capped_and_linked() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let d = NaiveDate::from_ymd(2026, 1, 5);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         let so_id = mk_so(&db, p, d, "Confirmed", "100", "A");
 
         // 第一次下推 → 全量 100
@@ -1676,7 +1946,7 @@ mod tests {
     fn prod_push_rejects_draft_and_cancelled_sales_order() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let d = NaiveDate::from_ymd(2026, 1, 5);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         for st in ["Draft", "Cancelled"] {
             let id = mk_so(&db, p, d, st, "10", "A");
             assert!(
@@ -1697,7 +1967,7 @@ mod tests {
     fn atp_separates_dated_and_undated_incoming() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let d = NaiveDate::from_ymd(2026, 1, 5);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         // 300 已排期（1 月 20 日完工），200 没排期
         let a1 = mk_prod(&db, p, d, "300", ProdStatus::InProgress);
         let _a2 = mk_prod(&db, p, d, "200", ProdStatus::InProgress);
@@ -1720,15 +1990,23 @@ mod tests {
     fn atp_until_only_counts_incoming_scheduled_by_that_date() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let d = NaiveDate::from_ymd(2026, 1, 5);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         // 现货 100
         crate::business::stock_insert(
             &db,
             &crate::business::StockMove {
-                id: 0, period: p, biz_date: d, kind: crate::business::StockKind::Purchase,
-                item: "A".into(), warehouse: String::new(), batch_no: String::new(),
-                qty: m("100"), price: m("1"), amount: m("100"),
-                voucher_id: None, memo: String::new(),
+                id: 0,
+                period: p,
+                biz_date: d,
+                kind: crate::business::StockKind::Purchase,
+                item: "A".into(),
+                warehouse: String::new(),
+                batch_no: String::new(),
+                qty: m("100"),
+                price: m("1"),
+                amount: m("100"),
+                voucher_id: None,
+                memo: String::new(),
             },
         )
         .unwrap();
@@ -1743,12 +2021,12 @@ mod tests {
             .unwrap();
 
         // 1/15 之前：只有现货（1/20 完工的那 300 还不算数）
-        let early = atp_until(&db, "A", NaiveDate::from_ymd(2026, 1, 15)).unwrap();
+        let early = atp_until(&db, "A", NaiveDate::from_ymd_opt(2026, 1, 15).unwrap()).unwrap();
         assert_eq!(early.incoming, Money::ZERO, "1/20 完工的量在 1/15 不可承诺");
         assert_eq!(early.atp, m("100"), "1/15 只能承诺现货 100");
 
         // 1/20 当天：300 算进来；没排期的 200 仍然不算
-        let later = atp_until(&db, "A", NaiveDate::from_ymd(2026, 1, 20)).unwrap();
+        let later = atp_until(&db, "A", NaiveDate::from_ymd_opt(2026, 1, 20).unwrap()).unwrap();
         assert_eq!(later.incoming, m("300"), "1/20 完工的量在 1/20 可承诺");
         assert_eq!(
             later.atp,
@@ -1756,7 +2034,11 @@ mod tests {
             "现货 100 + 有日期的在途 300；未排期的 200 不给日期就不承诺"
         );
         // 原始口径仍然保留在字段里，界面要能同时说「总量」和「有保证的量」
-        assert_eq!(later.incoming_undated, m("200"), "未排期部分不能被这个口径吞掉");
+        assert_eq!(
+            later.incoming_undated,
+            m("200"),
+            "未排期部分不能被这个口径吞掉"
+        );
     }
 
     /// 排期校验：格式不对、完工早于开工都必须被拒
@@ -1768,7 +2050,7 @@ mod tests {
     fn prod_schedule_rejects_bad_dates() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let d = NaiveDate::from_ymd(2026, 1, 5);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         let id = mk_prod(&db, p, d, "10", ProdStatus::Released);
 
         // 完工早于开工
@@ -1799,16 +2081,14 @@ mod tests {
                 .unwrap()
         };
         let before = read(ok_id);
-        assert!(
-            prod_schedule(
-                &db,
-                &[
-                    (ok_id, "2026-01-10".to_string(), "2026-01-20".to_string()),
-                    (id, "2026-01-25".to_string(), "2026-01-20".to_string()),
-                ]
-            )
-            .is_err()
-        );
+        assert!(prod_schedule(
+            &db,
+            &[
+                (ok_id, "2026-01-10".to_string(), "2026-01-20".to_string()),
+                (id, "2026-01-25".to_string(), "2026-01-20".to_string()),
+            ]
+        )
+        .is_err());
         assert_eq!(before, read(ok_id), "整批失败时不该有半批落库");
 
         // 合法排期能写进去
@@ -1830,7 +2110,7 @@ mod tests {
     fn atp_reflects_newly_pushed_production() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let d = NaiveDate::from_ymd(2026, 1, 5);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         let so_id = mk_so(&db, p, d, "Confirmed", "60", "A");
 
         // 下推之前：无现货、无在途，而订单已占用 60 → ATP 为负（承诺不了）
@@ -1838,7 +2118,11 @@ mod tests {
         assert_eq!(before.on_hand, Money::ZERO);
         assert_eq!(before.incoming, Money::ZERO);
         assert_eq!(before.committed, m("60"));
-        assert_eq!(before.atp, m("-60"), "没有现货也没有在途时不该承诺得了 60 件");
+        assert_eq!(
+            before.atp,
+            m("-60"),
+            "没有现货也没有在途时不该承诺得了 60 件"
+        );
 
         // 下推 60 件生产
         prod_from_so(&db, so_id, p, d, None, "u1").unwrap();
@@ -1934,14 +2218,25 @@ mod tests {
     fn po_crud() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut po = PurchaseOrder::new(p, NaiveDate::from_ymd(2026, 1, 5), "S001", "供应商A", "u1");
+        let mut po = PurchaseOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S001",
+            "供应商A",
+            "u1",
+        );
         po.no = po_next_no(&db, p).unwrap();
         po.lines.push(PoLine {
-            id: 0, po_id: 0,
-            item_code: "140301".to_string(), item_name: "原材料A".to_string(),
-            qty_ordered: Money::parse("100").unwrap(), qty_received: Money::ZERO,
-            unit_price: Money::parse("10").unwrap(), tax_rate: Money::parse("0.13").unwrap(),
-            amount: Money::parse("1000").unwrap(), tax_amount: Money::parse("130").unwrap(),
+            id: 0,
+            po_id: 0,
+            item_code: "140301".to_string(),
+            item_name: "原材料A".to_string(),
+            qty_ordered: Money::parse("100").unwrap(),
+            qty_received: Money::ZERO,
+            unit_price: Money::parse("10").unwrap(),
+            tax_rate: Money::parse("0.13").unwrap(),
+            amount: Money::parse("1000").unwrap(),
+            tax_amount: Money::parse("130").unwrap(),
             memo: String::new(),
         });
         let id = po_save(&db, &mut po).unwrap();
@@ -1951,19 +2246,30 @@ mod tests {
         po_delete(&db, id).unwrap();
         assert_eq!(po_list(&db, p, None).unwrap().len(), 0);
     }
-    
+
     #[test]
     fn so_crud() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut so = SalesOrder::new(p, NaiveDate::from_ymd(2026, 1, 10), "C001", "客户B", "u1");
+        let mut so = SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            "C001",
+            "客户B",
+            "u1",
+        );
         so.no = so_next_no(&db, p).unwrap();
         so.lines.push(SoLine {
-            id: 0, so_id: 0,
-            item_code: "140301".to_string(), item_name: "原材料A".to_string(),
-            qty_ordered: Money::parse("50").unwrap(), qty_shipped: Money::ZERO,
-            unit_price: Money::parse("12").unwrap(), tax_rate: Money::parse("0.13").unwrap(),
-            amount: Money::parse("600").unwrap(), tax_amount: Money::parse("78").unwrap(),
+            id: 0,
+            so_id: 0,
+            item_code: "140301".to_string(),
+            item_name: "原材料A".to_string(),
+            qty_ordered: Money::parse("50").unwrap(),
+            qty_shipped: Money::ZERO,
+            unit_price: Money::parse("12").unwrap(),
+            tax_rate: Money::parse("0.13").unwrap(),
+            amount: Money::parse("600").unwrap(),
+            tax_amount: Money::parse("78").unwrap(),
             memo: String::new(),
         });
         let id = so_save(&db, &mut so).unwrap();
@@ -1978,14 +2284,25 @@ mod tests {
     fn so_set_status_keeps_concurrent_line_progress() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut so = SalesOrder::new(p, NaiveDate::from_ymd(2026, 1, 10), "C001", "客户B", "u1");
+        let mut so = SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            "C001",
+            "客户B",
+            "u1",
+        );
         so.no = so_next_no(&db, p).unwrap();
         so.lines.push(SoLine {
-            id: 0, so_id: 0,
-            item_code: "140301".to_string(), item_name: "原材料A".to_string(),
-            qty_ordered: m("50"), qty_shipped: Money::ZERO,
-            unit_price: m("12"), tax_rate: m("0.13"),
-            amount: m("600"), tax_amount: m("78"),
+            id: 0,
+            so_id: 0,
+            item_code: "140301".to_string(),
+            item_name: "原材料A".to_string(),
+            qty_ordered: m("50"),
+            qty_shipped: Money::ZERO,
+            unit_price: m("12"),
+            tax_rate: m("0.13"),
+            amount: m("600"),
+            tax_amount: m("78"),
             memo: String::new(),
         });
         let id = so_save(&db, &mut so).unwrap();
@@ -2013,14 +2330,25 @@ mod tests {
     fn so_set_status_rejects_illegal_transitions() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut so = SalesOrder::new(p, NaiveDate::from_ymd(2026, 1, 10), "C001", "客户B", "u1");
+        let mut so = SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            "C001",
+            "客户B",
+            "u1",
+        );
         so.no = so_next_no(&db, p).unwrap();
         so.lines.push(SoLine {
-            id: 0, so_id: 0,
-            item_code: "140301".to_string(), item_name: "原材料A".to_string(),
-            qty_ordered: m("50"), qty_shipped: Money::ZERO,
-            unit_price: m("12"), tax_rate: m("0.13"),
-            amount: m("600"), tax_amount: m("78"),
+            id: 0,
+            so_id: 0,
+            item_code: "140301".to_string(),
+            item_name: "原材料A".to_string(),
+            qty_ordered: m("50"),
+            qty_shipped: Money::ZERO,
+            unit_price: m("12"),
+            tax_rate: m("0.13"),
+            amount: m("600"),
+            tax_amount: m("78"),
             memo: String::new(),
         });
         let id = so_save(&db, &mut so).unwrap();
@@ -2030,7 +2358,10 @@ mod tests {
         so_set_status(&db, id, SoStatus::Cancelled).unwrap();
         assert!(so_set_status(&db, id, SoStatus::Confirmed).is_err());
         assert!(so_set_status(&db, id, SoStatus::Draft).is_err());
-        assert_eq!(so_get(&db, id).unwrap().unwrap().status, SoStatus::Cancelled);
+        assert_eq!(
+            so_get(&db, id).unwrap().unwrap().status,
+            SoStatus::Cancelled
+        );
         // 订单不存在要报错
         assert!(so_set_status(&db, 999_999, SoStatus::Confirmed).is_err());
     }
@@ -2041,14 +2372,25 @@ mod tests {
     fn so_progress_update_never_resurrects_draft_or_cancelled() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut so = SalesOrder::new(p, NaiveDate::from_ymd(2026, 1, 10), "C001", "客户B", "u1");
+        let mut so = SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            "C001",
+            "客户B",
+            "u1",
+        );
         so.no = so_next_no(&db, p).unwrap();
         so.lines.push(SoLine {
-            id: 0, so_id: 0,
-            item_code: "140301".to_string(), item_name: "原材料A".to_string(),
-            qty_ordered: m("50"), qty_shipped: Money::ZERO,
-            unit_price: m("12"), tax_rate: m("0.13"),
-            amount: m("600"), tax_amount: m("78"),
+            id: 0,
+            so_id: 0,
+            item_code: "140301".to_string(),
+            item_name: "原材料A".to_string(),
+            qty_ordered: m("50"),
+            qty_shipped: Money::ZERO,
+            unit_price: m("12"),
+            tax_rate: m("0.13"),
+            amount: m("600"),
+            tax_amount: m("78"),
             memo: String::new(),
         });
         let id = so_save(&db, &mut so).unwrap();
@@ -2066,7 +2408,10 @@ mod tests {
         // 确认 → 部分发货
         so_set_status(&db, id, SoStatus::Confirmed).unwrap();
         so_progress_update(&db, id).unwrap();
-        assert_eq!(so_get(&db, id).unwrap().unwrap().status, SoStatus::PartialShip);
+        assert_eq!(
+            so_get(&db, id).unwrap().unwrap().status,
+            SoStatus::PartialShip
+        );
         // 作废 → 进度同步不得复活
         so_set_status(&db, id, SoStatus::Cancelled).unwrap();
         so_progress_update(&db, id).unwrap();
@@ -2082,14 +2427,25 @@ mod tests {
     fn po_set_status_is_guarded_and_keeps_lines() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut po = PurchaseOrder::new(p, NaiveDate::from_ymd(2026, 1, 5), "S001", "供应商A", "u1");
+        let mut po = PurchaseOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S001",
+            "供应商A",
+            "u1",
+        );
         po.no = po_next_no(&db, p).unwrap();
         po.lines.push(PoLine {
-            id: 0, po_id: 0,
-            item_code: "140301".to_string(), item_name: "原材料A".to_string(),
-            qty_ordered: m("100"), qty_received: Money::ZERO,
-            unit_price: m("10"), tax_rate: m("0.13"),
-            amount: m("1000"), tax_amount: m("130"),
+            id: 0,
+            po_id: 0,
+            item_code: "140301".to_string(),
+            item_name: "原材料A".to_string(),
+            qty_ordered: m("100"),
+            qty_received: Money::ZERO,
+            unit_price: m("10"),
+            tax_rate: m("0.13"),
+            amount: m("1000"),
+            tax_amount: m("130"),
             memo: String::new(),
         });
         let id = po_save(&db, &mut po).unwrap();
@@ -2103,19 +2459,36 @@ mod tests {
         po_set_status(&db, id, PoStatus::Cancelled).unwrap();
         let got = po_get(&db, id).unwrap().unwrap();
         assert_eq!(got.status, PoStatus::Cancelled);
-        assert_eq!(got.lines[0].qty_received, m("40"), "状态流转不得回滚并发入库量");
+        assert_eq!(
+            got.lines[0].qty_received,
+            m("40"),
+            "状态流转不得回滚并发入库量"
+        );
         // 终态不可复活；不存在的单据要报错
         assert!(po_set_status(&db, id, PoStatus::Draft).is_err());
         assert!(po_set_status(&db, 999_999, PoStatus::Confirmed).is_err());
     }
-    
+
     #[test]
     fn bom_crud() {
         let db = mem();
-        bom_save(&db, "1001", &[
-            ("140301".to_string(), Money::parse("2").unwrap(), Money::parse("0.02").unwrap()),
-            ("140302".to_string(), Money::parse("1").unwrap(), Money::ZERO),
-        ]).unwrap();
+        bom_save(
+            &db,
+            "1001",
+            &[
+                (
+                    "140301".to_string(),
+                    Money::parse("2").unwrap(),
+                    Money::parse("0.02").unwrap(),
+                ),
+                (
+                    "140302".to_string(),
+                    Money::parse("1").unwrap(),
+                    Money::ZERO,
+                ),
+            ],
+        )
+        .unwrap();
         let items = bom_list(&db, "1001").unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].child_code, "140301");
@@ -2124,12 +2497,22 @@ mod tests {
     #[test]
     fn bom_version_and_log() {
         let db = mem();
-        bom_save_version(&db, "1001", "v1", &[
-            ("140301".to_string(), m("2"), m("0")),
-        ], "u").unwrap();
-        bom_save_version(&db, "1001", "v2", &[
-            ("140301".to_string(), m("3"), m("0")),
-        ], "u").unwrap();
+        bom_save_version(
+            &db,
+            "1001",
+            "v1",
+            &[("140301".to_string(), m("2"), m("0"))],
+            "u",
+        )
+        .unwrap();
+        bom_save_version(
+            &db,
+            "1001",
+            "v2",
+            &[("140301".to_string(), m("3"), m("0"))],
+            "u",
+        )
+        .unwrap();
         // 版本隔离
         assert_eq!(bom_list_version(&db, "1001", "v1").unwrap()[0].qty, m("2"));
         assert_eq!(bom_list_version(&db, "1001", "v2").unwrap()[0].qty, m("3"));
@@ -2157,10 +2540,19 @@ mod tests {
     #[test]
     fn bom_substitute_crud() {
         let db = mem();
-        bom_substitute_save(&db, &Substitute {
-            id: 0, parent_code: "FG".into(), child_code: "RM".into(),
-            substitute: "ALT".into(), ratio: m("1.2"), priority: 0,
-        }, "u").unwrap();
+        bom_substitute_save(
+            &db,
+            &Substitute {
+                id: 0,
+                parent_code: "FG".into(),
+                child_code: "RM".into(),
+                substitute: "ALT".into(),
+                ratio: m("1.2"),
+                priority: 0,
+            },
+            "u",
+        )
+        .unwrap();
         let subs = bom_substitutes(&db, "FG", "RM").unwrap();
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].ratio, m("1.2"));
@@ -2177,12 +2569,18 @@ mod tests {
 pub fn prod_next_no(db: &Db, period: Period) -> DbResult<String> {
     let year = period.year();
     let month = period.month();
-    let prefix = format!("{}{:04}{:02}", crate::doc_prefix(db, "prod", "SC"), year, month);
+    let prefix = format!(
+        "{}{:04}{:02}",
+        crate::doc_prefix(db, "prod", "SC"),
+        year,
+        month
+    );
     let sql = format!(
         "SELECT COALESCE(MAX(CAST(SUBSTR(no, {}) AS INTEGER)), 0) + 1 FROM production_order WHERE no LIKE ?",
         prefix.len() + 1
     );
-    let n: i64 = db.conn()
+    let n: i64 = db
+        .conn()
         .query_row(&sql, [format!("{}%", prefix)], |r| r.get(0))
         .unwrap_or(0);
     Ok(format!("{}{:04}", prefix, n))
@@ -2191,7 +2589,7 @@ pub fn prod_next_no(db: &Db, period: Period) -> DbResult<String> {
 pub fn prod_save(db: &Db, order: &mut ProductionOrder) -> DbResult<i64> {
     let tx = db.write_tx()?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    
+
     let id = if order.id > 0 {
         tx.execute(
             "UPDATE production_order SET period=?, date=?, item_code=?, item_name=?,
@@ -2216,12 +2614,23 @@ pub fn prod_save(db: &Db, order: &mut ProductionOrder) -> DbResult<i64> {
              order_kind, supplier_code, supplier_name, plan_start, plan_end, created_at, updated_at)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?18)",
             rusqlite::params![
-                order.period.ymm(), order.no, order.date, order.item_code, order.item_name,
-                crate::exact_param(order.planned_qty), crate::exact_param(order.completed_qty),
+                order.period.ymm(),
+                order.no,
+                order.date,
+                order.item_code,
+                order.item_name,
+                crate::exact_param(order.planned_qty),
+                crate::exact_param(order.completed_qty),
                 order.status.code(),
-                order.work_center, order.so_id, order.prepared_by, order.memo,
-                order.order_kind, order.supplier_code, order.supplier_name,
-                order.plan_start, order.plan_end,
+                order.work_center,
+                order.so_id,
+                order.prepared_by,
+                order.memo,
+                order.order_kind,
+                order.supplier_code,
+                order.supplier_name,
+                order.plan_start,
+                order.plan_end,
                 now
             ],
         )?;
@@ -2287,50 +2696,72 @@ pub fn prod_get(db: &Db, id: i64) -> DbResult<Option<ProductionOrder>> {
     }))
 }
 
-pub fn prod_list(db: &Db, period: Period, status: Option<ProdStatus>) -> DbResult<Vec<ProductionOrder>> {
+pub fn prod_list(
+    db: &Db,
+    period: Period,
+    status: Option<ProdStatus>,
+) -> DbResult<Vec<ProductionOrder>> {
     let sql = if let Some(_s) = status {
-        format!(
-            "SELECT id, no, period, date, item_code, item_name, planned_qty, completed_qty,
+        "SELECT id, no, period, date, item_code, item_name, planned_qty, completed_qty,
              status, work_center, so_id, prepared_by, memo, order_kind, supplier_code, supplier_name,
              plan_start, plan_end
-             FROM production_order WHERE period=? AND status=? ORDER BY date DESC, id DESC"
-        )
+             FROM production_order WHERE period=? AND status=? ORDER BY date DESC, id DESC".to_string()
     } else {
-        format!(
-            "SELECT id, no, period, date, item_code, item_name, planned_qty, completed_qty,
+        "SELECT id, no, period, date, item_code, item_name, planned_qty, completed_qty,
              status, work_center, so_id, prepared_by, memo, order_kind, supplier_code, supplier_name,
              plan_start, plan_end
-             FROM production_order WHERE period=? ORDER BY date DESC, id DESC"
-        )
+             FROM production_order WHERE period=? ORDER BY date DESC, id DESC".to_string()
     };
-    
+
     let mut stmt = db.conn().prepare(&sql)?;
     let rows = if let Some(s) = status {
         stmt.query_map(rusqlite::params![period.ymm(), s.code()], |r| {
             Ok(ProductionOrder {
-                id: r.get(0)?, no: r.get(1)?, period: Period::from_ymm(r.get(2)?),
-                date: r.get(3)?, item_code: r.get(4)?, item_name: r.get(5)?,
+                id: r.get(0)?,
+                no: r.get(1)?,
+                period: Period::from_ymm(r.get(2)?),
+                date: r.get(3)?,
+                item_code: r.get(4)?,
+                item_name: r.get(5)?,
                 planned_qty: Money::parse_or_zero(&r.get::<_, String>(6)?),
                 completed_qty: Money::parse_or_zero(&r.get::<_, String>(7)?),
                 status: prod_status_from(&r.get::<_, String>(8)?),
-                work_center: r.get(9)?, so_id: r.get(10)?, prepared_by: r.get(11)?, memo: r.get(12)?,
-                order_kind: r.get(13)?, supplier_code: r.get(14)?, supplier_name: r.get(15)?,
-                plan_start: r.get(16)?, plan_end: r.get(17)?,
+                work_center: r.get(9)?,
+                so_id: r.get(10)?,
+                prepared_by: r.get(11)?,
+                memo: r.get(12)?,
+                order_kind: r.get(13)?,
+                supplier_code: r.get(14)?,
+                supplier_name: r.get(15)?,
+                plan_start: r.get(16)?,
+                plan_end: r.get(17)?,
             })
-        })?.collect::<Result<Vec<_>, _>>()?
+        })?
+        .collect::<Result<Vec<_>, _>>()?
     } else {
         stmt.query_map([period.ymm()], |r| {
             Ok(ProductionOrder {
-                id: r.get(0)?, no: r.get(1)?, period: Period::from_ymm(r.get(2)?),
-                date: r.get(3)?, item_code: r.get(4)?, item_name: r.get(5)?,
+                id: r.get(0)?,
+                no: r.get(1)?,
+                period: Period::from_ymm(r.get(2)?),
+                date: r.get(3)?,
+                item_code: r.get(4)?,
+                item_name: r.get(5)?,
                 planned_qty: Money::parse_or_zero(&r.get::<_, String>(6)?),
                 completed_qty: Money::parse_or_zero(&r.get::<_, String>(7)?),
                 status: prod_status_from(&r.get::<_, String>(8)?),
-                work_center: r.get(9)?, so_id: r.get(10)?, prepared_by: r.get(11)?, memo: r.get(12)?,
-                order_kind: r.get(13)?, supplier_code: r.get(14)?, supplier_name: r.get(15)?,
-                plan_start: r.get(16)?, plan_end: r.get(17)?,
+                work_center: r.get(9)?,
+                so_id: r.get(10)?,
+                prepared_by: r.get(11)?,
+                memo: r.get(12)?,
+                order_kind: r.get(13)?,
+                supplier_code: r.get(14)?,
+                supplier_name: r.get(15)?,
+                plan_start: r.get(16)?,
+                plan_end: r.get(17)?,
             })
-        })?.collect::<Result<Vec<_>, _>>()?
+        })?
+        .collect::<Result<Vec<_>, _>>()?
     };
     Ok(rows)
 }
@@ -2344,10 +2775,16 @@ pub fn prod_schedule(db: &Db, items: &[(i64, String, String)]) -> DbResult<usize
     // 整批校验（而不是逐行跳过）：批量排期本来就是一次操作，
     // 静默跳过一半比整体失败更难排查。
     for (id, start, end) in items {
-        let s = NaiveDate::parse_from_str(start.trim(), "%Y-%m-%d")
-            .map_err(|_| fincore::FinError::state(format!("生产订单 {id}：开工日格式应为 YYYY-MM-DD，收到「{start}」")))?;
-        let e = NaiveDate::parse_from_str(end.trim(), "%Y-%m-%d")
-            .map_err(|_| fincore::FinError::state(format!("生产订单 {id}：完工日格式应为 YYYY-MM-DD，收到「{end}」")))?;
+        let s = NaiveDate::parse_from_str(start.trim(), "%Y-%m-%d").map_err(|_| {
+            fincore::FinError::state(format!(
+                "生产订单 {id}：开工日格式应为 YYYY-MM-DD，收到「{start}」"
+            ))
+        })?;
+        let e = NaiveDate::parse_from_str(end.trim(), "%Y-%m-%d").map_err(|_| {
+            fincore::FinError::state(format!(
+                "生产订单 {id}：完工日格式应为 YYYY-MM-DD，收到「{end}」"
+            ))
+        })?;
         if e < s {
             return Err(fincore::FinError::state(format!(
                 "生产订单 {id}：完工日 {end} 早于开工日 {s}"
@@ -2373,18 +2810,25 @@ pub fn prod_schedule(db: &Db, items: &[(i64, String, String)]) -> DbResult<usize
 mod prod_tests {
     use super::*;
     use crate::tests::mem;
-    
+
     #[test]
     fn prod_crud() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
         let mut order = ProductionOrder {
-            id: 0, no: String::new(), period: p,
-            date: NaiveDate::from_ymd(2026, 1, 5),
-            item_code: "1001".to_string(), item_name: "成品A".to_string(),
-            planned_qty: Money::parse("100").unwrap(), completed_qty: Money::ZERO,
-            status: ProdStatus::Draft, work_center: "WC01".to_string(), so_id: 0,
-            prepared_by: "u1".to_string(), memo: String::new(),
+            id: 0,
+            no: String::new(),
+            period: p,
+            date: NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            item_code: "1001".to_string(),
+            item_name: "成品A".to_string(),
+            planned_qty: Money::parse("100").unwrap(),
+            completed_qty: Money::ZERO,
+            status: ProdStatus::Draft,
+            work_center: "WC01".to_string(),
+            so_id: 0,
+            prepared_by: "u1".to_string(),
+            memo: String::new(),
             order_kind: "inhouse".to_string(),
             supplier_code: String::new(),
             supplier_name: String::new(),
@@ -2394,7 +2838,7 @@ mod prod_tests {
         order.no = prod_next_no(&db, p).unwrap();
         let id = prod_save(&db, &mut order).unwrap();
         assert!(id > 0);
-        
+
         let list = prod_list(&db, p, None).unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].no, order.no);

@@ -13,7 +13,8 @@ use findb::security::DeviceIdentity;
 
 /// 采集当前设备身份。id 稳定不变；name 供管理员在安全中心辨认。
 pub fn device_identity() -> DeviceIdentity {
-    let id = platform_uid().unwrap_or_else(|| format!("fbx-{fallback:016x}", fallback = fallback_hash()));
+    let id = platform_uid()
+        .unwrap_or_else(|| format!("fbx-{fallback:016x}", fallback = fallback_hash()));
     DeviceIdentity::new(&id, &host_label())
 }
 
@@ -86,7 +87,9 @@ fn host_label() -> String {
 
 /// 兜底指纹：主机名 + 用户名的 FNV-1a 64 位哈希
 fn fallback_hash() -> u64 {
-    let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default();
+    let user = std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .unwrap_or_default();
     let raw = format!("{}|{}", host_label(), user);
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in raw.as_bytes() {

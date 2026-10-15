@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use eframe::egui;
 
+// 同 finui：单线程 UI 内 Arc 共享 Db，不跨线程。
+#[allow(clippy::arc_with_non_send_sync)]
 fn main() -> eframe::Result<()> {
     let _ = env_logger::builder()
         .filter_level(log::LevelFilter::Warn)
@@ -19,7 +21,11 @@ fn main() -> eframe::Result<()> {
         None
     } else {
         let p = PathBuf::from(&arg);
-        if p.exists() { Some(p) } else { None }
+        if p.exists() {
+            Some(p)
+        } else {
+            None
+        }
     };
 
     let opts = eframe::NativeOptions {

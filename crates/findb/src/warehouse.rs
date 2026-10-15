@@ -103,8 +103,10 @@ pub fn delete(db: &Db, code: &str) -> DbResult<()> {
         ))
         .into());
     }
-    db.conn()
-        .execute("DELETE FROM warehouse WHERE code=?1", rusqlite::params![code])?;
+    db.conn().execute(
+        "DELETE FROM warehouse WHERE code=?1",
+        rusqlite::params![code],
+    )?;
     Ok(())
 }
 

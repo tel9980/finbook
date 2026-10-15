@@ -3,8 +3,8 @@
 //! 数据层 `findb::mgmt::budget_alerts` 已就绪，这里只做展示。
 
 use egui::{RichText, Ui};
-use findb::mgmt::{self, BudgetAlert};
 use fincore::Period;
+use findb::mgmt::{self, BudgetAlert};
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -53,7 +53,7 @@ impl BudgetAlertsView {
         Period::parse(&self.period_text).unwrap_or_else(|_| ctx.period())
     }
 
-    fn from_period(&self, ctx: &AppCtx<'_>) -> Period {
+    fn range_start(&self, ctx: &AppCtx<'_>) -> Period {
         Period::parse(&self.from_text).unwrap_or_else(|_| self.period(ctx))
     }
 
@@ -66,7 +66,7 @@ impl BudgetAlertsView {
         self.dirty = false;
 
         let p = self.period(ctx);
-        let from = self.from_period(ctx);
+        let from = self.range_start(ctx);
         let thr = self.threshold.trim().parse::<i64>().unwrap_or(90);
         self.rows = mgmt::budget_alerts(ctx.db(), p, from, thr).unwrap_or_default();
     }
@@ -80,17 +80,26 @@ impl BudgetAlertsView {
 
         widgets::toolbar(ui, |ui| {
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
             ui.label("起始期间");
-            let r2 = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.from_text));
+            let r2 = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.from_text),
+            );
             if r2.changed() {
                 self.dirty = true;
             }
             ui.label("阈值(%)");
-            let r3 = ui.add_sized([60.0, 22.0], egui::TextEdit::singleline(&mut self.threshold));
+            let r3 = ui.add_sized(
+                [60.0, 22.0],
+                egui::TextEdit::singleline(&mut self.threshold),
+            );
             if r3.changed() {
                 self.dirty = true;
             }
@@ -101,12 +110,23 @@ impl BudgetAlertsView {
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
                 let mut sh = crate::views::export::Sheet::new(
                     "预算预警",
-                    vec!["科目".to_string(), "部门".to_string(), "预算数".to_string(), "实际数".to_string(), "执行率(%)".to_string(), "超支额".to_string()],
+                    vec![
+                        "科目".to_string(),
+                        "部门".to_string(),
+                        "预算数".to_string(),
+                        "实际数".to_string(),
+                        "执行率(%)".to_string(),
+                        "超支额".to_string(),
+                    ],
                 );
                 for a in &self.rows {
                     sh.push(vec![
                         format!("{} {}", a.account_code, a.account_name),
-                        if a.dept.is_empty() { "—".to_string() } else { a.dept.clone() },
+                        if a.dept.is_empty() {
+                            "—".to_string()
+                        } else {
+                            a.dept.clone()
+                        },
                         a.budget.fmt_plain(),
                         a.actual.fmt_plain(),
                         a.rate.fmt_qty(),
@@ -140,14 +160,21 @@ impl BudgetAlertsView {
                     ui.label(format!("{} {}", a.account_code, a.account_name));
                 }
                 1 => {
-                    ui.label(if a.dept.is_empty() { "—".to_string() } else { a.dept.clone() });
+                    ui.label(if a.dept.is_empty() {
+                        "—".to_string()
+                    } else {
+                        a.dept.clone()
+                    });
                 }
                 2 => widgets::amount_label(ui, a.budget),
                 3 => widgets::amount_label(ui, a.actual),
                 4 => {
                     ui.label(
-                        RichText::new(a.rate.fmt_qty())
-                            .color(if a.rate.to_f64() >= 100.0 { palette::CREDIT } else { palette::WARN }),
+                        RichText::new(a.rate.fmt_qty()).color(if a.rate.to_f64() >= 100.0 {
+                            palette::CREDIT
+                        } else {
+                            palette::WARN
+                        }),
                     );
                 }
                 5 => widgets::amount_label(ui, a.over_amount),

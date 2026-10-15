@@ -99,7 +99,10 @@ impl Default for VoucherEdit {
             id: 0,
             status: VoucherStatus::Draft,
             period: Period::default(),
-            date: chrono::Local::now().date_naive().format("%Y-%m-%d").to_string(),
+            date: chrono::Local::now()
+                .date_naive()
+                .format("%Y-%m-%d")
+                .to_string(),
             word: "记".to_string(),
             no: "1".to_string(),
             attachments: String::new(),
@@ -268,16 +271,26 @@ impl VoucherEdit {
     }
 
     pub fn debit_total(&self) -> Money {
-        self.rows.iter().map(|r| r.debit()).fold(Money::ZERO, |a, b| a + b)
+        self.rows
+            .iter()
+            .map(|r| r.debit())
+            .fold(Money::ZERO, |a, b| a + b)
     }
     pub fn credit_total(&self) -> Money {
-        self.rows.iter().map(|r| r.credit()).fold(Money::ZERO, |a, b| a + b)
+        self.rows
+            .iter()
+            .map(|r| r.credit())
+            .fold(Money::ZERO, |a, b| a + b)
     }
 
     fn to_voucher(&self) -> Result<Voucher, String> {
         let date = self.parse_date()?;
         let period = Period::from_date(date);
-        let no: i32 = self.no.trim().parse().map_err(|_| "凭证号必须是整数".to_string())?;
+        let no: i32 = self
+            .no
+            .trim()
+            .parse()
+            .map_err(|_| "凭证号必须是整数".to_string())?;
         if no <= 0 {
             return Err("凭证号必须大于 0".to_string());
         }
@@ -399,8 +412,11 @@ impl VoucherEdit {
         ui.horizontal(|ui| {
             ui.label(RichText::new("附件").strong());
             ui.label(
-                RichText::new(format!("{} 个（表头「附件」栏的数字表示原始凭证张数）", atts.len()))
-                    .weak(),
+                RichText::new(format!(
+                    "{} 个（表头「附件」栏的数字表示原始凭证张数）",
+                    atts.len()
+                ))
+                .weak(),
             );
             if id == 0 {
                 ui.label(RichText::new("保存凭证后才能上传附件").weak());
@@ -426,7 +442,11 @@ impl VoucherEdit {
                         let icon = if a.is_image() { "🖼" } else { "📄" };
                         ui.label(RichText::new(format!("{icon} {}", a.name)).weak());
                         ui.label(RichText::new(a.size_text()).weak().small());
-                        if ui.small_button("开").on_hover_text("导出到临时目录并打开").clicked() {
+                        if ui
+                            .small_button("开")
+                            .on_hover_text("导出到临时目录并打开")
+                            .clicked()
+                        {
                             match findb::attach::read(ctx.db(), a.id) {
                                 Ok(data) => {
                                     let p = findb::attach::temp_export_path(&a.name);
@@ -464,7 +484,11 @@ impl VoucherEdit {
             return;
         }
         // 保存入口必须自己做权限校验：顶栏可达本页，侧栏的门槛在这里不生效
-        let needed = if self.id == 0 { Perm::VoucherNew } else { Perm::VoucherEdit };
+        let needed = if self.id == 0 {
+            Perm::VoucherNew
+        } else {
+            Perm::VoucherEdit
+        };
         if !ctx.can(needed) {
             ctx.error(format!("没有「{}」权限", needed.label()));
             return;
@@ -515,7 +539,11 @@ impl VoucherEdit {
                 let label = v.voucher_no();
                 ctx.log(
                     "凭证",
-                    if self.id == 0 { "新增凭证" } else { "修改凭证" },
+                    if self.id == 0 {
+                        "新增凭证"
+                    } else {
+                        "修改凭证"
+                    },
                     &format!("{label} 借贷 {}", v.debit_total().fmt_money()),
                 );
                 ctx.info(format!("已保存 {label}"));
@@ -635,19 +663,25 @@ impl VoucherEdit {
         let ectx = ui.ctx().clone();
 
         // ---------------- 表头 ----------------
-        widgets::page_header(ui, if self.id == 0 { "填制凭证" } else { "修改凭证" }, |ui| {
-            ui.label(
-                RichText::new(format!("状态：{}", self.status.label()))
-                    .color(theme::status_color(self.status.counts()))
-                    .strong(),
-            );
-        });
+        widgets::page_header(
+            ui,
+            if self.id == 0 {
+                "填制凭证"
+            } else {
+                "修改凭证"
+            },
+            |ui| {
+                ui.label(
+                    RichText::new(format!("状态：{}", self.status.label()))
+                        .color(theme::status_color(self.status.counts()))
+                        .strong(),
+                );
+            },
+        );
 
         widgets::toolbar(ui, |ui| {
             let save_clicked = ui.button("保存").on_hover_text("Ctrl+S").clicked()
-                || (ui.input(|i| {
-                    i.modifiers.ctrl && i.key_pressed(egui::Key::S)
-                }));
+                || (ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::S)));
             if save_clicked && !readonly {
                 self.save(ctx, true);
             }
@@ -661,7 +695,11 @@ impl VoucherEdit {
             if ui.button("增行").clicked() && !readonly {
                 self.rows.push(Row::default());
             }
-            if ui.button("常用摘要").on_hover_text("从摘要库选一条填入当前行").clicked() {
+            if ui
+                .button("常用摘要")
+                .on_hover_text("从摘要库选一条填入当前行")
+                .clicked()
+            {
                 self.summary_popup = !self.summary_popup;
             }
             if ui.button("删空行").clicked() && !readonly {
@@ -678,65 +716,69 @@ impl VoucherEdit {
             if ui.button("审核").clicked()
                 && self.id > 0
                 && self.status == VoucherStatus::Draft
+                && ctx.can(Perm::VoucherAudit)
             {
-                if ctx.can(Perm::VoucherAudit) {
-                    do_status(ctx, self.id, "audit");
-                    self.reload_after(ctx);
-                }
+                do_status(ctx, self.id, "audit");
+                self.reload_after(ctx);
             }
             if ui.button("反审核").clicked()
                 && self.id > 0
                 && self.status == VoucherStatus::Audited
+                && ctx.can(Perm::VoucherUnaudit)
             {
-                if ctx.can(Perm::VoucherUnaudit) {
-                    do_status(ctx, self.id, "unaudit");
-                    self.reload_after(ctx);
-                }
+                do_status(ctx, self.id, "unaudit");
+                self.reload_after(ctx);
             }
             // 出纳签字（可选前置：账套开启 require_cashier 后，现金/银行凭证记账前须签字）
             if ui.button("出纳签字").clicked()
                 && self.id > 0
                 && matches!(self.status, VoucherStatus::Draft | VoucherStatus::Audited)
+                && ctx.can(Perm::CashierSign)
             {
-                if ctx.can(Perm::CashierSign) {
-                    do_status(ctx, self.id, "sign");
-                    self.reload_after(ctx);
-                }
+                do_status(ctx, self.id, "sign");
+                self.reload_after(ctx);
             }
             if ui.button("取消签字").clicked()
                 && self.id > 0
                 && matches!(self.status, VoucherStatus::Draft | VoucherStatus::Audited)
+                && ctx.can(Perm::CashierSign)
             {
-                if ctx.can(Perm::CashierSign) {
-                    do_status(ctx, self.id, "unsign");
-                    self.reload_after(ctx);
-                }
+                do_status(ctx, self.id, "unsign");
+                self.reload_after(ctx);
             }
             // 与 Web 端一致：未审核（或未启用审核）的凭证核对后手动记账确认入账
-            if ui.button("记账").clicked() && self.status.can_post() {
-                if ctx.can(Perm::VoucherPost) {
-                    do_status(ctx, self.id, "post");
-                    self.reload_after(ctx);
-                }
+            if ui.button("记账").clicked() && self.status.can_post() && ctx.can(Perm::VoucherPost)
+            {
+                do_status(ctx, self.id, "post");
+                self.reload_after(ctx);
             }
-            if ui.button("反记账").clicked() && self.status.can_unpost() {
-                if ctx.can(Perm::VoucherUnpost) {
-                    do_status(ctx, self.id, "unpost");
-                    self.reload_after(ctx);
-                }
+            if ui.button("反记账").clicked()
+                && self.status.can_unpost()
+                && ctx.can(Perm::VoucherUnpost)
+            {
+                do_status(ctx, self.id, "unpost");
+                self.reload_after(ctx);
             }
-            if ui.button("红字冲销").clicked() && self.id > 0 && self.status != VoucherStatus::Void {
-                if ctx.can(Perm::VoucherNew) {
-                    let period = ctx.period();
-                    let date = chrono::Local::now().date_naive();
-                    match findb::vouchers::reverse(ctx.db(), self.id, &ctx.user().username, period, date) {
-                        Ok(nid) => {
-                            ctx.info(format!("已生成冲销凭证 #{nid}"));
-                            ctx.log("凭证", "红字冲销", &format!("凭证 #{nid}"));
-                            self.dirty = true;
-                        }
-                        Err(e) => ctx.error(e.to_string()),
+            if ui.button("红字冲销").clicked()
+                && self.id > 0
+                && self.status != VoucherStatus::Void
+                && ctx.can(Perm::VoucherNew)
+            {
+                let period = ctx.period();
+                let date = chrono::Local::now().date_naive();
+                match findb::vouchers::reverse(
+                    ctx.db(),
+                    self.id,
+                    &ctx.user().username,
+                    period,
+                    date,
+                ) {
+                    Ok(nid) => {
+                        ctx.info(format!("已生成冲销凭证 #{nid}"));
+                        ctx.log("凭证", "红字冲销", &format!("凭证 #{nid}"));
+                        self.dirty = true;
                     }
+                    Err(e) => ctx.error(e.to_string()),
                 }
             }
             ui.separator();
@@ -782,7 +824,10 @@ impl VoucherEdit {
                     self.date = d.format("%Y-%m-%d").to_string();
                 }
                 if ui.button("今天").clicked() {
-                    self.date = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+                    self.date = chrono::Local::now()
+                        .date_naive()
+                        .format("%Y-%m-%d")
+                        .to_string();
                 }
                 // 跨期提示：所选日期与当前期间不一致时提前告知，保存将按日期归入对应期间
                 if let Ok(d) = NaiveDate::parse_from_str(self.date.trim(), "%Y-%m-%d") {
@@ -798,10 +843,7 @@ impl VoucherEdit {
             }
             ui.label("凭证字");
             if readonly || self.words.is_empty() {
-                ui.add_sized(
-                    [60.0, 22.0],
-                    egui::TextEdit::singleline(&mut self.word),
-                );
+                ui.add_sized([60.0, 22.0], egui::TextEdit::singleline(&mut self.word));
             } else {
                 egui::ComboBox::from_id_salt("vch_word")
                     .selected_text(&self.word)
@@ -815,7 +857,10 @@ impl VoucherEdit {
             ui.label("凭证号");
             ui.add_sized([60.0, 22.0], egui::TextEdit::singleline(&mut self.no));
             ui.label("附件");
-            ui.add_sized([50.0, 22.0], egui::TextEdit::singleline(&mut self.attachments));
+            ui.add_sized(
+                [50.0, 22.0],
+                egui::TextEdit::singleline(&mut self.attachments),
+            );
             ui.label("制单");
             ui.label(RichText::new(&self.prepared_by).weak());
         });
@@ -861,7 +906,15 @@ impl VoucherEdit {
             .column(Column::initial(28.0).resizable(false));
 
         tb.header(26.0, |mut h| {
-            let heads = ["#", "摘　要", "会计科目", "辅助核算", "借方金额", "贷方金额", ""];
+            let heads = [
+                "#",
+                "摘　要",
+                "会计科目",
+                "辅助核算",
+                "借方金额",
+                "贷方金额",
+                "",
+            ];
             for t in heads {
                 h.col(|ui| {
                     ui.label(RichText::new(t).strong());
@@ -924,11 +977,9 @@ impl VoucherEdit {
                         };
                         if ui
                             .add(
-                                egui::Button::new(RichText::new(&name).color(color))
-                                    .min_size(egui::vec2(
-                                        (ui.available_width() - 30.0).max(60.0),
-                                        22.0,
-                                    )),
+                                egui::Button::new(RichText::new(&name).color(color)).min_size(
+                                    egui::vec2((ui.available_width() - 30.0).max(60.0), 22.0),
+                                ),
                             )
                             .clicked()
                         {
@@ -945,7 +996,7 @@ impl VoucherEdit {
                     let need = acct
                         .map(|a| !a.aux.is_empty() || a.is_cash || a.is_bank)
                         .unwrap_or(false);
-                    let txt = aux_text(&r.aux, &aux_names);
+                    let txt = aux_text(&r.aux, aux_names);
                     let label = if txt.is_empty() {
                         if need {
                             "（必录）".to_string()
@@ -1098,12 +1149,12 @@ impl VoucherEdit {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ui.ctx(), |ui| {
                 let acct = ctx.chart().get(&code).cloned();
-                let dims: Vec<AuxKind> = acct
-                    .as_ref()
-                    .map(|a| a.aux.list())
-                    .unwrap_or_default();
+                let dims: Vec<AuxKind> = acct.as_ref().map(|a| a.aux.list()).unwrap_or_default();
                 if dims.is_empty()
-                    && !acct.as_ref().map(|a| a.is_cash || a.is_bank).unwrap_or(false)
+                    && !acct
+                        .as_ref()
+                        .map(|a| a.is_cash || a.is_bank)
+                        .unwrap_or(false)
                 {
                     ui.label(RichText::new("该科目未启用辅助核算。").weak());
                 }
@@ -1124,10 +1175,8 @@ impl VoucherEdit {
                             .selected_text(label)
                             .width(260.0)
                             .show_ui(ui, |ui| {
-                                if ui
-                                    .selectable_value(&mut sel, String::new(), "（不核算）")
-                                    .clicked()
-                                {}
+                                ui.selectable_value(&mut sel, String::new(), "（不核算）")
+                                    .clicked();
                                 for c in &opts {
                                     let t = format!("{} {}", c, aux_name(ctx.db(), k, c));
                                     ui.selectable_value(&mut sel, c.clone(), t);
@@ -1153,29 +1202,29 @@ impl VoucherEdit {
                     if no_opts {
                         ui.colored_label(
                             crate::theme::palette::CREDIT,
-                            format!(
-                                "还没有任何{}档案 —— 这张凭证保存不了。",
-                                k.label()
-                            ),
+                            format!("还没有任何{}档案 —— 这张凭证保存不了。", k.label()),
                         );
                         ui.horizontal(|ui| {
-                            if fincore::auxiliary::has_preset(k) {
-                                if ui.button(format!("一键预置{}档案", k.label())).clicked() {
-                                    let r = findb::auxs::insert_presets(ctx.db(), k);
-                                    match r {
-                                        Ok((n, _)) => {
-                                            ctx.info(format!(
-                                                "已预置 {n} 条{}档案（通用占位，可改名）。",
-                                                k.label()
-                                            ));
-                                        }
-                                        Err(e) => ctx.error(e.to_string()),
+                            if fincore::auxiliary::has_preset(k)
+                                && ui.button(format!("一键预置{}档案", k.label())).clicked()
+                            {
+                                let r = findb::auxs::insert_presets(ctx.db(), k);
+                                match r {
+                                    Ok((n, _)) => {
+                                        ctx.info(format!(
+                                            "已预置 {n} 条{}档案（通用占位，可改名）。",
+                                            k.label()
+                                        ));
                                     }
+                                    Err(e) => ctx.error(e.to_string()),
                                 }
                             }
                             ui.label(
                                 RichText::new(if fincore::auxiliary::has_preset(k) {
-                                    format!("（也可以关掉凭证，去「基础资料 › {}档案」改）", k.label())
+                                    format!(
+                                        "（也可以关掉凭证，去「基础资料 › {}档案」改）",
+                                        k.label()
+                                    )
                                 } else {
                                     format!(
                                         "（{}的名字没有通用值，得去「基础资料 › {}档案」自己新建）",
@@ -1189,7 +1238,11 @@ impl VoucherEdit {
                     }
                 }
                 // 现金流量项目
-                if acct.as_ref().map(|a| a.is_cash || a.is_bank).unwrap_or(false) {
+                if acct
+                    .as_ref()
+                    .map(|a| a.is_cash || a.is_bank)
+                    .unwrap_or(false)
+                {
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.set_min_width(90.0);
@@ -1232,7 +1285,10 @@ impl VoucherEdit {
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label("数量");
-                        ui.add_sized([100.0, 22.0], egui::TextEdit::singleline(&mut self.rows[i].qty));
+                        ui.add_sized(
+                            [100.0, 22.0],
+                            egui::TextEdit::singleline(&mut self.rows[i].qty),
+                        );
                         ui.label("单价");
                         ui.add_sized(
                             [100.0, 22.0],
@@ -1327,10 +1383,8 @@ impl VoucherEdit {
                         }
                         // 凭证的 Excel 导出属于"数据落地"，仅管理员与财务主管可用；
                         // 屏幕内的打印预览（print_body）人人可见，满足"只能打印不能导出"。
-                        if ctx.user().can(Perm::Export) {
-                            if ui.button("导出 Excel").clicked() {
-                                do_export = true;
-                            }
+                        if ctx.user().can(Perm::Export) && ui.button("导出 Excel").clicked() {
+                            do_export = true;
                         }
                     });
                 });
@@ -1345,7 +1399,10 @@ impl VoucherEdit {
 
     // ---------------- 上下张 ----------------
     fn step(&mut self, ctx: &mut AppCtx<'_>, dir: i32) {
-        let list = match findb::vouchers::list(ctx.db(), &findb::vouchers::VoucherQuery::period(self.period)) {
+        let list = match findb::vouchers::list(
+            ctx.db(),
+            &findb::vouchers::VoucherQuery::period(self.period),
+        ) {
             Ok(l) => l,
             Err(e) => {
                 ctx.error(e.to_string());
@@ -1433,7 +1490,10 @@ pub fn aux_text(aux: &AuxRef, names: &std::collections::BTreeMap<String, String>
             continue;
         }
         if let Some(v) = aux.get(*k) {
-            let name = names.get(&format!("{}:{}", k.code(), v)).cloned().unwrap_or_default();
+            let name = names
+                .get(&format!("{}:{}", k.code(), v))
+                .cloned()
+                .unwrap_or_default();
             parts.push(if name.is_empty() {
                 format!("{}:{}", k.label(), v)
             } else {
@@ -1481,19 +1541,21 @@ pub fn print_body(ui: &mut Ui, v: &Voucher, chart: &Chart, company: &str) {
     ui.separator();
     let (d, c, cap) = fincore::engine::voucher_totals(v);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("合计：借 {} 贷 {}", d.fmt_money(), c.fmt_money())).strong());
+        ui.label(
+            RichText::new(format!("合计：借 {} 贷 {}", d.fmt_money(), c.fmt_money())).strong(),
+        );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(RichText::new(format!("大写：{cap}")).weak());
         });
     });
     ui.horizontal(|ui| {
         ui.label(format!("制单：{}", v.prepared_by));
-        ui.label(format!("审核：{}", v.audited_by.clone().unwrap_or_default()));
-        ui.label(format!("记账：{}", v.posted_by.clone().unwrap_or_default()));
         ui.label(format!(
-            "出纳：{}",
-            v.cashier.clone().unwrap_or_default()
+            "审核：{}",
+            v.audited_by.clone().unwrap_or_default()
         ));
+        ui.label(format!("记账：{}", v.posted_by.clone().unwrap_or_default()));
+        ui.label(format!("出纳：{}", v.cashier.clone().unwrap_or_default()));
     });
 }
 

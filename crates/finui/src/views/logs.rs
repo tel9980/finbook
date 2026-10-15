@@ -80,11 +80,21 @@ impl LogsView {
         widgets::grid(ui, "logs", &cols, page.len(), 24.0, |i, c, ui| {
             let l = &page[i];
             match c {
-                0 => { ui.label(RichText::new(&l.ts).weak()); }
-                1 => { ui.label(&l.user); }
-                2 => { ui.label(&l.module); }
-                3 => { ui.label(&l.action); }
-                4 => { ui.label(&l.detail); }
+                0 => {
+                    ui.label(RichText::new(&l.ts).weak());
+                }
+                1 => {
+                    ui.label(&l.user);
+                }
+                2 => {
+                    ui.label(&l.module);
+                }
+                3 => {
+                    ui.label(&l.action);
+                }
+                4 => {
+                    ui.label(&l.detail);
+                }
                 _ => {}
             }
         });

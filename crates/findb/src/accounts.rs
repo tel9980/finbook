@@ -97,7 +97,9 @@ pub fn insert(db: &Db, a: &Account) -> DbResult<()> {
         rusqlite::params![
             a.code,
             a.name,
-            serde_json::to_value(a.category)?.as_str().unwrap_or("asset"),
+            serde_json::to_value(a.category)?
+                .as_str()
+                .unwrap_or("asset"),
             serde_json::to_value(a.dir)?.as_str().unwrap_or("debit"),
             a.aux.0 as i64,
             a.unit,
@@ -123,7 +125,9 @@ pub fn update(db: &Db, a: &Account) -> DbResult<()> {
         rusqlite::params![
             a.code,
             a.name,
-            serde_json::to_value(a.category)?.as_str().unwrap_or("asset"),
+            serde_json::to_value(a.category)?
+                .as_str()
+                .unwrap_or("asset"),
             serde_json::to_value(a.dir)?.as_str().unwrap_or("debit"),
             a.aux.0 as i64,
             a.unit,
@@ -213,8 +217,14 @@ pub fn import_many(db: &Db, accounts: &[Account]) -> DbResult<usize> {
             rusqlite::params![
                 a.code,
                 a.name,
-                serde_json::to_value(a.category).unwrap_or_default().as_str().unwrap_or("asset"),
-                serde_json::to_value(a.dir).unwrap_or_default().as_str().unwrap_or("debit"),
+                serde_json::to_value(a.category)
+                    .unwrap_or_default()
+                    .as_str()
+                    .unwrap_or("asset"),
+                serde_json::to_value(a.dir)
+                    .unwrap_or_default()
+                    .as_str()
+                    .unwrap_or("debit"),
                 a.aux.0 as i64,
                 a.unit,
                 a.currency,
@@ -305,7 +315,8 @@ mod tests {
         assert_eq!(list(&db).unwrap().len(), full, "新账套应包含完整默认科目表");
 
         // 模拟旧版账套：只保留 1001/1002 两个一级科目，其余全部删掉
-        let keep: std::collections::HashSet<String> = ["1001", "1002"].iter().map(|s| s.to_string()).collect();
+        let keep: std::collections::HashSet<String> =
+            ["1001", "1002"].iter().map(|s| s.to_string()).collect();
         let mut codes: Vec<String> = list(&db)
             .unwrap()
             .into_iter()

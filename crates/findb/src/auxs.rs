@@ -145,9 +145,9 @@ pub fn delete(db: &Db, id: i64) -> DbResult<()> {
 /// 这类失败比不校验更糟：它让功能整体不可用，而且报错指向「数据不存在」，
 /// 真实原因是「校验写错了」。
 fn parent_map(db: &Db, kind: AuxKind) -> DbResult<std::collections::BTreeMap<String, String>> {
-    let mut st = db.conn().prepare(
-        "SELECT code, COALESCE(parent_code,'') FROM aux_entity WHERE kind=?1"
-    )?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT code, COALESCE(parent_code,'') FROM aux_entity WHERE kind=?1")?;
     let rows = st.query_map([kind_str(kind)], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
     })?;
@@ -191,9 +191,9 @@ pub fn check_parent(db: &Db, kind: AuxKind, code: &str, parent: Option<&str>) ->
         return Ok(());
     }
     if p == code.trim() {
-        return Err(fincore::FinError::validate(
-            format!("上级编码不能是自己（{code}）—— 会形成环，层级汇总无法收敛"),
-        )
+        return Err(fincore::FinError::validate(format!(
+            "上级编码不能是自己（{code}）—— 会形成环，层级汇总无法收敛"
+        ))
         .into());
     }
     let map = parent_map(db, kind)?;
@@ -229,10 +229,12 @@ pub fn find_parent_cycle(db: &Db, kind: AuxKind) -> DbResult<Option<String>> {
 
 /// 删除前的子节点检查：返回挂在 `code` 下面的直接子编码
 pub fn children_of(db: &Db, kind: AuxKind, code: &str) -> DbResult<Vec<String>> {
-    let mut st = db.conn().prepare(
-        "SELECT code FROM aux_entity WHERE kind=?1 AND parent_code=?2 ORDER BY code"
-    )?;
-    let rows = st.query_map(rusqlite::params![kind_str(kind), code], |r| r.get::<_, String>(0))?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT code FROM aux_entity WHERE kind=?1 AND parent_code=?2 ORDER BY code")?;
+    let rows = st.query_map(rusqlite::params![kind_str(kind), code], |r| {
+        r.get::<_, String>(0)
+    })?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r?);
@@ -270,11 +272,13 @@ pub fn name_map(db: &Db, kind: AuxKind) -> DbResult<BTreeMap<String, String>> {
 /// 全部档案的 "kind:code" → 名称 映射（辅助核算列展示用）
 pub fn full_name_map(db: &Db) -> DbResult<BTreeMap<String, String>> {
     let mut m = BTreeMap::new();
-    let mut stmt = db
-        .conn()
-        .prepare("SELECT kind,code,name FROM aux_entity")?;
+    let mut stmt = db.conn().prepare("SELECT kind,code,name FROM aux_entity")?;
     let rows = stmt.query_map([], |r| {
-        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
     })?;
     for r in rows {
         let (k, c, n) = r?;
@@ -288,11 +292,7 @@ pub fn full_name_map(db: &Db) -> DbResult<BTreeMap<String, String>> {
 /// 两侧补 `\x1f` 分隔符做**整段**匹配：`%customer=C001%` 会把
 /// `customer=C0011` 的引用也算进来，导致 C001 明明没被引用却删不掉。
 pub fn usage(db: &Db, kind: AuxKind, code: &str) -> DbResult<i64> {
-    let pattern = format!(
-        "%\u{1f}{}={}\u{1f}%",
-        kind.code(),
-        crate::escape_like(code)
-    );
+    let pattern = format!("%\u{1f}{}={}\u{1f}%", kind.code(), crate::escape_like(code));
     let c: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM voucher_entry
          WHERE (char(31) || aux_key || char(31)) LIKE ?1 ESCAPE '\\'",
@@ -372,7 +372,9 @@ pub fn list_summaries(db: &Db) -> DbResult<Vec<String>> {
     let mut stmt = db
         .conn()
         .prepare("SELECT text FROM summary ORDER BY use_count DESC, text")?;
-    let rows = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+    let rows = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -390,7 +392,9 @@ pub fn list_settle_types(db: &Db) -> DbResult<Vec<String>> {
     let mut stmt = db
         .conn()
         .prepare("SELECT name FROM settle_type ORDER BY sort")?;
-    let rows = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+    let rows = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -431,7 +435,7 @@ mod parent_tests {
     use super::*;
     use crate::tests::mem;
 
-    fn mk(db: &Db, code: &str, parent: Option<&str>) -> AuxEntity {
+    fn mk(_db: &Db, code: &str, parent: Option<&str>) -> AuxEntity {
         AuxEntity {
             id: 0,
             kind: AuxKind::Customer,
@@ -452,7 +456,10 @@ mod parent_tests {
         let e = mk(&db, "C02", Some("C99"));
         let err = insert(&db, &e).unwrap_err().to_string();
         assert!(err.contains("C99"), "报错要点名不存在的上级编码：{err}");
-        assert!(err.contains("不存在"), "要说清是「不存在」而不是「无效」：{err}");
+        assert!(
+            err.contains("不存在"),
+            "要说清是「不存在」而不是「无效」：{err}"
+        );
     }
 
     /// 自环：C01 的上级填 C01。
@@ -460,7 +467,9 @@ mod parent_tests {
     fn parent_cannot_be_self() {
         let db = mem();
         insert(&db, &mk(&db, "C01", None)).unwrap();
-        let err = insert(&db, &mk(&db, "C01", Some("C01"))).unwrap_err().to_string();
+        let err = insert(&db, &mk(&db, "C01", Some("C01")))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("自己"), "要说清是「不能填自己」：{err}");
     }
 
@@ -494,7 +503,10 @@ mod parent_tests {
         // 两种错法要能分开，否则用户不知道自己错在哪。
         let e2 = mk(&db, "C01", Some("ZZZ"));
         let err2 = update(&db, &e2).unwrap_err().to_string();
-        assert!(err2.contains("不存在"), "不存在的上级要说「不存在」：{err2}");
+        assert!(
+            err2.contains("不存在"),
+            "不存在的上级要说「不存在」：{err2}"
+        );
     }
 
     /// 删除前要知道有没有子节点 —— 删了父，子就成孤儿且没人知道。
@@ -510,10 +522,10 @@ mod parent_tests {
         kids.sort();
         assert_eq!(kids, vec!["C01".to_string(), "C02".to_string()]);
         // 只返回**直接**子节点；孙节点不在内（调用方要自己决定是拒绝还是级联）
-        assert!(
-            children_of(&db, AuxKind::Customer, "C01").unwrap() == vec!["C03".to_string()]
-        );
-        assert!(children_of(&db, AuxKind::Customer, "C03").unwrap().is_empty());
+        assert!(children_of(&db, AuxKind::Customer, "C01").unwrap() == vec!["C03".to_string()]);
+        assert!(children_of(&db, AuxKind::Customer, "C03")
+            .unwrap()
+            .is_empty());
     }
 
     /// find_parent_cycle：没有环时返回 None；有环时能指出环上的一个编码。
@@ -576,7 +588,10 @@ mod tests {
             "原客户名",
             "已有档案的名字不能被批量导入改掉"
         );
-        assert_eq!(get(&db, AuxKind::Customer, "C02").unwrap().unwrap().name, "新客户乙");
+        assert_eq!(
+            get(&db, AuxKind::Customer, "C02").unwrap().unwrap().name,
+            "新客户乙"
+        );
     }
 
     #[test]
@@ -650,7 +665,11 @@ mod tests {
         assert_eq!(usage(&db, AuxKind::Customer, "C0011").unwrap(), 2);
         assert_eq!(usage(&db, AuxKind::Customer, "ACME").unwrap(), 1);
         assert_eq!(usage(&db, AuxKind::Customer, "AC").unwrap(), 0);
-        assert_eq!(usage(&db, AuxKind::Supplier, "C0011").unwrap(), 0, "维度不同不算");
+        assert_eq!(
+            usage(&db, AuxKind::Supplier, "C0011").unwrap(),
+            0,
+            "维度不同不算"
+        );
     }
 
     #[test]
@@ -684,7 +703,10 @@ mod tests {
     fn name_maps() {
         let db = mem();
         insert(&db, &AuxEntity::new(AuxKind::Dept, "D01", "销售部")).unwrap();
-        assert_eq!(name_map(&db, AuxKind::Dept).unwrap().get("D01").unwrap(), "销售部");
+        assert_eq!(
+            name_map(&db, AuxKind::Dept).unwrap().get("D01").unwrap(),
+            "销售部"
+        );
         assert_eq!(
             full_name_map(&db).unwrap().get("dept:D01").unwrap(),
             "销售部"
@@ -708,9 +730,7 @@ mod preset_tests {
     use crate::tests::mem;
 
     fn count(db: &Db, kind: AuxKind) -> usize {
-        list(db, &AuxQuery::kind(kind))
-            .unwrap()
-            .len()
+        list(db, &AuxQuery::kind(kind)).unwrap().len()
     }
 
     /// 部门 + 银行账户各能预置进来，其余类别一条不加
@@ -722,7 +742,12 @@ mod preset_tests {
         assert!(skipped.is_empty());
         assert_eq!(count(&db, AuxKind::Dept), 3);
         assert_eq!(count(&db, AuxKind::Bank), 2);
-        for k in [AuxKind::Customer, AuxKind::Supplier, AuxKind::Item, AuxKind::Employee] {
+        for k in [
+            AuxKind::Customer,
+            AuxKind::Supplier,
+            AuxKind::Item,
+            AuxKind::Employee,
+        ] {
             assert_eq!(count(&db, k), 0, "{} 不该被预置", k.label());
         }
     }

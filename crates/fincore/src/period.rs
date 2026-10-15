@@ -48,13 +48,21 @@ impl Period {
         let (y, m) = match digits.len() {
             // 202601
             6 => (
-                digits[0..4].parse::<i32>().map_err(|_| FinError::msg("年份解析失败"))?,
-                digits[4..6].parse::<u32>().map_err(|_| FinError::msg("月份解析失败"))?,
+                digits[0..4]
+                    .parse::<i32>()
+                    .map_err(|_| FinError::msg("年份解析失败"))?,
+                digits[4..6]
+                    .parse::<u32>()
+                    .map_err(|_| FinError::msg("月份解析失败"))?,
             ),
             // 20261 —— "2026年1月" 去掉非数字后只剩 5 位，补零成 01
             5 => (
-                digits[0..4].parse::<i32>().map_err(|_| FinError::msg("年份解析失败"))?,
-                digits[4..5].parse::<u32>().map_err(|_| FinError::msg("月份解析失败"))?,
+                digits[0..4]
+                    .parse::<i32>()
+                    .map_err(|_| FinError::msg("年份解析失败"))?,
+                digits[4..5]
+                    .parse::<u32>()
+                    .map_err(|_| FinError::msg("月份解析失败"))?,
             ),
             _ => return Err(FinError::msg(format!("期间格式应为 YYYYMM，收到：{s}"))),
         };
@@ -204,8 +212,14 @@ mod tests {
 
     #[test]
     fn parse_ok() {
-        assert_eq!(Period::parse("2026-01").unwrap(), Period::new(2026, 1).unwrap());
-        assert_eq!(Period::parse("2026年3月").unwrap(), Period::new(2026, 3).unwrap());
+        assert_eq!(
+            Period::parse("2026-01").unwrap(),
+            Period::new(2026, 1).unwrap()
+        );
+        assert_eq!(
+            Period::parse("2026年3月").unwrap(),
+            Period::new(2026, 3).unwrap()
+        );
         assert!(Period::parse("202613").is_err());
     }
 }

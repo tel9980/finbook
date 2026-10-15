@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 
 use egui::{RichText, Ui};
-use findb::bank::{BookEntry, MatchResult, Reconciliation, Statement};
 use fincore::{Money, Period, Perm};
+use findb::bank::{BookEntry, MatchResult, Reconciliation, Statement};
 
 use crate::state::{AppCtx, ConfirmAction};
 use crate::theme::palette;
@@ -171,7 +171,10 @@ impl BankRecView {
             }
             ui.separator();
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -342,9 +345,15 @@ impl BankRecView {
                         toggled = Some(r.0);
                     }
                 }
-                1 => { ui.label(RichText::new(&r.1).monospace()); }
-                2 => { ui.label(&r.2); }
-                3 => { ui.label(RichText::new(&r.3).monospace()); }
+                1 => {
+                    ui.label(RichText::new(&r.1).monospace());
+                }
+                2 => {
+                    ui.label(&r.2);
+                }
+                3 => {
+                    ui.label(RichText::new(&r.3).monospace());
+                }
                 4 => widgets::amount_label(ui, r.4),
                 5 => widgets::amount_label(ui, r.5),
                 6 => widgets::amount_label(ui, r.6),
@@ -413,13 +422,11 @@ impl BankRecView {
                         .on_hover_text("选择填好的 .xlsx，直接读进输入框，检查后点「导入」")
                         .clicked()
                     {
-                        if let Some(path) =
-                            crate::views::export::pick_open(&["xlsx", "xls", "ods"])
+                        if let Some(path) = crate::views::export::pick_open(&["xlsx", "xls", "ods"])
                         {
                             match findb::imports::read_xlsx(&path) {
                                 Ok(rows) => {
-                                    self.import_text =
-                                        findb::imports::xlsx_to_csv_text(&rows);
+                                    self.import_text = findb::imports::xlsx_to_csv_text(&rows);
                                     ctx.info("已载入，检查无误后点「导入」");
                                 }
                                 Err(e) => ctx.error(format!("读取 Excel 失败：{e}")),
@@ -482,13 +489,19 @@ impl BankRecView {
         let mut auto = false;
         widgets::toolbar(ui, |ui| {
             ui.label("日期容差");
-            ui.add(egui::DragValue::new(&mut self.tolerance).range(0..=31).suffix(" 天"));
+            ui.add(
+                egui::DragValue::new(&mut self.tolerance)
+                    .range(0..=31)
+                    .suffix(" 天"),
+            );
             if ui.button("自动勾对").clicked() && can_edit {
                 auto = true;
             }
             ui.separator();
             if ui.button("手工勾对").clicked() && can_edit {
-                let s = self.sel_stmt.and_then(|id| self.stmts.iter().find(|x| x.id == id));
+                let s = self
+                    .sel_stmt
+                    .and_then(|id| self.stmts.iter().find(|x| x.id == id));
                 let b = self
                     .sel_book
                     .and_then(|id| self.books.iter().find(|x| x.entry_id == id));
@@ -606,32 +619,42 @@ impl BankRecView {
                 widgets::TCol::new("借方", 90.0).right(),
                 widgets::TCol::new("贷方", 90.0).right(),
             ];
-            widgets::grid(&mut cols[0], "bank_pick_stmt", &scols, rows.len(), 22.0, |i, c, ui| {
-                let r = &rows[i];
-                match c {
-                    0 => {
-                        if ui
-                            .selectable_label(sel_stmt == Some(r.0), RichText::new(&r.1).monospace())
-                            .clicked()
-                        {
-                            pick_stmt = Some(r.0);
+            widgets::grid(
+                &mut cols[0],
+                "bank_pick_stmt",
+                &scols,
+                rows.len(),
+                22.0,
+                |i, c, ui| {
+                    let r = &rows[i];
+                    match c {
+                        0 => {
+                            if ui
+                                .selectable_label(
+                                    sel_stmt == Some(r.0),
+                                    RichText::new(&r.1).monospace(),
+                                )
+                                .clicked()
+                            {
+                                pick_stmt = Some(r.0);
+                            }
                         }
-                    }
-                    1 => {
-                        let t = if r.5 {
-                            RichText::new(format!("✔ {}", r.2)).color(palette::OK)
-                        } else {
-                            RichText::new(&r.2)
-                        };
-                        if ui.selectable_label(sel_stmt == Some(r.0), t).clicked() {
-                            pick_stmt = Some(r.0);
+                        1 => {
+                            let t = if r.5 {
+                                RichText::new(format!("✔ {}", r.2)).color(palette::OK)
+                            } else {
+                                RichText::new(&r.2)
+                            };
+                            if ui.selectable_label(sel_stmt == Some(r.0), t).clicked() {
+                                pick_stmt = Some(r.0);
+                            }
                         }
+                        2 => widgets::amount_label(ui, r.3),
+                        3 => widgets::amount_label(ui, r.4),
+                        _ => {}
                     }
-                    2 => widgets::amount_label(ui, r.3),
-                    3 => widgets::amount_label(ui, r.4),
-                    _ => {}
-                }
-            });
+                },
+            );
 
             // 右：企业日记账
             cols[1].label(RichText::new(format!("企业日记账未勾对（{book_total}）")).strong());
@@ -657,35 +680,48 @@ impl BankRecView {
                 widgets::TCol::new("借方", 90.0).right(),
                 widgets::TCol::new("贷方", 90.0).right(),
             ];
-            widgets::grid(&mut cols[1], "bank_pick_book", &bcols, rows.len(), 22.0, |i, c, ui| {
-                let r = &rows[i];
-                match c {
-                    0 => {
-                        if ui
-                            .selectable_label(sel_book == Some(r.0), RichText::new(&r.1).monospace())
-                            .clicked()
-                        {
-                            pick_book = Some(r.0);
+            widgets::grid(
+                &mut cols[1],
+                "bank_pick_book",
+                &bcols,
+                rows.len(),
+                22.0,
+                |i, c, ui| {
+                    let r = &rows[i];
+                    match c {
+                        0 => {
+                            if ui
+                                .selectable_label(
+                                    sel_book == Some(r.0),
+                                    RichText::new(&r.1).monospace(),
+                                )
+                                .clicked()
+                            {
+                                pick_book = Some(r.0);
+                            }
                         }
-                    }
-                    1 => {
-                        if ui
-                            .selectable_label(sel_book == Some(r.0), RichText::new(&r.2).monospace())
-                            .clicked()
-                        {
-                            pick_book = Some(r.0);
+                        1 => {
+                            if ui
+                                .selectable_label(
+                                    sel_book == Some(r.0),
+                                    RichText::new(&r.2).monospace(),
+                                )
+                                .clicked()
+                            {
+                                pick_book = Some(r.0);
+                            }
                         }
-                    }
-                    2 => {
-                        if ui.selectable_label(sel_book == Some(r.0), &r.3).clicked() {
-                            pick_book = Some(r.0);
+                        2 => {
+                            if ui.selectable_label(sel_book == Some(r.0), &r.3).clicked() {
+                                pick_book = Some(r.0);
+                            }
                         }
+                        3 => widgets::amount_label(ui, r.4),
+                        4 => widgets::amount_label(ui, r.5),
+                        _ => {}
                     }
-                    3 => widgets::amount_label(ui, r.4),
-                    4 => widgets::amount_label(ui, r.5),
-                    _ => {}
-                }
-            });
+                },
+            );
         });
         if let Some(id) = pick_stmt {
             self.sel_stmt = Some(id);
@@ -741,9 +777,12 @@ impl BankRecView {
             ui.separator();
             if rec.balanced() {
                 ui.label(
-                    RichText::new(format!("✔ 调节后双方余额一致：{}", rec.bank_adjusted.fmt_money()))
-                        .color(palette::OK)
-                        .strong(),
+                    RichText::new(format!(
+                        "✔ 调节后双方余额一致：{}",
+                        rec.bank_adjusted.fmt_money()
+                    ))
+                    .color(palette::OK)
+                    .strong(),
                 );
             } else {
                 ui.label(
@@ -841,18 +880,14 @@ impl BankRecView {
         };
 
         ui.add_space(6.0);
-        ui.label(
-            RichText::new(format!("银行有、企业没有（{} 笔）", bank_rows.len())).strong(),
-        );
+        ui.label(RichText::new(format!("银行有、企业没有（{} 笔）", bank_rows.len())).strong());
         let rows = bank_rows.clone();
         widgets::grid(ui, "bank_only", &cols, rows.len(), 22.0, |i, c, ui| {
             cell(&rows[i], c, ui);
         });
 
         ui.add_space(8.0);
-        ui.label(
-            RichText::new(format!("企业有、银行没有（{} 笔）", book_rows.len())).strong(),
-        );
+        ui.label(RichText::new(format!("企业有、银行没有（{} 笔）", book_rows.len())).strong());
         let rows = book_rows.clone();
         widgets::grid(ui, "book_only", &cols, rows.len(), 22.0, |i, c, ui| {
             cell(&rows[i], c, ui);

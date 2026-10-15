@@ -164,7 +164,10 @@ pub fn variance_report(db: &Db, period: fincore::Period) -> DbResult<VarianceRep
         let actual_unit = if in_qty.is_zero() {
             Money::ZERO
         } else {
-            in_amount.checked_div(in_qty).unwrap_or(Money::ZERO).round2()
+            in_amount
+                .checked_div(in_qty)
+                .unwrap_or(Money::ZERO)
+                .round2()
         };
 
         if method == CostMethod::Standard && std.is_zero() {
@@ -292,7 +295,11 @@ mod tests {
             &StockMove {
                 id: 0,
                 period: Period::new(2026, 1).unwrap(),
-                biz_date: d(2026, 1, 5 + (SEQ.fetch_add(1, Ordering::SeqCst) as u32) % 20),
+                biz_date: d(
+                    2026,
+                    1,
+                    5 + (SEQ.fetch_add(1, Ordering::SeqCst) as u32) % 20,
+                ),
                 kind,
                 item: item.into(),
                 warehouse: String::new(),
@@ -319,7 +326,11 @@ mod tests {
             &StockMove {
                 id: 0,
                 period: Period::new(2026, 1).unwrap(),
-                biz_date: d(2026, 1, 6 + (SEQ.fetch_add(1, Ordering::SeqCst) as u32) % 10),
+                biz_date: d(
+                    2026,
+                    1,
+                    6 + (SEQ.fetch_add(1, Ordering::SeqCst) as u32) % 10,
+                ),
                 kind: StockKind::Adjust,
                 item: item.into(),
                 warehouse: String::new(),
@@ -377,7 +388,11 @@ mod tests {
         crate::business::stock_summary(&db, p, CostMethod::Standard).unwrap();
 
         let r = variance_report(&db, p).unwrap();
-        let row = r.rows.iter().find(|x| x.item == "M001").expect("应有 M001 行");
+        let row = r
+            .rows
+            .iter()
+            .find(|x| x.item == "M001")
+            .expect("应有 M001 行");
         assert_eq!(row.actual_unit, m("9"), "实际单价应取入库加权价");
         assert_eq!(row.price_variance, m("200"), "买贵 2 元 × 100 件 = 200");
         assert_eq!(r.total_price, m("200"));
@@ -395,7 +410,10 @@ mod tests {
         let r = variance_report(&db, p).unwrap();
         let row = r.rows.iter().find(|x| x.item == "M001").unwrap();
         assert_eq!(row.price_variance, m("-200"), "买便宜了应是负差异");
-        assert!(r.total_price.is_negative(), "合计也要跟着是负的，不能只统计超支");
+        assert!(
+            r.total_price.is_negative(),
+            "合计也要跟着是负的，不能只统计超支"
+        );
     }
 
     /// 出库成本超支差异：实际耗用贵于标准 → 正差异
@@ -520,7 +538,10 @@ mod tests {
 
         // 全局传移动加权：M001 仍应按标准成本 7（逐存货配置优先）
         let sum = crate::business::stock_summary(&db, p, CostMethod::MovingAverage).unwrap();
-        let s1 = sum.iter().find(|s| s.item == "M001").expect("M001 应有汇总");
+        let s1 = sum
+            .iter()
+            .find(|s| s.item == "M001")
+            .expect("M001 应有汇总");
         assert_eq!(
             s1.out_amount,
             m("70"),
@@ -528,7 +549,10 @@ mod tests {
             s1.out_amount
         );
         // 没配的跟随全局：M002 按移动加权 9
-        let s2 = sum.iter().find(|s| s.item == "M002").expect("M002 应有汇总");
+        let s2 = sum
+            .iter()
+            .find(|s| s.item == "M002")
+            .expect("M002 应有汇总");
         assert_eq!(
             s2.out_amount,
             m("90"),
@@ -621,11 +645,8 @@ mod tests {
     fn divergent_ref_cost_and_standard_cost_is_flagged() {
         let db = mem();
         // 建存货档案并写一个 ref_cost = 9
-        let mut e = fincore::auxiliary::AuxEntity::new(
-            fincore::account::AuxKind::Item,
-            "M001",
-            "材料甲",
-        );
+        let mut e =
+            fincore::auxiliary::AuxEntity::new(fincore::account::AuxKind::Item, "M001", "材料甲");
         e.props.insert("ref_cost".into(), "9".into());
         crate::auxs::insert(&db, &e).unwrap();
         mv(&db, StockKind::Purchase, "M001", "100", "9");
@@ -633,7 +654,9 @@ mod tests {
 
         let r = variance_report(&db, Period::new(2026, 1).unwrap()).unwrap();
         assert!(
-            r.warnings.iter().any(|w| w.contains("参考成本") && w.contains("标准成本")),
+            r.warnings
+                .iter()
+                .any(|w| w.contains("参考成本") && w.contains("标准成本")),
             "两个标准成本不一致必须点名：{:?}",
             r.warnings
         );

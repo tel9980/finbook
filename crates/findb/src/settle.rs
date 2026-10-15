@@ -40,7 +40,8 @@ fn map_rec(r: &rusqlite::Row) -> rusqlite::Result<SettleRecord> {
     })
 }
 
-const COLS: &str = "id,period,account_code,aux_key,from_entry,to_entry,amount,settled_by,settled_at";
+const COLS: &str =
+    "id,period,account_code,aux_key,from_entry,to_entry,amount,settled_by,settled_at";
 
 /// 某科目（含下级）的全部核销记录
 ///
@@ -73,9 +74,8 @@ pub fn list_for_entry(db: &Db, entry_id: i64) -> DbResult<Vec<SettleRecord>> {
 /// 需要能借给事务句柄（`Transaction` 会 Deref 到 `Connection`）。
 pub fn settled_of(conn: &Connection, entry_id: i64) -> DbResult<Money> {
     // 金额在库里是 TEXT，SUM 会走浮点，精度不可控；这里取行在 Rust 侧用定点累加
-    let mut st = conn.prepare(
-        "SELECT amount FROM settle_record WHERE from_entry=?1 OR to_entry=?1",
-    )?;
+    let mut st =
+        conn.prepare("SELECT amount FROM settle_record WHERE from_entry=?1 OR to_entry=?1")?;
     let rows = st
         .query_map(rusqlite::params![entry_id], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -113,7 +113,10 @@ pub fn settled_map(db: &Db, entry_ids: &[i64]) -> DbResult<std::collections::Has
         .collect();
     let rows = st
         .query_map(ids2.as_slice(), |r| {
-            Ok((r.get::<_, i64>(0)?, Money::parse_or_zero(&r.get::<_, String>(1)?)))
+            Ok((
+                r.get::<_, i64>(0)?,
+                Money::parse_or_zero(&r.get::<_, String>(1)?),
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     for (k, v) in rows {
@@ -127,13 +130,7 @@ fn settled_map_stub(db: &Db, entry_ids: &[i64]) -> DbResult<std::collections::Ha
 }
 
 /// 手工核销。会自动校验：两边分录同科目、同往来单位、金额不超过各自未核销额。
-pub fn settle(
-    db: &Db,
-    from_entry: i64,
-    to_entry: i64,
-    amount: Money,
-    who: &str,
-) -> DbResult<i64> {
+pub fn settle(db: &Db, from_entry: i64, to_entry: i64, amount: Money, who: &str) -> DbResult<i64> {
     // 「读未核销额 → 校验 → 累加写回」必须整体原子。BEGIN IMMEDIATE 在开头就取得
     // 写锁，期间不会有别的写事务插进来；否则两笔并发核销会各自通过超额校验，
     // 并把对方的累计额覆盖掉（唯一索引只保证行唯一，管不住金额）。
@@ -173,10 +170,7 @@ pub fn settle_in_tx(
         .into());
     }
     if f.aux_key != t.aux_key {
-        return Err(fincore::FinError::msg(
-            "两条分录的往来单位不一致，不能核销",
-        )
-        .into());
+        return Err(fincore::FinError::msg("两条分录的往来单位不一致，不能核销").into());
     }
     // 核销的**被核销方**（from_entry，即被冲销的应收/应付）必须已记账。
     //
@@ -243,8 +237,10 @@ pub fn settle_in_tx(
 }
 
 pub fn unsettle(db: &Db, id: i64) -> DbResult<()> {
-    db.conn()
-        .execute("DELETE FROM settle_record WHERE id=?1", rusqlite::params![id])?;
+    db.conn().execute(
+        "DELETE FROM settle_record WHERE id=?1",
+        rusqlite::params![id],
+    )?;
     Ok(())
 }
 
@@ -312,37 +308,37 @@ impl OpenEntry {
 
 fn entry_of(conn: &Connection, entry_id: i64) -> DbResult<Option<OpenEntry>> {
     conn.query_row(
-            "SELECT e.id, v.id, v.period, v.date, v.word, v.no, e.line, e.summary,
+        "SELECT e.id, v.id, v.period, v.date, v.word, v.no, e.line, e.summary,
                     e.account_code, e.aux_key, COALESCE(e.settle_no,''), e.debit, e.credit,
                     v.status
              FROM voucher_entry e JOIN voucher v ON v.id=e.voucher_id
              WHERE e.id=?1",
-            rusqlite::params![entry_id],
-            |r| {
-                let d: String = r.get(3)?;
-                let status: String = r.get(13)?;
-                Ok(OpenEntry {
-                    entry_id: r.get(0)?,
-                    voucher_id: r.get(1)?,
-                    period: Period::from_ymm(r.get(2)?),
-                    date: NaiveDate::parse_from_str(&d, "%Y-%m-%d")
-                        .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
-                    word: r.get(4)?,
-                    no: r.get(5)?,
-                    line: r.get(6)?,
-                    summary: r.get(7)?,
-                    account_code: r.get(8)?,
-                    aux_key: r.get(9)?,
-                    settle_no: r.get(10)?,
-                    debit: Money::parse_or_zero(&r.get::<_, String>(11)?),
-                    credit: Money::parse_or_zero(&r.get::<_, String>(12)?),
-                    settled: Money::ZERO,
-                    posted: status == "posted",
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
+        rusqlite::params![entry_id],
+        |r| {
+            let d: String = r.get(3)?;
+            let status: String = r.get(13)?;
+            Ok(OpenEntry {
+                entry_id: r.get(0)?,
+                voucher_id: r.get(1)?,
+                period: Period::from_ymm(r.get(2)?),
+                date: NaiveDate::parse_from_str(&d, "%Y-%m-%d")
+                    .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
+                word: r.get(4)?,
+                no: r.get(5)?,
+                line: r.get(6)?,
+                summary: r.get(7)?,
+                account_code: r.get(8)?,
+                aux_key: r.get(9)?,
+                settle_no: r.get(10)?,
+                debit: Money::parse_or_zero(&r.get::<_, String>(11)?),
+                credit: Money::parse_or_zero(&r.get::<_, String>(12)?),
+                settled: Money::ZERO,
+                posted: status == "posted",
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
 }
 
 /// 取某科目（含下级）截至某日的全部**已记账**往来分录，并填充已核销额。
@@ -376,7 +372,11 @@ pub fn open_entries_with(
     posted_only: bool,
 ) -> DbResult<Vec<OpenEntry>> {
     // 已记账分支固定用字面量 'posted'（走索引），放宽分支才用参数
-    let status_clause = if posted_only { "= 'posted'" } else { "!= 'void'" };
+    let status_clause = if posted_only {
+        "= 'posted'"
+    } else {
+        "!= 'void'"
+    };
     let sql = format!(
         "SELECT e.id, v.id, v.period, v.date, v.word, v.no, e.line, e.summary,
                 e.account_code, e.aux_key, COALESCE(e.settle_no,''), e.debit, e.credit,
@@ -472,16 +472,18 @@ pub fn auto_settle(
             }
             let dir_pos = g[i].debit > Money::ZERO;
             let amt = g[i].open();
-            let hit = g
-                .iter()
-                .position(|x| {
-                    x.entry_id != g[i].entry_id
-                        && (x.debit > Money::ZERO) != dir_pos
-                        && x.open() == amt
-                        && !x.open().is_zero()
-                });
+            let hit = g.iter().position(|x| {
+                x.entry_id != g[i].entry_id
+                    && (x.debit > Money::ZERO) != dir_pos
+                    && x.open() == amt
+                    && !x.open().is_zero()
+            });
             if let Some(j) = hit {
-                let (from, to) = if dir_pos { (g[i].entry_id, g[j].entry_id) } else { (g[j].entry_id, g[i].entry_id) };
+                let (from, to) = if dir_pos {
+                    (g[i].entry_id, g[j].entry_id)
+                } else {
+                    (g[j].entry_id, g[i].entry_id)
+                };
                 let id = settle(db, from, to, amt, who)?;
                 let _ = id;
                 res.pairs += 1;
@@ -531,7 +533,9 @@ pub fn auto_settle(
                 if !left.is_zero() && left <= tolerance {
                     // 找反向未结清分录把尾数吃掉
                     if let Some(other) = g.iter().find(|x| {
-                        x.entry_id != id && x.is_open() && (x.debit > Money::ZERO) != (d.debit > Money::ZERO)
+                        x.entry_id != id
+                            && x.is_open()
+                            && (x.debit > Money::ZERO) != (d.debit > Money::ZERO)
                     }) {
                         // 尾数抹平是「尽力而为」：失败不阻断整批，但也绝不能计数——
                         // 旧写法丢弃错误后照样 pairs/amount +=，界面显示"已核销 N 笔"
@@ -689,7 +693,11 @@ pub fn aging(
             // 只有那一个权威定义点。
             key: crate::balances::aux_key_value_of(&e.aux_key, party),
             date: e.date,
-            amount: if flip { e.signed().negated() } else { e.signed() },
+            amount: if flip {
+                e.signed().negated()
+            } else {
+                e.signed()
+            },
             settled: e.settled,
             doc_no: format!("{}-{}", e.word, e.no),
         })
@@ -713,7 +721,11 @@ pub fn aging(
                 settled: Money::ZERO,
                 doc_no: format!(
                     "期初 {}",
-                    if o.doc_no.is_empty() { format!("#{}", o.id) } else { o.doc_no.clone() }
+                    if o.doc_no.is_empty() {
+                        format!("#{}", o.id)
+                    } else {
+                        o.doc_no.clone()
+                    }
                 ),
             });
         }
@@ -756,25 +768,22 @@ fn map_arap_opening(r: &rusqlite::Row) -> rusqlite::Result<ArapOpening> {
 }
 
 pub fn arap_opening_list(db: &Db, kind: Option<&str>) -> DbResult<Vec<ArapOpening>> {
-    let out;
-    match kind {
+    let out = match kind {
         Some(k) => {
             let mut st = db.conn().prepare(&format!(
                 "SELECT {ARO_COLS} FROM arap_opening WHERE kind=?1 ORDER BY doc_date, id"
             ))?;
-            out = st
-                .query_map([k], map_arap_opening)?
-                .collect::<Result<Vec<_>, _>>()?;
+            let rows = st.query_map([k], map_arap_opening)?;
+            rows.collect::<Result<Vec<_>, _>>()?
         }
         None => {
             let mut st = db.conn().prepare(&format!(
                 "SELECT {ARO_COLS} FROM arap_opening ORDER BY kind, doc_date, id"
             ))?;
-            out = st
-                .query_map([], map_arap_opening)?
-                .collect::<Result<Vec<_>, _>>()?;
+            let rows = st.query_map([], map_arap_opening)?;
+            rows.collect::<Result<Vec<_>, _>>()?
         }
-    }
+    };
     Ok(out)
 }
 
@@ -957,7 +966,11 @@ pub fn dunning_create(
         return Err(fincore::FinError::msg("客商编码不能为空").into());
     }
     let account = if account.trim().is_empty() {
-        if kind == "ar" { "1122" } else { "2202" }
+        if kind == "ar" {
+            "1122"
+        } else {
+            "2202"
+        }
     } else {
         account.trim()
     };
@@ -978,7 +991,7 @@ pub fn dunning_create(
         if amt.is_zero() {
             continue;
         }
-        amount = amount + amt;
+        amount += amt;
         items.push(DunningItem {
             doc_no: format!("{}-{}", e.word, e.no),
             date: e.date.format("%Y-%m-%d").to_string(),
@@ -995,7 +1008,7 @@ pub fn dunning_create(
         if Period::from_date(d).ymm() > upto.ymm() {
             continue;
         }
-        amount = amount + o.amount;
+        amount += o.amount;
         items.push(DunningItem {
             doc_no: format!(
                 "期初 {}",
@@ -1052,11 +1065,9 @@ pub fn dunning_status(db: &Db, id: i64, status: &str) -> DbResult<()> {
         _ => false,
     };
     if !allowed {
-        return Err(fincore::FinError::msg(format!(
-            "状态不能从 {} 变更为 {}",
-            cur.status, status
-        ))
-        .into());
+        return Err(
+            fincore::FinError::msg(format!("状态不能从 {} 变更为 {}", cur.status, status)).into(),
+        );
     }
     let ts = dunning_now();
     let n = db.conn().execute(
@@ -1169,7 +1180,11 @@ pub fn bad_debt_provision_voucher(
     let mut v = fincore::Voucher::new(period, date, "记", no);
     v.prepared_by = who.to_string();
     v.source = fincore::voucher::VoucherSource::Business;
-    v.memo = if dec > inc { "冲回坏账准备".to_string() } else { "计提坏账准备".to_string() };
+    v.memo = if dec > inc {
+        "冲回坏账准备".to_string()
+    } else {
+        "计提坏账准备".to_string()
+    };
     let mut line_no = 1;
     for (key, d) in &deltas {
         // AuxRef 从「裸编码 + 维度」**现场构造**，不要 `from_key(key)` ——
@@ -1250,7 +1265,10 @@ mod tests {
         v.push_entry(Entry {
             debit: Money::parse("3000").unwrap(),
             credit: Money::ZERO,
-            aux: AuxRef { customer: Some("C01".into()), ..Default::default() },
+            aux: AuxRef {
+                customer: Some("C01".into()),
+                ..Default::default()
+            },
             ..Entry::new(1, "112201", "应收")
         });
         v.push_entry(Entry {
@@ -1273,7 +1291,10 @@ mod tests {
             lines.len(),
             1,
             "同一客户必须只有一行：{:?}",
-            lines.iter().map(|l| (l.key.clone(), l.total.fmt_money())).collect::<Vec<_>>()
+            lines
+                .iter()
+                .map(|l| (l.key.clone(), l.total.fmt_money()))
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             lines[0].key, "C01",
@@ -1307,12 +1328,7 @@ mod tests {
     fn aging_2203_预收按客户出() {
         let db = tmpdb("aging_2203");
         let p = Period::new(2026, 11).unwrap();
-        let mut v = Voucher::new(
-            p,
-            NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
-            "收",
-            1,
-        );
+        let mut v = Voucher::new(p, NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(), "收", 1);
         v.push_entry(Entry {
             debit: Money::parse("5000").unwrap(),
             credit: Money::ZERO,
@@ -1358,7 +1374,10 @@ mod tests {
         v.push_entry(Entry {
             debit: Money::parse("2000").unwrap(),
             credit: Money::ZERO,
-            aux: AuxRef { supplier: Some("S01".into()), ..Default::default() },
+            aux: AuxRef {
+                supplier: Some("S01".into()),
+                ..Default::default()
+            },
             ..Entry::new(1, "220201", "应付货款")
         });
         v.push_entry(Entry {
@@ -1381,7 +1400,10 @@ mod tests {
             lines.len(),
             1,
             "应付账龄必须出行 —— key 取值写死 customer 会让 2202 整页空白：{:?}",
-            lines.iter().map(|l| (l.key.clone(), l.total.fmt_money())).collect::<Vec<_>>()
+            lines
+                .iter()
+                .map(|l| (l.key.clone(), l.total.fmt_money()))
+                .collect::<Vec<_>>()
         );
         assert_eq!(lines[0].key, "S01", "key 是**裸供应商编码**");
         // 这笔是借方 220201（预付供应商）—— 翻正后落在预付栏，不进合计。
@@ -1456,7 +1478,6 @@ mod tests {
             lines.iter().map(|l| l.key.clone()).collect::<Vec<_>>()
         );
     }
-
 
     fn tmpdb(name: &str) -> Db {
         let p = std::env::temp_dir().join(format!("finbook_settle_{name}.fbk"));
@@ -1550,7 +1571,16 @@ mod tests {
         let d1 = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         let d2 = NaiveDate::from_ymd_opt(2026, 1, 20).unwrap();
         // 一张已记账 + 一张草稿
-        ar_voucher(&db, Period::new(2026, 1).unwrap(), d1, 1, "C01", "1000", true, "600101");
+        ar_voucher(
+            &db,
+            Period::new(2026, 1).unwrap(),
+            d1,
+            1,
+            "C01",
+            "1000",
+            true,
+            "600101",
+        );
         ar_voucher_draft(&db, d2, 2, "C01", "500", true, "600101");
         let p = Period::new(2026, 1).unwrap();
 
@@ -1578,17 +1608,42 @@ mod tests {
         let db = tmpdb("unposted_settle");
         let d1 = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
         let d2 = NaiveDate::from_ymd_opt(2026, 1, 20).unwrap();
-        let (_, e_ar_posted) =
-            ar_voucher(&db, Period::new(2026, 1).unwrap(), d1, 1, "C01", "1000", true, "600101");
+        let (_, e_ar_posted) = ar_voucher(
+            &db,
+            Period::new(2026, 1).unwrap(),
+            d1,
+            1,
+            "C01",
+            "1000",
+            true,
+            "600101",
+        );
         // 对方用 1001（库存现金，不核算银行账户），避免 100201 要求 bank 辅助核算
-        let (_, e_cash_posted) =
-            ar_voucher(&db, Period::new(2026, 1).unwrap(), d2, 2, "C01", "600", false, "1001");
+        let (_, e_cash_posted) = ar_voucher(
+            &db,
+            Period::new(2026, 1).unwrap(),
+            d2,
+            2,
+            "C01",
+            "600",
+            false,
+            "1001",
+        );
 
         // from 侧是草稿 → 拒绝
         let (_, e_ar_draft) = ar_voucher_draft(&db, d2, 3, "C01", "800", true, "600101");
-        let err = settle(&db, e_ar_draft, e_ar_posted, Money::parse("100").unwrap(), "u1")
-            .unwrap_err();
-        assert!(err.to_string().contains("已记账"), "草稿债权应被拒绝：{err}");
+        let err = settle(
+            &db,
+            e_ar_draft,
+            e_ar_posted,
+            Money::parse("100").unwrap(),
+            "u1",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("已记账"),
+            "草稿债权应被拒绝：{err}"
+        );
         assert_eq!(
             settled_of(db.conn(), e_ar_draft).unwrap(),
             Money::ZERO,
@@ -1635,7 +1690,10 @@ mod tests {
         let (_, e_cash) = ar_voucher(&db, p, d2, 2, "C01", "600", false, "100201");
 
         settle(&db, e_ar, e_cash, Money::parse("600").unwrap(), "u1").unwrap();
-        assert_eq!(settled_of(db.conn(), e_ar).unwrap(), Money::parse("600").unwrap());
+        assert_eq!(
+            settled_of(db.conn(), e_ar).unwrap(),
+            Money::parse("600").unwrap()
+        );
 
         // 超额核销要拦
         assert!(settle(&db, e_ar, e_cash, Money::parse("500").unwrap(), "u1").is_err());
@@ -1739,10 +1797,7 @@ mod tests {
         ar_voucher(&db, p, d, 3, "C01", "0.005", false, "100201");
 
         let res = auto_settle(&db, "1122", p, Money::parse("0.01").unwrap(), "u").unwrap();
-        assert_eq!(
-            res.written_off, 0,
-            "抹平失败不得计入 written_off：{res:?}"
-        );
+        assert_eq!(res.written_off, 0, "抹平失败不得计入 written_off：{res:?}");
         assert!(
             res.warnings.iter().any(|w| w.contains("抹平失败")),
             "抹平失败必须进 warnings：{res:?}"
@@ -1809,7 +1864,7 @@ mod tests {
         let sm = settled_map(&db, &[e_r68, e_inv, e_r50]).unwrap();
         assert_eq!(sm.get(&e_inv), Some(&Money::parse("68000").unwrap()));
         assert_eq!(sm.get(&e_r68), Some(&Money::parse("68000").unwrap()));
-        assert!(sm.get(&e_r50).is_none());
+        assert!(!sm.contains_key(&e_r50));
 
         // 自动核销必须一口气吃完发票剩下的 24700，而不是报错
         let res = auto_settle(&db, "112201", p, Money::ZERO, "u").unwrap();
@@ -1822,7 +1877,8 @@ mod tests {
     }
 
     #[test]
-    fn aging_report() {        let db = tmpdb("aging");
+    fn aging_report() {
+        let db = tmpdb("aging");
         let p = Period::new(2026, 3).unwrap();
         let d1 = NaiveDate::from_ymd_opt(2026, 3, 20).unwrap();
         let d2 = NaiveDate::from_ymd_opt(2025, 6, 1).unwrap();
@@ -1835,7 +1891,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].total, Money::parse("3000").unwrap());
         assert_eq!(lines[0].amounts[0], Money::parse("1000").unwrap()); // 11 天
-        // 2025-06-01 → 2026-03-31 约 303 天，落在 181-365 档
+                                                                        // 2025-06-01 → 2026-03-31 约 303 天，落在 181-365 档
         assert_eq!(lines[0].amounts[4], Money::parse("2000").unwrap());
     }
 
@@ -1844,18 +1900,43 @@ mod tests {
         let db = tmpdb("baddebt");
         let p = Period::new(2026, 3).unwrap();
         // 一笔 3 年以上的老应收 10000，一笔 1 年以内 2000
-        ar_voucher(&db, p, NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(), 1, "C01", "2000", true, "600101");
-        ar_voucher(&db, p, NaiveDate::from_ymd_opt(2023, 1, 5).unwrap(), 2, "C01", "10000", true, "600101");
+        ar_voucher(
+            &db,
+            p,
+            NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+            1,
+            "C01",
+            "2000",
+            true,
+            "600101",
+        );
+        ar_voucher(
+            &db,
+            p,
+            NaiveDate::from_ymd_opt(2023, 1, 5).unwrap(),
+            2,
+            "C01",
+            "10000",
+            true,
+            "600101",
+        );
 
         let as_of = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let id = bad_debt_provision_voucher(&db, p, as_of, "u1").unwrap().expect("应生成坏账准备凭证");
+        let id = bad_debt_provision_voucher(&db, p, as_of, "u1")
+            .unwrap()
+            .expect("应生成坏账准备凭证");
         let v = crate::vouchers::get(&db, id).unwrap().unwrap();
         // 借 资产减值损失 / 贷 坏账准备，借贷平衡
         assert!(v.balanced());
         assert!(v.entries.iter().any(|e| e.account_code == "6701"));
         assert!(v.entries.iter().any(|e| e.account_code == "1231"));
         // 3-4 年老账 10000 × 30% + 1 年内新账 2000 × 5% = 3000 + 100 = 3100
-        let credit: Money = v.entries.iter().filter(|e| e.account_code == "1231").map(|e| e.credit).sum();
+        let credit: Money = v
+            .entries
+            .iter()
+            .filter(|e| e.account_code == "1231")
+            .map(|e| e.credit)
+            .sum();
         assert_eq!(credit, Money::parse("3100").unwrap());
         assert_eq!(v.source, fincore::voucher::VoucherSource::Business);
     }
@@ -1885,7 +1966,9 @@ mod tests {
             "600101",
         );
         let as_of = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
-        let first = bad_debt_provision_voucher(&db, p1, as_of, "u1").unwrap().expect("首次应计提");
+        let first = bad_debt_provision_voucher(&db, p1, as_of, "u1")
+            .unwrap()
+            .expect("首次应计提");
         // 计提出来的 1231 分录**必须挂上往来对象** —— 这是幂等性的机械保证：
         // 下一轮 existing 从 `e.aux_key` 读回上一轮的数，aux 没挂上就取不到，
         // 于是每轮都当成「还没提过」而全额重复计提（而且不报错）。
@@ -1901,14 +1984,19 @@ mod tests {
                 .find(|e| e.account_code == "1231")
                 .expect("应有 1231 分录");
             assert_eq!(
-                e1231.aux.get(fincore::AuxKind::Customer).as_deref(),
-                Some(&"C01".to_string()),
+                e1231
+                    .aux
+                    .get(fincore::AuxKind::Customer)
+                    .map(|s| s.as_str()),
+                Some("C01"),
                 "计提的 1231 分录必须挂客户辅助核算，否则下一轮读不回来、幂等性断裂"
             );
         }
         // 目标未变：重复执行差额为 0，不再生成
         assert!(
-            bad_debt_provision_voucher(&db, p1, as_of, "u1").unwrap().is_none(),
+            bad_debt_provision_voucher(&db, p1, as_of, "u1")
+                .unwrap()
+                .is_none(),
             "目标不变时不应重复计提"
         );
 
@@ -1952,23 +2040,23 @@ mod tests {
         assert_eq!(debit, Money::parse("3100").unwrap());
         assert_eq!(credit, Money::parse("3100").unwrap());
         // 已到目标余额：再执行不再生成
-        assert!(
-            bad_debt_provision_voucher(
-                &db,
-                p2,
-                NaiveDate::from_ymd_opt(2026, 4, 30).unwrap(),
-                "u1"
-            )
-            .unwrap()
-            .is_none()
-        );
+        assert!(bad_debt_provision_voucher(
+            &db,
+            p2,
+            NaiveDate::from_ymd_opt(2026, 4, 30).unwrap(),
+            "u1"
+        )
+        .unwrap()
+        .is_none());
     }
 
     #[test]
     fn bad_debt_provision_skip_when_none() {
         let db = tmpdb("baddebt0");
         let p = Period::new(2026, 3).unwrap();
-        let r = bad_debt_provision_voucher(&db, p, NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(), "u1").unwrap();
+        let r =
+            bad_debt_provision_voucher(&db, p, NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(), "u1")
+                .unwrap();
         assert!(r.is_none(), "无应收时不应生成凭证");
     }
 }

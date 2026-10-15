@@ -168,7 +168,8 @@ impl BalanceSnapshot {
                 sql.push_str(&conds.join(" AND "));
             }
             let mut stmt = db.conn().prepare(&sql)?;
-            let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
             let mut r = stmt.query(refs.as_slice())?;
             while let Some(row) = r.next()? {
                 let code: String = row.get(0)?;
@@ -191,7 +192,13 @@ impl BalanceSnapshot {
                 e.ytd_debit = ad;
                 e.ytd_credit = ac;
                 if !qb.is_zero() {
-                    qtys.insert(key, QtyRow { begin: qb, ..Default::default() });
+                    qtys.insert(
+                        key,
+                        QtyRow {
+                            begin: qb,
+                            ..Default::default()
+                        },
+                    );
                 }
             }
         }
@@ -203,7 +210,11 @@ impl BalanceSnapshot {
             } else {
                 q.to.year() * 100 + 1
             };
-            let status_filter = if q.posted_only { "v.status = 'posted'" } else { "v.status != 'void'" };
+            let status_filter = if q.posted_only {
+                "v.status = 'posted'"
+            } else {
+                "v.status != 'void'"
+            };
             let mut sql = format!(
                 "SELECT e.account_code, e.aux_key, e.aux_json, e.period, e.debit, e.credit, e.qty
                  FROM voucher_entry e JOIN voucher v ON e.voucher_id=v.id
@@ -223,7 +234,8 @@ impl BalanceSnapshot {
                 sql.push_str(&format!(" AND v.prepared_by = ?{}", params.len()));
             }
             let mut stmt = db.conn().prepare(&sql)?;
-            let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
             let mut r = stmt.query(refs.as_slice())?;
             while let Some(row) = r.next()? {
                 let code: String = row.get(0)?;
@@ -341,7 +353,11 @@ impl BalanceSnapshot {
                     continue;
                 }
             }
-            let mut r = self.rows.get(&(code.clone(), aux_key.clone())).cloned().unwrap();
+            let mut r = self
+                .rows
+                .get(&(code.clone(), aux_key.clone()))
+                .cloned()
+                .unwrap();
             r.account_name = chart.get(code).map(|a| a.name.clone()).unwrap_or_default();
             if let Some(qr) = self.qtys.get(&(code.clone(), aux_key.clone())) {
                 if !qr.is_zero() {
@@ -678,7 +694,10 @@ pub fn gl_reconcile(
         .prepare("SELECT item, amount FROM stock_move WHERE item <> '' AND period <= ?1")?;
     let mv_rows = st
         .query_map([period.ymm()], |r| {
-            Ok((r.get::<_, String>(0)?, Money::parse_or_zero(&r.get::<_, String>(1)?)))
+            Ok((
+                r.get::<_, String>(0)?,
+                Money::parse_or_zero(&r.get::<_, String>(1)?),
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(st);
@@ -701,8 +720,8 @@ pub fn gl_reconcile(
     for item in items {
         let s = stock.get(&item).copied().unwrap_or(Money::ZERO);
         let g = gl.get(&item).copied().unwrap_or(Money::ZERO);
-        stock_total = stock_total + s;
-        gl_total = gl_total + g;
+        stock_total += s;
+        gl_total += g;
         out.push(ReconRow {
             item,
             stock_value: s,
@@ -764,11 +783,7 @@ fn begin_balance_of(db: &Db, account: &str) -> DbResult<Money> {
     )?;
     let rows = st
         .query_map([account], |r| {
-            Ok((
-                read_money(r, 0)?,
-                read_money(r, 1)?,
-                read_money(r, 2)?,
-            ))
+            Ok((read_money(r, 0)?, read_money(r, 1)?, read_money(r, 2)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(st);
@@ -814,22 +829,19 @@ pub fn account_detail(
          ORDER BY v.period, v.date, v.id, e.line",
     )?;
     let raw = st
-        .query_map(
-            rusqlite::params![account, from.ymm(), to.ymm()],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                    r.get::<_, String>(5)?,
-                    r.get::<_, String>(6)?,
-                    r.get::<_, String>(7)?,
-                    r.get::<_, String>(8)?,
-                ))
-            },
-        )?
+        .query_map(rusqlite::params![account, from.ymm(), to.ymm()], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, String>(8)?,
+            ))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     let mut bal = begin;
     let mut out = Vec::with_capacity(raw.len());
@@ -868,21 +880,23 @@ pub fn qty_balance_sheet(
     // 数量挂在 filtered() 里合并（raw_rows 只有金额），因此这里走 filtered
     for row in snap.filtered(&chart, &q) {
         let Some(qty) = row.qty else { continue };
-        let e = map.entry(row.account_code.clone()).or_insert(QtyBalanceRow {
-            account_code: row.account_code.clone(),
-            account_name: chart
-                .get(&row.account_code)
-                .map(|a| a.name.clone())
-                .unwrap_or_default(),
-            qty_begin: Money::ZERO,
-            qty_in: Money::ZERO,
-            qty_out: Money::ZERO,
-            qty_end: Money::ZERO,
-            amount_begin: Money::ZERO,
-            amount_debit: Money::ZERO,
-            amount_credit: Money::ZERO,
-            amount_end: Money::ZERO,
-        });
+        let e = map
+            .entry(row.account_code.clone())
+            .or_insert(QtyBalanceRow {
+                account_code: row.account_code.clone(),
+                account_name: chart
+                    .get(&row.account_code)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default(),
+                qty_begin: Money::ZERO,
+                qty_in: Money::ZERO,
+                qty_out: Money::ZERO,
+                qty_end: Money::ZERO,
+                amount_begin: Money::ZERO,
+                amount_debit: Money::ZERO,
+                amount_credit: Money::ZERO,
+                amount_end: Money::ZERO,
+            });
         e.qty_begin += qty.begin;
         e.qty_in += qty.in_qty;
         e.qty_out += qty.out_qty;
@@ -922,8 +936,10 @@ pub fn upsert_begin_on(conn: &rusqlite::Connection, r: &BeginRow) -> DbResult<()
 }
 
 pub fn delete_begin(db: &Db, id: i64) -> DbResult<()> {
-    db.conn()
-        .execute("DELETE FROM begin_balance WHERE id=?1", rusqlite::params![id])?;
+    db.conn().execute(
+        "DELETE FROM begin_balance WHERE id=?1",
+        rusqlite::params![id],
+    )?;
     Ok(())
 }
 
@@ -933,7 +949,10 @@ pub fn delete_begin(db: &Db, id: i64) -> DbResult<()> {
 /// 并保证整体原子。原来只有非事务版，删除与写入无法绑在一个事务里 ——
 /// 删成功但后续写入失败，就会留下「界面以为删了、库里没删」或反之的半截状态。
 pub fn delete_begin_on(conn: &rusqlite::Connection, id: i64) -> DbResult<()> {
-    conn.execute("DELETE FROM begin_balance WHERE id=?1", rusqlite::params![id])?;
+    conn.execute(
+        "DELETE FROM begin_balance WHERE id=?1",
+        rusqlite::params![id],
+    )?;
     Ok(())
 }
 
@@ -1126,8 +1145,18 @@ pub fn ledger(db: &Db, chart: &Chart, q: &LedgerQuery) -> DbResult<Vec<LedgerRow
             balance,
             signed_balance: running,
             qty_in: qty.filter(|v| v.is_positive()),
-            qty_out: qty.and_then(|v| if v.is_negative() { Some(v.negated()) } else { None }),
-            qty_balance: if qty.is_some() { Some(qty_running) } else { None },
+            qty_out: qty.and_then(|v| {
+                if v.is_negative() {
+                    Some(v.negated())
+                } else {
+                    None
+                }
+            }),
+            qty_balance: if qty.is_some() {
+                Some(qty_running)
+            } else {
+                None
+            },
         });
     }
     let _ = chart;
@@ -1240,8 +1269,10 @@ pub fn journal(db: &Db, chart: &Chart, q: &LedgerQuery) -> DbResult<Vec<JournalR
              WHERE voucher_id IN ({placeholders})"
         );
         let mut stmt = db.conn().prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            ids.iter().map(|i| i as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|i| i as &dyn rusqlite::types::ToSql)
+            .collect();
         let mut rr = stmt.query(params.as_slice())?;
         while let Some(r) = rr.next()? {
             let vid: i64 = r.get(0)?;
@@ -1251,13 +1282,14 @@ pub fn journal(db: &Db, chart: &Chart, q: &LedgerQuery) -> DbResult<Vec<JournalR
             // 只保留与本行借贷方向相反的分录，即真正的"对方科目"
             let is_debit = d.is_positive();
             if ((is_debit && c.is_zero()) || (!is_debit && d.is_zero()))
-                && !code.starts_with(&q.code) {
-                    let name = chart
-                        .get(&code)
-                        .map(|a| a.name.clone())
-                        .unwrap_or_else(|| code.clone());
-                    opposite.entry(vid).or_default().push(name);
-                }
+                && !code.starts_with(&q.code)
+            {
+                let name = chart
+                    .get(&code)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_else(|| code.clone());
+                opposite.entry(vid).or_default().push(name);
+            }
         }
     }
 
@@ -1267,8 +1299,10 @@ pub fn journal(db: &Db, chart: &Chart, q: &LedgerQuery) -> DbResult<Vec<JournalR
         let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!("SELECT id, cashier FROM voucher WHERE id IN ({placeholders})");
         let mut stmt = db.conn().prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            ids.iter().map(|i| i as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|i| i as &dyn rusqlite::types::ToSql)
+            .collect();
         let mut rr = stmt.query(params.as_slice())?;
         while let Some(r) = rr.next()? {
             let vid: i64 = r.get(0)?;
@@ -1344,7 +1378,6 @@ mod tests {
     use crate::vouchers;
     use fincore::{AcctCategory, AuxKind, AuxMask, Entry, Voucher};
 
-
     /// 按科目表要求补齐辅助核算与数量，让测试用的凭证符合落库校验。
     ///
     /// 现在 `vouchers::save` 会做完整校验（借贷平衡、末级科目、辅助必录、数量必录），
@@ -1371,7 +1404,11 @@ mod tests {
             e.aux.set(k, Some(v.to_string()));
         }
         if a.has_qty && e.qty.is_none() {
-            let amt = if e.debit.is_positive() { e.debit } else { e.credit };
+            let amt = if e.debit.is_positive() {
+                e.debit
+            } else {
+                e.credit
+            };
             e.qty = Some(Money::ONE);
             e.price = Some(amt);
         }
@@ -1380,7 +1417,12 @@ mod tests {
     /// 保存一张草稿凭证（不记账）——H-3 口径测试需要区分草稿与已记账
     fn save_draft(db: &Db, period: Period, day: u32, entries: Vec<(&str, &str, &str)>) -> i64 {
         let d = NaiveDate::from_ymd_opt(period.year(), period.month(), day).unwrap();
-        let mut v = Voucher::new(period, d, "记", vouchers::next_no(db, period, "记").unwrap());
+        let mut v = Voucher::new(
+            period,
+            d,
+            "记",
+            vouchers::next_no(db, period, "记").unwrap(),
+        );
         v.prepared_by = "张三".to_string();
         let mut i = 0;
         for (code, side, amt) in entries {
@@ -1471,7 +1513,12 @@ mod tests {
             5,
             vec![("1001", "借", "1000"), ("100201", "贷", "1000")],
         );
-        post_voucher(&db, p1, 10, vec![("1001", "借", "500"), ("2001", "贷", "500")]);
+        post_voucher(
+            &db,
+            p1,
+            10,
+            vec![("1001", "借", "500"), ("2001", "贷", "500")],
+        );
         let chart = crate::accounts::chart(&db).unwrap();
         let mk = |posted: bool| LedgerQuery {
             code: "1001".into(),
@@ -1528,11 +1575,20 @@ mod tests {
             vec![("1001", "借", "1000"), ("100201", "贷", "1000")],
         );
         // 2 月：借 1001 500 / 贷 6001 500
-        post_voucher(&db, p2, 6, vec![("1001", "借", "500"), ("600101", "贷", "500")]);
+        post_voucher(
+            &db,
+            p2,
+            6,
+            vec![("1001", "借", "500"), ("600101", "贷", "500")],
+        );
 
         let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p2)).unwrap();
         let cash = snap.for_account("1001", None);
-        assert_eq!(cash.begin, Money::parse("1000").unwrap(), "2 月期初应是 1 月期末");
+        assert_eq!(
+            cash.begin,
+            Money::parse("1000").unwrap(),
+            "2 月期初应是 1 月期末"
+        );
         assert_eq!(cash.debit, Money::parse("500").unwrap());
         assert_eq!(cash.end(), Money::parse("1500").unwrap());
         assert_eq!(cash.ytd_debit, Money::parse("1500").unwrap());
@@ -1552,7 +1608,12 @@ mod tests {
             5,
             vec![("1001", "借", "1000"), ("100201", "贷", "1000")],
         );
-        post_voucher(&db, p, 6, vec![("660101", "借", "300"), ("1001", "贷", "300")]);
+        post_voucher(
+            &db,
+            p,
+            6,
+            vec![("660101", "借", "300"), ("1001", "贷", "300")],
+        );
 
         let chart = crate::accounts::chart(&db).unwrap();
         let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p)).unwrap();
@@ -1577,11 +1638,13 @@ mod tests {
             )
             .unwrap();
         let vid: i64 = db.conn().last_insert_rowid();
-        for (line, code, side, amt) in [
-            (1i32, "1001", "借", "100"),
-            (2i32, "600101", "贷", "90"),
-        ] {
-            let (dr, cr) = if side == "借" { (amt, "0") } else { ("0", amt) };
+        for (line, code, side, amt) in [(1i32, "1001", "借", "100"), (2i32, "600101", "贷", "90")]
+        {
+            let (dr, cr) = if side == "借" {
+                (amt, "0")
+            } else {
+                ("0", amt)
+            };
             db.conn()
                 .execute(
                     "INSERT INTO voucher_entry(voucher_id,period,line,summary,account_code,
@@ -1602,9 +1665,24 @@ mod tests {
     fn ledger_rolls_balance() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        post_voucher(&db, p, 5, vec![("1001", "借", "1000"), ("100201", "贷", "1000")]);
-        post_voucher(&db, p, 10, vec![("1001", "借", "500"), ("600101", "贷", "500")]);
-        post_voucher(&db, p, 20, vec![("660101", "借", "200"), ("1001", "贷", "200")]);
+        post_voucher(
+            &db,
+            p,
+            5,
+            vec![("1001", "借", "1000"), ("100201", "贷", "1000")],
+        );
+        post_voucher(
+            &db,
+            p,
+            10,
+            vec![("1001", "借", "500"), ("600101", "贷", "500")],
+        );
+        post_voucher(
+            &db,
+            p,
+            20,
+            vec![("660101", "借", "200"), ("1001", "贷", "200")],
+        );
 
         let chart = crate::accounts::chart(&db).unwrap();
         let rows = ledger(
@@ -1634,8 +1712,18 @@ mod tests {
     fn ledger_with_children() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        post_voucher(&db, p, 5, vec![("100201", "借", "800"), ("1001", "贷", "800")]);
-        post_voucher(&db, p, 6, vec![("100202", "借", "200"), ("1001", "贷", "200")]);
+        post_voucher(
+            &db,
+            p,
+            5,
+            vec![("100201", "借", "800"), ("1001", "贷", "800")],
+        );
+        post_voucher(
+            &db,
+            p,
+            6,
+            vec![("100202", "借", "200"), ("1001", "贷", "200")],
+        );
 
         let chart = crate::accounts::chart(&db).unwrap();
         // 父科目 1002 应汇总两个下级
@@ -1666,12 +1754,18 @@ mod tests {
         let mut v = Voucher::new(p, NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(), "记", 1);
         v.push_entry(Entry {
             debit: Money::parse("600").unwrap(),
-            aux: AuxRef { dept: Some("D01".into()), ..Default::default() },
+            aux: AuxRef {
+                dept: Some("D01".into()),
+                ..Default::default()
+            },
             ..Entry::new(1, "660201", "办公费")
         });
         v.push_entry(Entry {
             debit: Money::parse("400").unwrap(),
-            aux: AuxRef { dept: Some("D02".into()), ..Default::default() },
+            aux: AuxRef {
+                dept: Some("D02".into()),
+                ..Default::default()
+            },
             ..Entry::new(2, "660201", "办公费")
         });
         v.push_entry(Entry {
@@ -1686,7 +1780,10 @@ mod tests {
         assert_eq!(all.debit, Money::parse("1000").unwrap());
         let d01 = snap.for_account(
             "660201",
-            Some(&AuxRef { dept: Some("D01".into()), ..Default::default() }),
+            Some(&AuxRef {
+                dept: Some("D01".into()),
+                ..Default::default()
+            }),
         );
         assert_eq!(d01.debit, Money::parse("600").unwrap());
         assert_eq!(snap.aux_breakdown("660201").len(), 2);
@@ -1709,25 +1806,44 @@ mod tests {
             },
         )
         .unwrap();
-        post_voucher(&db, p, 5, vec![("1001", "借", "200"), ("600101", "贷", "200")]);
+        post_voucher(
+            &db,
+            p,
+            5,
+            vec![("1001", "借", "200"), ("600101", "贷", "200")],
+        );
 
         let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p)).unwrap();
         let cash = snap.for_account("1001", None);
         // 5000 - 1000 + 200 = 4200
         assert_eq!(cash.end(), Money::parse("4200").unwrap());
         assert_eq!(cash.begin, Money::parse("4000").unwrap());
-        assert_eq!(begin_trial(&db).unwrap(), (Money::parse("4000").unwrap(), Money::ZERO));
+        assert_eq!(
+            begin_trial(&db).unwrap(),
+            (Money::parse("4000").unwrap(), Money::ZERO)
+        );
     }
 
     #[test]
     fn balance_source_impl() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        post_voucher(&db, p, 5, vec![("1001", "借", "1000"), ("600101", "贷", "1000")]);
+        post_voucher(
+            &db,
+            p,
+            5,
+            vec![("1001", "借", "1000"), ("600101", "贷", "1000")],
+        );
         let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p)).unwrap();
         let src: &dyn BalanceSource = &snap;
-        assert_eq!(src.balance_of("1001", None).end(), Money::parse("1000").unwrap());
-        assert_eq!(src.balance_of("600101", None).end(), Money::parse("-1000").unwrap());
+        assert_eq!(
+            src.balance_of("1001", None).end(),
+            Money::parse("1000").unwrap()
+        );
+        assert_eq!(
+            src.balance_of("600101", None).end(),
+            Money::parse("-1000").unwrap()
+        );
         assert_eq!(src.balance_of("9999", None).end(), Money::ZERO);
     }
 
@@ -1762,13 +1878,21 @@ mod tests {
     fn account_table_shape() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        post_voucher(&db, p, 5, vec![("1001", "借", "1000"), ("600101", "贷", "1000")]);
+        post_voucher(
+            &db,
+            p,
+            5,
+            vec![("1001", "借", "1000"), ("600101", "贷", "1000")],
+        );
         let chart = crate::accounts::chart(&db).unwrap();
         let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p)).unwrap();
-        let table = snap.account_table(&chart, &BalanceQuery {
-            non_zero_only: true,
-            ..BalanceQuery::period(p)
-        });
+        let table = snap.account_table(
+            &chart,
+            &BalanceQuery {
+                non_zero_only: true,
+                ..BalanceQuery::period(p)
+            },
+        );
         // 1001 与 6001 应有数据，1002 无数据被过滤
         assert!(table.iter().any(|r| r.account_code == "1001"));
         assert!(table.iter().any(|r| r.account_code == "600101"));
@@ -1779,8 +1903,18 @@ mod tests {
     fn profit_loss_rows_only_pl() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        post_voucher(&db, p, 5, vec![("1001", "借", "1000"), ("600101", "贷", "1000")]);
-        post_voucher(&db, p, 6, vec![("660101", "借", "300"), ("1001", "贷", "300")]);
+        post_voucher(
+            &db,
+            p,
+            5,
+            vec![("1001", "借", "1000"), ("600101", "贷", "1000")],
+        );
+        post_voucher(
+            &db,
+            p,
+            6,
+            vec![("660101", "借", "300"), ("1001", "贷", "300")],
+        );
         let chart = crate::accounts::chart(&db).unwrap();
         let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p)).unwrap();
         let pl = snap.profit_loss_rows(&chart);
@@ -1823,7 +1957,11 @@ mod tests {
         let snap = BalanceSnapshot::load(&db, &bq).unwrap();
         let chart = crate::accounts::chart(&db).unwrap();
         let t = snap.trial_balance(&chart);
-        assert_eq!(t.period_debit, Money::parse("1000").unwrap(), "只应统计张三的凭证");
+        assert_eq!(
+            t.period_debit,
+            Money::parse("1000").unwrap(),
+            "只应统计张三的凭证"
+        );
         assert_eq!(t.period_credit, Money::parse("1000").unwrap());
 
         // 管理员视角不受限
@@ -1840,14 +1978,26 @@ mod tests {
 
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        post_voucher(&db, p, 5, vec![("1001", "借", "1000"), ("600101", "贷", "1000")]);
-        post_voucher(&db, p, 6, vec![("100201", "借", "500"), ("1001", "贷", "500")]);
+        post_voucher(
+            &db,
+            p,
+            5,
+            vec![("1001", "借", "1000"), ("600101", "贷", "1000")],
+        );
+        post_voucher(
+            &db,
+            p,
+            6,
+            vec![("100201", "借", "500"), ("1001", "贷", "500")],
+        );
 
         let chart = crate::accounts::chart(&db).unwrap();
 
         // 无范围：能看到全部
         let q0 = BalanceQuery::period(p).with_data_scope(&DataScope::default());
-        let rows = BalanceSnapshot::load(&db, &q0).unwrap().account_table(&chart, &q0);
+        let rows = BalanceSnapshot::load(&db, &q0)
+            .unwrap()
+            .account_table(&chart, &q0);
         let codes: Vec<&str> = rows.iter().map(|r| r.account_code.as_str()).collect();
         assert!(codes.contains(&"1001"));
         assert!(codes.contains(&"600101"));
@@ -1859,7 +2009,9 @@ mod tests {
             ..Default::default()
         };
         let q1 = BalanceQuery::period(p).with_data_scope(&scope);
-        let rows = BalanceSnapshot::load(&db, &q1).unwrap().account_table(&chart, &q1);
+        let rows = BalanceSnapshot::load(&db, &q1)
+            .unwrap()
+            .account_table(&chart, &q1);
         let codes: Vec<&str> = rows.iter().map(|r| r.account_code.as_str()).collect();
         assert!(codes.contains(&"1001"), "1001 应在范围内：{codes:?}");
         assert!(!codes.contains(&"600101"), "600101 不应在范围内：{codes:?}");
@@ -1868,7 +2020,9 @@ mod tests {
         let q2 = BalanceQuery::period(p)
             .with_code_range(Some("1001".into()), None)
             .with_data_scope(&scope);
-        let rows = BalanceSnapshot::load(&db, &q2).unwrap().account_table(&chart, &q2);
+        let rows = BalanceSnapshot::load(&db, &q2)
+            .unwrap()
+            .account_table(&chart, &q2);
         assert!(rows.iter().any(|r| r.account_code == "1001"));
         assert!(!rows.iter().any(|r| r.account_code == "600101"));
     }

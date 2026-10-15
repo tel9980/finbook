@@ -2,8 +2,8 @@
 //! 审批中心 / 报表附注 / 电子档案
 
 use egui::{RichText, Ui};
-use findb::advanced;
 use fincore::{AuxKind, Money, Period};
+use findb::advanced;
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -32,52 +32,96 @@ impl Default for MultiColumnView {
 }
 
 impl MultiColumnView {
-    pub fn invalidate(&mut self) { self.dirty = true; }
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
     pub fn enter(&mut self, ctx: &mut AppCtx<'_>) {
-        if self.period_text.is_empty() { self.period_text = ctx.period().code(); }
+        if self.period_text.is_empty() {
+            self.period_text = ctx.period().code();
+        }
         self.dirty = true;
     }
     fn period(&self, ctx: &AppCtx<'_>) -> Period {
         Period::parse(&self.period_text).unwrap_or_else(|_| ctx.period())
     }
     fn cols(&self) -> Vec<String> {
-        self.cols_text.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+        self.cols_text
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
     fn reload(&mut self, ctx: &mut AppCtx<'_>) {
         let p = self.period(ctx);
         let key = format!("{}|{}|{}", p.ymm(), self.main, self.cols_text);
-        if !self.dirty && self.key == key { return; }
+        if !self.dirty && self.key == key {
+            return;
+        }
         self.key = key;
         self.dirty = false;
         let cols = self.cols();
-        if self.main.trim().is_empty() || cols.is_empty() { self.rows.clear(); return; }
-        match advanced::multi_column_table(ctx.db(), self.main.trim(), &cols, p, p, Some(ctx.user())) {
+        if self.main.trim().is_empty() || cols.is_empty() {
+            self.rows.clear();
+            return;
+        }
+        match advanced::multi_column_table(
+            ctx.db(),
+            self.main.trim(),
+            &cols,
+            p,
+            p,
+            Some(ctx.user()),
+        ) {
             Ok(rows) => self.rows = rows,
-            Err(e) => { ctx.error(e.to_string()); self.rows.clear(); }
+            Err(e) => {
+                ctx.error(e.to_string());
+                self.rows.clear();
+            }
         }
     }
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         self.reload(ctx);
         let p = self.period(ctx);
-        widgets::page_header(ui, "多栏账", |ui| { ui.label(RichText::new(p.label()).weak()); });
+        widgets::page_header(ui, "多栏账", |ui| {
+            ui.label(RichText::new(p.label()).weak());
+        });
         widgets::toolbar(ui, |ui| {
             ui.label("主科目");
             let r = ui.add_sized([80.0, 22.0], egui::TextEdit::singleline(&mut self.main));
-            if r.changed() { self.dirty = true; }
+            if r.changed() {
+                self.dirty = true;
+            }
             ui.label("栏目(逗号分隔)");
-            let r = ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut self.cols_text));
-            if r.changed() { self.dirty = true; }
+            let r = ui.add_sized(
+                [200.0, 22.0],
+                egui::TextEdit::singleline(&mut self.cols_text),
+            );
+            if r.changed() {
+                self.dirty = true;
+            }
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
-            if r.changed() { self.dirty = true; }
-            if ui.button("刷新").clicked() { self.dirty = true; }
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
+            if r.changed() {
+                self.dirty = true;
+            }
+            if ui.button("刷新").clicked() {
+                self.dirty = true;
+            }
             ui.separator();
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
                 self.export(ctx, mode);
             }
         });
         ui.add_space(4.0);
-        ui.label(RichText::new("以主科目发生额为主线，按凭证把对方发生额拆到各栏目；金额带符号（借正贷负）。").weak());
+        ui.label(
+            RichText::new(
+                "以主科目发生额为主线，按凭证把对方发生额拆到各栏目；金额带符号（借正贷负）。",
+            )
+            .weak(),
+        );
         ui.add_space(6.0);
         let cols = self.cols();
         let rows = self.rows.clone();
@@ -87,28 +131,49 @@ impl MultiColumnView {
             widgets::TCol::new("摘要", 180.0),
             widgets::TCol::new("发生额", 110.0).right(),
         ];
-        for c in &cols { tcols.push(widgets::TCol::new(c, 110.0).right()); }
+        for c in &cols {
+            tcols.push(widgets::TCol::new(c, 110.0).right());
+        }
         tcols.push(widgets::TCol::new("余额", 110.0).right());
         let ncols = cols.len();
         widgets::grid(ui, "multi_col", &tcols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(&r.date); }
-                1 => { ui.label(RichText::new(&r.voucher_no).monospace()); }
-                2 => { ui.label(&r.summary); }
-                3 => { widgets::amount_label(ui, r.amount); }
+                0 => {
+                    ui.label(&r.date);
+                }
+                1 => {
+                    ui.label(RichText::new(&r.voucher_no).monospace());
+                }
+                2 => {
+                    ui.label(&r.summary);
+                }
+                3 => {
+                    widgets::amount_label(ui, r.amount);
+                }
                 x if x >= 4 && x < 4 + ncols => {
                     let v = r.cols.get(x - 4).copied().unwrap_or(Money::ZERO);
-                    if v.is_zero() { ui.label("—"); } else { widgets::amount_label(ui, v); }
+                    if v.is_zero() {
+                        ui.label("—");
+                    } else {
+                        widgets::amount_label(ui, v);
+                    }
                 }
-                _ => { widgets::amount_label(ui, r.balance); }
+                _ => {
+                    widgets::amount_label(ui, r.balance);
+                }
             }
         });
     }
 
     fn export(&mut self, ctx: &mut AppCtx<'_>, mode: crate::views::export::ExportMode) {
         let cols = self.cols();
-        let mut headers = vec!["日期".to_string(), "凭证号".to_string(), "摘要".to_string(), "发生额".to_string()];
+        let mut headers = vec![
+            "日期".to_string(),
+            "凭证号".to_string(),
+            "摘要".to_string(),
+            "发生额".to_string(),
+        ];
         headers.extend(cols.iter().cloned());
         headers.push("余额".to_string());
         let mut sh = crate::views::export::Sheet::new("多栏账", headers);
@@ -140,14 +205,23 @@ pub struct SummaryTableView {
 
 impl Default for SummaryTableView {
     fn default() -> Self {
-        Self { period_text: String::new(), rows: Vec::new(), dirty: true, key: String::new() }
+        Self {
+            period_text: String::new(),
+            rows: Vec::new(),
+            dirty: true,
+            key: String::new(),
+        }
     }
 }
 
 impl SummaryTableView {
-    pub fn invalidate(&mut self) { self.dirty = true; }
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
     pub fn enter(&mut self, ctx: &mut AppCtx<'_>) {
-        if self.period_text.is_empty() { self.period_text = ctx.period().code(); }
+        if self.period_text.is_empty() {
+            self.period_text = ctx.period().code();
+        }
         self.dirty = true;
     }
     fn period(&self, ctx: &AppCtx<'_>) -> Period {
@@ -156,23 +230,37 @@ impl SummaryTableView {
     fn reload(&mut self, ctx: &mut AppCtx<'_>) {
         let p = self.period(ctx);
         let key = p.ymm().to_string();
-        if !self.dirty && self.key == key { return; }
+        if !self.dirty && self.key == key {
+            return;
+        }
         self.key = key;
         self.dirty = false;
         match advanced::summary_table(ctx.db(), p, p, Some(ctx.user())) {
             Ok(rows) => self.rows = rows,
-            Err(e) => { ctx.error(e.to_string()); self.rows.clear(); }
+            Err(e) => {
+                ctx.error(e.to_string());
+                self.rows.clear();
+            }
         }
     }
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         self.reload(ctx);
         let p = self.period(ctx);
-        widgets::page_header(ui, "摘要汇总表", |ui| { ui.label(RichText::new(p.label()).weak()); });
+        widgets::page_header(ui, "摘要汇总表", |ui| {
+            ui.label(RichText::new(p.label()).weak());
+        });
         widgets::toolbar(ui, |ui| {
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
-            if r.changed() { self.dirty = true; }
-            if ui.button("刷新").clicked() { self.dirty = true; }
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
+            if r.changed() {
+                self.dirty = true;
+            }
+            if ui.button("刷新").clicked() {
+                self.dirty = true;
+            }
             ui.separator();
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
                 self.export(ctx, mode);
@@ -189,10 +277,18 @@ impl SummaryTableView {
         widgets::grid(ui, "summary_table", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(&r.summary); }
-                1 => { ui.label(r.voucher_count.to_string()); }
-                2 => { widgets::amount_label(ui, r.debit); }
-                3 => { widgets::amount_label(ui, r.credit); }
+                0 => {
+                    ui.label(&r.summary);
+                }
+                1 => {
+                    ui.label(r.voucher_count.to_string());
+                }
+                2 => {
+                    widgets::amount_label(ui, r.debit);
+                }
+                3 => {
+                    widgets::amount_label(ui, r.credit);
+                }
                 _ => {}
             }
         });
@@ -201,7 +297,12 @@ impl SummaryTableView {
     fn export(&mut self, ctx: &mut AppCtx<'_>, mode: crate::views::export::ExportMode) {
         let mut sh = crate::views::export::Sheet::new(
             "摘要汇总表",
-            vec!["摘要".to_string(), "凭证张数".to_string(), "借方发生额".to_string(), "贷方发生额".to_string()],
+            vec![
+                "摘要".to_string(),
+                "凭证张数".to_string(),
+                "借方发生额".to_string(),
+                "贷方发生额".to_string(),
+            ],
         );
         for r in &self.rows {
             sh.push(vec![
@@ -228,14 +329,23 @@ pub struct RatiosView {
 
 impl Default for RatiosView {
     fn default() -> Self {
-        Self { period_text: String::new(), rows: Vec::new(), dirty: true, key: String::new() }
+        Self {
+            period_text: String::new(),
+            rows: Vec::new(),
+            dirty: true,
+            key: String::new(),
+        }
     }
 }
 
 impl RatiosView {
-    pub fn invalidate(&mut self) { self.dirty = true; }
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
     pub fn enter(&mut self, ctx: &mut AppCtx<'_>) {
-        if self.period_text.is_empty() { self.period_text = ctx.period().code(); }
+        if self.period_text.is_empty() {
+            self.period_text = ctx.period().code();
+        }
         self.dirty = true;
     }
     fn period(&self, ctx: &AppCtx<'_>) -> Period {
@@ -244,24 +354,38 @@ impl RatiosView {
     fn reload(&mut self, ctx: &mut AppCtx<'_>) {
         let p = self.period(ctx);
         let key = p.ymm().to_string();
-        if !self.dirty && self.key == key { return; }
+        if !self.dirty && self.key == key {
+            return;
+        }
         self.key = key;
         self.dirty = false;
         let from = Period::new(p.year(), 1).unwrap_or(p);
         match advanced::fin_ratios(ctx.db(), p, from, Some(ctx.user())) {
             Ok(rows) => self.rows = rows,
-            Err(e) => { ctx.error(e.to_string()); self.rows.clear(); }
+            Err(e) => {
+                ctx.error(e.to_string());
+                self.rows.clear();
+            }
         }
     }
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         self.reload(ctx);
         let p = self.period(ctx);
-        widgets::page_header(ui, "财务指标分析", |ui| { ui.label(RichText::new(p.label()).weak()); });
+        widgets::page_header(ui, "财务指标分析", |ui| {
+            ui.label(RichText::new(p.label()).weak());
+        });
         widgets::toolbar(ui, |ui| {
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
-            if r.changed() { self.dirty = true; }
-            if ui.button("刷新").clicked() { self.dirty = true; }
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
+            if r.changed() {
+                self.dirty = true;
+            }
+            if ui.button("刷新").clicked() {
+                self.dirty = true;
+            }
             ui.separator();
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
                 self.export(ctx, mode);
@@ -277,9 +401,15 @@ impl RatiosView {
         widgets::grid(ui, "ratios", &cols, rows.len(), 26.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.name).strong()); }
-                1 => { ui.label(RichText::new(&r.display).strong()); }
-                2 => { ui.label(RichText::new(&r.formula).weak()); }
+                0 => {
+                    ui.label(RichText::new(&r.name).strong());
+                }
+                1 => {
+                    ui.label(RichText::new(&r.display).strong());
+                }
+                2 => {
+                    ui.label(RichText::new(&r.formula).weak());
+                }
                 _ => {}
             }
         });
@@ -288,7 +418,11 @@ impl RatiosView {
     fn export(&mut self, ctx: &mut AppCtx<'_>, mode: crate::views::export::ExportMode) {
         let mut sh = crate::views::export::Sheet::new(
             "财务指标分析",
-            vec!["指标".to_string(), "数值".to_string(), "计算公式".to_string()],
+            vec![
+                "指标".to_string(),
+                "数值".to_string(),
+                "计算公式".to_string(),
+            ],
         );
         for r in &self.rows {
             sh.push(vec![r.name.clone(), r.display.clone(), r.formula.clone()]);
@@ -306,7 +440,11 @@ impl RatiosView {
 // ===========================================================================
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum MfgTab { Routing, Mrp, Report }
+enum MfgTab {
+    Routing,
+    Mrp,
+    Report,
+}
 
 pub struct ManufacturingView {
     tab: MfgTab,
@@ -350,18 +488,26 @@ impl Default for ManufacturingView {
 }
 
 impl ManufacturingView {
-    pub fn invalidate(&mut self) { self.dirty = true; }
-    pub fn enter(&mut self, _ctx: &mut AppCtx<'_>) { self.dirty = true; }
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+    pub fn enter(&mut self, _ctx: &mut AppCtx<'_>) {
+        self.dirty = true;
+    }
     fn item_codes(&self, ctx: &AppCtx<'_>) -> Vec<String> {
         findb::auxs::codes(ctx.db(), AuxKind::Item).unwrap_or_default()
     }
     fn reload_routing(&mut self, ctx: &mut AppCtx<'_>) {
         let key = format!("r|{}", self.item_text);
-        if !self.dirty && self.key == key { return; }
+        if !self.dirty && self.key == key {
+            return;
+        }
         self.key = key;
         self.dirty = false;
         self.ops.clear();
-        if self.item_text.trim().is_empty() { return; }
+        if self.item_text.trim().is_empty() {
+            return;
+        }
         match advanced::routing_list(ctx.db(), self.item_text.trim()) {
             Ok(ops) => self.ops = ops,
             Err(e) => ctx.error(e.to_string()),
@@ -409,7 +555,9 @@ impl ManufacturingView {
                     self.dirty = true;
                 }
             }
-            if ui.button("加载").clicked() { self.dirty = true; }
+            if ui.button("加载").clicked() {
+                self.dirty = true;
+            }
             ui.separator();
             ui.label(RichText::new("工序清单（维护入口在 Web 端 /api/routing）").weak());
         });
@@ -427,24 +575,45 @@ impl ManufacturingView {
         widgets::grid(ui, "routing_ops", &cols, ops.len(), 24.0, |i, c, ui| {
             let op = &ops[i];
             match c {
-                0 => { ui.label(op.seq.to_string()); }
-                1 => { ui.label(RichText::new(&op.op_code).monospace()); }
-                2 => { ui.label(&op.op_name); }
-                3 => { ui.label(&op.work_center); }
-                4 => { ui.label(op.std_hours.fmt_qty()); }
-                5 => { widgets::amount_label(ui, op.rate); }
+                0 => {
+                    ui.label(op.seq.to_string());
+                }
+                1 => {
+                    ui.label(RichText::new(&op.op_code).monospace());
+                }
+                2 => {
+                    ui.label(&op.op_name);
+                }
+                3 => {
+                    ui.label(&op.work_center);
+                }
+                4 => {
+                    ui.label(op.std_hours.fmt_qty());
+                }
+                5 => {
+                    widgets::amount_label(ui, op.rate);
+                }
                 _ => {}
             }
         });
         ui.add_space(6.0);
-        ui.label(RichText::new("说明：工艺路线用于开工时生成报工清单、报工后按工时×费率归集人工成本。").weak());
+        ui.label(
+            RichText::new("说明：工艺路线用于开工时生成报工清单、报工后按工时×费率归集人工成本。")
+                .weak(),
+        );
     }
     fn show_mrp(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         widgets::toolbar(ui, |ui| {
             ui.label("需求产品");
-            ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut self.mrp_demand_item));
+            ui.add_sized(
+                [120.0, 22.0],
+                egui::TextEdit::singleline(&mut self.mrp_demand_item),
+            );
             ui.label("数量");
-            ui.add_sized([80.0, 22.0], egui::TextEdit::singleline(&mut self.mrp_demand_qty));
+            ui.add_sized(
+                [80.0, 22.0],
+                egui::TextEdit::singleline(&mut self.mrp_demand_qty),
+            );
             if ui.button("运行 MRP").clicked() {
                 let item = self.mrp_demand_item.trim().to_string();
                 let qty = widgets::parse_money(&self.mrp_demand_qty);
@@ -454,7 +623,8 @@ impl ManufacturingView {
                     match advanced::mrp_run(ctx.db(), &[(item, qty, "手工".into())]) {
                         Ok(run_at) => {
                             self.mrp_run_at = run_at;
-                            self.mrp_rows = advanced::mrp_by_run(ctx.db(), &self.mrp_run_at).unwrap_or_default();
+                            self.mrp_rows = advanced::mrp_by_run(ctx.db(), &self.mrp_run_at)
+                                .unwrap_or_default();
                             ctx.info("MRP 运算完成");
                         }
                         Err(e) => ctx.error(e.to_string()),
@@ -463,7 +633,11 @@ impl ManufacturingView {
             }
             if ui.button("最近一次结果").clicked() {
                 self.mrp_rows = advanced::mrp_latest(ctx.db()).unwrap_or_default();
-                self.mrp_run_at = self.mrp_rows.first().map(|r| r.run_at.clone()).unwrap_or_default();
+                self.mrp_run_at = self
+                    .mrp_rows
+                    .first()
+                    .map(|r| r.run_at.clone())
+                    .unwrap_or_default();
             }
         });
         ui.add_space(4.0);
@@ -485,12 +659,24 @@ impl ManufacturingView {
         widgets::grid(ui, "mrp_rows", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(r.level.to_string()); }
-                1 => { ui.label(RichText::new(&r.item_code).monospace()); }
-                2 => { ui.label(r.gross_req.fmt_qty()); }
-                3 => { ui.label(r.on_hand.fmt_qty()); }
-                4 => { ui.label(r.net_req.fmt_qty()); }
-                5 => { ui.label(r.planned_qty.fmt_qty()); }
+                0 => {
+                    ui.label(r.level.to_string());
+                }
+                1 => {
+                    ui.label(RichText::new(&r.item_code).monospace());
+                }
+                2 => {
+                    ui.label(r.gross_req.fmt_qty());
+                }
+                3 => {
+                    ui.label(r.on_hand.fmt_qty());
+                }
+                4 => {
+                    ui.label(r.net_req.fmt_qty());
+                }
+                5 => {
+                    ui.label(r.planned_qty.fmt_qty());
+                }
                 6 => {
                     let (txt, color) = match r.action.as_str() {
                         "produce" => ("生产", palette::OK),
@@ -499,7 +685,9 @@ impl ManufacturingView {
                     };
                     ui.colored_label(color, txt);
                 }
-                7 => { ui.label(RichText::new(&r.source).weak()); }
+                7 => {
+                    ui.label(RichText::new(&r.source).weak());
+                }
                 _ => {}
             }
         });
@@ -517,9 +705,15 @@ impl ManufacturingView {
             }
             ui.separator();
             ui.label("完工数量");
-            ui.add_sized([80.0, 22.0], egui::TextEdit::singleline(&mut self.report_qty));
+            ui.add_sized(
+                [80.0, 22.0],
+                egui::TextEdit::singleline(&mut self.report_qty),
+            );
             ui.label("实际工时");
-            ui.add_sized([80.0, 22.0], egui::TextEdit::singleline(&mut self.report_hours));
+            ui.add_sized(
+                [80.0, 22.0],
+                egui::TextEdit::singleline(&mut self.report_hours),
+            );
             if ui.button("报工").clicked() {
                 self.do_report(ctx);
             }
@@ -550,10 +744,18 @@ impl ManufacturingView {
                         sel = if sel == Some(i) { None } else { Some(i) };
                     }
                 }
-                1 => { ui.label(&op.op_name); }
-                2 => { ui.label(&op.work_center); }
-                3 => { ui.label(op.qty_done.fmt_qty()); }
-                4 => { ui.label(op.hours.fmt_qty()); }
+                1 => {
+                    ui.label(&op.op_name);
+                }
+                2 => {
+                    ui.label(&op.work_center);
+                }
+                3 => {
+                    ui.label(op.qty_done.fmt_qty());
+                }
+                4 => {
+                    ui.label(op.hours.fmt_qty());
+                }
                 5 => {
                     let (txt, color) = match op.status.as_str() {
                         "done" => ("完工", palette::OK),
@@ -585,9 +787,14 @@ impl ManufacturingView {
             Ok(ops) => {
                 if ops.is_empty() {
                     // 首次加载：尝试按工艺路线生成工序清单
-                    match advanced::prod_op_init_from_routing(ctx.db(), self.po_id, &order.item_code) {
+                    match advanced::prod_op_init_from_routing(
+                        ctx.db(),
+                        self.po_id,
+                        &order.item_code,
+                    ) {
                         Ok(n) if n > 0 => {
-                            self.prod_ops = advanced::prod_op_list(ctx.db(), self.po_id).unwrap_or_default();
+                            self.prod_ops =
+                                advanced::prod_op_list(ctx.db(), self.po_id).unwrap_or_default();
                             ctx.info(format!("已按工艺路线生成 {n} 道工序"));
                         }
                         _ => {
@@ -667,29 +874,51 @@ pub struct ApprovalView {
 
 impl Default for ApprovalView {
     fn default() -> Self {
-        Self { rows: Vec::new(), dirty: true, key: String::new() }
+        Self {
+            rows: Vec::new(),
+            dirty: true,
+            key: String::new(),
+        }
     }
 }
 
 impl ApprovalView {
-    pub fn invalidate(&mut self) { self.dirty = true; }
-    pub fn enter(&mut self, _ctx: &mut AppCtx<'_>) { self.dirty = true; }
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+    pub fn enter(&mut self, _ctx: &mut AppCtx<'_>) {
+        self.dirty = true;
+    }
     fn reload(&mut self, ctx: &mut AppCtx<'_>) {
-        if !self.dirty && self.key == "todo" { return; }
+        if !self.dirty && self.key == "todo" {
+            return;
+        }
         self.key = "todo".into();
         self.dirty = false;
         match advanced::approval_todo(ctx.db(), ctx.user().username.as_str()) {
             Ok(rows) => self.rows = rows,
-            Err(e) => { ctx.error(e.to_string()); self.rows.clear(); }
+            Err(e) => {
+                ctx.error(e.to_string());
+                self.rows.clear();
+            }
         }
     }
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         self.reload(ctx);
-        widgets::page_header(ui, "审批中心", |ui| { ui.label(RichText::new("待我审批").weak()); });
+        widgets::page_header(ui, "审批中心", |ui| {
+            ui.label(RichText::new("待我审批").weak());
+        });
         widgets::toolbar(ui, |ui| {
-            if ui.button("刷新").clicked() { self.dirty = true; }
+            if ui.button("刷新").clicked() {
+                self.dirty = true;
+            }
             ui.separator();
-            ui.label(RichText::new("说明：报销/采购/销售/生产单据可发起审批流，当前节点审批人可在此通过或驳回。").weak());
+            ui.label(
+                RichText::new(
+                    "说明：报销/采购/销售/生产单据可发起审批流，当前节点审批人可在此通过或驳回。",
+                )
+                .weak(),
+            );
         });
         ui.add_space(6.0);
         let rows = self.rows.clone();
@@ -698,36 +927,58 @@ impl ApprovalView {
             return;
         }
         for r in &rows {
-            widgets::card(ui, &format!("{}（{}/{}）", r.title, r.biz_kind, r.biz_id), |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("申请人").weak());
-                    ui.label(&r.applicant);
-                    ui.separator();
-                    ui.label(RichText::new("当前节点").weak());
-                    let cur = r.steps.iter().find(|s| s.seq == r.current_node);
-                    if let Some(s) = cur {
-                        ui.label(format!("{}/{}（{}）", s.seq, r.steps.len(), s.approver));
-                    }
-                    ui.separator();
-                    ui.label(RichText::new("发起时间").weak());
-                    ui.label(&r.created_at);
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("通过").clicked() {
-                        match advanced::approval_act(ctx.db(), r.id, ctx.user().username.as_str(), true, "同意") {
-                            Ok(_) => { ctx.info("已通过"); self.dirty = true; }
-                            Err(e) => ctx.error(e.to_string()),
+            widgets::card(
+                ui,
+                &format!("{}（{}/{}）", r.title, r.biz_kind, r.biz_id),
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("申请人").weak());
+                        ui.label(&r.applicant);
+                        ui.separator();
+                        ui.label(RichText::new("当前节点").weak());
+                        let cur = r.steps.iter().find(|s| s.seq == r.current_node);
+                        if let Some(s) = cur {
+                            ui.label(format!("{}/{}（{}）", s.seq, r.steps.len(), s.approver));
                         }
-                    }
-                    if ui.button("驳回").clicked() {
-                        match advanced::approval_act(ctx.db(), r.id, ctx.user().username.as_str(), false, "驳回") {
-                            Ok(_) => { ctx.info("已驳回"); self.dirty = true; }
-                            Err(e) => ctx.error(e.to_string()),
+                        ui.separator();
+                        ui.label(RichText::new("发起时间").weak());
+                        ui.label(&r.created_at);
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("通过").clicked() {
+                            match advanced::approval_act(
+                                ctx.db(),
+                                r.id,
+                                ctx.user().username.as_str(),
+                                true,
+                                "同意",
+                            ) {
+                                Ok(_) => {
+                                    ctx.info("已通过");
+                                    self.dirty = true;
+                                }
+                                Err(e) => ctx.error(e.to_string()),
+                            }
                         }
-                    }
-                });
-            });
+                        if ui.button("驳回").clicked() {
+                            match advanced::approval_act(
+                                ctx.db(),
+                                r.id,
+                                ctx.user().username.as_str(),
+                                false,
+                                "驳回",
+                            ) {
+                                Ok(_) => {
+                                    ctx.info("已驳回");
+                                    self.dirty = true;
+                                }
+                                Err(e) => ctx.error(e.to_string()),
+                            }
+                        }
+                    });
+                },
+            );
             ui.add_space(4.0);
         }
     }
@@ -776,9 +1027,13 @@ impl Default for ReportNotesView {
 }
 
 impl ReportNotesView {
-    pub fn invalidate(&mut self) { self.dirty = true; }
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
     pub fn enter(&mut self, ctx: &mut AppCtx<'_>) {
-        if self.period_text.is_empty() { self.period_text = ctx.period().code(); }
+        if self.period_text.is_empty() {
+            self.period_text = ctx.period().code();
+        }
         self.dirty = true;
     }
     fn period(&self, ctx: &AppCtx<'_>) -> Period {
@@ -787,18 +1042,25 @@ impl ReportNotesView {
     fn reload(&mut self, ctx: &mut AppCtx<'_>) {
         let p = self.period(ctx);
         let key = format!("{}|{}", self.report_key, p.ymm());
-        if !self.dirty && self.key == key { return; }
+        if !self.dirty && self.key == key {
+            return;
+        }
         self.key = key;
         self.dirty = false;
         match advanced::note_list(ctx.db(), &self.report_key, p) {
             Ok(rows) => self.rows = rows,
-            Err(e) => { ctx.error(e.to_string()); self.rows.clear(); }
+            Err(e) => {
+                ctx.error(e.to_string());
+                self.rows.clear();
+            }
         }
     }
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         self.reload(ctx);
         let p = self.period(ctx);
-        widgets::page_header(ui, "报表附注", |ui| { ui.label(RichText::new(p.label()).weak()); });
+        widgets::page_header(ui, "报表附注", |ui| {
+            ui.label(RichText::new(p.label()).weak());
+        });
         widgets::toolbar(ui, |ui| {
             ui.label("报表");
             let mut rk = self.report_key.clone();
@@ -815,19 +1077,32 @@ impl ReportNotesView {
                 self.dirty = true;
             }
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
-            if r.changed() { self.dirty = true; }
-            if ui.button("刷新").clicked() { self.dirty = true; }
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
+            if r.changed() {
+                self.dirty = true;
+            }
+            if ui.button("刷新").clicked() {
+                self.dirty = true;
+            }
         });
         ui.add_space(6.0);
         widgets::card(ui, "新增附注", |ui| {
             ui.horizontal(|ui| {
                 ui.label("标题");
-                ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut self.new_title));
+                ui.add_sized(
+                    [220.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.new_title),
+                );
             });
             ui.horizontal(|ui| {
                 ui.label("内容");
-                ui.add_sized([400.0, 60.0], egui::TextEdit::multiline(&mut self.new_content));
+                ui.add_sized(
+                    [400.0, 60.0],
+                    egui::TextEdit::multiline(&mut self.new_content),
+                );
                 if ui.button("保存").clicked() {
                     let seq = (self.rows.len() as i32) + 1;
                     let mut n = advanced::ReportNote {
@@ -858,7 +1133,9 @@ impl ReportNotesView {
             widgets::card(ui, &format!("{} · {}", n.seq, n.title), |ui| {
                 ui.label(&n.content);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("更新：{} {}", n.updated_by, n.updated_at)).weak());
+                    ui.label(
+                        RichText::new(format!("更新：{} {}", n.updated_by, n.updated_at)).weak(),
+                    );
                     if ui.button("删除").clicked() {
                         if let Err(e) = advanced::note_delete(ctx.db(), n.id) {
                             ctx.error(e.to_string());
@@ -869,9 +1146,13 @@ impl ReportNotesView {
                     }
                 });
             });
-            if i + 1 < rows.len() { ui.add_space(4.0); }
+            if i + 1 < rows.len() {
+                ui.add_space(4.0);
+            }
         }
-        if rows.is_empty() { widgets::empty_hint(ui, "暂无附注"); }
+        if rows.is_empty() {
+            widgets::empty_hint(ui, "暂无附注");
+        }
     }
 }
 
@@ -906,9 +1187,13 @@ impl Default for ArchiveView {
 }
 
 impl ArchiveView {
-    pub fn invalidate(&mut self) { self.dirty = true; }
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
     pub fn enter(&mut self, ctx: &mut AppCtx<'_>) {
-        if self.period_text.is_empty() { self.period_text = ctx.period().code(); }
+        if self.period_text.is_empty() {
+            self.period_text = ctx.period().code();
+        }
         self.dirty = true;
     }
     fn period(&self, ctx: &AppCtx<'_>) -> Period {
@@ -917,39 +1202,68 @@ impl ArchiveView {
     fn reload(&mut self, ctx: &mut AppCtx<'_>) {
         let p = self.period(ctx);
         let key = format!("{}|{}", p.ymm(), self.kind);
-        if !self.dirty && self.key == key { return; }
+        if !self.dirty && self.key == key {
+            return;
+        }
         self.key = key;
         self.dirty = false;
-        let kind = if self.kind.is_empty() { None } else { Some(self.kind.as_str()) };
+        let kind = if self.kind.is_empty() {
+            None
+        } else {
+            Some(self.kind.as_str())
+        };
         match advanced::archive_list(ctx.db(), p, kind) {
             Ok(rows) => self.rows = rows,
-            Err(e) => { ctx.error(e.to_string()); self.rows.clear(); }
+            Err(e) => {
+                ctx.error(e.to_string());
+                self.rows.clear();
+            }
         }
     }
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         self.reload(ctx);
         let p = self.period(ctx);
-        widgets::page_header(ui, "会计电子档案", |ui| { ui.label(RichText::new(p.label()).weak()); });
+        widgets::page_header(ui, "会计电子档案", |ui| {
+            ui.label(RichText::new(p.label()).weak());
+        });
         widgets::toolbar(ui, |ui| {
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
-            if r.changed() { self.dirty = true; }
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
+            if r.changed() {
+                self.dirty = true;
+            }
             ui.label("类型(空=全部)");
             let r = ui.add_sized([100.0, 22.0], egui::TextEdit::singleline(&mut self.kind));
-            if r.changed() { self.dirty = true; }
-            if ui.button("刷新").clicked() { self.dirty = true; }
+            if r.changed() {
+                self.dirty = true;
+            }
+            if ui.button("刷新").clicked() {
+                self.dirty = true;
+            }
         });
         ui.add_space(6.0);
         widgets::card(ui, "新增归档", |ui| {
             ui.horizontal(|ui| {
                 ui.label("类型");
-                ui.add_sized([100.0, 22.0], egui::TextEdit::singleline(&mut self.new_kind));
+                ui.add_sized(
+                    [100.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.new_kind),
+                );
                 ui.label("标题");
-                ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut self.new_title));
+                ui.add_sized(
+                    [220.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.new_title),
+                );
                 if ui.button("归档").clicked() {
                     let file_no = match advanced::archive_next_no(ctx.db(), p, &self.new_kind) {
                         Ok(n) => n,
-                        Err(e) => { ctx.error(e.to_string()); return; }
+                        Err(e) => {
+                            ctx.error(e.to_string());
+                            return;
+                        }
                     };
                     match advanced::archive_create(
                         ctx.db(),
@@ -972,7 +1286,10 @@ impl ArchiveView {
             });
             ui.horizontal(|ui| {
                 ui.label("内容(JSON)");
-                ui.add_sized([500.0, 60.0], egui::TextEdit::multiline(&mut self.new_payload));
+                ui.add_sized(
+                    [500.0, 60.0],
+                    egui::TextEdit::multiline(&mut self.new_payload),
+                );
             });
         });
         ui.add_space(6.0);
@@ -989,9 +1306,15 @@ impl ArchiveView {
         widgets::grid(ui, "archive_rows", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.file_no).monospace()); }
-                1 => { ui.label(&r.kind); }
-                2 => { ui.label(&r.title); }
+                0 => {
+                    ui.label(RichText::new(&r.file_no).monospace());
+                }
+                1 => {
+                    ui.label(&r.kind);
+                }
+                2 => {
+                    ui.label(&r.title);
+                }
                 3 => {
                     let h = &r.content_hash;
                     ui.label(RichText::new(&h[..h.len().min(16)]).monospace());
@@ -1003,8 +1326,12 @@ impl ArchiveView {
                         ui.colored_label(palette::CREDIT, "被篡改");
                     }
                 }
-                5 => { ui.label(&r.archived_by); }
-                6 => { ui.label(&r.archived_at); }
+                5 => {
+                    ui.label(&r.archived_by);
+                }
+                6 => {
+                    ui.label(&r.archived_at);
+                }
                 _ => {}
             }
         });

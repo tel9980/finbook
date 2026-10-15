@@ -2,8 +2,8 @@
 //!
 //! 用法: cargo run --example create --release -- <path>
 
-use findb::Db;
 use fincore::{BookOptions, Period};
+use findb::Db;
 use std::env;
 use std::path::PathBuf;
 

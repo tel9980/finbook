@@ -6,10 +6,10 @@
 //! 让用户自己决定要不要分、怎么分。
 
 use egui::{RichText, Ui};
-use findb::balances::{BalanceQuery, BalanceSnapshot};
-use findb::mgmt::{self, DimProfit};
 use fincore::account::{AcctCategory, AuxKind};
 use fincore::{Money, Period};
+use findb::balances::{BalanceQuery, BalanceSnapshot};
+use findb::mgmt::{self, DimProfit};
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -25,8 +25,7 @@ const DIMS: &[AuxKind] = &[
     AuxKind::Item,
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[derive(Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SortBy {
     Profit,
     Revenue,
@@ -93,8 +92,8 @@ impl DimProfitView {
         match mgmt::dim_profit(ctx.db(), p, self.dim) {
             Ok(mut rows) => {
                 match self.sort_by {
-                    SortBy::Profit => rows.sort_by(|a, b| b.profit.cmp(&a.profit)),
-                    SortBy::Revenue => rows.sort_by(|a, b| b.revenue.cmp(&a.revenue)),
+                    SortBy::Profit => rows.sort_by_key(|a| std::cmp::Reverse(a.profit)),
+                    SortBy::Revenue => rows.sort_by_key(|a| std::cmp::Reverse(a.revenue)),
                 }
                 // 数据层只归集"挂了维度"的分录，剩余部分在这里补成「未分配」行
                 if let Some(u) = unallocated(ctx, p, &rows) {
@@ -125,8 +124,10 @@ impl DimProfitView {
 
         widgets::toolbar(ui, |ui| {
             ui.label("期间");
-            let r =
-                ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -170,7 +171,14 @@ impl DimProfitView {
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
                 let mut sh = crate::views::export::Sheet::new(
                     "多维损益",
-                    vec!["维度".to_string(), "收入".to_string(), "成本".to_string(), "费用".to_string(), "税金".to_string(), "利润".to_string()],
+                    vec![
+                        "维度".to_string(),
+                        "收入".to_string(),
+                        "成本".to_string(),
+                        "费用".to_string(),
+                        "税金".to_string(),
+                        "利润".to_string(),
+                    ],
                 );
                 for r in &self.rows {
                     sh.push(vec![
@@ -214,13 +222,27 @@ impl DimProfitView {
         widgets::grid(ui, "dim_profit", &cols, rows.len() + 1, 24.0, |i, c, ui| {
             if i == rows.len() {
                 match c {
-                    0 => { ui.label(RichText::new("合计").strong()); }
-                    2 => { ui.label(RichText::new(self.sum_revenue.fmt_money()).strong()); }
-                    3 => { ui.label(RichText::new(self.sum_cost.fmt_money()).strong()); }
-                    4 => { ui.label(RichText::new(self.sum_expense.fmt_money()).strong()); }
-                    5 => { ui.label(RichText::new(self.sum_tax.fmt_money()).strong()); }
-                    6 => { ui.label(RichText::new(self.sum_profit.fmt_money()).strong()); }
-                    7 => { ui.label(RichText::new("100.00%").strong()); }
+                    0 => {
+                        ui.label(RichText::new("合计").strong());
+                    }
+                    2 => {
+                        ui.label(RichText::new(self.sum_revenue.fmt_money()).strong());
+                    }
+                    3 => {
+                        ui.label(RichText::new(self.sum_cost.fmt_money()).strong());
+                    }
+                    4 => {
+                        ui.label(RichText::new(self.sum_expense.fmt_money()).strong());
+                    }
+                    5 => {
+                        ui.label(RichText::new(self.sum_tax.fmt_money()).strong());
+                    }
+                    6 => {
+                        ui.label(RichText::new(self.sum_profit.fmt_money()).strong());
+                    }
+                    7 => {
+                        ui.label(RichText::new("100.00%").strong());
+                    }
                     _ => {}
                 }
                 return;
@@ -270,7 +292,8 @@ impl DimProfitView {
 /// 口径必须与 `mgmt::dim_profit` 完全一致（同样的科目前缀归类、同样的借贷符号），
 /// 否则合计行会对不上——所以这里照抄了它的归类规则。
 fn unallocated(ctx: &AppCtx<'_>, p: Period, allocated: &[DimProfit]) -> Option<DimProfit> {
-    let snap = BalanceSnapshot::load(ctx.db(), &BalanceQuery::period(p).with_leaf_only(true)).ok()?;
+    let snap =
+        BalanceSnapshot::load(ctx.db(), &BalanceQuery::period(p).with_leaf_only(true)).ok()?;
     let chart = ctx.chart();
 
     let mut rev = Money::ZERO;

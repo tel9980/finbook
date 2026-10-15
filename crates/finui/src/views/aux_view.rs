@@ -187,7 +187,9 @@ impl AuxView {
         widgets::grid(ui, "aux_list", &cols, rows.len(), 24.0, |i, c, ui| {
             let e = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&e.code).monospace()); }
+                0 => {
+                    ui.label(RichText::new(&e.code).monospace());
+                }
                 1 => {
                     ui.label(RichText::new(&e.name).color(if e.disabled {
                         ui.visuals().weak_text_color()
@@ -195,7 +197,9 @@ impl AuxView {
                         Color32::BLACK
                     }));
                 }
-                2 => { ui.label(e.parent_code.as_deref().unwrap_or("")); }
+                2 => {
+                    ui.label(e.parent_code.as_deref().unwrap_or(""));
+                }
                 3 => {
                     ui.label(if e.disabled {
                         RichText::new("停用").color(palette::CREDIT)
@@ -205,7 +209,9 @@ impl AuxView {
                 }
                 4 => {
                     let ext = e.summary();
-                    ui.label(RichText::new(if ext.is_empty() { e.memo.clone() } else { ext }).weak());
+                    ui.label(
+                        RichText::new(if ext.is_empty() { e.memo.clone() } else { ext }).weak(),
+                    );
                 }
                 5 => {
                     ui.horizontal(|ui| {
@@ -253,84 +259,85 @@ impl AuxView {
         let mut close = false;
         let is_new = self.editing_new;
 
-        egui::Window::new(if is_new { "新增档案" } else { "修改档案" })
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                if !self.err.is_empty() {
-                    ui.colored_label(palette::CREDIT, &self.err);
-                }
-                egui::Grid::new("aux_edit")
-                    .num_columns(2)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("编码：");
-                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut e.code));
+        egui::Window::new(if is_new {
+            "新增档案"
+        } else {
+            "修改档案"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ui.ctx(), |ui| {
+            if !self.err.is_empty() {
+                ui.colored_label(palette::CREDIT, &self.err);
+            }
+            egui::Grid::new("aux_edit")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("编码：");
+                    ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut e.code));
+                    ui.end_row();
+                    ui.label("名称：");
+                    ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut e.name));
+                    ui.end_row();
+                    if e.kind == AuxKind::Bank {
+                        let mut bn = e
+                            .prop(fincore::auxiliary::prop::BANK_NAME)
+                            .cloned()
+                            .unwrap_or_default();
+                        ui.label("开户行：");
+                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut bn));
+                        e.set_prop(fincore::auxiliary::prop::BANK_NAME, bn.trim().to_string());
                         ui.end_row();
-                        ui.label("名称：");
-                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut e.name));
+                        let mut ba = e
+                            .prop(fincore::auxiliary::prop::BANK_ACCOUNT)
+                            .cloned()
+                            .unwrap_or_default();
+                        ui.label("账号：");
+                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut ba));
+                        e.set_prop(
+                            fincore::auxiliary::prop::BANK_ACCOUNT,
+                            ba.trim().to_string(),
+                        );
                         ui.end_row();
-                        if e.kind == AuxKind::Bank {
-                            let mut bn = e
-                                .prop(fincore::auxiliary::prop::BANK_NAME)
-                                .cloned()
-                                .unwrap_or_default();
-                            ui.label("开户行：");
-                            ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut bn));
-                            e.set_prop(
-                                fincore::auxiliary::prop::BANK_NAME,
-                                bn.trim().to_string(),
-                            );
-                            ui.end_row();
-                            let mut ba = e
-                                .prop(fincore::auxiliary::prop::BANK_ACCOUNT)
-                                .cloned()
-                                .unwrap_or_default();
-                            ui.label("账号：");
-                            ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut ba));
-                            e.set_prop(
-                                fincore::auxiliary::prop::BANK_ACCOUNT,
-                                ba.trim().to_string(),
-                            );
-                            ui.end_row();
-                        }
-                        if e.kind == AuxKind::Customer {
-                            let mut cl = e
-                                .prop(fincore::auxiliary::prop::CREDIT_LIMIT)
-                                .cloned()
-                                .unwrap_or_default();
-                            ui.label("信用额度（0=不限）：");
-                            ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut cl));
-                            e.set_prop(
-                                fincore::auxiliary::prop::CREDIT_LIMIT,
-                                cl.trim().to_string(),
-                            );
-                            ui.end_row();
-                        }
-                        ui.label("上级编码：");
-                        let mut p = e.parent_code.clone().unwrap_or_default();
-                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut p));
-                        e.parent_code = if p.trim().is_empty() { None } else { Some(p) };
+                    }
+                    if e.kind == AuxKind::Customer {
+                        let mut cl = e
+                            .prop(fincore::auxiliary::prop::CREDIT_LIMIT)
+                            .cloned()
+                            .unwrap_or_default();
+                        ui.label("信用额度（0=不限）：");
+                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut cl));
+                        e.set_prop(
+                            fincore::auxiliary::prop::CREDIT_LIMIT,
+                            cl.trim().to_string(),
+                        );
                         ui.end_row();
-                        ui.label("备注：");
-                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut e.memo));
-                        ui.end_row();
-                    });
-                ui.checkbox(&mut e.disabled, "停用");
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("取消").clicked() {
-                            close = true;
-                        }
-                        if ui.button("保存").clicked() {
-                            save = true;
-                        }
-                    });
+                    }
+                    ui.label("上级编码：");
+                    let mut p = e.parent_code.clone().unwrap_or_default();
+                    ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut p));
+                    e.parent_code = if p.trim().is_empty() { None } else { Some(p) };
+                    ui.end_row();
+                    ui.label("备注：");
+                    ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut e.memo));
+                    ui.end_row();
+                });
+            ui.checkbox(&mut e.disabled, "停用");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                    if ui.button("保存").clicked() {
+                        save = true;
+                    }
                 });
             });
+        });
 
         if close || !open {
             self.editing = None;
@@ -357,7 +364,11 @@ impl AuxView {
                     Ok(()) => {
                         ctx.log(
                             "档案",
-                            if self.editing_new { "新增档案" } else { "修改档案" },
+                            if self.editing_new {
+                                "新增档案"
+                            } else {
+                                "修改档案"
+                            },
                             &format!("{} {} {}", e.kind.label(), e.code, e.name),
                         );
                         ctx.info("已保存");

@@ -5,9 +5,9 @@
 //! 以及每个人到底能看到哪些数据——管理员不用在菜单里来回跳就能回答这些问题。
 
 use egui::{RichText, Ui};
-use findb::security::Attempt;
 use fincore::user::{DataScope, PasswordPolicy, User};
 use fincore::Perm;
+use findb::security::Attempt;
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -366,7 +366,10 @@ impl SecurityView {
                     ctx.log(
                         "安全",
                         "修改口令策略",
-                        &format!("{}位/{}天/失败{}次锁{}分钟", p.min_len, p.max_age_days, p.max_fail, p.lock_minutes),
+                        &format!(
+                            "{}位/{}天/失败{}次锁{}分钟",
+                            p.min_len, p.max_age_days, p.max_fail, p.lock_minutes
+                        ),
                     );
                     ctx.info("口令策略已保存");
                 }
@@ -494,7 +497,8 @@ impl SecurityView {
                             acts.push((u.username.clone(), UserOp::Reset));
                         }
                         // 管理员不受设备限制，无需重置；只对已绑定的普通账号提供重置
-                        if !u.is_admin() && !u.device_id.is_empty()
+                        if !u.is_admin()
+                            && !u.device_id.is_empty()
                             && ui.small_button("重置绑定").clicked()
                         {
                             acts.push((u.username.clone(), UserOp::ResetDevice));
@@ -606,7 +610,9 @@ impl SecurityView {
         match findb::security::admin_reset_password(ctx.db(), &name, &pwd, &policy) {
             Ok(Ok(())) => {
                 ctx.log("安全", "重置口令", &name);
-                ctx.info(format!("已重置 {name} 的口令，已强制该用户下次登录时修改口令"));
+                ctx.info(format!(
+                    "已重置 {name} 的口令，已强制该用户下次登录时修改口令"
+                ));
                 self.reset_user = None;
                 self.reset_pwd.clear();
                 self.dirty = true;
@@ -629,19 +635,28 @@ impl SecurityView {
         widgets::toolbar(ui, |ui| {
             ui.label("用户");
             let before = self.audit_user.clone();
-            widgets::combo(ui, "sec_audit_user", &mut self.audit_user, &user_opts, 130.0);
+            widgets::combo(
+                ui,
+                "sec_audit_user",
+                &mut self.audit_user,
+                &user_opts,
+                130.0,
+            );
             if self.audit_user != before {
                 self.dirty = true;
             }
-            if ui
-                .checkbox(&mut self.only_fail, "只看失败")
-                .changed()
-            {
+            if ui.checkbox(&mut self.only_fail, "只看失败").changed() {
                 self.dirty = true;
             }
             ui.label("条数");
             let before = self.limit_text.clone();
-            widgets::combo(ui, "sec_audit_limit", &mut self.limit_text, &limit_opts, 80.0);
+            widgets::combo(
+                ui,
+                "sec_audit_limit",
+                &mut self.limit_text,
+                &limit_opts,
+                80.0,
+            );
             if self.limit_text != before {
                 self.dirty = true;
             }
@@ -668,9 +683,7 @@ impl SecurityView {
             widgets::kv(ui, "失败数", &self.stats_fail.to_string());
             widgets::kv(ui, "最近 1 小时失败数", &self.stats_fail_1h.to_string());
         });
-        ui.label(
-            RichText::new("注：登录日志只保留最近 500 条，总尝试数为库内现有记录数。").weak(),
-        );
+        ui.label(RichText::new("注：登录日志只保留最近 500 条，总尝试数为库内现有记录数。").weak());
         ui.add_space(6.0);
 
         let rows = std::mem::take(&mut self.attempts);
@@ -723,7 +736,12 @@ impl SecurityView {
                             close = true;
                         }
                         if ui
-                            .add(egui::Button::new(RichText::new("确定").color(egui::Color32::WHITE)).fill(palette::CREDIT))
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("确定").color(egui::Color32::WHITE),
+                                )
+                                .fill(palette::CREDIT),
+                            )
                             .clicked()
                         {
                             yes = true;

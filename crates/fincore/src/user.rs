@@ -35,12 +35,12 @@ pub enum Perm {
     CarryForward,
     /// 期末结账 / 反结账
     PeriodClose,
-            /// 查看账簿报表
-            Report,
-            /// 财务报表（账簿、三大报表、试算、资金、成本、预算、发票——业务岗不可见，对标金蝶报表按角色授权）
-            FinReport,
-            /// 导出数据（Excel / CSV 文件落地，仅管理员与财务主管）
-            Export,
+    /// 查看账簿报表
+    Report,
+    /// 财务报表（账簿、三大报表、试算、资金、成本、预算、发票——业务岗不可见，对标金蝶报表按角色授权）
+    FinReport,
+    /// 导出数据（Excel / CSV 文件落地，仅管理员与财务主管）
+    Export,
     /// 用户与权限管理
     UserManage,
     /// 账套参数
@@ -198,10 +198,28 @@ impl Role {
         match self {
             Role::Admin => Perm::all(),
             Role::Supervisor => &[
-                VoucherNew, VoucherEdit, VoucherDelete, VoucherAudit, VoucherUnaudit,
-                VoucherPost, VoucherUnpost, AccountEdit, AuxEdit, Opening,
-                CarryForward, PeriodClose, Report, FinReport, Export, AuditLog, OrderOps,
-                Warehouse, PriceView, PriceEdit, CostOps, ProductionOps,
+                VoucherNew,
+                VoucherEdit,
+                VoucherDelete,
+                VoucherAudit,
+                VoucherUnaudit,
+                VoucherPost,
+                VoucherUnpost,
+                AccountEdit,
+                AuxEdit,
+                Opening,
+                CarryForward,
+                PeriodClose,
+                Report,
+                FinReport,
+                Export,
+                AuditLog,
+                OrderOps,
+                Warehouse,
+                PriceView,
+                PriceEdit,
+                CostOps,
+                ProductionOps,
                 // ⚠️ 这里原来有 `CashierSign`，后果是**财务主管这个岗位根本建不出来**。
                 //
                 // `validate_duty_separation` 的判据是「有效权限里同时出现 CashierSign 与
@@ -219,7 +237,12 @@ impl Role {
                 // 里最有价值的控制之一。出纳签字只归出纳（`Role::Cashier`）。
             ],
             Role::Accountant => &[
-                VoucherNew, VoucherEdit, VoucherDelete, VoucherPost, AccountEdit, AuxEdit,
+                VoucherNew,
+                VoucherEdit,
+                VoucherDelete,
+                VoucherPost,
+                AccountEdit,
+                AuxEdit,
                 // PeriodClose：结账是会计的本职动作，不是监督动作。
                 //
                 // 为什么给：审核（VoucherAudit）之所以不给会计，是三权分离 ——
@@ -229,15 +252,25 @@ impl Role {
                 // 期末处理页对会计直接显示「没有「期末结账」权限」，连按钮都没有。
                 // 实测确认过这条死路。
                 PeriodClose,
-                Opening, CarryForward, Report, FinReport, OrderOps, Warehouse,
-                PriceView, PriceEdit, CostOps, ProductionOps,
+                Opening,
+                CarryForward,
+                Report,
+                FinReport,
+                OrderOps,
+                Warehouse,
+                PriceView,
+                PriceEdit,
+                CostOps,
+                ProductionOps,
             ],
             Role::Cashier => &[VoucherNew, VoucherEdit, CashierSign, Report, FinReport],
             Role::Auditor => &[VoucherAudit, VoucherUnaudit, Report, FinReport],
             Role::OrderClerk => &[OrderOps, AuxEdit, Report, PriceView, PriceEdit],
             Role::Keeper => &[Warehouse, Report],
             Role::Receivables => &[VoucherNew, AuxEdit, Report, FinReport],
-            Role::Payables => &[OrderOps, VoucherNew, AuxEdit, Report, FinReport, PriceView, PriceEdit],
+            Role::Payables => &[
+                OrderOps, VoucherNew, AuxEdit, Report, FinReport, PriceView, PriceEdit,
+            ],
             Role::CostAccountant => &[CostOps, VoucherNew, Report, FinReport],
             Role::Production => &[ProductionOps, Report],
             Role::Viewer => &[Report, FinReport],
@@ -486,10 +519,7 @@ impl User {
         if self.deny_perms.contains(&p) {
             return false;
         }
-        self.all_roles()
-            .iter()
-            .any(|r| r.perms().contains(&p))
-            || self.extra_perms.contains(&p)
+        self.all_roles().iter().any(|r| r.perms().contains(&p)) || self.extra_perms.contains(&p)
     }
 
     /// 不相容职务分离（会计 × 出纳）：**出纳签字**不得与**会计角色核心权限**同现于同一账号。
@@ -575,8 +605,8 @@ impl User {
         if scope.own_voucher_only && v.prepared_by != self.username {
             return false;
         }
-        let has_account_limit = !scope.account_from.trim().is_empty()
-            || !scope.account_to.trim().is_empty();
+        let has_account_limit =
+            !scope.account_from.trim().is_empty() || !scope.account_to.trim().is_empty();
         if !has_account_limit {
             return true;
         }
@@ -585,7 +615,9 @@ impl User {
         // 早先这里是 `any`，与上面注释的规格相反——范围外的科目金额会随整张
         // 凭证一起泄露（实测确认）。空凭证视为不可见更安全，但没有分录的凭证
         // 本不该存在，这里按"无可见证据"处理。
-        v.entries.iter().all(|e| scope.allows_account(&e.account_code))
+        v.entries
+            .iter()
+            .all(|e| scope.allows_account(&e.account_code))
     }
 }
 
@@ -857,7 +889,7 @@ mod tests {
             "对方科目越界同样不可见"
         );
         // 空范围不限制
-        let mut un = User::new("acc2", "会计二", Role::Accountant);
+        let un = User::new("acc2", "会计二", Role::Accountant);
         assert!(un.can_see_voucher(&mk(&["1122", "1001"])));
     }
 
@@ -887,7 +919,7 @@ mod tests {
     /// 下界 `lo` 意为「lo 及其所有下级」。锁住这个语义，避免以后被"修"成别的。
     #[test]
     fn account_scope_range_semantics() {
-        use crate::account::{CodeScheme, Chart};
+        use crate::account::CodeScheme;
         let mut sc = DataScope::default();
         // 默认方案 4-2-2-2-2 下合法编码长度只有 4/6/8/10/12
         let scheme = CodeScheme::default();
@@ -996,7 +1028,10 @@ mod tests {
     #[test]
     fn two_person_company_can_close_the_month() {
         let acc = User::new("acc", "会计", Role::Accountant);
-        assert!(acc.can(Perm::PeriodClose), "会计必须能期末结账，否则两人公司断在年末");
+        assert!(
+            acc.can(Perm::PeriodClose),
+            "会计必须能期末结账，否则两人公司断在年末"
+        );
 
         let cashier = User::new("cash", "出纳", Role::Cashier);
         // 出纳连凭证都不该碰，结账更不必给

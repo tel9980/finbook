@@ -84,7 +84,11 @@ impl AccountView {
         self.rows = findb::accounts::list(ctx.db()).unwrap_or_default();
     }
 
-    fn filtered(&self, ctx: &AppCtx<'_>, used: &std::collections::HashSet<String>) -> Vec<&Account> {
+    fn filtered(
+        &self,
+        ctx: &AppCtx<'_>,
+        used: &std::collections::HashSet<String>,
+    ) -> Vec<&Account> {
         let kw = self.kw.trim().to_lowercase();
         let chart = ctx.chart();
         let mut out: Vec<&Account> = self
@@ -111,9 +115,9 @@ impl AccountView {
             .collect();
         match self.sort {
             AccountSort::ByCode => out.sort_by(|a, b| a.code.cmp(&b.code)),
-            AccountSort::ByName => out.sort_by(|a, b| {
-                a.name.cmp(&b.name).then_with(|| a.code.cmp(&b.code))
-            }),
+            AccountSort::ByName => {
+                out.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.code.cmp(&b.code)))
+            }
             AccountSort::ByCategory => out.sort_by(|a, b| {
                 format!("{:?}", a.category)
                     .cmp(&format!("{:?}", b.category))
@@ -142,7 +146,8 @@ impl AccountView {
         if let Ok(begins) = findb::balances::list_begin(ctx.db()) {
             for b in begins {
                 // BeginRow 的期初口径：三项任一非零就算在用
-                if !b.year_begin.is_zero() || !b.debit_accum.is_zero() || !b.credit_accum.is_zero() {
+                if !b.year_begin.is_zero() || !b.debit_accum.is_zero() || !b.credit_accum.is_zero()
+                {
                     used.insert(b.account_code.clone());
                 }
             }
@@ -203,7 +208,11 @@ impl AccountView {
             }
             ui.separator();
             if ui.button("新增").clicked() && ctx.can(Perm::AccountEdit) {
-                self.editing = Some(Account::new(String::new(), String::new(), AcctCategory::Asset));
+                self.editing = Some(Account::new(
+                    String::new(),
+                    String::new(),
+                    AcctCategory::Asset,
+                ));
                 self.editing_new = true;
                 self.err.clear();
             }
@@ -260,13 +269,20 @@ impl AccountView {
                     // 新手不知道点哪个。level 从科目表来，1 级不缩。
                     let lvl = ctx.chart().level(&a.code).saturating_sub(1) as usize;
                     let indent = "　".repeat(lvl.min(3));
-                    let marker = if lvl > 0 && leaf { "└ " } else if lvl > 0 { "├ " } else { "" };
-                    ui.label(
-                        RichText::new(format!("{indent}{marker}{}", a.name)).color(if a.disabled {
+                    let marker = if lvl > 0 && leaf {
+                        "└ "
+                    } else if lvl > 0 {
+                        "├ "
+                    } else {
+                        ""
+                    };
+                    ui.label(RichText::new(format!("{indent}{marker}{}", a.name)).color(
+                        if a.disabled {
                             ui.visuals().weak_text_color()
                         } else {
-                        Color32::BLACK
-                    }));
+                            Color32::BLACK
+                        },
+                    ));
                 }
                 2 => {
                     ui.label(a.category.label());
@@ -275,7 +291,8 @@ impl AccountView {
                     ui.label(a.dir.label());
                 }
                 4 => {
-                    let list: Vec<String> = a.aux.list().iter().map(|k| k.label().to_string()).collect();
+                    let list: Vec<String> =
+                        a.aux.list().iter().map(|k| k.label().to_string()).collect();
                     ui.label(RichText::new(list.join("、")).weak());
                 }
                 5 => {
@@ -341,121 +358,125 @@ impl AccountView {
         let mut close = false;
         let is_new = self.editing_new;
 
-        egui::Window::new(if is_new { "新增科目" } else { "修改科目" })
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([560.0, 520.0])
-            .show(ui.ctx(), |ui| {
-                if !self.err.is_empty() {
-                    ui.colored_label(palette::CREDIT, &self.err);
-                    ui.separator();
-                }
-                egui::Grid::new("acct_edit")
-                    .num_columns(2)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("科目编码：");
-                        ui.add_enabled_ui(is_new, |ui| {
-                            ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut a.code));
-                        });
-                        if !is_new {
-                            ui.label(RichText::new("编码不可修改").weak());
-                        }
-                        ui.end_row();
-
-                        ui.label("科目名称：");
-                        ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut a.name));
-                        ui.end_row();
-
-                        ui.label("科目类别：");
-                        egui::ComboBox::from_id_salt("acct_cat")
-                            .selected_text(a.category.label())
-                            .width(200.0)
-                            .show_ui(ui, |ui| {
-                                for c in AcctCategory::all() {
-                                    ui.selectable_value(&mut a.category, *c, c.label());
-                                }
-                            });
-                        ui.end_row();
-
-                        ui.label("余额方向：");
-                        egui::ComboBox::from_id_salt("acct_dir")
-                            .selected_text(a.dir.label())
-                            .width(200.0)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut a.dir, Direction::Debit, "借");
-                                ui.selectable_value(&mut a.dir, Direction::Credit, "贷");
-                            });
-                        ui.end_row();
-
-                        ui.label("数量单位：");
-                        let mut unit = a.unit.clone().unwrap_or_default();
-                        ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut unit));
-                        a.unit = if unit.trim().is_empty() {
-                            None
-                        } else {
-                            Some(unit.trim().to_string())
-                        };
-                        ui.end_row();
-
-                        ui.label("外币币种：");
-                        let mut cur = a.currency.clone().unwrap_or_default();
-                        ui.add_sized(
-                            [200.0, 22.0],
-                            egui::TextEdit::singleline(&mut cur).hint_text("如 USD"),
-                        );
-                        a.currency = if cur.trim().is_empty() {
-                            None
-                        } else {
-                            Some(cur.trim().to_uppercase())
-                        };
-                        ui.end_row();
-                    });
-
+        egui::Window::new(if is_new {
+            "新增科目"
+        } else {
+            "修改科目"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_size([560.0, 520.0])
+        .show(ui.ctx(), |ui| {
+            if !self.err.is_empty() {
+                ui.colored_label(palette::CREDIT, &self.err);
                 ui.separator();
-                ui.label(RichText::new("辅助核算").strong());
-                ui.horizontal_wrapped(|ui| {
-                    for k in AuxKind::ALL {
-                        if *k == AuxKind::CashFlow {
-                            continue;
-                        }
-                        let mut on = a.aux.contains(*k);
-                        if ui.checkbox(&mut on, k.label()).changed() {
-                            a.aux.set(*k, on);
-                        }
+            }
+            egui::Grid::new("acct_edit")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("科目编码：");
+                    ui.add_enabled_ui(is_new, |ui| {
+                        ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut a.code));
+                    });
+                    if !is_new {
+                        ui.label(RichText::new("编码不可修改").weak());
+                    }
+                    ui.end_row();
+
+                    ui.label("科目名称：");
+                    ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut a.name));
+                    ui.end_row();
+
+                    ui.label("科目类别：");
+                    egui::ComboBox::from_id_salt("acct_cat")
+                        .selected_text(a.category.label())
+                        .width(200.0)
+                        .show_ui(ui, |ui| {
+                            for c in AcctCategory::all() {
+                                ui.selectable_value(&mut a.category, *c, c.label());
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label("余额方向：");
+                    egui::ComboBox::from_id_salt("acct_dir")
+                        .selected_text(a.dir.label())
+                        .width(200.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut a.dir, Direction::Debit, "借");
+                            ui.selectable_value(&mut a.dir, Direction::Credit, "贷");
+                        });
+                    ui.end_row();
+
+                    ui.label("数量单位：");
+                    let mut unit = a.unit.clone().unwrap_or_default();
+                    ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut unit));
+                    a.unit = if unit.trim().is_empty() {
+                        None
+                    } else {
+                        Some(unit.trim().to_string())
+                    };
+                    ui.end_row();
+
+                    ui.label("外币币种：");
+                    let mut cur = a.currency.clone().unwrap_or_default();
+                    ui.add_sized(
+                        [200.0, 22.0],
+                        egui::TextEdit::singleline(&mut cur).hint_text("如 USD"),
+                    );
+                    a.currency = if cur.trim().is_empty() {
+                        None
+                    } else {
+                        Some(cur.trim().to_uppercase())
+                    };
+                    ui.end_row();
+                });
+
+            ui.separator();
+            ui.label(RichText::new("辅助核算").strong());
+            ui.horizontal_wrapped(|ui| {
+                for k in AuxKind::ALL {
+                    if *k == AuxKind::CashFlow {
+                        continue;
+                    }
+                    let mut on = a.aux.contains(*k);
+                    if ui.checkbox(&mut on, k.label()).changed() {
+                        a.aux.set(*k, on);
+                    }
+                }
+            });
+
+            ui.separator();
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut a.has_qty, "核算数量");
+                ui.checkbox(&mut a.is_cash, "现金科目");
+                ui.checkbox(&mut a.is_bank, "银行科目");
+                ui.checkbox(&mut a.disabled, "停用");
+            });
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label("备注：");
+                ui.add_sized(
+                    [ui.available_width() - 10.0, 22.0],
+                    egui::TextEdit::singleline(&mut a.memo),
+                );
+            });
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                    if ui.button("保存").clicked() {
+                        save = true;
                     }
                 });
-
-                ui.separator();
-                ui.horizontal_wrapped(|ui| {
-                    ui.checkbox(&mut a.has_qty, "核算数量");
-                    ui.checkbox(&mut a.is_cash, "现金科目");
-                    ui.checkbox(&mut a.is_bank, "银行科目");
-                    ui.checkbox(&mut a.disabled, "停用");
-                });
-
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("备注：");
-                    ui.add_sized(
-                        [ui.available_width() - 10.0, 22.0],
-                        egui::TextEdit::singleline(&mut a.memo),
-                    );
-                });
-
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("取消").clicked() {
-                            close = true;
-                        }
-                        if ui.button("保存").clicked() {
-                            save = true;
-                        }
-                    });
-                });
             });
+        });
 
         if close || !open {
             self.editing = None;
@@ -468,7 +489,8 @@ impl AccountView {
             // 编码改动会按"新编码"覆盖另一科目的属性（UPDATE ... WHERE code=新编码），
             // 且凭证/余额仍挂在旧编码上——直接禁止修改既有科目的编码。
             if !self.editing_new && a.code != self.editing_orig {
-                self.err = "科目编码不可修改；如需更换编码，请新建科目并在期初/凭证中调整".to_string();
+                self.err =
+                    "科目编码不可修改；如需更换编码，请新建科目并在期初/凭证中调整".to_string();
                 return;
             }
             let res = if self.editing_new {
@@ -489,7 +511,11 @@ impl AccountView {
                         Ok(()) => {
                             ctx.log(
                                 "科目",
-                                if self.editing_new { "新增科目" } else { "修改科目" },
+                                if self.editing_new {
+                                    "新增科目"
+                                } else {
+                                    "修改科目"
+                                },
                                 &format!("{} {}", code, a.name),
                             );
                             ctx.info("已保存");
@@ -560,7 +586,11 @@ pub fn guess_category(code: &str) -> Option<AcctCategory> {
 
 /// 位掩码转换（界面复选框用）
 pub fn mask_from(flags: &[(AuxKind, bool)]) -> AuxMask {
-    let kinds: Vec<AuxKind> = flags.iter().filter(|(_, on)| *on).map(|(k, _)| *k).collect();
+    let kinds: Vec<AuxKind> = flags
+        .iter()
+        .filter(|(_, on)| *on)
+        .map(|(k, _)| *k)
+        .collect();
     AuxMask::from_list(&kinds)
 }
 
@@ -582,7 +612,11 @@ mod sort_tests {
 
     #[test]
     fn 每档都有中文标签() {
-        for s in [AccountSort::ByCode, AccountSort::ByName, AccountSort::ByCategory] {
+        for s in [
+            AccountSort::ByCode,
+            AccountSort::ByName,
+            AccountSort::ByCategory,
+        ] {
             assert!(!s.label().is_empty(), "{:?} 缺标签", s);
         }
     }
@@ -590,6 +624,6 @@ mod sort_tests {
     /// 层级缩进的上限：再深也只缩 3 格，不然窄屏下名称列被吃光
     #[test]
     fn 缩进有上限() {
-        assert_eq!("　".repeat(10.min(3)).chars().count(), 3);
+        assert_eq!("　".repeat(3).chars().count(), 3);
     }
 }

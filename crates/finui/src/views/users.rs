@@ -105,8 +105,12 @@ impl UsersView {
                     }
                     ui.label(t);
                 }
-                1 => { ui.label(&u.display_name); }
-                2 => { ui.label(u.role_labels()); }
+                1 => {
+                    ui.label(&u.display_name);
+                }
+                2 => {
+                    ui.label(u.role_labels());
+                }
                 3 => {
                     if u.last_login_at.is_empty() {
                         ui.label(RichText::new("从未登录").weak());
@@ -135,7 +139,9 @@ impl UsersView {
                         RichText::new("启用").color(palette::OK)
                     });
                 }
-                7 => { ui.label(RichText::new(&u.memo).weak()); }
+                7 => {
+                    ui.label(RichText::new(&u.memo).weak());
+                }
                 8 => {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
@@ -189,183 +195,201 @@ impl UsersView {
         let mut close = false;
         let is_new = self.editing_new;
 
-        egui::Window::new(if is_new { "新增用户" } else { "修改用户" })
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                if !self.err.is_empty() {
-                    ui.colored_label(palette::CREDIT, &self.err);
-                }
-                egui::Grid::new("user_edit")
-                    .num_columns(2)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("用户名：");
-                        if is_new {
-                            ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut u.username));
-                        } else {
-                            // 用户名一旦创建不可改（后端按 username 关联），只读展示避免误导
-                            ui.label(RichText::new(&u.username).monospace().weak());
+        egui::Window::new(if is_new {
+            "新增用户"
+        } else {
+            "修改用户"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ui.ctx(), |ui| {
+            if !self.err.is_empty() {
+                ui.colored_label(palette::CREDIT, &self.err);
+            }
+            egui::Grid::new("user_edit")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("用户名：");
+                    if is_new {
+                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut u.username));
+                    } else {
+                        // 用户名一旦创建不可改（后端按 username 关联），只读展示避免误导
+                        ui.label(RichText::new(&u.username).monospace().weak());
+                    }
+                    ui.end_row();
+                    ui.label("姓名：");
+                    ui.add_sized(
+                        [220.0, 22.0],
+                        egui::TextEdit::singleline(&mut u.display_name),
+                    );
+                    ui.end_row();
+                    ui.label("角色：");
+                    egui::ComboBox::from_id_salt("user_role")
+                        .selected_text(u.role_labels())
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            for r in Role::all() {
+                                ui.selectable_value(&mut u.role, *r, r.label());
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("兼任岗位：");
+                    ui.horizontal_wrapped(|ui| {
+                        for r in Role::all() {
+                            if *r == u.role {
+                                continue;
+                            }
+                            let mut on = u.roles.contains(r);
+                            if ui.checkbox(&mut on, r.label()).changed() {
+                                if on {
+                                    if !u.roles.contains(r) {
+                                        u.roles.push(*r);
+                                    }
+                                } else {
+                                    u.roles.retain(|x| x != r);
+                                }
+                            }
                         }
-                        ui.end_row();
-                        ui.label("姓名：");
-                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut u.display_name));
-                        ui.end_row();
-                        ui.label("角色：");
-                        egui::ComboBox::from_id_salt("user_role")
-                            .selected_text(u.role_labels())
-                            .width(220.0)
-                            .show_ui(ui, |ui| {
-                                for r in Role::all() {
-                                    ui.selectable_value(&mut u.role, *r, r.label());
+                    });
+                    ui.end_row();
+                    ui.label(if is_new {
+                        "初始密码："
+                    } else {
+                        "重置密码："
+                    });
+                    ui.add_sized(
+                        [220.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.pwd)
+                            .password(true)
+                            .hint_text(if is_new {
+                                "至少 6 位（必填）"
+                            } else {
+                                "留空表示不修改"
+                            }),
+                    );
+                    ui.end_row();
+                    ui.label("备注：");
+                    ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut u.memo));
+                    ui.end_row();
+                    ui.label("部门范围：");
+                    ui.add_sized(
+                        [220.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.depts_text)
+                            .hint_text("逗号分隔，留空不限"),
+                    );
+                    ui.end_row();
+                    ui.label("科目范围：");
+                    ui.horizontal(|ui| {
+                        ui.add_sized(
+                            [100.0, 22.0],
+                            egui::TextEdit::singleline(&mut u.data_scope.account_from)
+                                .hint_text("起"),
+                        );
+                        ui.label("至");
+                        ui.add_sized(
+                            [100.0, 22.0],
+                            egui::TextEdit::singleline(&mut u.data_scope.account_to)
+                                .hint_text("止"),
+                        );
+                    });
+                    ui.end_row();
+                });
+            ui.add_space(6.0);
+            ui.label(RichText::new("数据范围").weak());
+            ui.checkbox(&mut u.data_scope.own_voucher_only, "仅看本人填制的凭证");
+            ui.checkbox(&mut u.data_scope.own_doc_only, "仅看本人经手的业务单据");
+            ui.add_space(6.0);
+            ui.checkbox(&mut u.disabled, "停用该用户");
+            ui.checkbox(&mut u.must_change_pwd, "下次登录强制改密");
+            ui.add_space(8.0);
+
+            // 权限逐项覆盖：角色预设基础上，每一项可改为「强制开启 / 强制关闭」
+            if u.is_admin() {
+                ui.label(RichText::new("系统管理员默认拥有全部权限，不受逐项开关限制。").weak());
+            } else {
+                ui.label(RichText::new("权限覆盖（角色基础上逐项开关）").weak());
+                ui.add_space(4.0);
+                // 主岗位 + 兼任岗位权限并集（身兼多职）
+                let mut role_perms: Vec<Perm> = u.role.perms().to_vec();
+                for rc in &u.roles {
+                    for p in rc.perms() {
+                        if !role_perms.contains(p) {
+                            role_perms.push(*p);
+                        }
+                    }
+                }
+                let extra = u.extra_perms.clone();
+                let deny = u.deny_perms.clone();
+                // -1=强制关闭 0=跟随角色 1=强制开启
+                let mut changed: Option<(Perm, i8)> = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("user_perm_overrides")
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("perm_overrides")
+                            .num_columns(2)
+                            .spacing([10.0, 6.0])
+                            .show(ui, |ui| {
+                                for p in Perm::all() {
+                                    let base = role_perms.contains(p);
+                                    let force_on = extra.contains(p);
+                                    let force_off = deny.contains(p);
+                                    let cur = if force_off {
+                                        "强制关闭".to_string()
+                                    } else if force_on {
+                                        "强制开启".to_string()
+                                    } else {
+                                        format!("跟随角色{}", if base { " ✔" } else { " ✖" })
+                                    };
+                                    ui.label(format!("{}：", p.label()));
+                                    egui::ComboBox::from_id_salt(("perm_ovr", p))
+                                        .selected_text(cur)
+                                        .width(170.0)
+                                        .show_ui(ui, |ui| {
+                                            ui.selectable_label(
+                                                !force_off && !force_on,
+                                                "跟随角色",
+                                            )
+                                            .clicked()
+                                            .then(|| changed = Some((*p, 0)));
+                                            ui.selectable_label(force_on, "强制开启")
+                                                .clicked()
+                                                .then(|| changed = Some((*p, 1)));
+                                            ui.selectable_label(force_off, "强制关闭")
+                                                .clicked()
+                                                .then(|| changed = Some((*p, -1)));
+                                        });
+                                    ui.end_row();
                                 }
                             });
-                        ui.end_row();
-                        ui.label("兼任岗位：");
-                        ui.horizontal_wrapped(|ui| {
-                            for r in Role::all() {
-                                if *r == u.role {
-                                    continue;
-                                }
-                                let mut on = u.roles.contains(r);
-                                if ui.checkbox(&mut on, r.label()).changed() {
-                                    if on {
-                                        if !u.roles.contains(r) {
-                                            u.roles.push(*r);
-                                        }
-                                    } else {
-                                        u.roles.retain(|x| x != r);
-                                    }
-                                }
-                            }
-                        });
-                        ui.end_row();
-                        ui.label(if is_new { "初始密码：" } else { "重置密码：" });
-                        ui.add_sized(
-                            [220.0, 22.0],
-                            egui::TextEdit::singleline(&mut self.pwd)
-                                .password(true)
-                                .hint_text(if is_new { "至少 6 位（必填）" } else { "留空表示不修改" }),
-                        );
-                        ui.end_row();
-                        ui.label("备注：");
-                        ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut u.memo));
-                        ui.end_row();
-                        ui.label("部门范围：");
-                        ui.add_sized(
-                            [220.0, 22.0],
-                            egui::TextEdit::singleline(&mut self.depts_text)
-                                .hint_text("逗号分隔，留空不限"),
-                        );
-                        ui.end_row();
-                        ui.label("科目范围：");
-                        ui.horizontal(|ui| {
-                            ui.add_sized(
-                                [100.0, 22.0],
-                                egui::TextEdit::singleline(&mut u.data_scope.account_from)
-                                    .hint_text("起"),
-                            );
-                            ui.label("至");
-                            ui.add_sized(
-                                [100.0, 22.0],
-                                egui::TextEdit::singleline(&mut u.data_scope.account_to)
-                                    .hint_text("止"),
-                            );
-                        });
-                        ui.end_row();
                     });
-                ui.add_space(6.0);
-                ui.label(RichText::new("数据范围").weak());
-                ui.checkbox(&mut u.data_scope.own_voucher_only, "仅看本人填制的凭证");
-                ui.checkbox(&mut u.data_scope.own_doc_only, "仅看本人经手的业务单据");
-                ui.add_space(6.0);
-                ui.checkbox(&mut u.disabled, "停用该用户");
-                ui.checkbox(&mut u.must_change_pwd, "下次登录强制改密");
-                ui.add_space(8.0);
-
-                // 权限逐项覆盖：角色预设基础上，每一项可改为「强制开启 / 强制关闭」
-                if u.is_admin() {
-                    ui.label(RichText::new("系统管理员默认拥有全部权限，不受逐项开关限制。").weak());
-                } else {
-                    ui.label(RichText::new("权限覆盖（角色基础上逐项开关）").weak());
-                    ui.add_space(4.0);
-                    // 主岗位 + 兼任岗位权限并集（身兼多职）
-                    let mut role_perms: Vec<Perm> = u.role.perms().to_vec();
-                    for rc in &u.roles {
-                        for p in rc.perms() {
-                            if !role_perms.contains(p) {
-                                role_perms.push(*p);
-                            }
-                        }
+                // 应用选择：跟随角色 → 清空覆盖；强制开启 → 加 extra；强制关闭 → 加 deny
+                if let Some((p, mode)) = changed {
+                    u.extra_perms.retain(|x| *x != p);
+                    u.deny_perms.retain(|x| *x != p);
+                    match mode {
+                        1 => u.extra_perms.push(p),
+                        -1 => u.deny_perms.push(p),
+                        _ => {}
                     }
-                    let extra = u.extra_perms.clone();
-                    let deny = u.deny_perms.clone();
-                    // -1=强制关闭 0=跟随角色 1=强制开启
-                    let mut changed: Option<(Perm, i8)> = None;
-                    egui::ScrollArea::vertical()
-                        .id_salt("user_perm_overrides")
-                        .max_height(180.0)
-                        .show(ui, |ui| {
-                            egui::Grid::new("perm_overrides")
-                                .num_columns(2)
-                                .spacing([10.0, 6.0])
-                                .show(ui, |ui| {
-                                    for p in Perm::all() {
-                                        let base = role_perms.contains(p);
-                                        let force_on = extra.contains(p);
-                                        let force_off = deny.contains(p);
-                                        let cur = if force_off {
-                                            "强制关闭".to_string()
-                                        } else if force_on {
-                                            "强制开启".to_string()
-                                        } else {
-                                            format!("跟随角色{}", if base { " ✔" } else { " ✖" })
-                                        };
-                                        ui.label(format!("{}：", p.label()));
-                                        egui::ComboBox::from_id_salt(("perm_ovr", p))
-                                            .selected_text(cur)
-                                            .width(170.0)
-                                            .show_ui(ui, |ui| {
-                                                ui.selectable_label(!force_off && !force_on, "跟随角色")
-                                                    .clicked()
-                                                    .then(|| changed = Some((*p, 0)));
-                                                ui.selectable_label(force_on, "强制开启")
-                                                    .clicked()
-                                                    .then(|| changed = Some((*p, 1)));
-                                                ui.selectable_label(force_off, "强制关闭")
-                                                    .clicked()
-                                                    .then(|| changed = Some((*p, -1)));
-                                            });
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                    // 应用选择：跟随角色 → 清空覆盖；强制开启 → 加 extra；强制关闭 → 加 deny
-                    if let Some((p, mode)) = changed {
-                        u.extra_perms.retain(|x| *x != p);
-                        u.deny_perms.retain(|x| *x != p);
-                        match mode {
-                            1 => u.extra_perms.push(p),
-                            -1 => u.deny_perms.push(p),
-                            _ => {}
-                        }
-                    }
-                    ui.add_space(6.0);
                 }
+                ui.add_space(6.0);
+            }
 
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("取消").clicked() {
-                            close = true;
-                        }
-                        if ui.button("保存").clicked() {
-                            save = true;
-                        }
-                    });
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                    if ui.button("保存").clicked() {
+                        save = true;
+                    }
                 });
             });
+        });
 
         if close || !open {
             self.editing = None;
@@ -452,13 +476,11 @@ impl UsersView {
                         } else {
                             format!("✖ {}", p.label())
                         };
-                        ui.label(
-                            RichText::new(txt).color(if on {
-                                Color32::BLACK
-                            } else {
-                                ui.visuals().weak_text_color()
-                            }),
-                        );
+                        ui.label(RichText::new(txt).color(if on {
+                            Color32::BLACK
+                        } else {
+                            ui.visuals().weak_text_color()
+                        }));
                         ui.add_space(6.0);
                     }
                 });

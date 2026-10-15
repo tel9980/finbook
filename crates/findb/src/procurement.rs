@@ -53,7 +53,12 @@ fn map_req(r: &rusqlite::Row) -> rusqlite::Result<PurchaseReq> {
 const R_COLS: &str = "id,no,period,date,item_code,item_name,qty,status,requester,memo";
 
 pub fn pr_next_no(db: &Db, period: Period) -> DbResult<String> {
-    let prefix = format!("{}{:04}{:02}", crate::doc_prefix(db, "req", "QG"), period.year(), period.month());
+    let prefix = format!(
+        "{}{:04}{:02}",
+        crate::doc_prefix(db, "req", "QG"),
+        period.year(),
+        period.month()
+    );
     let n: i64 = db.conn().query_row(
         "SELECT COUNT(*) FROM purchase_req WHERE no LIKE ?1",
         rusqlite::params![format!("{prefix}%")],
@@ -63,18 +68,26 @@ pub fn pr_next_no(db: &Db, period: Period) -> DbResult<String> {
 }
 
 pub fn pr_save(db: &Db, r: &mut PurchaseReq) -> DbResult<i64> {
-    let id = if r.id > 0 {
-        db.conn().execute(
-            "UPDATE purchase_req SET period=?2, date=?3, item_code=?4, item_name=?5,
+    let id =
+        if r.id > 0 {
+            db.conn().execute(
+                "UPDATE purchase_req SET period=?2, date=?3, item_code=?4, item_name=?5,
              qty=?6, status=?7, requester=?8, memo=?9 WHERE id=?1",
-            rusqlite::params![
-                r.id, r.period.ymm(), r.date.format("%Y-%m-%d").to_string(),
-                r.item_code, r.item_name, crate::exact_param(r.qty), r.status, r.requester, r.memo
-            ],
-        )?;
-        r.id
-    } else {
-        db.conn().execute(
+                rusqlite::params![
+                    r.id,
+                    r.period.ymm(),
+                    r.date.format("%Y-%m-%d").to_string(),
+                    r.item_code,
+                    r.item_name,
+                    crate::exact_param(r.qty),
+                    r.status,
+                    r.requester,
+                    r.memo
+                ],
+            )?;
+            r.id
+        } else {
+            db.conn().execute(
             "INSERT INTO purchase_req(no,period,date,item_code,item_name,qty,status,requester,memo)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             rusqlite::params![
@@ -82,8 +95,8 @@ pub fn pr_save(db: &Db, r: &mut PurchaseReq) -> DbResult<i64> {
                 r.item_code, r.item_name, crate::exact_param(r.qty), r.status, r.requester, r.memo
             ],
         )?;
-        db.conn().last_insert_rowid()
-    };
+            db.conn().last_insert_rowid()
+        };
     r.id = id;
     Ok(id)
 }
@@ -100,7 +113,11 @@ pub fn pr_list(db: &Db, period: Period) -> DbResult<Vec<PurchaseReq>> {
 
 pub fn pr_get(db: &Db, id: i64) -> DbResult<Option<PurchaseReq>> {
     db.conn()
-        .query_row(&format!("SELECT {R_COLS} FROM purchase_req WHERE id=?1"), [id], map_req)
+        .query_row(
+            &format!("SELECT {R_COLS} FROM purchase_req WHERE id=?1"),
+            [id],
+            map_req,
+        )
         .optional()
         .map_err(Into::into)
 }
@@ -149,7 +166,13 @@ pub fn po_receipt_add(db: &Db, r: &PoReceipt) -> DbResult<i64> {
     }
     db.conn().execute(
         "INSERT INTO po_receipt(po_id,period,date,qty,memo) VALUES(?1,?2,?3,?4,?5)",
-        rusqlite::params![r.po_id, r.period.ymm(), r.date.format("%Y-%m-%d").to_string(), crate::exact_param(r.qty), r.memo],
+        rusqlite::params![
+            r.po_id,
+            r.period.ymm(),
+            r.date.format("%Y-%m-%d").to_string(),
+            crate::exact_param(r.qty),
+            r.memo
+        ],
     )?;
     // 执行进度以 po_receipt 流水累计为准（Rust 侧 Decimal），不落冗余字段
     Ok(db.conn().last_insert_rowid())
@@ -158,7 +181,7 @@ pub fn po_receipt_add(db: &Db, r: &PoReceipt) -> DbResult<i64> {
 pub fn po_receipt_list(db: &Db, po_id: i64) -> DbResult<Vec<PoReceipt>> {
     let mut st = db.conn().prepare(
         "SELECT id,po_id,period,date,qty,memo,item_code,warehouse
-         FROM po_receipt WHERE po_id=?1 ORDER BY id"
+         FROM po_receipt WHERE po_id=?1 ORDER BY id",
     )?;
     let rows = st
         .query_map([po_id], |r| {
@@ -179,13 +202,26 @@ pub fn po_receipt_list(db: &Db, po_id: i64) -> DbResult<Vec<PoReceipt>> {
 }
 
 /// 采购退货：生成负到货记录（数量为负），冲减收货
-pub fn po_return_add(db: &Db, po_id: i64, period: Period, date: NaiveDate, qty: Money, memo: &str) -> DbResult<i64> {
+pub fn po_return_add(
+    db: &Db,
+    po_id: i64,
+    period: Period,
+    date: NaiveDate,
+    qty: Money,
+    memo: &str,
+) -> DbResult<i64> {
     if qty.is_negative() || qty.is_zero() {
         return Err(fincore::FinError::msg("退货数量必须为正数").into());
     }
     db.conn().execute(
         "INSERT INTO po_receipt(po_id,period,date,qty,memo) VALUES(?1,?2,?3,?4,?5)",
-        rusqlite::params![po_id, period.ymm(), date.format("%Y-%m-%d").to_string(), qty.negated().to_string(), format!("退货 {}", memo)],
+        rusqlite::params![
+            po_id,
+            period.ymm(),
+            date.format("%Y-%m-%d").to_string(),
+            qty.negated().to_string(),
+            format!("退货 {}", memo)
+        ],
     )?;
     Ok(db.conn().last_insert_rowid())
 }
@@ -245,7 +281,7 @@ fn stock_purchase_in(
 ) -> DbResult<i64> {
     // 仓库：空 = 默认仓；非空必须存在且未停用（仓库主数据 v30）
     let wh = crate::warehouse::resolve_conn(tx, warehouse)?;
-    let mut mv = crate::business::StockMove {
+    let mv = crate::business::StockMove {
         id: 0,
         period,
         biz_date: date,
@@ -263,13 +299,15 @@ fn stock_purchase_in(
             memo.to_string()
         },
     };
-    crate::business::stock_insert_of(tx, &mut mv)?;
+    crate::business::stock_insert_of(tx, &mv)?;
     Ok(tx.last_insert_rowid())
 }
 
 /// 订单首行（品名与单价）——到货/退货/质检统一取价口径
 fn first_line(po: &crate::scm::PurchaseOrder) -> Result<&crate::scm::PoLine, fincore::FinError> {
-    po.lines.first().ok_or_else(|| fincore::FinError::msg("采购订单没有明细行，不能入库"))
+    po.lines
+        .first()
+        .ok_or_else(|| fincore::FinError::msg("采购订单没有明细行，不能入库"))
 }
 
 /// 到货登记：执行流水 + 采购入库流水**同事务**。
@@ -279,8 +317,8 @@ fn first_line(po: &crate::scm::PurchaseOrder) -> Result<&crate::scm::PoLine, fin
 /// 净收货 ≥ 订购量 → Completed；>0 → PartialIn；=0 → Confirmed；
 /// 已取消的单不回退（WHERE status <> 'Cancelled'）。
 pub fn refresh_po_status(db: &Db, po_id: i64) -> DbResult<()> {
-    let po = crate::scm::po_get(db, po_id)?
-        .ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
+    let po =
+        crate::scm::po_get(db, po_id)?.ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
     let ordered: Money = po.lines.iter().map(|l| l.qty_ordered).sum();
     let received = po_receipt_sum(db, po_id)?;
     let target = if ordered.is_positive() && received >= ordered {
@@ -301,8 +339,8 @@ pub fn po_receipt_with_stock(db: &Db, r: &PoReceipt, warehouse: &str) -> DbResul
     if r.qty.is_negative() || r.qty.is_zero() {
         return Err(fincore::FinError::msg("到货数量必须为正数").into());
     }
-    let po = crate::scm::po_get(db, r.po_id)?
-        .ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
+    let po =
+        crate::scm::po_get(db, r.po_id)?.ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
     let line = if r.item_code.trim().is_empty() {
         first_line(&po)?.clone()
     } else {
@@ -336,18 +374,13 @@ pub fn po_receipt_with_stock(db: &Db, r: &PoReceipt, warehouse: &str) -> DbResul
     let item = line.item_code.clone();
     let price = line.unit_price;
     // 仓库优先取行上的，其次取调用方传的（接口参数，为空则由存货层兜底）
-    let wh = if r.warehouse.trim().is_empty() { warehouse } else { r.warehouse.as_str() };
+    let wh = if r.warehouse.trim().is_empty() {
+        warehouse
+    } else {
+        r.warehouse.as_str()
+    };
     let tx = db.write_tx()?;
-    let rid = receipt_row_in(
-        &tx,
-        r.po_id,
-        r.period,
-        r.date,
-        r.qty,
-        &r.memo,
-        &item,
-        wh,
-    )?;
+    let rid = receipt_row_in(&tx, r.po_id, r.period, r.date, r.qty, &r.memo, &item, wh)?;
     let mid = stock_purchase_in(
         &tx,
         &po.no,
@@ -361,7 +394,10 @@ pub fn po_receipt_with_stock(db: &Db, r: &PoReceipt, warehouse: &str) -> DbResul
     )?;
     // 来料检验（存货档案 qc_required=1）→ 入库标记待检：可用量口径排除，质检转正后方可领用
     if crate::business::item_qc_required(db, &item) {
-        tx.execute("UPDATE stock_move SET qc_status='pending' WHERE id=?1", [mid])?;
+        tx.execute(
+            "UPDATE stock_move SET qc_status='pending' WHERE id=?1",
+            [mid],
+        )?;
     }
     tx.commit()?;
     // 到货推进订单执行状态（对标金蝶：部分入库 / 已完成）
@@ -387,8 +423,8 @@ pub fn po_return_with_stock(
     if qty.is_negative() || qty.is_zero() {
         return Err(fincore::FinError::msg("退货数量必须为正数").into());
     }
-    let po = crate::scm::po_get(db, po_id)?
-        .ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
+    let po =
+        crate::scm::po_get(db, po_id)?.ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
     let line = if item_code.trim().is_empty() {
         first_line(&po)?.clone()
     } else {
@@ -421,7 +457,11 @@ pub fn po_return_with_stock(
         return Err(fincore::FinError::state(format!(
             "退货数量 {} 超过{}累计净收货 {}",
             qty.fmt_qty(),
-            if item_code.trim().is_empty() { String::new() } else { format!("物料 {item_code} 的") },
+            if item_code.trim().is_empty() {
+                String::new()
+            } else {
+                format!("物料 {item_code} 的")
+            },
             received.fmt_qty()
         ))
         .into());
@@ -482,8 +522,8 @@ pub fn qc_save(
     if qty_fail.is_negative() || qty_fail > qty_insp {
         return Err(fincore::FinError::msg("不合格数必须 ≥0 且 ≤ 检验数").into());
     }
-    let po = crate::scm::po_get(db, po_id)?
-        .ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
+    let po =
+        crate::scm::po_get(db, po_id)?.ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
     let line = first_line(&po)?;
     let item = line.item_code.clone();
     let price = line.unit_price;
@@ -602,8 +642,9 @@ pub fn qc_save(
                 );
             }
             let received = {
-                let mut st = tx
-                    .prepare("SELECT COALESCE(SUM(CAST(qty AS REAL)),0) FROM po_receipt WHERE po_id=?1")?;
+                let mut st = tx.prepare(
+                    "SELECT COALESCE(SUM(CAST(qty AS REAL)),0) FROM po_receipt WHERE po_id=?1",
+                )?;
                 let v: f64 = st.query_row([po_id], |r| r.get(0))?;
                 Money::parse_or_zero(&format!("{v:.4}"))
             };
@@ -666,13 +707,21 @@ pub fn qc_save(
 pub fn po_payment_add(db: &Db, p: &PoPayment) -> DbResult<i64> {
     db.conn().execute(
         "INSERT INTO po_payment(po_id,period,date,amount,memo) VALUES(?1,?2,?3,?4,?5)",
-        rusqlite::params![p.po_id, p.period.ymm(), p.date.format("%Y-%m-%d").to_string(), crate::money_param(p.amount), p.memo],
+        rusqlite::params![
+            p.po_id,
+            p.period.ymm(),
+            p.date.format("%Y-%m-%d").to_string(),
+            crate::money_param(p.amount),
+            p.memo
+        ],
     )?;
     Ok(db.conn().last_insert_rowid())
 }
 
 pub fn po_payment_sum(db: &Db, po_id: i64) -> DbResult<Money> {
-    let mut st = db.conn().prepare("SELECT amount FROM po_payment WHERE po_id=?1")?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT amount FROM po_payment WHERE po_id=?1")?;
     let rows = st
         .query_map([po_id], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -684,11 +733,22 @@ pub fn po_payment_sum(db: &Db, po_id: i64) -> DbResult<Money> {
 // ===========================================================================
 
 /// 记录历史价格（采购订单保存时调用）
-pub fn price_history_record(db: &Db, item_code: &str, supplier_code: &str, unit_price: Money, date: NaiveDate) -> DbResult<()> {
+pub fn price_history_record(
+    db: &Db,
+    item_code: &str,
+    supplier_code: &str,
+    unit_price: Money,
+    date: NaiveDate,
+) -> DbResult<()> {
     db.conn().execute(
         "INSERT INTO price_history(item_code,supplier_code,unit_price,date) VALUES(?1,?2,?3,?4)
          ON CONFLICT(item_code,supplier_code,date) DO UPDATE SET unit_price=excluded.unit_price",
-        rusqlite::params![item_code, supplier_code, crate::exact_param(unit_price), date.format("%Y-%m-%d").to_string()],
+        rusqlite::params![
+            item_code,
+            supplier_code,
+            crate::exact_param(unit_price),
+            date.format("%Y-%m-%d").to_string()
+        ],
     )?;
     Ok(())
 }
@@ -699,7 +759,9 @@ pub fn price_history(db: &Db, item_code: &str) -> DbResult<Vec<(String, Money, S
         "SELECT supplier_code, unit_price, date FROM price_history WHERE item_code=?1 ORDER BY date DESC"
     )?;
     let rows = st
-        .query_map([item_code], |r| Ok((r.get(0)?, m(&r.get::<_, String>(1)?), r.get(2)?)))?
+        .query_map([item_code], |r| {
+            Ok((r.get(0)?, m(&r.get::<_, String>(1)?), r.get(2)?))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -715,14 +777,17 @@ pub struct PurchaseStat {
 
 pub fn purchase_stats(db: &Db, period: Period) -> DbResult<Vec<PurchaseStat>> {
     let orders = crate::scm::po_list(db, period, None)?;
-    let mut map: std::collections::BTreeMap<String, PurchaseStat> = std::collections::BTreeMap::new();
+    let mut map: std::collections::BTreeMap<String, PurchaseStat> =
+        std::collections::BTreeMap::new();
     for o in orders {
-        let e = map.entry(o.supplier_code.clone()).or_insert_with(|| PurchaseStat {
-            supplier_code: o.supplier_code.clone(),
-            supplier_name: o.supplier_name.clone(),
-            order_count: 0,
-            amount: Money::ZERO,
-        });
+        let e = map
+            .entry(o.supplier_code.clone())
+            .or_insert_with(|| PurchaseStat {
+                supplier_code: o.supplier_code.clone(),
+                supplier_name: o.supplier_name.clone(),
+                order_count: 0,
+                amount: Money::ZERO,
+            });
         e.order_count += 1;
         e.amount += o.total_amount;
     }
@@ -756,7 +821,7 @@ pub fn po_execution_track(db: &Db, period: Period) -> DbResult<Vec<PoTrack>> {
         let rate = if ordered.is_zero() {
             Money::ZERO
         } else {
-            ((received.abs() * Money::from_i64(100)))
+            (received.abs() * Money::from_i64(100))
                 .checked_div(ordered.abs().inner())
                 .expect("ordered 已判非零")
                 .round2()
@@ -783,10 +848,16 @@ mod tests {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
         let mut r = PurchaseReq {
-            id: 0, no: pr_next_no(&db, p).unwrap(), period: p,
+            id: 0,
+            no: pr_next_no(&db, p).unwrap(),
+            period: p,
             date: NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
-            item_code: "140301".into(), item_name: "原料".into(),
-            qty: m("100"), status: "draft".into(), requester: "张三".into(), memo: String::new(),
+            item_code: "140301".into(),
+            item_name: "原料".into(),
+            qty: m("100"),
+            status: "draft".into(),
+            requester: "张三".into(),
+            memo: String::new(),
         };
         let id = pr_save(&db, &mut r).unwrap();
         assert!(id > 0);
@@ -801,20 +872,66 @@ mod tests {
     fn receipt_payment_and_stats() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut po = crate::scm::PurchaseOrder::new(p, NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(), "S01", "供应商A", "u");
+        let mut po = crate::scm::PurchaseOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S01",
+            "供应商A",
+            "u",
+        );
         po.no = crate::scm::po_next_no(&db, p).unwrap();
         po.lines.push(crate::scm::PoLine {
-            id: 0, po_id: 0, item_code: "140301".into(), item_name: "原料".into(),
-            qty_ordered: m("100"), qty_received: m("0"), unit_price: m("10"),
-            tax_rate: m("0"), amount: m("1000"), tax_amount: m("0"), memo: String::new(),
+            id: 0,
+            po_id: 0,
+            item_code: "140301".into(),
+            item_name: "原料".into(),
+            qty_ordered: m("100"),
+            qty_received: m("0"),
+            unit_price: m("10"),
+            tax_rate: m("0"),
+            amount: m("1000"),
+            tax_amount: m("0"),
+            memo: String::new(),
         });
         let po_id = crate::scm::po_save(&db, &mut po).unwrap();
         // 到货 60
-        po_receipt_add(&db, &PoReceipt { id: 0, po_id, period: p, date: NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(), qty: m("60"), memo: String::new(), item_code: String::new(), warehouse: String::new() }).unwrap();
+        po_receipt_add(
+            &db,
+            &PoReceipt {
+                id: 0,
+                po_id,
+                period: p,
+                date: NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+                qty: m("60"),
+                memo: String::new(),
+                item_code: String::new(),
+                warehouse: String::new(),
+            },
+        )
+        .unwrap();
         // 退货 10
-        po_return_add(&db, po_id, p, NaiveDate::from_ymd_opt(2026, 1, 12).unwrap(), m("10"), "破损").unwrap();
+        po_return_add(
+            &db,
+            po_id,
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 12).unwrap(),
+            m("10"),
+            "破损",
+        )
+        .unwrap();
         // 付款 500
-        po_payment_add(&db, &PoPayment { id: 0, po_id, period: p, date: NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(), amount: m("500"), memo: String::new() }).unwrap();
+        po_payment_add(
+            &db,
+            &PoPayment {
+                id: 0,
+                po_id,
+                period: p,
+                date: NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+                amount: m("500"),
+                memo: String::new(),
+            },
+        )
+        .unwrap();
         assert_eq!(po_payment_sum(&db, po_id).unwrap(), m("500"));
         // 执行跟踪：60-10=50 → 执行率 50%
         let track = po_execution_track(&db, p).unwrap();
@@ -830,8 +947,22 @@ mod tests {
     #[test]
     fn price_history_recorded() {
         let db = mem();
-        price_history_record(&db, "140301", "S01", m("10"), NaiveDate::from_ymd_opt(2026, 1, 5).unwrap()).unwrap();
-        price_history_record(&db, "140301", "S01", m("11"), NaiveDate::from_ymd_opt(2026, 2, 5).unwrap()).unwrap();
+        price_history_record(
+            &db,
+            "140301",
+            "S01",
+            m("10"),
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        )
+        .unwrap();
+        price_history_record(
+            &db,
+            "140301",
+            "S01",
+            m("11"),
+            NaiveDate::from_ymd_opt(2026, 2, 5).unwrap(),
+        )
+        .unwrap();
         let h = price_history(&db, "140301").unwrap();
         assert_eq!(h.len(), 2);
         assert_eq!(h[0].1, m("11")); // 最新在前

@@ -31,7 +31,12 @@ pub fn income_statement_def() -> ReportDef {
     ));
 
     let i_cost = lines.len();
-    lines.push(ReportLine::normal("2", "减：营业成本", 1, expense(&["6401", "6402"])));
+    lines.push(ReportLine::normal(
+        "2",
+        "减：营业成本",
+        1,
+        expense(&["6401", "6402"]),
+    ));
 
     let i_tax = lines.len();
     lines.push(ReportLine::normal(
@@ -42,13 +47,28 @@ pub fn income_statement_def() -> ReportDef {
     ));
 
     let i_sell = lines.len();
-    lines.push(ReportLine::normal("4", "　　销售费用", 1, expense(&["6601"])));
+    lines.push(ReportLine::normal(
+        "4",
+        "　　销售费用",
+        1,
+        expense(&["6601"]),
+    ));
 
     let i_admin = lines.len();
-    lines.push(ReportLine::normal("5", "　　管理费用", 1, expense(&["6602"])));
+    lines.push(ReportLine::normal(
+        "5",
+        "　　管理费用",
+        1,
+        expense(&["6602"]),
+    ));
 
     let i_fin = lines.len();
-    lines.push(ReportLine::normal("6", "　　财务费用", 1, expense(&["6603"])));
+    lines.push(ReportLine::normal(
+        "6",
+        "　　财务费用",
+        1,
+        expense(&["6603"]),
+    ));
 
     let i_impair = lines.len();
     lines.push(ReportLine::normal(
@@ -132,10 +152,7 @@ pub fn income_statement_def() -> ReportDef {
         "15",
         "四、净利润（净亏损以“-”号填列）",
         0,
-        vec![
-            Term::line(i_total_profit),
-            Term::line(i_income_tax).neg(),
-        ],
+        vec![Term::line(i_total_profit), Term::line(i_income_tax).neg()],
     ));
 
     ReportDef {

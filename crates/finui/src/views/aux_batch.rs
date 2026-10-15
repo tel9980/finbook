@@ -115,8 +115,7 @@ impl Ui {
                         .on_hover_text("选择填好的 .xlsx，直接读进来预览")
                         .clicked()
                     {
-                        if let Some(path) =
-                            crate::views::export::pick_open(&["xlsx", "xls", "ods"])
+                        if let Some(path) = crate::views::export::pick_open(&["xlsx", "xls", "ods"])
                         {
                             match findb::imports::read_xlsx(&path) {
                                 Ok(rows) => {
@@ -140,8 +139,8 @@ impl Ui {
                     let p = parse(&self.text, kind, existing);
                     if p.is_empty() {
                         self.preview = None;
-                        self.err =
-                            "没解析出内容。每行一条，编码和名称之间用逗号或 Tab 隔开就行。".to_string();
+                        self.err = "没解析出内容。每行一条，编码和名称之间用逗号或 Tab 隔开就行。"
+                            .to_string();
                     } else {
                         self.err.clear();
                         self.preview = Some(p);
@@ -154,11 +153,14 @@ impl Ui {
                     ui.add_space(6.0);
                     ui.separator();
                     ui.add_space(4.0);
-                    ui.label(RichText::new(format!("解析到 {} 条，其中 {} 条将导入", p.rows.len(), ok)).strong());
+                    ui.label(
+                        RichText::new(format!("解析到 {} 条，其中 {} 条将导入", p.rows.len(), ok))
+                            .strong(),
+                    );
                     if dup > 0 {
                         ui.colored_label(
                             crate::theme::palette::CREDIT,
-                            &format!("{dup} 条编码已存在，将跳过（不会覆盖原有档案）"),
+                            format!("{dup} 条编码已存在，将跳过（不会覆盖原有档案）"),
                         );
                     }
                     let cols = [
@@ -167,24 +169,31 @@ impl Ui {
                         crate::widgets::TCol::new("状态", 130.0).fixed(),
                     ];
                     let rows = p.rows.clone();
-                    crate::widgets::grid(ui, "aux_batch_preview", &cols, rows.len(), 22.0, |i, c, ui| {
-                        match c {
-                            0 => {
-                                ui.label(&rows[i].code);
+                    crate::widgets::grid(
+                        ui,
+                        "aux_batch_preview",
+                        &cols,
+                        rows.len(),
+                        22.0,
+                        |i, c, ui| {
+                            match c {
+                                0 => {
+                                    ui.label(&rows[i].code);
+                                }
+                                1 => {
+                                    ui.label(&rows[i].name);
+                                }
+                                _ => {
+                                    let txt = match &rows[i].skip {
+                                        None => "将导入",
+                                        // 文案统一走 fincore 的 label()，两端共用一份
+                                        Some(reason) => reason.label(),
+                                    };
+                                    ui.label(RichText::new(txt).weak());
+                                }
                             }
-                            1 => {
-                                ui.label(&rows[i].name);
-                            }
-                            _ => {
-                                let txt = match &rows[i].skip {
-                                    None => "将导入",
-                                    // 文案统一走 fincore 的 label()，两端共用一份
-                                    Some(reason) => reason.label(),
-                                };
-                                ui.label(RichText::new(txt).weak());
-                            }
-                        }
-                    });
+                        },
+                    );
                 }
 
                 if let Some(msg) = &self.done {
@@ -313,7 +322,11 @@ mod tests {
     /// 从 WPS/记事本贴过来的空行和首尾空格不能变成空档案
     #[test]
     fn 清理空行与空白() {
-        let p = parse("\n  \nC01,杭州明远\n\n  C02 , 宁波华信  \n", AuxKind::Customer, &[]);
+        let p = parse(
+            "\n  \nC01,杭州明远\n\n  C02 , 宁波华信  \n",
+            AuxKind::Customer,
+            &[],
+        );
         assert_eq!(p.rows.len(), 2);
         assert_eq!(p.rows[0].name, "杭州明远");
         assert_eq!(p.rows[1].code, "C02");

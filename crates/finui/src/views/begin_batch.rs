@@ -102,11 +102,10 @@ impl Ui {
                         .on_hover_text("保存 .xlsx 空表（带示例和填表说明）")
                         .clicked()
                     {
-                        let sheets = crate::views::export::batch_template_sheets(
-                            "期初余额",
-                            &template(),
-                        );
-                        match crate::views::export::save_template(&sheets, "期初余额导入模板") {
+                        let sheets =
+                            crate::views::export::batch_template_sheets("期初余额", &template());
+                        match crate::views::export::save_template(&sheets, "期初余额导入模板")
+                        {
                             Ok(Some(m)) => {
                                 self.done = Some(m);
                                 self.err.clear();
@@ -120,8 +119,7 @@ impl Ui {
                         .on_hover_text("选择填好的 .xlsx，直接读进来预览")
                         .clicked()
                     {
-                        if let Some(path) =
-                            crate::views::export::pick_open(&["xlsx", "xls", "ods"])
+                        if let Some(path) = crate::views::export::pick_open(&["xlsx", "xls", "ods"])
                         {
                             match findb::imports::read_xlsx(&path) {
                                 Ok(rows) => {
@@ -159,11 +157,14 @@ impl Ui {
                     ui.add_space(6.0);
                     ui.separator();
                     ui.add_space(4.0);
-                    ui.label(RichText::new(format!("解析到 {} 条，其中 {} 条可并入", p.rows.len(), ok)).strong());
+                    ui.label(
+                        RichText::new(format!("解析到 {} 条，其中 {} 条可并入", p.rows.len(), ok))
+                            .strong(),
+                    );
                     if bad > 0 {
                         ui.colored_label(
                             crate::theme::palette::CREDIT,
-                            &format!("{bad} 条有问题（编码不对 / 库里已填过），将跳过"),
+                            format!("{bad} 条有问题（编码不对 / 库里已填过），将跳过"),
                         );
                     }
                     // 试算提示：可并入部分借贷各多少 —— 用户粘完先看平不平
@@ -191,29 +192,36 @@ impl Ui {
                         crate::widgets::TCol::new("状态", 180.0),
                     ];
                     let rows = p.rows.clone();
-                    crate::widgets::grid(ui, "begin_batch_preview", &cols, rows.len(), 22.0, |i, c, ui| {
-                        let r = &rows[i];
-                        match c {
-                            0 => {
-                                ui.label(&r.code);
+                    crate::widgets::grid(
+                        ui,
+                        "begin_batch_preview",
+                        &cols,
+                        rows.len(),
+                        22.0,
+                        |i, c, ui| {
+                            let r = &rows[i];
+                            match c {
+                                0 => {
+                                    ui.label(&r.code);
+                                }
+                                1 => {
+                                    ui.label(r.dir.label());
+                                }
+                                2 => {
+                                    ui.label(r.amount.fmt_money());
+                                }
+                                _ => {
+                                    let txt = match &r.skip {
+                                        None => "将并入".to_string(),
+                                        // 文案统一走 fincore 的 label()，两端共用一份，
+                                        // 免得桌面端改了 Web 端没改
+                                        Some(reason) => reason.label(),
+                                    };
+                                    ui.label(RichText::new(txt).weak());
+                                }
                             }
-                            1 => {
-                                ui.label(r.dir.label());
-                            }
-                            2 => {
-                                ui.label(r.amount.fmt_money());
-                            }
-                            _ => {
-                                let txt = match &r.skip {
-                                    None => "将并入".to_string(),
-                                    // 文案统一走 fincore 的 label()，两端共用一份，
-                                    // 免得桌面端改了 Web 端没改
-                                    Some(reason) => reason.label(),
-                                };
-                                ui.label(RichText::new(txt).weak());
-                            }
-                        }
-                    });
+                        },
+                    );
                 }
 
                 if let Some(msg) = &self.done {
@@ -284,8 +292,14 @@ mod tests {
         // 资产记借、负债记贷 —— 新手最容易错的就是这一判断
         let p = parse("1001,5000\n2001,3000", &mixed, &leaves(), &[]);
         assert_eq!(p.rows.len(), 2);
-        assert_eq!((p.rows[0].code.as_str(), p.rows[0].dir), ("1001", Direction::Debit));
-        assert_eq!((p.rows[1].code.as_str(), p.rows[1].dir), ("2001", Direction::Credit));
+        assert_eq!(
+            (p.rows[0].code.as_str(), p.rows[0].dir),
+            ("1001", Direction::Debit)
+        );
+        assert_eq!(
+            (p.rows[1].code.as_str(), p.rows[1].dir),
+            ("2001", Direction::Credit)
+        );
         assert!(p.rows.iter().all(|r| r.skip.is_none()));
     }
 
@@ -327,7 +341,10 @@ mod tests {
     #[test]
     fn 未知编码给提示() {
         let p = parse("10011,5000", &mixed, &leaves(), &[]);
-        assert!(matches!(p.rows[0].skip, Some(SkipReason::UnknownCode { .. })));
+        assert!(matches!(
+            p.rows[0].skip,
+            Some(SkipReason::UnknownCode { .. })
+        ));
         if let Some(SkipReason::UnknownCode { suggestion }) = &p.rows[0].skip {
             assert_eq!(suggestion.as_deref(), Some("1001"));
         }
@@ -335,7 +352,12 @@ mod tests {
 
     #[test]
     fn 库里已有的标为跳过() {
-        let p = parse("1001,5000\n2001,3000", &mixed, &leaves(), &["1001".to_string()]);
+        let p = parse(
+            "1001,5000\n2001,3000",
+            &mixed,
+            &leaves(),
+            &["1001".to_string()],
+        );
         assert!(matches!(p.rows[0].skip, Some(SkipReason::ExistsInBook)));
         assert_eq!(p.rows[1].skip, None);
         assert_eq!(p.importable().len(), 1);

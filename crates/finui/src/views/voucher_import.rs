@@ -19,8 +19,11 @@ pub struct Ui {
     pub err: String,
 }
 
-const TMPLS: [ImportTemplate; 3] =
-    [ImportTemplate::Generic, ImportTemplate::Kingdee, ImportTemplate::Yonyou];
+const TMPLS: [ImportTemplate; 3] = [
+    ImportTemplate::Generic,
+    ImportTemplate::Kingdee,
+    ImportTemplate::Yonyou,
+];
 
 fn tmpl_hint(t: ImportTemplate) -> &'static str {
     match t {
@@ -30,19 +33,13 @@ fn tmpl_hint(t: ImportTemplate) -> &'static str {
         ImportTemplate::Kingdee => {
             "写法：日期,凭证字,凭证号,摘要,科目编码,科目名称,借方,贷方（后可加 客户,银行）"
         }
-        ImportTemplate::Yonyou => {
-            "写法：日期,凭证字号,摘要,科目编码,借方,贷方（后可加 客户,银行）"
-        }
+        ImportTemplate::Yonyou => "写法：日期,凭证字号,摘要,科目编码,借方,贷方（后可加 客户,银行）",
     }
 }
 
 impl Ui {
     /// 展示导入窗口。导入成功返回 true，调用方据此刷新列表。
-    pub fn window(
-        &mut self,
-        ctx: &mut crate::state::AppCtx<'_>,
-        egui_ui: &mut egui::Ui,
-    ) -> bool {
+    pub fn window(&mut self, ctx: &mut crate::state::AppCtx<'_>, egui_ui: &mut egui::Ui) -> bool {
         if !self.open {
             return false;
         }
@@ -109,8 +106,7 @@ impl Ui {
                             } else {
                                 match findb::imports::read_xlsx(&path) {
                                     Ok(rows) => {
-                                        self.text =
-                                            findb::imports::xlsx_to_csv_text(&rows);
+                                        self.text = findb::imports::xlsx_to_csv_text(&rows);
                                         self.preview = None;
                                         self.done = None;
                                         self.err.clear();
@@ -186,17 +182,13 @@ impl Ui {
                         }
                         if pv.missing_accounts.len() > 10 {
                             ui.label(
-                                format!("  ……另有 {} 个", pv.missing_accounts.len() - 10)
-                                    .as_str(),
+                                format!("  ……另有 {} 个", pv.missing_accounts.len() - 10).as_str(),
                             );
                         }
                     }
                     for iss in pv.issues.iter().take(15) {
                         let level = if iss.level == "error" { "错" } else { "注" };
-                        let row = iss
-                            .row
-                            .map(|r| format!("第{r}行"))
-                            .unwrap_or_default();
+                        let row = iss.row.map(|r| format!("第{r}行")).unwrap_or_default();
                         ui.label(
                             format!("[{level}·{}] {row} {}", iss.category, iss.detail).as_str(),
                         );

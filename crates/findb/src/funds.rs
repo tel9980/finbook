@@ -168,21 +168,29 @@ pub fn bill_get(db: &Db, id: i64) -> DbResult<Option<Bill>> {
 }
 
 pub fn bill_save(db: &Db, b: &mut Bill) -> DbResult<i64> {
-    let id = if b.id > 0 {
-        db.conn().execute(
-            "UPDATE bill SET kind=?2, no=?3, issue_date=?4, due_date=?5, status=?6, period=?7,
+    let id =
+        if b.id > 0 {
+            db.conn().execute(
+                "UPDATE bill SET kind=?2, no=?3, issue_date=?4, due_date=?5, status=?6, period=?7,
              counterpart=?8, bank=?9, amount=?10, handled_date=?11, memo=?12 WHERE id=?1",
-            rusqlite::params![
-                b.id, b.kind, b.no,
-                b.issue_date.format("%Y-%m-%d").to_string(),
-                b.due_date.format("%Y-%m-%d").to_string(),
-                b.status, b.period.ymm(), b.counterpart, b.bank, crate::money_param(b.amount),
-                b.handled_date.map(|d| d.format("%Y-%m-%d").to_string()), b.memo
-            ],
-        )?;
-        b.id
-    } else {
-        db.conn().execute(
+                rusqlite::params![
+                    b.id,
+                    b.kind,
+                    b.no,
+                    b.issue_date.format("%Y-%m-%d").to_string(),
+                    b.due_date.format("%Y-%m-%d").to_string(),
+                    b.status,
+                    b.period.ymm(),
+                    b.counterpart,
+                    b.bank,
+                    crate::money_param(b.amount),
+                    b.handled_date.map(|d| d.format("%Y-%m-%d").to_string()),
+                    b.memo
+                ],
+            )?;
+            b.id
+        } else {
+            db.conn().execute(
             "INSERT INTO bill(kind,no,issue_date,due_date,status,period,counterpart,bank,amount,
              handled_date,memo,created_by,created_at)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
@@ -195,8 +203,8 @@ pub fn bill_save(db: &Db, b: &mut Bill) -> DbResult<i64> {
                 b.created_by, now()
             ],
         )?;
-        db.conn().last_insert_rowid()
-    };
+            db.conn().last_insert_rowid()
+        };
     b.id = id;
     Ok(id)
 }
@@ -247,22 +255,22 @@ fn bill_entries(
         ..Default::default()
     };
     match (b.kind.as_str(), to) {
-        (k, BillStatus::Discounted) if k == "receivable" => {
+        ("receivable", BillStatus::Discounted) => {
             Some(("100201", bank_aux(), "112101", AuxRef::default(), "贴现"))
         }
-        (k, BillStatus::Discounted) if k == "payable" => {
+        ("payable", BillStatus::Discounted) => {
             Some(("220101", AuxRef::default(), "100201", bank_aux(), "贴现"))
         }
-        (k, BillStatus::Endorsed) if k == "receivable" => {
+        ("receivable", BillStatus::Endorsed) => {
             Some(("220201", sup_aux(), "112101", AuxRef::default(), "背书"))
         }
-        (k, BillStatus::Endorsed) if k == "payable" => {
+        ("payable", BillStatus::Endorsed) => {
             Some(("220101", AuxRef::default(), "220201", sup_aux(), "背书"))
         }
-        (k, BillStatus::Settled) if k == "receivable" => {
+        ("receivable", BillStatus::Settled) => {
             Some(("100201", bank_aux(), "112101", AuxRef::default(), "兑付"))
         }
-        (k, BillStatus::Settled) if k == "payable" => {
+        ("payable", BillStatus::Settled) => {
             Some(("220101", AuxRef::default(), "100201", bank_aux(), "兑付"))
         }
         _ => None,
@@ -278,8 +286,8 @@ fn bill_voucher_in(
     date: NaiveDate,
     who: &str,
 ) -> Result<i64, DbError> {
-    let (dr, dr_aux, cr, cr_aux, what) = bill_entries(b, to)
-        .ok_or_else(|| fincore::FinError::state("当前状态无需生成台账凭证"))?;
+    let (dr, dr_aux, cr, cr_aux, what) =
+        bill_entries(b, to).ok_or_else(|| fincore::FinError::state("当前状态无需生成台账凭证"))?;
     let period = Period::from_date(date);
     let no = crate::vouchers::next_no_of(tx, period, "记")?;
     let mut v = Voucher::new(period, date, "记", no);
@@ -352,9 +360,7 @@ pub fn bill_voucher(db: &Db, id: i64, who: &str) -> DbResult<i64> {
     let b = bill_get(db, id)?.ok_or_else(|| fincore::FinError::not_found("票据"))?;
     let to = BillStatus::parse(&b.status);
     if bill_entries(&b, to).is_none() {
-        return Err(
-            fincore::FinError::state("当前状态无需生成凭证（在库/已到期请先流转）").into(),
-        );
+        return Err(fincore::FinError::state("当前状态无需生成凭证（在库/已到期请先流转）").into());
     }
     if b.voucher_id.is_some() {
         return Err(fincore::FinError::state("该票据已生成过凭证").into());
@@ -480,10 +486,16 @@ pub fn loan_save(db: &Db, l: &mut Loan) -> DbResult<i64> {
             "UPDATE loan SET kind=?2, no=?3, bank=?4, principal=?5, start_date=?6, end_date=?7,
              status=?8, rate_pct=?9, memo=?10 WHERE id=?1",
             rusqlite::params![
-                l.id, l.kind, l.no, l.bank, crate::money_param(l.principal),
+                l.id,
+                l.kind,
+                l.no,
+                l.bank,
+                crate::money_param(l.principal),
                 l.start_date.format("%Y-%m-%d").to_string(),
                 l.end_date.format("%Y-%m-%d").to_string(),
-                l.status, crate::exact_param(l.rate_pct), l.memo
+                l.status,
+                crate::exact_param(l.rate_pct),
+                l.memo
             ],
         )?;
         l.id
@@ -692,14 +704,9 @@ pub struct FundsDailyRow {
 /// 资金日报：各现金/银行科目的期初、收入、支出、结存
 pub fn funds_daily(db: &Db, period: Period) -> DbResult<Vec<FundsDailyRow>> {
     let accounts = crate::accounts::list(db)?;
-    let cash_bank: Vec<_> = accounts
-        .iter()
-        .filter(|a| a.is_cash || a.is_bank)
-        .collect();
-    let snap = crate::balances::BalanceSnapshot::load(
-        db,
-        &crate::balances::BalanceQuery::period(period),
-    )?;
+    let cash_bank: Vec<_> = accounts.iter().filter(|a| a.is_cash || a.is_bank).collect();
+    let snap =
+        crate::balances::BalanceSnapshot::load(db, &crate::balances::BalanceQuery::period(period))?;
     let mut out = Vec::new();
     for a in cash_bank {
         let row = snap.for_account(&a.code, None);
@@ -738,10 +745,7 @@ pub struct FundsDateRow {
 pub fn funds_daily_by_date(db: &Db, date: NaiveDate) -> DbResult<Vec<FundsDateRow>> {
     let day = date.format("%Y-%m-%d").to_string();
     let accounts = crate::accounts::list(db)?;
-    let cash_bank: Vec<_> = accounts
-        .iter()
-        .filter(|a| a.is_cash || a.is_bank)
-        .collect();
+    let cash_bank: Vec<_> = accounts.iter().filter(|a| a.is_cash || a.is_bank).collect();
     if cash_bank.is_empty() {
         return Ok(Vec::new());
     }
@@ -828,7 +832,7 @@ pub fn funds_budget(db: &Db, period: Period) -> DbResult<Vec<crate::mgmt::Budget
     Ok(rows
         .into_iter()
         .filter(|r| {
-            cash_bank.iter().any(|c| *c == r.account_code)
+            cash_bank.contains(&r.account_code)
                 || cash_bank.iter().any(|c| c.starts_with(&r.account_code))
         })
         .collect())
@@ -916,9 +920,9 @@ pub fn funds_forecast_rolling(db: &Db, from: Period, periods: usize) -> DbResult
                 continue;
             }
             if b.kind == "receivable" {
-                bill_in = bill_in + b.amount;
+                bill_in += b.amount;
             } else {
-                bill_out = bill_out + b.amount;
+                bill_out += b.amount;
             }
         }
         let mut loan_in = Money::ZERO;
@@ -930,21 +934,21 @@ pub fn funds_forecast_rolling(db: &Db, from: Period, periods: usize) -> DbResult
             // 放款（lend）在 start 日出账、end 日收回；借款（borrow）反之
             if Period::from_date(l.start_date).ymm() == p.ymm() {
                 if l.kind == "lend" {
-                    loan_out = loan_out + l.principal;
+                    loan_out += l.principal;
                 } else {
-                    loan_in = loan_in + l.principal;
+                    loan_in += l.principal;
                 }
             }
             if Period::from_date(l.end_date).ymm() == p.ymm() {
                 if l.kind == "lend" {
-                    loan_in = loan_in + l.principal;
+                    loan_in += l.principal;
                 } else {
-                    loan_out = loan_out + l.principal;
+                    loan_out += l.principal;
                 }
             }
         }
         let net = bill_in - bill_out + loan_in - loan_out;
-        balance = balance + net;
+        balance += net;
         out.push(RollingRow {
             period: p,
             bill_in,
@@ -1005,10 +1009,12 @@ const C_COLS: &str =
     "id,period,date,account_code,book_amount,counted,diff,memo,voucher_id,created_by,created_at";
 
 pub fn cash_count_list(db: &Db) -> DbResult<Vec<CashCount>> {
-    let mut st = db
-        .conn()
-        .prepare(&format!("SELECT {C_COLS} FROM cash_count ORDER BY date DESC, id DESC"))?;
-    let rows = st.query_map([], map_count)?.collect::<Result<Vec<_>, _>>()?;
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {C_COLS} FROM cash_count ORDER BY date DESC, id DESC"
+    ))?;
+    let rows = st
+        .query_map([], map_count)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -1048,9 +1054,14 @@ pub fn cash_count_save(db: &Db, c: &mut CashCount) -> DbResult<i64> {
             "UPDATE cash_count SET period=?2, date=?3, account_code=?4, book_amount=?5,
              counted=?6, diff=?7, memo=?8 WHERE id=?1",
             rusqlite::params![
-                c.id, c.period.ymm(), c.date.format("%Y-%m-%d").to_string(),
-                c.account_code, crate::money_param(c.book_amount),
-                crate::money_param(c.counted), crate::money_param(c.diff), c.memo
+                c.id,
+                c.period.ymm(),
+                c.date.format("%Y-%m-%d").to_string(),
+                c.account_code,
+                crate::money_param(c.book_amount),
+                crate::money_param(c.counted),
+                crate::money_param(c.diff),
+                c.memo
             ],
         )?;
         c.id
@@ -1060,10 +1071,15 @@ pub fn cash_count_save(db: &Db, c: &mut CashCount) -> DbResult<i64> {
              voucher_id,created_by,created_at)
              VALUES(?1,?2,?3,?4,?5,?6,?7,NULL,?8,?9)",
             rusqlite::params![
-                c.period.ymm(), c.date.format("%Y-%m-%d").to_string(),
-                c.account_code, crate::money_param(c.book_amount),
-                crate::money_param(c.counted), crate::money_param(c.diff), c.memo,
-                c.created_by, now()
+                c.period.ymm(),
+                c.date.format("%Y-%m-%d").to_string(),
+                c.account_code,
+                crate::money_param(c.book_amount),
+                crate::money_param(c.counted),
+                crate::money_param(c.diff),
+                c.memo,
+                c.created_by,
+                now()
             ],
         )?;
         db.conn().last_insert_rowid()
@@ -1246,26 +1262,36 @@ const CK_COLS: &str =
     "id,no,kind,bank_account,payee,amount,issued_date,status,memo,created_by,created_at";
 
 pub fn check_list(db: &Db) -> DbResult<Vec<CheckRow>> {
-    let mut st = db
-        .conn()
-        .prepare(&format!("SELECT {CK_COLS} FROM check_register ORDER BY issued_date DESC, id DESC"))?;
-    let rows = st.query_map([], map_check)?.collect::<Result<Vec<_>, _>>()?;
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {CK_COLS} FROM check_register ORDER BY issued_date DESC, id DESC"
+    ))?;
+    let rows = st
+        .query_map([], map_check)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 pub fn check_save(db: &Db, c: &mut CheckRow) -> DbResult<i64> {
-    let id = if c.id > 0 {
-        db.conn().execute(
-            "UPDATE check_register SET no=?2, kind=?3, bank_account=?4, payee=?5, amount=?6,
+    let id =
+        if c.id > 0 {
+            db.conn().execute(
+                "UPDATE check_register SET no=?2, kind=?3, bank_account=?4, payee=?5, amount=?6,
              issued_date=?7, status=?8, memo=?9 WHERE id=?1",
-            rusqlite::params![
-                c.id, c.no, c.kind, c.bank_account, c.payee, crate::money_param(c.amount),
-                c.issued_date.format("%Y-%m-%d").to_string(), c.status, c.memo
-            ],
-        )?;
-        c.id
-    } else {
-        db.conn().execute(
+                rusqlite::params![
+                    c.id,
+                    c.no,
+                    c.kind,
+                    c.bank_account,
+                    c.payee,
+                    crate::money_param(c.amount),
+                    c.issued_date.format("%Y-%m-%d").to_string(),
+                    c.status,
+                    c.memo
+                ],
+            )?;
+            c.id
+        } else {
+            db.conn().execute(
             "INSERT INTO check_register(no,kind,bank_account,payee,amount,issued_date,status,memo,
              created_by,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             rusqlite::params![
@@ -1274,8 +1300,8 @@ pub fn check_save(db: &Db, c: &mut CheckRow) -> DbResult<i64> {
                 c.created_by, now()
             ],
         )?;
-        db.conn().last_insert_rowid()
-    };
+            db.conn().last_insert_rowid()
+        };
     c.id = id;
     Ok(id)
 }
@@ -1285,12 +1311,10 @@ pub fn check_set_status(db: &Db, id: i64, status: &str) -> DbResult<()> {
     if status != "issued" && status != "void" {
         return Err(fincore::FinError::state("支票状态只能是已开出/已作废").into());
     }
-    let n = db
-        .conn()
-        .execute(
-            "UPDATE check_register SET status=?2 WHERE id=?1",
-            rusqlite::params![id, status],
-        )?;
+    let n = db.conn().execute(
+        "UPDATE check_register SET status=?2 WHERE id=?1",
+        rusqlite::params![id, status],
+    )?;
     if n == 0 {
         return Err(fincore::FinError::not_found("支票").into());
     }
@@ -1298,9 +1322,10 @@ pub fn check_set_status(db: &Db, id: i64, status: &str) -> DbResult<()> {
 }
 
 pub fn check_delete(db: &Db, id: i64) -> DbResult<()> {
-    let n = db
-        .conn()
-        .execute("DELETE FROM check_register WHERE id=?1", rusqlite::params![id])?;
+    let n = db.conn().execute(
+        "DELETE FROM check_register WHERE id=?1",
+        rusqlite::params![id],
+    )?;
     if n == 0 {
         return Err(fincore::FinError::not_found("支票").into());
     }
@@ -1367,10 +1392,12 @@ const A_COLS: &str = "id,no,period,date,employee,purpose,amount,pay_account,stat
      paid_voucher_id,settle_date,settle_voucher_id,expense_account,memo,created_by,created_at";
 
 pub fn advance_list(db: &Db) -> DbResult<Vec<Advance>> {
-    let mut st = db
-        .conn()
-        .prepare(&format!("SELECT {A_COLS} FROM advance ORDER BY date DESC, id DESC"))?;
-    let rows = st.query_map([], map_advance)?.collect::<Result<Vec<_>, _>>()?;
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {A_COLS} FROM advance ORDER BY date DESC, id DESC"
+    ))?;
+    let rows = st
+        .query_map([], map_advance)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -1398,9 +1425,16 @@ pub fn advance_save(db: &Db, a: &mut Advance) -> DbResult<i64> {
             "UPDATE advance SET no=?2, period=?3, date=?4, employee=?5, purpose=?6, amount=?7,
              pay_account=?8, expense_account=?9, memo=?10 WHERE id=?1",
             rusqlite::params![
-                a.id, a.no, a.period.ymm(), a.date.format("%Y-%m-%d").to_string(),
-                a.employee, a.purpose, crate::money_param(a.amount), a.pay_account,
-                a.expense_account, a.memo
+                a.id,
+                a.no,
+                a.period.ymm(),
+                a.date.format("%Y-%m-%d").to_string(),
+                a.employee,
+                a.purpose,
+                crate::money_param(a.amount),
+                a.pay_account,
+                a.expense_account,
+                a.memo
             ],
         )?;
         a.id
@@ -1410,9 +1444,17 @@ pub fn advance_save(db: &Db, a: &mut Advance) -> DbResult<i64> {
              expense_account,memo,created_by,created_at)
              VALUES(?1,?2,?3,?4,?5,?6,?7,'approved',?8,?9,?10,?11)",
             rusqlite::params![
-                a.no, a.period.ymm(), a.date.format("%Y-%m-%d").to_string(),
-                a.employee, a.purpose, crate::money_param(a.amount), a.pay_account,
-                a.expense_account, a.memo, a.created_by, now()
+                a.no,
+                a.period.ymm(),
+                a.date.format("%Y-%m-%d").to_string(),
+                a.employee,
+                a.purpose,
+                crate::money_param(a.amount),
+                a.pay_account,
+                a.expense_account,
+                a.memo,
+                a.created_by,
+                now()
             ],
         )?;
         db.conn().last_insert_rowid()
@@ -1577,9 +1619,7 @@ pub fn advance_settle(
 pub fn advance_delete(db: &Db, id: i64) -> DbResult<()> {
     let a = advance_get(db, id)?.ok_or_else(|| fincore::FinError::not_found("借支单"))?;
     if a.paid_voucher_id.is_some() || a.settle_voucher_id.is_some() {
-        return Err(
-            fincore::FinError::state("该借支已生成凭证，不能删除（可先作废凭证）").into(),
-        );
+        return Err(fincore::FinError::state("该借支已生成凭证，不能删除（可先作废凭证）").into());
     }
     db.conn()
         .execute("DELETE FROM advance WHERE id=?1", rusqlite::params![id])?;
@@ -1685,10 +1725,10 @@ pub fn cash_shift_create(
             continue;
         }
         if acc.is_cash {
-            cash = cash + row.end;
+            cash += row.end;
         }
         if acc.is_bank {
-            bank = bank + row.end;
+            bank += row.end;
         }
         // 日清状态：该账户当日是否已标记（出纳确认账实相符）
         let cleared = day_clear_dates(db, &row.account_code, date, date)?;
@@ -1729,9 +1769,7 @@ pub fn cash_shift_confirm(db: &Db, id: i64, who: &str) -> DbResult<()> {
         return Err(fincore::FinError::state("该交班单已确认或已取消").into());
     }
     if who == s.from_user {
-        return Err(
-            fincore::FinError::state("交班人不能确认自己的交班单，请由接班人确认").into(),
-        );
+        return Err(fincore::FinError::state("交班人不能确认自己的交班单，请由接班人确认").into());
     }
     let n = db.conn().execute(
         "UPDATE cash_shift SET status='confirmed', confirmed_by=?2, confirmed_at=?3
@@ -1777,11 +1815,21 @@ mod tests {
         let db = tmpdb("bill");
         let p = Period::new(2026, 1).unwrap();
         let mut b = Bill {
-            id: 0, kind: "receivable".into(), no: "PJ001".into(), period: p,
-            issue_date: d(2026, 1, 5), due_date: d(2026, 4, 5),
-            counterpart: "客户甲".into(), bank: "工行".into(), amount: mon("10000"),
-            status: "in_hand".into(), handled_date: None, memo: String::new(),
-            created_by: "u".into(), created_at: String::new(), voucher_id: None,
+            id: 0,
+            kind: "receivable".into(),
+            no: "PJ001".into(),
+            period: p,
+            issue_date: d(2026, 1, 5),
+            due_date: d(2026, 4, 5),
+            counterpart: "客户甲".into(),
+            bank: "工行".into(),
+            amount: mon("10000"),
+            status: "in_hand".into(),
+            handled_date: None,
+            memo: String::new(),
+            created_by: "u".into(),
+            created_at: String::new(),
+            voucher_id: None,
         };
         bill_save(&db, &mut b).unwrap();
         assert_eq!(bill_list(&db, None).unwrap().len(), 1);
@@ -1810,12 +1858,21 @@ mod tests {
     fn loan_signed_and_settle() {
         let db = tmpdb("loan");
         let mut l = Loan {
-            id: 0, kind: "borrow".into(), no: "DK001".into(), bank: "建行".into(),
-            principal: mon("500000"), rate_pct: mon("4.35"),
-            start_date: d(2026, 1, 1), end_date: d(2027, 1, 1),
-            status: "active".into(), memo: String::new(),
-            created_by: "u".into(), created_at: String::new(),
-            voucher_id: None, settle_voucher_id: None, settle_date: None,
+            id: 0,
+            kind: "borrow".into(),
+            no: "DK001".into(),
+            bank: "建行".into(),
+            principal: mon("500000"),
+            rate_pct: mon("4.35"),
+            start_date: d(2026, 1, 1),
+            end_date: d(2027, 1, 1),
+            status: "active".into(),
+            memo: String::new(),
+            created_by: "u".into(),
+            created_at: String::new(),
+            voucher_id: None,
+            settle_voucher_id: None,
+            settle_date: None,
         };
         loan_save(&db, &mut l).unwrap();
         assert!(l.signed().is_negative());
@@ -1835,7 +1892,9 @@ mod tests {
         let v = crate::vouchers::get(&db, sv.unwrap()).unwrap().unwrap();
         assert_eq!(v.entries[0].account_code, "2001");
         assert_eq!(v.entries[1].account_code, "100201");
-        assert!(loan_settle(&db, l.id, d(2026, 6, 2), "u").unwrap().is_none());
+        assert!(loan_settle(&db, l.id, d(2026, 6, 2), "u")
+            .unwrap()
+            .is_none());
         assert_eq!(loan_get(&db, l.id).unwrap().unwrap().status, "settled");
         // 已出凭证的融资不可删除
         assert!(loan_delete(&db, l.id).is_err());
@@ -1846,7 +1905,12 @@ mod tests {
         let db = tmpdb("bydate");
         let p = Period::new(2026, 1).unwrap();
         let d10 = d(2026, 1, 10);
-        let mut v = Voucher::new(p, d10, "记", crate::vouchers::next_no(&db, p, "记").unwrap());
+        let mut v = Voucher::new(
+            p,
+            d10,
+            "记",
+            crate::vouchers::next_no(&db, p, "记").unwrap(),
+        );
         v.push_entry(fincore::Entry {
             debit: mon("1000"),
             ..fincore::Entry::new(1, "1001", "收款")
@@ -1859,7 +1923,10 @@ mod tests {
         crate::vouchers::post(&db, id, "u").unwrap();
 
         let one = |rows: &Vec<FundsDateRow>, code: &str| -> FundsDateRow {
-            rows.iter().find(|r| r.account_code == code).unwrap().clone()
+            rows.iter()
+                .find(|r| r.account_code == code)
+                .unwrap()
+                .clone()
         };
         // 前一日：无发生
         let r = one(&funds_daily_by_date(&db, d(2026, 1, 9)).unwrap(), "1001");
@@ -1921,7 +1988,9 @@ mod tests {
         );
         assert_eq!(v.entries[1].account_code, "1001");
         // 幂等：重复支付不再出凭证
-        assert!(advance_pay(&db, a.id, d(2026, 1, 9), "u").unwrap().is_none());
+        assert!(advance_pay(&db, a.id, d(2026, 1, 9), "u")
+            .unwrap()
+            .is_none());
         assert_eq!(advance_get(&db, a.id).unwrap().unwrap().status, "paid");
 
         // 核销超额被拒
@@ -1939,9 +2008,11 @@ mod tests {
         assert_eq!(v.entries[2].account_code, "122105");
         assert_eq!(v.entries[2].credit, mon("2000"));
         // 幂等 + 状态 + 守卫
-        assert!(advance_settle(&db, a.id, "660201", mon("1500"), d(2026, 1, 21), "u")
-            .unwrap()
-            .is_none());
+        assert!(
+            advance_settle(&db, a.id, "660201", mon("1500"), d(2026, 1, 21), "u")
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(advance_get(&db, a.id).unwrap().unwrap().status, "settled");
         assert!(advance_delete(&db, a.id).is_err(), "已出凭证不可删除");
 
@@ -1989,9 +2060,11 @@ mod tests {
         day_clear_set(&db, "1001", d(2026, 1, 10), true, "u").unwrap();
         let set = day_clear_dates(&db, "1001", d(2026, 1, 1), d(2026, 1, 31)).unwrap();
         assert!(set.contains("2026-01-10"));
-        assert!(!day_clear_dates(&db, "100201", d(2026, 1, 1), d(2026, 1, 31))
-            .unwrap()
-            .contains("2026-01-10"));
+        assert!(
+            !day_clear_dates(&db, "100201", d(2026, 1, 1), d(2026, 1, 31))
+                .unwrap()
+                .contains("2026-01-10")
+        );
         day_clear_set(&db, "1001", d(2026, 1, 10), false, "u").unwrap();
         assert!(day_clear_dates(&db, "1001", d(2026, 1, 1), d(2026, 1, 31))
             .unwrap()
@@ -2029,7 +2102,12 @@ mod tests {
         let p = Period::new(2026, 1).unwrap();
         let d10 = d(2026, 1, 10);
         // 记一笔现金收入 800（已记账）
-        let mut v = Voucher::new(p, d10, "记", crate::vouchers::next_no(&db, p, "记").unwrap());
+        let mut v = Voucher::new(
+            p,
+            d10,
+            "记",
+            crate::vouchers::next_no(&db, p, "记").unwrap(),
+        );
         v.push_entry(fincore::Entry {
             debit: mon("800"),
             ..fincore::Entry::new(1, "1001", "收款")
@@ -2062,7 +2140,10 @@ mod tests {
         let v = crate::vouchers::get(&db, cvid).unwrap().unwrap();
         assert_eq!(v.entries[0].account_code, "1001");
         assert_eq!(v.entries[1].account_code, "1901");
-        assert!(cash_count_voucher(&db, c.id, "u").is_err(), "不可重复出凭证");
+        assert!(
+            cash_count_voucher(&db, c.id, "u").is_err(),
+            "不可重复出凭证"
+        );
         assert!(cash_count_delete(&db, c.id).is_err(), "已挂凭证不可删除");
 
         // 盘亏：实盘 700 < 账面 800 → 借1901/贷1001
@@ -2173,7 +2254,12 @@ mod tests {
         let p = Period::new(2026, 1).unwrap();
         // 现金凭证 1000（已记账）
         let d10 = d(2026, 1, 10);
-        let mut v = Voucher::new(p, d10, "记", crate::vouchers::next_no(&db, p, "记").unwrap());
+        let mut v = Voucher::new(
+            p,
+            d10,
+            "记",
+            crate::vouchers::next_no(&db, p, "记").unwrap(),
+        );
         v.push_entry(fincore::Entry {
             debit: mon("1000"),
             ..fincore::Entry::new(1, "1001", "收款")

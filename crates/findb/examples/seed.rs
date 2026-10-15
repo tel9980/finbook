@@ -2,9 +2,9 @@
 //!
 //! 用法: cargo run --example seed --release -- <path>
 
-use findb::Db;
 use fincore::chart::default_accounts;
 use fincore::{AuxEntity, AuxKind};
+use findb::Db;
 use std::env;
 use std::path::PathBuf;
 
@@ -37,7 +37,9 @@ fn main() {
     let mut n2 = 0;
     for (kind, code, name) in &auxs {
         let e = AuxEntity::new(*kind, *code, *name);
-        if findb::auxs::insert(&db, &e).is_ok() { n2 += 1; }
+        if findb::auxs::insert(&db, &e).is_ok() {
+            n2 += 1;
+        }
     }
     println!("创建辅助档案 {} 个", n2);
 

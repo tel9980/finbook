@@ -45,11 +45,8 @@ impl AssetStatus {
             _ => AssetStatus::InUse,
         }
     }
-    pub const ALL: &'static [AssetStatus] = &[
-        AssetStatus::InUse,
-        AssetStatus::Idle,
-        AssetStatus::Disposed,
-    ];
+    pub const ALL: &'static [AssetStatus] =
+        &[AssetStatus::InUse, AssetStatus::Idle, AssetStatus::Disposed];
 }
 
 /// 固定资产卡片
@@ -167,13 +164,18 @@ pub fn list(db: &Db) -> DbResult<Vec<Asset>> {
     let mut st = db
         .conn()
         .prepare(&format!("SELECT {COLS} FROM fixed_asset ORDER BY code"))?;
-    let rows = st.query_map([], map_asset)?.collect::<Result<Vec<_>, _>>()?;
+    let rows = st
+        .query_map([], map_asset)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 /// 按状态过滤
 pub fn list_by_status(db: &Db, status: AssetStatus) -> DbResult<Vec<Asset>> {
-    Ok(list(db)?.into_iter().filter(|a| a.status == status).collect())
+    Ok(list(db)?
+        .into_iter()
+        .filter(|a| a.status == status)
+        .collect())
 }
 
 /// 某期间应计提的卡片
@@ -333,15 +335,47 @@ pub fn update_logged(db: &Db, old: &Asset, a: &Asset, who: &str, memo: &str) -> 
         ("类别", old.category.clone(), a.category.clone()),
         ("规格", old.spec.clone(), a.spec.clone()),
         ("使用部门", old.dept.clone(), a.dept.clone()),
-        ("资产科目", old.asset_account.clone(), a.asset_account.clone()),
-        ("累计折旧科目", old.dep_account.clone(), a.dep_account.clone()),
-        ("折旧费用科目", old.expense_account.clone(), a.expense_account.clone()),
-        ("原值", old.original_value.fmt_money(), a.original_value.fmt_money()),
-        ("残值率", crate::exact_param(old.residual_rate), crate::exact_param(a.residual_rate)),
-        ("使用年限（月）", old.life_months.to_string(), a.life_months.to_string()),
-        ("折旧方法", old.method.label().to_string(), a.method.label().to_string()),
+        (
+            "资产科目",
+            old.asset_account.clone(),
+            a.asset_account.clone(),
+        ),
+        (
+            "累计折旧科目",
+            old.dep_account.clone(),
+            a.dep_account.clone(),
+        ),
+        (
+            "折旧费用科目",
+            old.expense_account.clone(),
+            a.expense_account.clone(),
+        ),
+        (
+            "原值",
+            old.original_value.fmt_money(),
+            a.original_value.fmt_money(),
+        ),
+        (
+            "残值率",
+            crate::exact_param(old.residual_rate),
+            crate::exact_param(a.residual_rate),
+        ),
+        (
+            "使用年限（月）",
+            old.life_months.to_string(),
+            a.life_months.to_string(),
+        ),
+        (
+            "折旧方法",
+            old.method.label().to_string(),
+            a.method.label().to_string(),
+        ),
         ("启用期间", old.start_period.label(), a.start_period.label()),
-        ("状态", old.status.label().to_string(), a.status.label().to_string()),
+        (
+            "状态",
+            old.status.label().to_string(),
+            a.status.label().to_string(),
+        ),
         ("备注", old.memo.clone(), a.memo.clone()),
     ]
     .into_iter()
@@ -656,9 +690,9 @@ pub fn depreciate_period(db: &Db, period: Period, who: &str) -> DbResult<DepAccr
 
 /// 折旧凭证的辅助核算填充：只支持部门（其余维度无法自动确定）
 fn fill_dep_aux(chart: &Chart, e: &mut Entry, code: &str, dept: &str) -> DbResult<()> {
-    let acct = chart.get(code).ok_or_else(|| {
-        fincore::FinError::msg(format!("科目 {code} 不存在，请先在科目表里维护"))
-    })?;
+    let acct = chart
+        .get(code)
+        .ok_or_else(|| fincore::FinError::msg(format!("科目 {code} 不存在，请先在科目表里维护")))?;
     for k in acct.aux.list() {
         match k {
             AuxKind::Dept => {
@@ -849,7 +883,9 @@ pub fn impair(db: &Db, asset_id: i64, period: Period, amount: Money, memo: &str)
 }
 
 pub fn impairment_sum(db: &Db, asset_id: i64) -> DbResult<Money> {
-    let mut st = db.conn().prepare("SELECT amount FROM asset_impairment WHERE asset_id=?1")?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT amount FROM asset_impairment WHERE asset_id=?1")?;
     let rows = st
         .query_map([asset_id], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -910,22 +946,19 @@ pub fn gl_reconcile(db: &Db, at: Period) -> DbResult<AssetGlReport> {
         if a.start_period.ymm() > at.ymm() || disposed {
             continue;
         }
-        let e = cost_map.entry(a.asset_account.clone()).or_insert(Money::ZERO);
-        *e = *e + a.original_value;
+        let e = cost_map
+            .entry(a.asset_account.clone())
+            .or_insert(Money::ZERO);
+        *e += a.original_value;
         let accum = accum_at_conn(db.conn(), a.id, at)?;
         if !accum.is_zero() {
             let e = dep_map.entry(a.dep_account.clone()).or_insert(Money::ZERO);
-            *e = *e + accum;
+            *e += accum;
         }
     }
     let snap = BalanceSnapshot::load(db, &BalanceQuery::period(at))?;
     let mut rows = Vec::new();
-    let (mut ca, mut cg, mut da, mut dg) = (
-        Money::ZERO,
-        Money::ZERO,
-        Money::ZERO,
-        Money::ZERO,
-    );
+    let (mut ca, mut cg, mut da, mut dg) = (Money::ZERO, Money::ZERO, Money::ZERO, Money::ZERO);
     for code in codes {
         let is_dep = all.iter().any(|a| a.dep_account == code)
             && !all.iter().any(|a| a.asset_account == code);
@@ -935,19 +968,27 @@ pub fn gl_reconcile(db: &Db, at: Period) -> DbResult<AssetGlReport> {
             cost_map.get(&code).copied().unwrap_or(Money::ZERO)
         };
         let end = snap.for_account(&code, None).end();
-        let gl_value = if is_dep && end.is_negative() { -end } else { end };
+        let gl_value = if is_dep && end.is_negative() {
+            -end
+        } else {
+            end
+        };
         let diff = asset_value - gl_value;
         if is_dep {
-            da = da + asset_value;
-            dg = dg + gl_value;
+            da += asset_value;
+            dg += gl_value;
         } else {
-            ca = ca + asset_value;
-            cg = cg + gl_value;
+            ca += asset_value;
+            cg += gl_value;
         }
         rows.push(AssetGlRow {
             account_code: code.clone(),
             account_name: names.get(&code).cloned().unwrap_or_default(),
-            kind: if is_dep { "累计折旧".into() } else { "原值".into() },
+            kind: if is_dep {
+                "累计折旧".into()
+            } else {
+                "原值".into()
+            },
             asset_value,
             gl_value,
             diff,
@@ -975,7 +1016,14 @@ pub struct Accessory {
     pub memo: String,
 }
 
-pub fn accessory_add(db: &Db, asset_id: i64, name: &str, spec: &str, qty: i32, memo: &str) -> DbResult<i64> {
+pub fn accessory_add(
+    db: &Db,
+    asset_id: i64,
+    name: &str,
+    spec: &str,
+    qty: i32,
+    memo: &str,
+) -> DbResult<i64> {
     db.conn().execute(
         "INSERT INTO asset_accessory(asset_id,name,spec,qty,memo) VALUES(?1,?2,?3,?4,?5)",
         rusqlite::params![asset_id, name, spec, qty, memo],
@@ -1003,7 +1051,8 @@ pub fn accessory_list(db: &Db, asset_id: i64) -> DbResult<Vec<Accessory>> {
 }
 
 pub fn accessory_delete(db: &Db, id: i64) -> DbResult<()> {
-    db.conn().execute("DELETE FROM asset_accessory WHERE id=?1", [id])?;
+    db.conn()
+        .execute("DELETE FROM asset_accessory WHERE id=?1", [id])?;
     Ok(())
 }
 
@@ -1074,7 +1123,9 @@ pub fn ac_post(db: &Db, id: i64) -> DbResult<usize> {
     }
     let mut st = tx.prepare("SELECT asset_id, found FROM asset_count_line WHERE ac_id=?1")?;
     let lines: Vec<(i64, bool)> = st
-        .query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? != 0)))?
+        .query_map([id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? != 0))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     drop(st);
     let mut n = 0;
@@ -1247,8 +1298,18 @@ mod tests {
         let db = tmpdb("imp");
         let id = insert(&db, &asset("GD0001", "10000", 60)).unwrap();
         // 减值 2000
-        impair(&db, id, Period::new(2026, 2).unwrap(), Money::parse("2000").unwrap(), "减值测试").unwrap();
-        assert_eq!(impairment_sum(&db, id).unwrap(), Money::parse("2000").unwrap());
+        impair(
+            &db,
+            id,
+            Period::new(2026, 2).unwrap(),
+            Money::parse("2000").unwrap(),
+            "减值测试",
+        )
+        .unwrap();
+        assert_eq!(
+            impairment_sum(&db, id).unwrap(),
+            Money::parse("2000").unwrap()
+        );
         // 类别
         assert_eq!(categories(&db).unwrap(), vec!["电子设备".to_string()]);
         // 附属设备
@@ -1257,9 +1318,13 @@ mod tests {
         // 盘点：盘亏 → 过账后资产变 Idle
         let p = Period::new(2026, 2).unwrap();
         let mut c = AssetCount {
-            id: 0, no: ac_next_no(&db, p).unwrap(), period: p,
+            id: 0,
+            no: ac_next_no(&db, p).unwrap(),
+            period: p,
             date: NaiveDate::from_ymd_opt(2026, 2, 28).unwrap(),
-            status: "draft".into(), prepared_by: "张三".into(), memo: String::new(),
+            status: "draft".into(),
+            prepared_by: "张三".into(),
+            memo: String::new(),
             lines: vec![(id, false, "盘亏".to_string())],
         };
         let cid = ac_save(&db, &mut c).unwrap();
@@ -1275,16 +1340,24 @@ mod tests {
         let id = insert(&db, &asset("GD0001", "10000", 60)).unwrap();
         let p = Period::new(2026, 2).unwrap();
         let mut c = AssetCount {
-            id: 0, no: ac_next_no(&db, p).unwrap(), period: p,
+            id: 0,
+            no: ac_next_no(&db, p).unwrap(),
+            period: p,
             date: NaiveDate::from_ymd_opt(2026, 2, 28).unwrap(),
-            status: "draft".into(), prepared_by: "张三".into(), memo: String::new(),
+            status: "draft".into(),
+            prepared_by: "张三".into(),
+            memo: String::new(),
             lines: vec![(id, false, "盘亏".to_string())],
         };
         let cid = ac_save(&db, &mut c).unwrap();
         assert_eq!(ac_post(&db, cid).unwrap(), 1);
         let after_first = get(&db, id).unwrap().unwrap();
         assert_eq!(after_first.status, AssetStatus::Idle);
-        assert_eq!(after_first.memo, " 盘亏", "首过账应只记一次盘亏：{:?}", after_first.memo);
+        assert_eq!(
+            after_first.memo, " 盘亏",
+            "首过账应只记一次盘亏：{:?}",
+            after_first.memo
+        );
         // 第二次过账必须报错，且不得再次改写卡片
         assert!(
             ac_post(&db, cid).is_err(),
@@ -1301,19 +1374,29 @@ mod tests {
         // 单据本身也应是已过账
         let st: String = db
             .conn()
-            .query_row("SELECT status FROM asset_count WHERE id=?1", [cid], |r| r.get(0))
+            .query_row("SELECT status FROM asset_count WHERE id=?1", [cid], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(st, "posted");
         // 重新草拟一张单盘同一张卡：备注仍不得堆叠
         let mut c2 = AssetCount {
-            id: 0, no: ac_next_no(&db, p).unwrap(), period: p,
+            id: 0,
+            no: ac_next_no(&db, p).unwrap(),
+            period: p,
             date: NaiveDate::from_ymd_opt(2026, 2, 28).unwrap(),
-            status: "draft".into(), prepared_by: "张三".into(), memo: String::new(),
+            status: "draft".into(),
+            prepared_by: "张三".into(),
+            memo: String::new(),
             lines: vec![(id, false, "盘亏".to_string())],
         };
         let cid2 = ac_save(&db, &mut c2).unwrap();
         ac_post(&db, cid2).unwrap();
         let memo = get(&db, id).unwrap().unwrap().memo;
-        assert_eq!(memo.matches("盘亏").count(), 1, "多次盘点不得堆叠备注：{memo:?}");
+        assert_eq!(
+            memo.matches("盘亏").count(),
+            1,
+            "多次盘点不得堆叠备注：{memo:?}"
+        );
     }
 }

@@ -187,7 +187,8 @@ fn raw_amount(input: &DepInput, i: i32, accum: Money, total: Money) -> Money {
     match input.method {
         DepMethod::Straight => {
             // 每月等额（life_months 已在 DepInput 校验中要求 > 0）
-            total.checked_div(Money::from_i64(n as i64))
+            total
+                .checked_div(Money::from_i64(n as i64))
                 .expect("life_months 已校验 > 0")
                 .round2()
         }
@@ -249,7 +250,8 @@ fn raw_amount(input: &DepInput, i: i32, accum: Money, total: Money) -> Money {
                 return total;
             }
             if i == 1 || i == n {
-                total.checked_div(Money::from_i64(2))
+                total
+                    .checked_div(Money::from_i64(2))
                     .expect("字面量除数 2 非零")
                     .round2()
             } else {

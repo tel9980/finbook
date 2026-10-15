@@ -4,8 +4,7 @@
 //! 这层验**接口与权限**。唯一交叉点是 `customer_detail_balance_matches_list`
 //! —— 若两层各自算一遍余额，界面上会「列表说欠 1000、点进去明细加起来 900」。
 
-use axum::body::Body;
-use axum::http::{header, Request, StatusCode};
+use axum::http::StatusCode;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -14,7 +13,7 @@ use finweb::state::WebState;
 
 mod common;
 use common::{
-    authed_get, authed_post, boss_in_b1, body_string, login, money_num, select_book, test_state,
+    authed_get, authed_post, body_string, boss_in_b1, login, money_num, select_book, test_state,
 };
 
 /// 建一个客户档案（同步：内部只有一次 oneshot().await，故须 async；
@@ -50,9 +49,7 @@ async fn post_ar(state: &Arc<WebState>, sid: &str, date: &str, cust: &str, amoun
     // 撞上「凭证日期不在所选期间」的 400，而报错完全指不到真正的原因
     // （我写账龄用例时就这么撞了一次）。
     let ym = date.replace('-', "");
-    let period: i32 = ym[..6]
-        .parse()
-        .expect("日期应能推出 YYYYMM");
+    let period: i32 = ym[..6].parse().expect("日期应能推出 YYYYMM");
     let req = authed_post(
         "/api/vouchers",
         sid,
@@ -68,11 +65,20 @@ async fn post_ar(state: &Arc<WebState>, sid: &str, date: &str, cust: &str, amoun
         }),
     );
     let resp = handlers::router(state.clone()).oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "录凭证：{}", body_string(resp).await);
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "录凭证：{}",
+        body_string(resp).await
+    );
     let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
     let vid = v["id"].as_i64().expect("应返回凭证 id");
     for step in ["audit", "sign", "post"] {
-        let req = authed_post(&format!("/api/vouchers/{vid}/{step}"), sid, serde_json::json!({}));
+        let req = authed_post(
+            &format!("/api/vouchers/{vid}/{step}"),
+            sid,
+            serde_json::json!({}),
+        );
         let resp = handlers::router(state.clone()).oneshot(req).await.unwrap();
         assert_eq!(
             resp.status(),
@@ -182,7 +188,10 @@ async fn customer_detail_balance_matches_list() {
     );
     assert_eq!(lines.len(), 2, "2 张凭证 = 2 行明细，实际 {}", lines.len());
     for l in lines {
-        assert!(l["voucher_id"].as_i64().unwrap_or(0) > 0, "明细行应有 voucher_id：{l}");
+        assert!(
+            l["voucher_id"].as_i64().unwrap_or(0) > 0,
+            "明细行应有 voucher_id：{l}"
+        );
         assert!(!l["doc_no"].as_str().unwrap().is_empty(), "应有单据号：{l}");
     }
     assert_eq!(
@@ -216,7 +225,12 @@ async fn cashier_can_read_customers_but_not_edit() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "开通平台账号：{}", body_string(resp).await);
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "开通平台账号：{}",
+        body_string(resp).await
+    );
 
     let resp = handlers::router(state.clone())
         .oneshot(authed_post(
@@ -229,9 +243,14 @@ async fn cashier_can_read_customers_but_not_edit() {
         ))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "拉进出纳：{}", body_string(resp).await);
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "拉进出纳：{}",
+        body_string(resp).await
+    );
 
-    let (st, sid) = login(&state, "csh", "Csh@2026x").await;
+    let (_st, sid) = login(&state, "csh", "Csh@2026x").await;
     assert_eq!(select_book(&state, &sid, "b1").await, StatusCode::OK);
 
     // 能读
@@ -303,7 +322,10 @@ async fn customer_aging_matches_settle_aging_row() {
 
     // 客户页：as_of 与账龄页取同一天，否则天数不同、桶也不同（那是有意的口径差异）
     let resp = handlers::router(state.clone())
-        .oneshot(authed_get("/api/customers/C01/aging?as_of=2026-01-31", &sid))
+        .oneshot(authed_get(
+            "/api/customers/C01/aging?as_of=2026-01-31",
+            &sid,
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "{}", body_string(resp).await);

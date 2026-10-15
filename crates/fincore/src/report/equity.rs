@@ -127,9 +127,6 @@ mod tests {
             stmt.total.end,
             "前置条件：合计必须是对得上的"
         );
-        assert!(
-            !stmt.ties(),
-            "合计对得上但两行各自不平，必须判为不勾稽"
-        );
+        assert!(!stmt.ties(), "合计对得上但两行各自不平，必须判为不勾稽");
     }
 }

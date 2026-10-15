@@ -186,7 +186,12 @@ impl LandedCost {
 // ===========================================================================
 
 pub fn next_no(db: &Db, period: Period) -> DbResult<String> {
-    let prefix = format!("{}{:04}{:02}", crate::doc_prefix(db, "lcv", "LC"), period.year(), period.month());
+    let prefix = format!(
+        "{}{:04}{:02}",
+        crate::doc_prefix(db, "lcv", "LC"),
+        period.year(),
+        period.month()
+    );
     let sql = format!(
         "SELECT COALESCE(MAX(CAST(SUBSTR(no, {}) AS INTEGER)), 0) + 1 FROM landed_cost WHERE no LIKE ?",
         prefix.len() + 1
@@ -414,8 +419,7 @@ pub fn split_to_stock(db: &Db, period: Period, lines: &mut [LcLine]) -> DbResult
 /// 草稿 → 已过账。条件更新（`AND status='draft'`）防并发：两个界面同时点过账，
 /// 只有一个能成功，另一个拿到「不是草稿」而不是把状态覆盖掉。
 pub fn post(db: &Db, id: i64, who: &str) -> DbResult<i64> {
-    let mut lc = get(db, id)?
-        .ok_or_else(|| fincore::FinError::not_found("到岸成本单不存在"))?;
+    let mut lc = get(db, id)?.ok_or_else(|| fincore::FinError::not_found("到岸成本单不存在"))?;
     if !lc.is_draft() {
         return Err(fincore::FinError::state(format!(
             "到岸成本单 {} 已是「{}」，不能重复过账",
@@ -429,7 +433,11 @@ pub fn post(db: &Db, id: i64, who: &str) -> DbResult<i64> {
 
     // 重新分摊 + 封顶：用**当前**结存重算，而不是信任草稿里算好的数。
     // 草稿到过账之间货可能已经卖掉，信任草稿就会把运费挂到已清空的存货上。
-    allocate(lc.total_charges(), AllocBasis::parse(&lc.basis), &mut lc.lines)?;
+    allocate(
+        lc.total_charges(),
+        AllocBasis::parse(&lc.basis),
+        &mut lc.lines,
+    )?;
     split_to_stock(db, period, &mut lc.lines)?;
 
     let total_stock = lc.total_to_stock();
@@ -439,10 +447,15 @@ pub fn post(db: &Db, id: i64, who: &str) -> DbResult<i64> {
     // 条件更新：先抢状态，抢不到直接失败，避免重复入账
     let n = tx.execute(
         "UPDATE landed_cost SET status='posted', updated_at=?2 WHERE id=?1 AND status='draft'",
-        rusqlite::params![id, chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()],
+        rusqlite::params![
+            id,
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+        ],
     )?;
     if n == 0 {
-        return Err(fincore::FinError::state("到账成本单已被他人过账，请刷新后重试".to_string()).into());
+        return Err(
+            fincore::FinError::state("到账成本单已被他人过账，请刷新后重试".to_string()).into(),
+        );
     }
 
     // 回写分摊结果（可追溯：单据上能看出哪部分进了存货、哪部分进了费用）
@@ -469,7 +482,12 @@ pub fn post(db: &Db, id: i64, who: &str) -> DbResult<i64> {
     // 数量口径：`to_stock` 是这批货**已收货数量**（`l.qty`）上摊的，所以数量取
     // 收货量、单价取「每件多承担了多少成本」——数量 × 单价 = 本行金额，
     // 校验的容差是 0.01，这里天然满足。
-    let mut v = Voucher::new(period, date, "记", crate::vouchers::next_no_of(&tx, period, "记")?);
+    let mut v = Voucher::new(
+        period,
+        date,
+        "记",
+        crate::vouchers::next_no_of(&tx, period, "记")?,
+    );
     v.prepared_by = who.to_string();
     v.source = VoucherSource::Business;
     v.memo = format!("到岸成本 {}", lc.no);
@@ -481,7 +499,11 @@ pub fn post(db: &Db, id: i64, who: &str) -> DbResult<i64> {
         }
         // 收货量取不到（历史数据）就退回结存数量：宁可口径粗一点，
         // 也不能让凭证因为「数量必填」过不去而整笔失败。
-        let qty = if l.qty.is_positive() { l.qty } else { l.on_hand_qty };
+        let qty = if l.qty.is_positive() {
+            l.qty
+        } else {
+            l.on_hand_qty
+        };
         if !qty.is_positive() {
             continue;
         }
@@ -513,7 +535,7 @@ pub fn post(db: &Db, id: i64, who: &str) -> DbResult<i64> {
         seq += 1;
         v.push_entry(Entry {
             debit: total_expense,
-            ..Entry::new(seq, acct.as_str(), &format!("{memo}（货已出清，转费用）"))
+            ..Entry::new(seq, acct.as_str(), format!("{memo}（货已出清，转费用）"))
         });
     }
     seq += 1;
@@ -538,7 +560,7 @@ pub fn post(db: &Db, id: i64, who: &str) -> DbResult<i64> {
         if !l.to_stock.is_zero() {
             let mv_id = crate::business::stock_insert_of(
                 &tx,
-                &mut crate::business::StockMove {
+                &crate::business::StockMove {
                     id: 0,
                     period,
                     biz_date: date,
@@ -620,13 +642,11 @@ pub fn get(db: &Db, id: i64) -> DbResult<Option<LandedCost>> {
         updated_at: String::new(),
         lines: Vec::new(),
     };
-    let mut st = db
-        .conn()
-        .prepare(
-            "SELECT id, lcv_id, po_id, item_code, item_name, qty, weight, amount,
+    let mut st = db.conn().prepare(
+        "SELECT id, lcv_id, po_id, item_code, item_name, qty, weight, amount,
              manual_amount, allocated, to_stock, to_expense, memo
              FROM landed_cost_item WHERE lcv_id=?1 ORDER BY id",
-        )?;
+    )?;
     let mut line_rows = st.query([id])?;
     while let Some(r) = line_rows.next()? {
         lc.lines.push(LcLine {
@@ -651,9 +671,9 @@ pub fn get(db: &Db, id: i64) -> DbResult<Option<LandedCost>> {
 }
 
 pub fn list(db: &Db, period: Period) -> DbResult<Vec<LandedCost>> {
-    let mut stmt = db.conn().prepare(
-        "SELECT id FROM landed_cost WHERE period=?1 ORDER BY date DESC, id DESC",
-    )?;
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT id FROM landed_cost WHERE period=?1 ORDER BY date DESC, id DESC")?;
     let ids: Vec<i64> = stmt
         .query_map([period.ymm()], |r| r.get::<_, i64>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -719,7 +739,9 @@ pub fn landed_cost_sum(db: &Db, item: &str, period: Period) -> DbResult<Money> {
         "SELECT i.to_stock FROM landed_cost_item i JOIN landed_cost c ON c.id = i.lcv_id
          WHERE i.item_code=?1 AND c.period=?2 AND c.status='posted'",
     )?;
-    let rows = st.query_map(rusqlite::params![item, period.ymm()], |r| r.get::<_, String>(0))?;
+    let rows = st.query_map(rusqlite::params![item, period.ymm()], |r| {
+        r.get::<_, String>(0)
+    })?;
     for r in rows {
         total += Money::parse_or_zero(&r?);
     }
@@ -733,7 +755,9 @@ pub fn by_item(db: &Db, period: Period) -> DbResult<BTreeMap<String, Money>> {
         "SELECT i.item_code, i.to_stock FROM landed_cost_item i JOIN landed_cost c ON c.id = i.lcv_id
          WHERE c.period=?1 AND c.status='posted'",
     )?;
-    let rows = st.query_map([period.ymm()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let rows = st.query_map([period.ymm()], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
     for r in rows {
         let (item, amt) = r?;
         *map.entry(item).or_insert(Money::ZERO) += Money::parse_or_zero(&amt);
@@ -774,12 +798,20 @@ mod tests {
     /// 合计会变成 99.99 或 100.01，成本凭空少/多几分而报表上看不出来。
     #[test]
     fn allocation_absorbs_rounding_residual_in_last_line() {
-        let mut ls = vec![line("A", "1", "33.33"), line("B", "1", "33.33"), line("C", "1", "33.34")];
+        let mut ls = vec![
+            line("A", "1", "33.33"),
+            line("B", "1", "33.33"),
+            line("C", "1", "33.34"),
+        ];
         allocate(m("100"), AllocBasis::Amount, &mut ls).unwrap();
         let sum: Money = ls.iter().map(|l| l.allocated).sum();
         assert_eq!(sum, m("100"), "各行分摊额之和必须等于总额，一分不差");
         // 1/3 这类除不尽的也要守住
-        let mut ls2 = vec![line("A", "1", "1"), line("B", "1", "1"), line("C", "1", "1")];
+        let mut ls2 = vec![
+            line("A", "1", "1"),
+            line("B", "1", "1"),
+            line("C", "1", "1"),
+        ];
         allocate(m("100"), AllocBasis::Qty, &mut ls2).unwrap();
         assert_eq!(ls2.iter().map(|l| l.allocated).sum::<Money>(), m("100"));
     }
@@ -789,11 +821,7 @@ mod tests {
     fn allocation_rejects_zero_weight() {
         let mut ls = vec![line("A", "0", "0"), line("B", "0", "0")];
         let e = allocate(m("100"), AllocBasis::Qty, &mut ls).unwrap_err();
-        assert!(
-            format!("{e:?}").contains("权重"),
-            "该明确报错：{:?}",
-            e
-        );
+        assert!(format!("{e:?}").contains("权重"), "该明确报错：{:?}", e);
     }
 
     /// 手工指定时合计必须等于总额 —— 否则「手工指定」就成了改总额的暗门
@@ -824,9 +852,18 @@ mod tests {
         stock_insert(
             &db,
             &StockMove {
-                id: 0, period: p(), biz_date: dt, kind: StockKind::Purchase,
-                item: "A".into(), warehouse: String::new(), batch_no: String::new(),
-                qty: m("10"), price: m("8"), amount: m("80"), voucher_id: None, memo: String::new(),
+                id: 0,
+                period: p(),
+                biz_date: dt,
+                kind: StockKind::Purchase,
+                item: "A".into(),
+                warehouse: String::new(),
+                batch_no: String::new(),
+                qty: m("10"),
+                price: m("8"),
+                amount: m("80"),
+                voucher_id: None,
+                memo: String::new(),
             },
         )
         .unwrap();
@@ -841,7 +878,11 @@ mod tests {
         ls2[0].allocated = m("120");
         split_to_stock(&db, p(), &mut ls2).unwrap();
         assert_eq!(ls2[0].to_stock, m("80"), "入存货的不能超过结存价值");
-        assert_eq!(ls2[0].to_expense, m("40"), "超出部分必须转费用，否则是幽灵存货");
+        assert_eq!(
+            ls2[0].to_expense,
+            m("40"),
+            "超出部分必须转费用，否则是幽灵存货"
+        );
         assert_eq!(
             ls2[0].to_stock + ls2[0].to_expense,
             m("120"),
@@ -861,10 +902,18 @@ mod tests {
             stock_insert(
                 &db,
                 &StockMove {
-                    id: 0, period: p(), biz_date: dt, kind,
-                    item: "A".into(), warehouse: String::new(), batch_no: String::new(),
-                    qty: m(qty), price: m(price), amount: m(amount),
-                    voucher_id: None, memo: String::new(),
+                    id: 0,
+                    period: p(),
+                    biz_date: dt,
+                    kind,
+                    item: "A".into(),
+                    warehouse: String::new(),
+                    batch_no: String::new(),
+                    qty: m(qty),
+                    price: m(price),
+                    amount: m(amount),
+                    voucher_id: None,
+                    memo: String::new(),
                 },
             )
             .unwrap();
@@ -887,9 +936,18 @@ mod tests {
         stock_insert(
             db,
             &StockMove {
-                id: 0, period: p(), biz_date: d(2026, 1, 5), kind: StockKind::Purchase,
-                item: item.into(), warehouse: String::new(), batch_no: String::new(),
-                qty: q, price: pr, amount: (q * pr).round2(), voucher_id: None, memo: String::new(),
+                id: 0,
+                period: p(),
+                biz_date: d(2026, 1, 5),
+                kind: StockKind::Purchase,
+                item: item.into(),
+                warehouse: String::new(),
+                batch_no: String::new(),
+                qty: q,
+                price: pr,
+                amount: (q * pr).round2(),
+                voucher_id: None,
+                memo: String::new(),
             },
         )
         .unwrap();
@@ -919,7 +977,7 @@ mod tests {
         let db = mem();
         seed_goods(&db, "A", "10", "80"); // 结存价值 800
         seed_goods(&db, "B", "10", "20"); // 结存价值 200
-        let mut lc = mk_lcv(&db, "amount", "100"); // 运费 100 按货值分摊
+        let lc = mk_lcv(&db, "amount", "100"); // 运费 100 按货值分摊
 
         let vid = post(&db, lc.id, "u1").unwrap();
         assert!(vid > 0, "过账应生成凭证");
@@ -931,7 +989,11 @@ mod tests {
         let b = after.lines.iter().find(|l| l.item_code == "B").unwrap();
         assert_eq!(a.to_stock, m("80"), "A 按货值占 80%");
         assert_eq!(b.to_stock, m("20"), "B 按货值占 20%");
-        assert_eq!(after.total_to_stock(), m("100"), "全额入存货（结存价值充足）");
+        assert_eq!(
+            after.total_to_stock(),
+            m("100"),
+            "全额入存货（结存价值充足）"
+        );
         assert_eq!(after.total_to_expense(), Money::ZERO);
 
         // 存货金额确实被抬高
@@ -954,11 +1016,18 @@ mod tests {
                 "借方分录必须带存货辅助，缺了总账里看不出是哪个存货涨了：{:?}",
                 e
             );
-            assert!(e.qty.map(|q| q.is_positive()).unwrap_or(false), "借方必须填数量");
+            assert!(
+                e.qty.map(|q| q.is_positive()).unwrap_or(false),
+                "借方必须填数量"
+            );
         }
         // 贷方带供应商辅助，运费才能进应付往来对账
         let cr = v.entries.last().unwrap();
-        assert_eq!(cr.aux.supplier.as_deref(), Some("S001"), "贷方应带供应商辅助");
+        assert_eq!(
+            cr.aux.supplier.as_deref(),
+            Some("S001"),
+            "贷方应带供应商辅助"
+        );
 
         // 与来源采购单建边（否则这张单和它摊的货在数据上仍是断的）
         assert!(
@@ -994,10 +1063,18 @@ mod tests {
         stock_insert(
             &db,
             &StockMove {
-                id: 0, period: p(), biz_date: d(2026, 1, 6), kind: StockKind::Sale,
-                item: "A".into(), warehouse: String::new(), batch_no: String::new(),
-                qty: m("-10"), price: Money::ZERO, amount: Money::ZERO,
-                voucher_id: None, memo: String::new(),
+                id: 0,
+                period: p(),
+                biz_date: d(2026, 1, 6),
+                kind: StockKind::Sale,
+                item: "A".into(),
+                warehouse: String::new(),
+                batch_no: String::new(),
+                qty: m("-10"),
+                price: Money::ZERO,
+                amount: Money::ZERO,
+                voucher_id: None,
+                memo: String::new(),
             },
         )
         .unwrap();
@@ -1018,7 +1095,12 @@ mod tests {
 
         // 关键：结存数量 0、结存金额也必须 0（幽灵存货检查）
         let st = crate::business::stock_state(&db, "A", p(), CostMethod::MovingAverage).unwrap();
-        assert!(st.qty.is_zero() && st.amount.is_zero(), "不得留下幽灵存货：数量 {} 金额 {}", st.qty, st.amount);
+        assert!(
+            st.qty.is_zero() && st.amount.is_zero(),
+            "不得留下幽灵存货：数量 {} 金额 {}",
+            st.qty,
+            st.amount
+        );
     }
 
     /// 部分出清：分摊额超出剩余结存价值的部分转费用，且两段之和等于分摊额
@@ -1026,14 +1108,22 @@ mod tests {
     fn posting_splits_between_stock_and_expense() {
         let db = mem();
         seed_goods(&db, "A", "10", "80"); // 结存价值 800
-        // 卖掉 9 件 → 剩 1 件 × 80 = 80
+                                          // 卖掉 9 件 → 剩 1 件 × 80 = 80
         stock_insert(
             &db,
             &StockMove {
-                id: 0, period: p(), biz_date: d(2026, 1, 6), kind: StockKind::Sale,
-                item: "A".into(), warehouse: String::new(), batch_no: String::new(),
-                qty: m("-9"), price: Money::ZERO, amount: Money::ZERO,
-                voucher_id: None, memo: String::new(),
+                id: 0,
+                period: p(),
+                biz_date: d(2026, 1, 6),
+                kind: StockKind::Sale,
+                item: "A".into(),
+                warehouse: String::new(),
+                batch_no: String::new(),
+                qty: m("-9"),
+                price: Money::ZERO,
+                amount: Money::ZERO,
+                voucher_id: None,
+                memo: String::new(),
             },
         )
         .unwrap();

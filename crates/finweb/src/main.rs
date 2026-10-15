@@ -35,7 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let realm_path =
         std::env::var("FINBOOK_REALM").unwrap_or_else(|_| "./data/realm.db".to_string());
     // 用户自建账套的存放目录
-    let books_dir = std::env::var("FINBOOK_BOOKS_DIR").unwrap_or_else(|_| "./data/books".to_string());
+    let books_dir =
+        std::env::var("FINBOOK_BOOKS_DIR").unwrap_or_else(|_| "./data/books".to_string());
     let books_dir = PathBuf::from(&books_dir);
     // 数据目录是否必须**事先存在**。
     //
@@ -159,9 +160,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Ok(db) = st.db_for(&key) {
                         if let Ok(due) = findb::exports::sched_due(&db, &hhmm, &today) {
                             for s in due {
-                                if let Err(e) =
-                                    findb::exports::sched_run(&db, s.id, &st.books_dir.join("exports"))
-                                {
+                                if let Err(e) = findb::exports::sched_run(
+                                    &db,
+                                    s.id,
+                                    &st.books_dir.join("exports"),
+                                ) {
                                     error!(schedule = s.id, error = %e, "导出计划任务执行失败");
                                 }
                             }
@@ -226,7 +229,7 @@ async fn shutdown_signal() {
 fn default_period() -> i32 {
     use chrono::Datelike;
     let now = chrono::Local::now();
-    (now.year() as i32) * 100 + now.month() as i32
+    now.year() * 100 + now.month() as i32
 }
 
 /// 组装应用：API 路由 + 访问日志 + panic 兜底

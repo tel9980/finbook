@@ -5,9 +5,9 @@
 //! 只读展示，不做任何录入。
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui};
+use fincore::{Money, Period};
 use findb::advanced::FinancialAnalysis;
 use findb::reports::Overview;
-use fincore::{Money, Period};
 
 use crate::state::AppCtx;
 use crate::theme;
@@ -87,7 +87,10 @@ impl OverviewView {
         });
         widgets::toolbar(ui, |ui| {
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -118,13 +121,17 @@ impl OverviewView {
 
         // ---------------- 财务走势 ----------------
         if let Some(a) = self.analysis.as_ref() {
-            widgets::card(ui, "财务走势 · 年初至今累计（收入 / 成本 / 净利润）", |ui| {
-                if !a.trend.is_empty() {
-                    draw_trend(ui, a);
-                } else {
-                    ui.label(RichText::new("本年度尚无数据").weak());
-                }
-            });
+            widgets::card(
+                ui,
+                "财务走势 · 年初至今累计（收入 / 成本 / 净利润）",
+                |ui| {
+                    if !a.trend.is_empty() {
+                        draw_trend(ui, a);
+                    } else {
+                        ui.label(RichText::new("本年度尚无数据").weak());
+                    }
+                },
+            );
 
             widgets::card(ui, "当月发生额 · 逐月对比", |ui| {
                 if !a.trend.is_empty() {
@@ -214,19 +221,33 @@ impl OverviewView {
         widgets::grid(ui, "overview_recent", &cols, rows, 24.0, |i, c, ui| {
             let v = &o.recent[i];
             match c {
-                0 => { ui.label(v.period.code()); }
-                1 => { ui.label(v.date.format("%Y-%m-%d").to_string()); }
-                2 => { ui.label(RichText::new(v.voucher_no()).monospace()); }
-                3 => { ui.label(v.first_summary()); }
-                4 => { widgets::amount_label(ui, v.debit_total()); }
-                5 => { widgets::amount_label(ui, v.credit_total()); }
+                0 => {
+                    ui.label(v.period.code());
+                }
+                1 => {
+                    ui.label(v.date.format("%Y-%m-%d").to_string());
+                }
+                2 => {
+                    ui.label(RichText::new(v.voucher_no()).monospace());
+                }
+                3 => {
+                    ui.label(v.first_summary());
+                }
+                4 => {
+                    widgets::amount_label(ui, v.debit_total());
+                }
+                5 => {
+                    widgets::amount_label(ui, v.credit_total());
+                }
                 6 => {
                     ui.label(
                         RichText::new(v.status.label())
                             .color(theme::status_color(v.status.counts())),
                     );
                 }
-                7 => { ui.label(&v.prepared_by); }
+                7 => {
+                    ui.label(&v.prepared_by);
+                }
                 _ => {}
             }
         });
@@ -248,11 +269,30 @@ fn draw_trend(ui: &mut Ui, a: &FinancialAnalysis) {
     let plot = plot_rect(rect);
     p.rect_filled(rect, 6.0, palette::SUBTOTAL_BG);
 
-    let labels: Vec<String> = a.trend.iter().map(|t| t.period.month().to_string()).collect();
+    let labels: Vec<String> = a
+        .trend
+        .iter()
+        .map(|t| t.period.month().to_string())
+        .collect();
     let series: [(&str, Color32, Vec<f64>, Vec<bool>); 3] = [
-        ("累计营业收入", C_REV, a.trend.iter().map(|t| f64_of(t.cum_revenue)).collect(), a.trend.iter().map(|t| t.anomaly_revenue).collect()),
-        ("累计营业成本", C_COST, a.trend.iter().map(|t| f64_of(t.cum_cost)).collect(), a.trend.iter().map(|t| t.anomaly_cost).collect()),
-        ("累计净利润", C_NP, a.trend.iter().map(|t| f64_of(t.cum_net_profit)).collect(), a.trend.iter().map(|t| t.anomaly_net_profit).collect()),
+        (
+            "累计营业收入",
+            C_REV,
+            a.trend.iter().map(|t| f64_of(t.cum_revenue)).collect(),
+            a.trend.iter().map(|t| t.anomaly_revenue).collect(),
+        ),
+        (
+            "累计营业成本",
+            C_COST,
+            a.trend.iter().map(|t| f64_of(t.cum_cost)).collect(),
+            a.trend.iter().map(|t| t.anomaly_cost).collect(),
+        ),
+        (
+            "累计净利润",
+            C_NP,
+            a.trend.iter().map(|t| f64_of(t.cum_net_profit)).collect(),
+            a.trend.iter().map(|t| t.anomaly_net_profit).collect(),
+        ),
     ];
     draw_lines(&p, plot, &labels, &series);
     draw_legend(ui, &series);
@@ -267,9 +307,24 @@ fn draw_bars(ui: &mut Ui, a: &FinancialAnalysis) {
 
     let n = a.trend.len();
     let groups: [(&str, Color32, Vec<f64>, Vec<bool>); 3] = [
-        ("营业收入", C_REV, a.trend.iter().map(|t| f64_of(t.revenue)).collect(), a.trend.iter().map(|t| t.anomaly_revenue).collect()),
-        ("营业成本", C_COST, a.trend.iter().map(|t| f64_of(t.cost)).collect(), a.trend.iter().map(|t| t.anomaly_cost).collect()),
-        ("净利润", C_NP, a.trend.iter().map(|t| f64_of(t.net_profit)).collect(), a.trend.iter().map(|t| t.anomaly_net_profit).collect()),
+        (
+            "营业收入",
+            C_REV,
+            a.trend.iter().map(|t| f64_of(t.revenue)).collect(),
+            a.trend.iter().map(|t| t.anomaly_revenue).collect(),
+        ),
+        (
+            "营业成本",
+            C_COST,
+            a.trend.iter().map(|t| f64_of(t.cost)).collect(),
+            a.trend.iter().map(|t| t.anomaly_cost).collect(),
+        ),
+        (
+            "净利润",
+            C_NP,
+            a.trend.iter().map(|t| f64_of(t.net_profit)).collect(),
+            a.trend.iter().map(|t| t.anomaly_net_profit).collect(),
+        ),
     ];
 
     let mut min = 0.0f64;
@@ -293,7 +348,10 @@ fn draw_bars(ui: &mut Ui, a: &FinancialAnalysis) {
         let v = min + span * k as f64 / 4.0;
         let gy = base - (v - min) / span * h;
         p.line_segment(
-            [Pos2::new(plot.left(), gy as f32), Pos2::new(plot.right(), gy as f32)],
+            [
+                Pos2::new(plot.left(), gy as f32),
+                Pos2::new(plot.right(), gy as f32),
+            ],
             Stroke::new(1.0_f32, palette::GRID),
         );
         p.text(
@@ -311,7 +369,11 @@ fn draw_bars(ui: &mut Ui, a: &FinancialAnalysis) {
         for (i, v) in vals.iter().enumerate() {
             let cx = plot.left() + slot * (i as f32 + 0.5) + (gi as f32 - 1.0) * (bw + 2.0);
             let vy = base - ((*v - min) / span) * h;
-            let (top, bottom) = if vy >= zero_y { (vy, zero_y) } else { (zero_y, vy) };
+            let (top, bottom) = if vy >= zero_y {
+                (vy, zero_y)
+            } else {
+                (zero_y, vy)
+            };
             let r = Rect::from_min_max(
                 Pos2::new(cx - bw / 2.0, top as f32),
                 Pos2::new(cx + bw / 2.0, bottom as f32),
@@ -321,11 +383,17 @@ fn draw_bars(ui: &mut Ui, a: &FinancialAnalysis) {
                 let ax = cx;
                 let ay = if vy >= zero_y { vy - 8.0 } else { vy + 8.0 };
                 p.line_segment(
-                    [Pos2::new(ax, ay as f32), Pos2::new(ax + 4.0, (ay + 7.0) as f32)],
+                    [
+                        Pos2::new(ax, ay as f32),
+                        Pos2::new(ax + 4.0, (ay + 7.0) as f32),
+                    ],
                     Stroke::new(1.6_f32, C_ERR),
                 );
                 p.line_segment(
-                    [Pos2::new(ax, ay as f32), Pos2::new(ax - 4.0, (ay + 7.0) as f32)],
+                    [
+                        Pos2::new(ax, ay as f32),
+                        Pos2::new(ax - 4.0, (ay + 7.0) as f32),
+                    ],
                     Stroke::new(1.6_f32, C_ERR),
                 );
             }
@@ -379,7 +447,10 @@ fn draw_lines(
         let v = min + span * k as f64 / 4.0;
         let gy = base - (v - min) / span * h;
         p.line_segment(
-            [Pos2::new(plot.left(), gy as f32), Pos2::new(plot.right(), gy as f32)],
+            [
+                Pos2::new(plot.left(), gy as f32),
+                Pos2::new(plot.right(), gy as f32),
+            ],
             Stroke::new(1.0_f32, palette::GRID),
         );
         p.text(
@@ -412,7 +483,11 @@ fn draw_lines(
         }
         for (i, v) in vals.iter().enumerate() {
             let r = if anoms[i] { 4.5 } else { 2.4 };
-            p.circle_filled(Pos2::new(x_at(i), y_at(*v) as f32), r, if anoms[i] { C_ERR } else { *color });
+            p.circle_filled(
+                Pos2::new(x_at(i), y_at(*v) as f32),
+                r,
+                if anoms[i] { C_ERR } else { *color },
+            );
         }
     }
 
@@ -440,7 +515,11 @@ fn draw_legend(ui: &mut Ui, series: &[(&str, Color32, Vec<f64>, Vec<bool>)]) {
             ui.label(RichText::new(*name).size(12.0).weak());
             ui.add_space(12.0);
         }
-        ui.label(RichText::new("红点/红三角 = 异常月份").size(12.0).color(C_ERR));
+        ui.label(
+            RichText::new("红点/红三角 = 异常月份")
+                .size(12.0)
+                .color(C_ERR),
+        );
     });
 }
 
@@ -472,7 +551,8 @@ fn driver_panel(ui: &mut Ui, title: &str, items: &[findb::advanced::DriverItem],
             ui.label(RichText::new(&d.name).size(12.5));
             ui.add_space(4.0);
             let frac = (cur.abs() / max_abs) as f32;
-            let (w, _) = ui.allocate_exact_size(egui::vec2(80.0 * frac.max(0.02), 8.0), Sense::hover());
+            let (w, _) =
+                ui.allocate_exact_size(egui::vec2(80.0 * frac.max(0.02), 8.0), Sense::hover());
             let color = if signed && cur < 0.0 { C_ERR } else { C_REV };
             ui.painter().rect_filled(w, 2.0, color);
             ui.label(RichText::new(d.amount.fmt_money()).size(12.5).monospace());
@@ -493,11 +573,7 @@ fn driver_panel(ui: &mut Ui, title: &str, items: &[findb::advanced::DriverItem],
         } else {
             "—".to_string()
         };
-        ui.label(
-            RichText::new(format!("  环比 {change}"))
-                .size(11.5)
-                .weak(),
-        );
+        ui.label(RichText::new(format!("  环比 {change}")).size(11.5).weak());
         ui.add_space(4.0);
     }
 }
@@ -527,12 +603,7 @@ fn ratio_chip(ui: &mut Ui, r: &findb::advanced::FinRatio) {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&r.display).size(19.0).strong());
                 ui.add_space(6.0);
-                ui.label(
-                    RichText::new(tag)
-                        .size(11.0)
-                        .strong()
-                        .color(color),
-                );
+                ui.label(RichText::new(tag).size(11.0).strong().color(color));
             });
             ui.label(RichText::new(&r.formula).size(10.5).weak());
         });
@@ -542,25 +613,67 @@ fn ratio_chip(ui: &mut Ui, r: &findb::advanced::FinRatio) {
 fn ratio_verdict(key: &str, v: f64) -> i32 {
     match key {
         "current_ratio" => {
-            if v >= 2.0 { 2 } else if v >= 1.0 { 1 } else { 0 }
+            if v >= 2.0 {
+                2
+            } else if v >= 1.0 {
+                1
+            } else {
+                0
+            }
         }
         "quick_ratio" => {
-            if v >= 1.0 { 2 } else if v >= 0.5 { 1 } else { 0 }
+            if v >= 1.0 {
+                2
+            } else if v >= 0.5 {
+                1
+            } else {
+                0
+            }
         }
         "debt_ratio" => {
-            if v <= 0.5 { 2 } else if v <= 0.7 { 1 } else { 0 }
+            if v <= 0.5 {
+                2
+            } else if v <= 0.7 {
+                1
+            } else {
+                0
+            }
         }
         "gross_margin" => {
-            if v >= 0.3 { 2 } else if v >= 0.1 { 1 } else { 0 }
+            if v >= 0.3 {
+                2
+            } else if v >= 0.1 {
+                1
+            } else {
+                0
+            }
         }
         "net_margin" => {
-            if v >= 0.1 { 2 } else if v >= 0.0 { 1 } else { 0 }
+            if v >= 0.1 {
+                2
+            } else if v >= 0.0 {
+                1
+            } else {
+                0
+            }
         }
         "roe" => {
-            if v >= 0.1 { 2 } else if v >= 0.0 { 1 } else { 0 }
+            if v >= 0.1 {
+                2
+            } else if v >= 0.0 {
+                1
+            } else {
+                0
+            }
         }
         "roa" => {
-            if v >= 0.05 { 2 } else if v >= 0.0 { 1 } else { 0 }
+            if v >= 0.05 {
+                2
+            } else if v >= 0.0 {
+                1
+            } else {
+                0
+            }
         }
         _ => 1,
     }

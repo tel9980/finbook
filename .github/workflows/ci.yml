@@ -84,8 +84,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: clippy（fincore/findb）
         run: cargo clippy -p fincore -p findb --all-targets -- -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::should_implement_trait -A clippy::field_reassign_with_default
+      # 与上一条同口径：这几个 lint 是项目既定接受的设计风格（长参数表/复杂类型/
+      # 结构体 Default 外赋值），不是待修项。两处允许集保持一致，改一处记得改另一处。
       - name: clippy（全 workspace）
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets -- -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::should_implement_trait -A clippy::field_reassign_with_default
 
   # ── 依赖漏洞扫描（cargo-audit 读 Cargo.lock，不编译，秒级） ───────────
   audit:

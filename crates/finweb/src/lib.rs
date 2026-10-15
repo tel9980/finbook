@@ -7,7 +7,7 @@
 pub mod dto;
 pub mod handlers;
 pub mod openapi;
-pub mod realm;
 pub mod pdf;
+pub mod realm;
 pub mod report_html;
 pub mod state;

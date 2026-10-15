@@ -73,8 +73,8 @@ pub fn po_estimate_add(
     est_amount: Money,
     who: &str,
 ) -> DbResult<(i64, i64)> {
-    let po = crate::scm::po_get(db, po_id)?
-        .ok_or_else(|| fincore::FinError::not_found("采购订单"))?;
+    let po =
+        crate::scm::po_get(db, po_id)?.ok_or_else(|| fincore::FinError::not_found("采购订单"))?;
     let biz = db.options().biz_accounts.clone();
     let memo = format!("暂估入库 {} {}", po.no, item);
     let dr = estimate_item_entry(db, item, est_amount, memo.as_str(), 1, true);
@@ -112,7 +112,9 @@ pub fn po_estimate_add(
         .query_map(rusqlite::params![po_id, item], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?
         .iter()
-        .fold(fincore::Money::ZERO, |acc, a| acc + fincore::Money::parse_or_zero(a));
+        .fold(fincore::Money::ZERO, |acc, a| {
+            acc + fincore::Money::parse_or_zero(a)
+        });
     if open_est + est_amount > cap {
         return Err(fincore::FinError::state(format!(
             "暂估金额超出可暂估额度：本次 {est_amount}，本物料未结算暂估累计 {open_est}，\
@@ -181,9 +183,9 @@ pub fn estimate_cap_for_line(
             .collect::<Result<Vec<_>, _>>()?;
         v
     };
-    let recv_qty = rows
-        .iter()
-        .fold(fincore::Money::ZERO, |acc, q| acc + fincore::Money::parse_or_zero(q));
+    let recv_qty = rows.iter().fold(fincore::Money::ZERO, |acc, q| {
+        acc + fincore::Money::parse_or_zero(q)
+    });
     let has_line_receipt: bool = db.conn().query_row(
         "SELECT COUNT(*) FROM po_receipt WHERE po_id=?1 AND item_code=?2",
         rusqlite::params![po.id, item],
@@ -228,8 +230,8 @@ pub struct EstimateLine {
 
 /// 逐行列出该 PO 的暂估状态（收货 → 暂估的联动界面靠它）
 pub fn estimate_status_by_line(db: &Db, po_id: i64) -> DbResult<Vec<EstimateLine>> {
-    let po = crate::scm::po_get(db, po_id)?
-        .ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
+    let po =
+        crate::scm::po_get(db, po_id)?.ok_or_else(|| fincore::FinError::msg("采购订单不存在"))?;
     let mut out = Vec::new();
     for line in &po.lines {
         let cap = estimate_cap_for_line(db, &po, &line.item_code)?;
@@ -240,13 +242,15 @@ pub fn estimate_status_by_line(db: &Db, po_id: i64) -> DbResult<Vec<EstimateLine
                  WHERE po_id=?1 AND item=?2 AND settled=0 ORDER BY id",
             )?;
             let v = st
-                .query_map(rusqlite::params![po_id, line.item_code], |r| r.get::<_, String>(0))?
+                .query_map(rusqlite::params![po_id, line.item_code], |r| {
+                    r.get::<_, String>(0)
+                })?
                 .collect::<Result<Vec<_>, _>>()?;
             v
         };
-        let estimated = rows
-            .iter()
-            .fold(fincore::Money::ZERO, |acc, a| acc + fincore::Money::parse_or_zero(a));
+        let estimated = rows.iter().fold(fincore::Money::ZERO, |acc, a| {
+            acc + fincore::Money::parse_or_zero(a)
+        });
         let recv_rows: Vec<String> = {
             let conn = db.conn();
             let mut st = conn.prepare(
@@ -254,20 +258,26 @@ pub fn estimate_status_by_line(db: &Db, po_id: i64) -> DbResult<Vec<EstimateLine
                  WHERE po_id=?1 AND (item_code=?2 OR item_code='') ORDER BY id",
             )?;
             let v = st
-                .query_map(rusqlite::params![po_id, line.item_code], |r| r.get::<_, String>(0))?
+                .query_map(rusqlite::params![po_id, line.item_code], |r| {
+                    r.get::<_, String>(0)
+                })?
                 .collect::<Result<Vec<_>, _>>()?;
             v
         };
-        let qty_received = recv_rows
-            .iter()
-            .fold(fincore::Money::ZERO, |acc, q| acc + fincore::Money::parse_or_zero(q));
+        let qty_received = recv_rows.iter().fold(fincore::Money::ZERO, |acc, q| {
+            acc + fincore::Money::parse_or_zero(q)
+        });
         let remaining = cap - estimated;
         out.push(EstimateLine {
             item_code: line.item_code.clone(),
             item_name: line.item_name.clone(),
             cap,
             estimated,
-            remaining: if remaining.is_positive() { remaining } else { fincore::Money::ZERO },
+            remaining: if remaining.is_positive() {
+                remaining
+            } else {
+                fincore::Money::ZERO
+            },
             qty_ordered: line.qty_ordered,
             qty_received,
             qty_outstanding: line.qty_ordered - qty_received,
@@ -278,12 +288,7 @@ pub fn estimate_status_by_line(db: &Db, po_id: i64) -> DbResult<Vec<EstimateLine
 
 /// 暂估冲回：发票到票后标记 settled，并同事务生成反向冲回凭证（借 应付 / 贷 存货）。
 /// 返回冲回凭证 id；已冲回或并发重复冲回返回 None（幂等）。
-pub fn po_estimate_settle(
-    db: &Db,
-    id: i64,
-    date: NaiveDate,
-    who: &str,
-) -> DbResult<Option<i64>> {
+pub fn po_estimate_settle(db: &Db, id: i64, date: NaiveDate, who: &str) -> DbResult<Option<i64>> {
     let row: (i64, String, String, bool) = db
         .conn()
         .query_row(
@@ -297,8 +302,8 @@ pub fn po_estimate_settle(
     if settled {
         return Ok(None);
     }
-    let po = crate::scm::po_get(db, po_id)?
-        .ok_or_else(|| fincore::FinError::not_found("采购订单"))?;
+    let po =
+        crate::scm::po_get(db, po_id)?.ok_or_else(|| fincore::FinError::not_found("采购订单"))?;
     let amount = Money::parse_or_zero(&amount_s);
     let biz = db.options().biz_accounts.clone();
     let memo = format!("暂估冲回 {} {}", po.no, item);
@@ -334,7 +339,9 @@ pub fn po_estimate_settle(
 
 /// 未冲回的暂估合计
 pub fn po_estimate_open_sum(db: &Db, po_id: i64) -> DbResult<Money> {
-    let mut st = db.conn().prepare("SELECT est_amount FROM po_estimate WHERE po_id=?1 AND settled=0")?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT est_amount FROM po_estimate WHERE po_id=?1 AND settled=0")?;
     let rows = st
         .query_map([po_id], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -451,7 +458,13 @@ pub fn so_reconcile(db: &Db, period: Period) -> DbResult<Vec<SoRecon>> {
 // ===========================================================================
 
 /// 供应商配额：设置某期间某供应商某物料的可采购上限
-pub fn quota_set(db: &Db, period: Period, supplier: &str, item: &str, quota_qty: Money) -> DbResult<()> {
+pub fn quota_set(
+    db: &Db,
+    period: Period,
+    supplier: &str,
+    item: &str,
+    quota_qty: Money,
+) -> DbResult<()> {
     if quota_qty < Money::ZERO {
         return Err(fincore::FinError::msg("配额不能为负").into());
     }
@@ -483,7 +496,12 @@ pub fn quota_use(db: &Db, period: Period, supplier: &str, item: &str, qty: Money
 }
 
 /// 配额检查：某供应商某物料的剩余配额（quota 未设置返回 None）
-pub fn quota_remaining(db: &Db, period: Period, supplier: &str, item: &str) -> DbResult<Option<Money>> {
+pub fn quota_remaining(
+    db: &Db,
+    period: Period,
+    supplier: &str,
+    item: &str,
+) -> DbResult<Option<Money>> {
     let row: Option<(String, String)> = db.conn().query_row(
         "SELECT quota_qty, used_qty FROM supplier_quota WHERE period=?1 AND supplier_code=?2 AND item=?3",
         rusqlite::params![period.ymm(), supplier, item],
@@ -499,8 +517,24 @@ pub fn quota_remaining(db: &Db, period: Period, supplier: &str, item: &str) -> D
 // 订单变更历史
 // ===========================================================================
 
-pub fn change_log_add(db: &Db, order_type: &str, order_id: i64, field: &str, old_value: &str, new_value: &str, who: &str) -> DbResult<()> {
-    change_log_add_conn(db.conn(), order_type, order_id, field, old_value, new_value, who)
+pub fn change_log_add(
+    db: &Db,
+    order_type: &str,
+    order_id: i64,
+    field: &str,
+    old_value: &str,
+    new_value: &str,
+    who: &str,
+) -> DbResult<()> {
+    change_log_add_conn(
+        db.conn(),
+        order_type,
+        order_id,
+        field,
+        old_value,
+        new_value,
+        who,
+    )
 }
 
 /// 连接版（事务内可用）
@@ -521,7 +555,11 @@ pub fn change_log_add_conn(
     Ok(())
 }
 
-pub fn change_log_list(db: &Db, order_type: &str, order_id: i64) -> DbResult<Vec<(String, String, String, String, String)>> {
+pub fn change_log_list(
+    db: &Db,
+    order_type: &str,
+    order_id: i64,
+) -> DbResult<Vec<(String, String, String, String, String)>> {
     let mut st = db.conn().prepare(
         "SELECT field, old_value, new_value, changed_by, changed_at FROM order_change_log
          WHERE order_type=?1 AND order_id=?2 ORDER BY id DESC",
@@ -561,9 +599,17 @@ mod tests {
         );
         po.no = crate::scm::po_next_no(&db, p).unwrap();
         po.lines.push(crate::scm::PoLine {
-            id: 0, po_id: 0, item_code: "140301".into(), item_name: "原料".into(),
-            qty_ordered: m("100"), qty_received: m("0"), unit_price: m("10"),
-            tax_rate: m("0"), amount: m("1000"), tax_amount: m("0"), memo: String::new(),
+            id: 0,
+            po_id: 0,
+            item_code: "140301".into(),
+            item_name: "原料".into(),
+            qty_ordered: m("100"),
+            qty_received: m("0"),
+            unit_price: m("10"),
+            tax_rate: m("0"),
+            amount: m("1000"),
+            tax_amount: m("0"),
+            memo: String::new(),
         });
         let po_id = crate::scm::po_save(&db, &mut po).unwrap();
 
@@ -612,10 +658,14 @@ mod tests {
         assert_eq!(po_estimate_open_sum(&db, po_id).unwrap(), m("1500"));
 
         // ④ 已冲回的不占额度：否则发票到票后反而登不进新暂估
-        let open: i64 = db.conn().query_row(
-            "SELECT COUNT(*) FROM po_estimate WHERE po_id=?1 AND settled=0",
-            [po_id], |r| r.get(0),
-        ).unwrap();
+        let open: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM po_estimate WHERE po_id=?1 AND settled=0",
+                [po_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(open, 3, "三条未结算暂估");
     }
 
@@ -625,12 +675,25 @@ mod tests {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
         let mut po = crate::scm::PurchaseOrder::new(
-            p, NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(), "S01", "供应商A", "u");
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S01",
+            "供应商A",
+            "u",
+        );
         po.no = crate::scm::po_next_no(&db, p).unwrap();
         po.lines.push(crate::scm::PoLine {
-            id: 0, po_id: 0, item_code: "140301".into(), item_name: "原料".into(),
-            qty_ordered: m("100"), qty_received: m("0"), unit_price: m("10"),
-            tax_rate: m("0"), amount: m("1000"), tax_amount: m("0"), memo: String::new(),
+            id: 0,
+            po_id: 0,
+            item_code: "140301".into(),
+            item_name: "原料".into(),
+            qty_ordered: m("100"),
+            qty_received: m("0"),
+            unit_price: m("10"),
+            tax_rate: m("0"),
+            amount: m("1000"),
+            tax_amount: m("0"),
+            memo: String::new(),
         });
         let po_id = crate::scm::po_save(&db, &mut po).unwrap();
         db.conn()
@@ -641,12 +704,19 @@ mod tests {
             .unwrap();
         // 额度 1000：一次性登满
         let (est_id, _) = po_estimate_add(&db, po_id, p, "140301", m("1000"), "u").unwrap();
-        assert!(po_estimate_add(&db, po_id, p, "140301", m("1"), "u").is_err(),
-            "额度已用满，追加必须被拒");
+        assert!(
+            po_estimate_add(&db, po_id, p, "140301", m("1"), "u").is_err(),
+            "额度已用满，追加必须被拒"
+        );
         // 冲回后额度释放
-        po_estimate_settle(&db, est_id, NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(), "u")
-            .unwrap()
-            .unwrap();
+        po_estimate_settle(
+            &db,
+            est_id,
+            NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+            "u",
+        )
+        .unwrap()
+        .unwrap();
         po_estimate_add(&db, po_id, p, "140301", m("1000"), "u")
             .expect("冲回后额度应释放，能重新暂估全额");
     }
@@ -663,14 +733,27 @@ mod tests {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
         let mut po = crate::scm::PurchaseOrder::new(
-            p, NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(), "S01", "供应商A", "u");
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S01",
+            "供应商A",
+            "u",
+        );
         po.no = crate::scm::po_next_no(&db, p).unwrap();
         // 两行，各 100 件、单价 10、税率 10% → 含税单价 11
         for (code, name) in [("140301", "原料A"), ("140302", "原料B")] {
             po.lines.push(crate::scm::PoLine {
-                id: 0, po_id: 0, item_code: code.into(), item_name: name.into(),
-                qty_ordered: m("100"), qty_received: m("0"), unit_price: m("10"),
-                tax_rate: m("0.1"), amount: m("1000"), tax_amount: m("100"), memo: String::new(),
+                id: 0,
+                po_id: 0,
+                item_code: code.into(),
+                item_name: name.into(),
+                qty_ordered: m("100"),
+                qty_received: m("0"),
+                unit_price: m("10"),
+                tax_rate: m("0.1"),
+                amount: m("1000"),
+                tax_amount: m("100"),
+                memo: String::new(),
             });
         }
         let po_id = crate::scm::po_save(&db, &mut po).unwrap();
@@ -679,16 +762,26 @@ mod tests {
         crate::procurement::po_receipt_with_stock(
             &db,
             &crate::procurement::PoReceipt {
-                id: 0, po_id, period: p, date: NaiveDate::from_ymd_opt(2026, 1, 8).unwrap(),
-                qty: m("100"), memo: "只到 A".into(),
-                item_code: "140301".into(), warehouse: "01".into(),
+                id: 0,
+                po_id,
+                period: p,
+                date: NaiveDate::from_ymd_opt(2026, 1, 8).unwrap(),
+                qty: m("100"),
+                memo: "只到 A".into(),
+                item_code: "140301".into(),
+                warehouse: "01".into(),
             },
             "01",
-        ).unwrap();
+        )
+        .unwrap();
 
         // 第一行额度 = 11 × 100 = 1100（精确），不是折算的 550
         let cap_a = estimate_cap_for_line(&db, &po, "140301").unwrap();
-        assert_eq!(cap_a, m("1100"), "第一行额度应按该行含税单价精确算：{cap_a}");
+        assert_eq!(
+            cap_a,
+            m("1100"),
+            "第一行额度应按该行含税单价精确算：{cap_a}"
+        );
         // 第二行没收货 → 额度 0（不能被第一行的收货撑起来）
         let cap_b = estimate_cap_for_line(&db, &po, "140302").unwrap();
         assert_eq!(cap_b, m("0"), "没收货的行额度必须是 0");
@@ -714,12 +807,25 @@ mod tests {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
         let mut po = crate::scm::PurchaseOrder::new(
-            p, NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(), "S01", "供应商A", "u");
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S01",
+            "供应商A",
+            "u",
+        );
         po.no = crate::scm::po_next_no(&db, p).unwrap();
         po.lines.push(crate::scm::PoLine {
-            id: 0, po_id: 0, item_code: "140301".into(), item_name: "原料".into(),
-            qty_ordered: m("100"), qty_received: m("0"), unit_price: m("10"),
-            tax_rate: m("0"), amount: m("1000"), tax_amount: m("0"), memo: String::new(),
+            id: 0,
+            po_id: 0,
+            item_code: "140301".into(),
+            item_name: "原料".into(),
+            qty_ordered: m("100"),
+            qty_received: m("0"),
+            unit_price: m("10"),
+            tax_rate: m("0"),
+            amount: m("1000"),
+            tax_amount: m("0"),
+            memo: String::new(),
         });
         let po_id = crate::scm::po_save(&db, &mut po).unwrap();
 
@@ -727,12 +833,18 @@ mod tests {
         crate::procurement::po_receipt_with_stock(
             &db,
             &crate::procurement::PoReceipt {
-                id: 0, po_id, period: p, date: NaiveDate::from_ymd_opt(2026, 1, 8).unwrap(),
-                qty: m("130"), memo: "超收".into(),
-                item_code: "140301".into(), warehouse: "01".into(),
+                id: 0,
+                po_id,
+                period: p,
+                date: NaiveDate::from_ymd_opt(2026, 1, 8).unwrap(),
+                qty: m("130"),
+                memo: "超收".into(),
+                item_code: "140301".into(),
+                warehouse: "01".into(),
             },
             "01",
-        ).unwrap();
+        )
+        .unwrap();
 
         // ① 存货流水按实收 130 入库，不是按订购 100 截断
         let stock_qty: String = db
@@ -750,21 +862,37 @@ mod tests {
         );
         // ② 暂估额度随之放大到 1300（守卫不该把真实超收挡掉）
         let po2 = crate::scm::po_get(&db, po_id).unwrap().unwrap();
-        assert_eq!(estimate_cap_for_line(&db, &po2, "140301").unwrap(), m("1300"));
-        po_estimate_add(&db, po_id, p, "140301", m("1300"), "u")
-            .expect("超收后的额度应能全额暂估");
+        assert_eq!(
+            estimate_cap_for_line(&db, &po2, "140301").unwrap(),
+            m("1300")
+        );
+        po_estimate_add(&db, po_id, p, "140301", m("1300"), "u").expect("超收后的额度应能全额暂估");
     }
 
     #[test]
     fn estimate_and_reconcile() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let mut po = crate::scm::PurchaseOrder::new(p, NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(), "S01", "供应商A", "u");
+        let mut po = crate::scm::PurchaseOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S01",
+            "供应商A",
+            "u",
+        );
         po.no = crate::scm::po_next_no(&db, p).unwrap();
         po.lines.push(crate::scm::PoLine {
-            id: 0, po_id: 0, item_code: "140301".into(), item_name: "原料".into(),
-            qty_ordered: m("100"), qty_received: m("0"), unit_price: m("10"),
-            tax_rate: m("0"), amount: m("1000"), tax_amount: m("0"), memo: String::new(),
+            id: 0,
+            po_id: 0,
+            item_code: "140301".into(),
+            item_name: "原料".into(),
+            qty_ordered: m("100"),
+            qty_received: m("0"),
+            unit_price: m("10"),
+            tax_rate: m("0"),
+            amount: m("1000"),
+            tax_amount: m("0"),
+            memo: String::new(),
         });
         let po_id = crate::scm::po_save(&db, &mut po).unwrap();
         // 先收货再暂估：暂估额度来自实收量（`po_received_gross`），
@@ -800,16 +928,29 @@ mod tests {
         assert_eq!(v.entries[1].account_code, "140301");
         assert_eq!(v.entries[1].credit, m("800"));
         assert!(
-            po_estimate_settle(&db, est_id, NaiveDate::from_ymd_opt(2026, 1, 21).unwrap(), "u")
-                .unwrap()
-                .is_none(),
+            po_estimate_settle(
+                &db,
+                est_id,
+                NaiveDate::from_ymd_opt(2026, 1, 21).unwrap(),
+                "u"
+            )
+            .unwrap()
+            .is_none(),
             "重复冲回应幂等"
         );
         // 付款 600 → 对账未付 400
-        crate::procurement::po_payment_add(&db, &crate::procurement::PoPayment {
-            id: 0, po_id, period: p, date: NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
-            amount: m("600"), memo: String::new(),
-        }).unwrap();
+        crate::procurement::po_payment_add(
+            &db,
+            &crate::procurement::PoPayment {
+                id: 0,
+                po_id,
+                period: p,
+                date: NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+                amount: m("600"),
+                memo: String::new(),
+            },
+        )
+        .unwrap();
         let r = po_reconcile(&db, p).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].order_amount, m("1000"));
@@ -821,9 +962,15 @@ mod tests {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
         quota_set(&db, p, "S01", "140301", m("500")).unwrap();
-        assert_eq!(quota_remaining(&db, p, "S01", "140301").unwrap(), Some(m("500")));
+        assert_eq!(
+            quota_remaining(&db, p, "S01", "140301").unwrap(),
+            Some(m("500"))
+        );
         quota_use(&db, p, "S01", "140301", m("120")).unwrap();
-        assert_eq!(quota_remaining(&db, p, "S01", "140301").unwrap(), Some(m("380")));
+        assert_eq!(
+            quota_remaining(&db, p, "S01", "140301").unwrap(),
+            Some(m("380"))
+        );
         // 未设置配额的返回 None
         assert_eq!(quota_remaining(&db, p, "S01", "9999").unwrap(), None);
     }

@@ -2,8 +2,8 @@
 //!
 //! 用法: cargo run --example reset_pwd --release -- <path>
 
-use findb::Db;
 use fincore::user::hash_password;
+use findb::Db;
 use std::env;
 use std::path::PathBuf;
 

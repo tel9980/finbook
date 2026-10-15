@@ -117,7 +117,10 @@ fn load_cjk_font() -> Option<(String, Vec<u8>)> {
     let candidates: Vec<(&str, String)> = if cfg!(windows) {
         vec![
             ("微软雅黑", "C:\\Windows\\Fonts\\msyh.ttc".to_string()),
-            ("微软雅黑 Bold", "C:\\Windows\\Fonts\\msyhbd.ttc".to_string()),
+            (
+                "微软雅黑 Bold",
+                "C:\\Windows\\Fonts\\msyhbd.ttc".to_string(),
+            ),
             ("黑体", "C:\\Windows\\Fonts\\simhei.ttf".to_string()),
             ("宋体", "C:\\Windows\\Fonts\\simsun.ttc".to_string()),
             ("等线", "C:\\Windows\\Fonts\\Deng.ttf".to_string()),
@@ -130,10 +133,7 @@ fn load_cjk_font() -> Option<(String, Vec<u8>)> {
                 "Heiti SC",
                 "/System/Library/Fonts/STHeiti Medium.ttc".to_string(),
             ),
-            (
-                "Songti SC",
-                "/Library/Fonts/Arial Unicode.ttf".to_string(),
-            ),
+            ("Songti SC", "/Library/Fonts/Arial Unicode.ttf".to_string()),
         ]
     } else {
         vec![
@@ -159,8 +159,7 @@ fn load_cjk_font() -> Option<(String, Vec<u8>)> {
             ),
             (
                 "Source Han Sans",
-                "/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf"
-                    .to_string(),
+                "/usr/share/fonts/opentype/source-han-sans/SourceHanSansSC-Regular.otf".to_string(),
             ),
         ]
     };

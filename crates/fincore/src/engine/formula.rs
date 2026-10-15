@@ -234,7 +234,9 @@ impl<'a> Parser<'a> {
                     self.bump();
                     let d = self.factor()?;
                     // L-1：公式除零不再静默置 0——金额公式会把 0 当合法结果算下去
-                    v = v.checked_div(d).ok_or_else(|| FinError::msg("公式除零：除数为 0"))?;
+                    v = v
+                        .checked_div(d)
+                        .ok_or_else(|| FinError::msg("公式除零：除数为 0"))?;
                 }
                 _ => break,
             }
@@ -324,8 +326,7 @@ impl<'a> Parser<'a> {
 
     fn apply(&self, name: &str, args: &[Option<String>]) -> Result<Money, FinError> {
         let a = |i: usize| -> Option<String> { args.get(i).cloned().flatten() };
-        let code = a(0)
-            .ok_or_else(|| FinError::msg(format!("{name}() 缺少科目参数")))?;
+        let code = a(0).ok_or_else(|| FinError::msg(format!("{name}() 缺少科目参数")))?;
         // 期间偏移：允许 -1 / -12 这类写法，也容忍历史公式里的 "-1.00" 小数写法。
         // 解析不出来必须报错——旧的 `unwrap_or(0)` 会把 `QM("1001","abc")` 静默
         // 当成"本期"，报表数字看着正常但口径是错的，财务上比报错难查得多。
@@ -488,7 +489,10 @@ mod tests {
         assert_eq!(e("FS(\"6001\",,\"贷\")"), Money::parse("200").unwrap());
         assert_eq!(e("LFS(\"6001\")"), Money::parse("1500").unwrap());
         assert_eq!(e("QM(\"1001\")-QC(\"1001\")"), Money::parse("200").unwrap());
-        assert_eq!(e("FS(\"6001\")/LFS(\"6001\")*100"), Money::parse("13.33").unwrap());
+        assert_eq!(
+            e("FS(\"6001\")/LFS(\"6001\")*100"),
+            Money::parse("13.33").unwrap()
+        );
     }
 
     #[test]
@@ -604,7 +608,8 @@ mod tests {
     /// 期间偏移解析不出来必须报错。
     /// 回归：旧的 `unwrap_or(0)` 让 `QM("1001","abc")` 静默取本期数据。
     #[test]
-    fn bad_period_offset_is_error() {        let spy = Spy {
+    fn bad_period_offset_is_error() {
+        let spy = Spy {
             seen: std::cell::RefCell::new(Vec::new()),
             val: Money::ZERO,
         };
@@ -661,7 +666,10 @@ mod tests {
             );
         }
         // 纯数字与空公式仍照常返回 0（无取数可失败）
-        assert_eq!(eval("100", &Broken, p()).unwrap(), Money::parse("100").unwrap());
+        assert_eq!(
+            eval("100", &Broken, p()).unwrap(),
+            Money::parse("100").unwrap()
+        );
         assert_eq!(eval("   ", &Broken, p()).unwrap(), Money::ZERO);
         // check() 用的 Null 取数实现应返回 Ok，纯语法检查不受影响
         assert!(check("QM(\"1001\")+1").is_ok());

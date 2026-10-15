@@ -11,47 +11,47 @@
 
 pub mod accounts;
 pub mod advanced;
+pub mod assets;
 pub mod attach;
 pub mod automation;
-pub mod assets;
 pub mod auxs;
 pub mod balances;
 pub mod bank;
+pub mod batch;
 pub mod business;
+pub mod customers;
+pub mod docflow;
+pub mod exports;
 pub mod funds;
 pub mod imports;
 pub mod inventory2;
-pub mod stocktake;
-pub mod workflow;
-pub mod batch;
-pub mod workbench;
-pub mod docflow;
 pub mod invoices;
+pub mod landedcost;
+pub mod manufacturing;
 pub mod mgmt;
 pub mod periods;
 pub mod printform;
 pub mod procurement;
-pub mod security;
+pub mod receipt;
 pub mod reports;
 pub mod sales;
 pub mod schema;
-pub mod summaries;
+pub mod scm;
+pub mod scm2;
+pub mod security;
 pub mod settle;
 pub mod statement;
 pub mod stdcost;
-pub mod taxdecl;
-pub mod receipt;
-pub mod template;
-pub mod scm;
-pub mod customers;
-pub mod scm2;
-pub mod manufacturing;
 pub mod stock;
+pub mod stocktake;
+pub mod summaries;
+pub mod taxdecl;
+pub mod template;
 pub mod users;
 pub mod vouchers;
 pub mod warehouse;
-pub mod exports;
-pub mod landedcost;
+pub mod workbench;
+pub mod workflow;
 
 use std::path::{Path, PathBuf};
 
@@ -155,7 +155,11 @@ impl Db {
         Self::create_with(path, opts, false)
     }
 
-    fn create_with<P: AsRef<Path>>(path: P, opts: &BookOptions, seed_admin: bool) -> DbResult<Self> {
+    fn create_with<P: AsRef<Path>>(
+        path: P,
+        opts: &BookOptions,
+        seed_admin: bool,
+    ) -> DbResult<Self> {
         let path = path.as_ref().to_path_buf();
         if path.exists() {
             return Err(FinError::msg(format!("文件已存在，未覆盖：{}", path.display())).into());
@@ -276,9 +280,11 @@ impl Db {
     // ---------------- meta ----------------
     pub fn meta_get(&self, key: &str) -> Option<String> {
         self.conn
-            .query_row("SELECT value FROM meta WHERE key=?1", rusqlite::params![key], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT value FROM meta WHERE key=?1",
+                rusqlite::params![key],
+                |r| r.get(0),
+            )
             .ok()
     }
     pub fn meta_set(&self, key: &str, value: &str) -> DbResult<()> {
@@ -343,10 +349,7 @@ impl Db {
     /// 供 [`prune_auto_backups`] 识别。
     pub fn backup_auto<P: AsRef<Path>>(&self, dir: P, keep: usize) -> DbResult<PathBuf> {
         let dir = dir.as_ref().to_path_buf();
-        let base = format!(
-            "auto_{}",
-            chrono::Local::now().format("%Y%m%d_%H%M%S%3f")
-        );
+        let base = format!("auto_{}", chrono::Local::now().format("%Y%m%d_%H%M%S%3f"));
         // 毫秒级时间戳极少冲突；万一冲突（时钟回拨等）则追加序号
         let mut path = dir.join(format!("{base}.{BOOK_EXT}"));
         let mut n = 1;
@@ -376,11 +379,15 @@ impl Db {
 
     /// 统计信息：（凭证数, 分录数, 科目数）
     pub fn stats(&self) -> DbResult<(i64, i64, i64)> {
-        let v: i64 = self.conn.query_row("SELECT COUNT(*) FROM voucher", [], |r| r.get(0))?;
+        let v: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM voucher", [], |r| r.get(0))?;
         let e: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM voucher_entry", [], |r| r.get(0))?;
-        let a: i64 = self.conn.query_row("SELECT COUNT(*) FROM account", [], |r| r.get(0))?;
+        let a: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM account", [], |r| r.get(0))?;
         Ok((v, e, a))
     }
 
@@ -699,11 +706,9 @@ mod tests {
         let id = business::stock_insert(&db, &mv).unwrap();
         let (q, pr): (String, String) = db
             .conn()
-            .query_row(
-                "SELECT qty, price FROM stock_move WHERE id=?1",
-                [id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            .query_row("SELECT qty, price FROM stock_move WHERE id=?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .unwrap();
         assert_eq!(q, "0.123456", "数量落库被截断为 {q}");
         assert_eq!(pr, "9.876543", "单价落库被截断为 {pr}");
@@ -736,10 +741,7 @@ mod tests {
     /// 快速路径若只看版本号，这两张表对老账套就永远回不来了。
     #[test]
     fn reopen_recreates_table_missing_at_current_version() {
-        let dir = std::env::temp_dir().join(format!(
-            "finbook_test_repair_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("finbook_test_repair_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("b2.fbk");
@@ -769,10 +771,8 @@ mod tests {
     /// 写锁。退回 DEFERRED 时 BEGIN 本身不拿锁，第二个连接就会成功，此测试失败。
     #[test]
     fn write_tx_holds_write_lock_from_begin() {
-        let dir = std::env::temp_dir().join(format!(
-            "finbook_test_immediate_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("finbook_test_immediate_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("b4.fbk");
@@ -807,10 +807,7 @@ mod tests {
     /// 纯读请求也会去抢写锁，Web 端并发下就是成片 500。
     #[test]
     fn open_is_not_blocked_by_another_write_tx() {
-        let dir = std::env::temp_dir().join(format!(
-            "finbook_test_conc_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("finbook_test_conc_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("b3.fbk");
@@ -870,10 +867,7 @@ mod tests {
     #[test]
     fn backup_auto_with_retention() {
         let db = mem();
-        let dir = std::env::temp_dir().join(format!(
-            "finbook_test_backup_{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("finbook_test_backup_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

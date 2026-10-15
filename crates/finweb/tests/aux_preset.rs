@@ -32,7 +32,12 @@ async fn get(state: &Arc<WebState>, sid: &str, uri: &str) -> (StatusCode, String
     (s, body_string(resp).await)
 }
 
-async fn post(state: &Arc<WebState>, sid: &str, uri: &str, body: serde_json::Value) -> (StatusCode, String) {
+async fn post(
+    state: &Arc<WebState>,
+    sid: &str,
+    uri: &str,
+    body: serde_json::Value,
+) -> (StatusCode, String) {
     let resp = handlers::router(state.clone())
         .oneshot(authed_post(uri, sid, body))
         .await
@@ -57,7 +62,11 @@ async fn 预置清单的查询串能正常解析() {
 
     // 没有 kind 参数也不能 422 —— 前端任何一次拼错都会走到这里
     let (st, body) = get(&state, &sid, "/api/aux-presets").await;
-    assert_eq!(st, StatusCode::OK, "缺 kind 应回落到默认值，不该 422：{body}");
+    assert_eq!(
+        st,
+        StatusCode::OK,
+        "缺 kind 应回落到默认值，不该 422：{body}"
+    );
     // 类别不认识也不能 422（回落成部门而不是报错）
     let (st, body) = get(&state, &sid, "/api/aux-presets?kind=not-a-kind").await;
     assert_eq!(st, StatusCode::OK, "未知类别应回落，不该 422：{body}");
@@ -69,17 +78,35 @@ async fn 只预置部门与银行账户() {
     let (state, _dir, _tmp) = test_state();
     let sid = boss_in_b1(&state).await;
 
-    let (_, body) = post(&state, &sid, "/api/aux-presets", serde_json::json!({"kind": "dept"})).await;
+    let (_, body) = post(
+        &state,
+        &sid,
+        "/api/aux-presets",
+        serde_json::json!({"kind": "dept"}),
+    )
+    .await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["inserted"], 3);
 
-    let (_, body) = post(&state, &sid, "/api/aux-presets", serde_json::json!({"kind": "bank"})).await;
+    let (_, body) = post(
+        &state,
+        &sid,
+        "/api/aux-presets",
+        serde_json::json!({"kind": "bank"}),
+    )
+    .await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["inserted"], 2);
 
     // 客户/供应商/存货：预置端点必须报告「什么都没加」，而不是偷偷造几条
     for k in ["customer", "supplier", "item"] {
-        let (_, body) = post(&state, &sid, "/api/aux-presets", serde_json::json!({"kind": k})).await;
+        let (_, body) = post(
+            &state,
+            &sid,
+            "/api/aux-presets",
+            serde_json::json!({"kind": k}),
+        )
+        .await;
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["inserted"], 0, "{k} 不该被预置");
         assert_eq!(v["skipped"].as_array().unwrap().len(), 0);
@@ -110,7 +137,13 @@ async fn 重复预置不覆盖已有档案() {
     .await;
     assert_eq!(st, StatusCode::OK, "建自有部门应成功：{body}");
 
-    let (_, body) = post(&state, &sid, "/api/aux-presets", serde_json::json!({"kind": "dept"})).await;
+    let (_, body) = post(
+        &state,
+        &sid,
+        "/api/aux-presets",
+        serde_json::json!({"kind": "dept"}),
+    )
+    .await;
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["inserted"], 2, "只该新增 D02/D03");
     let skipped = v["skipped"].as_array().unwrap();
@@ -137,7 +170,13 @@ async fn 预置的银行账户不带账号() {
     let (state, _dir, _tmp) = test_state();
     let sid = boss_in_b1(&state).await;
 
-    post(&state, &sid, "/api/aux-presets", serde_json::json!({"kind": "bank"})).await;
+    post(
+        &state,
+        &sid,
+        "/api/aux-presets",
+        serde_json::json!({"kind": "bank"}),
+    )
+    .await;
     let (st, body) = get(&state, &sid, "/api/aux?kind=bank").await;
     assert_eq!(st, StatusCode::OK);
     let rows: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();

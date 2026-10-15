@@ -5,13 +5,13 @@
 //! 像折旧计提、结转损益这些别处已经实现的功能，这里只显示金额 + 跳转，不重复造一遍。
 
 use egui::{RichText, Ui};
+use fincore::{Money, Period, Perm};
 use findb::automation::{
-    at_delete, at_insert, at_list, at_preview_all, at_run, at_update, checklist, fx_adjust, fx_calc,
-    fx_delete, fx_list, fx_missing, fx_set, AutoTransfer, CheckItem, EntryDir, FxAdjLine, FxRate,
-    SrcKind, TransferPreview, FX_GAIN_ACCOUNT,
+    at_delete, at_insert, at_list, at_preview_all, at_run, at_update, checklist, fx_adjust,
+    fx_calc, fx_delete, fx_list, fx_missing, fx_set, AutoTransfer, CheckItem, EntryDir, FxAdjLine,
+    FxRate, SrcKind, TransferPreview, FX_GAIN_ACCOUNT,
 };
 use findb::balances::BalanceQuery;
-use fincore::{Money, Period, Perm};
 
 use crate::state::{AppCtx, NavItem};
 use crate::theme::palette;
@@ -331,8 +331,10 @@ impl AutomationView {
             ui.selectable_value(&mut self.tab, Tab::Wizard, "一键月末处理");
             ui.separator();
             ui.label("期间");
-            let r =
-                ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -359,70 +361,74 @@ impl AutomationView {
 
     // ------------------------- Tab 1 期末调汇 -------------------------
     fn show_fx(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui, p: Period) {
-        widgets::card(ui, "外币汇率（1 单位外币 = ? 单位本位币）", |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("新增汇率").clicked() && ctx.can(Perm::CarryForward) {
-                    self.fx_edit = Some(FxForm::new(p));
+        widgets::card(
+            ui,
+            "外币汇率（1 单位外币 = ? 单位本位币）",
+            |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("新增汇率").clicked() && ctx.can(Perm::CarryForward) {
+                        self.fx_edit = Some(FxForm::new(p));
+                    }
+                    ui.label(RichText::new("汇率按期间维护，不同期间的期末汇率互不影响").weak());
+                });
+                if !self.fx_missing.is_empty() {
+                    ui.colored_label(
+                        palette::WARN,
+                        format!("本期用到但未维护汇率：{}", self.fx_missing.join("、")),
+                    );
                 }
-                ui.label(RichText::new("汇率按期间维护，不同期间的期末汇率互不影响").weak());
-            });
-            if !self.fx_missing.is_empty() {
-                ui.colored_label(
-                    palette::WARN,
-                    format!("本期用到但未维护汇率：{}", self.fx_missing.join("、")),
-                );
-            }
 
-            let rows = self.fx_rates.clone();
-            let cols = [
-                widgets::TCol::new("币种", 100.0).fixed(),
-                widgets::TCol::new("期间", 100.0).fixed(),
-                widgets::TCol::new("汇率", 140.0).right(),
-                widgets::TCol::new("操作", 100.0).fixed(),
-            ];
-            let mut edit: Option<String> = None;
-            let mut del: Option<String> = None;
-            widgets::grid(ui, "fx_rates", &cols, rows.len(), 24.0, |i, c, ui| {
-                let r = &rows[i];
-                match c {
-                    0 => {
-                        ui.label(RichText::new(&r.currency).monospace());
+                let rows = self.fx_rates.clone();
+                let cols = [
+                    widgets::TCol::new("币种", 100.0).fixed(),
+                    widgets::TCol::new("期间", 100.0).fixed(),
+                    widgets::TCol::new("汇率", 140.0).right(),
+                    widgets::TCol::new("操作", 100.0).fixed(),
+                ];
+                let mut edit: Option<String> = None;
+                let mut del: Option<String> = None;
+                widgets::grid(ui, "fx_rates", &cols, rows.len(), 24.0, |i, c, ui| {
+                    let r = &rows[i];
+                    match c {
+                        0 => {
+                            ui.label(RichText::new(&r.currency).monospace());
+                        }
+                        1 => {
+                            ui.label(r.period.code());
+                        }
+                        2 => widgets::amount_label(ui, r.rate),
+                        3 => {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                if ui.small_button("改").clicked() {
+                                    edit = Some(r.currency.clone());
+                                }
+                                if ui.small_button("删").clicked() {
+                                    del = Some(r.currency.clone());
+                                }
+                            });
+                        }
+                        _ => {}
                     }
-                    1 => {
-                        ui.label(r.period.code());
-                    }
-                    2 => widgets::amount_label(ui, r.rate),
-                    3 => {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 2.0;
-                            if ui.small_button("改").clicked() {
-                                edit = Some(r.currency.clone());
-                            }
-                            if ui.small_button("删").clicked() {
-                                del = Some(r.currency.clone());
-                            }
-                        });
-                    }
-                    _ => {}
-                }
-            });
+                });
 
-            if let Some(cur) = edit {
-                if let Some(r) = self.fx_rates.iter().find(|r| r.currency == cur) {
-                    self.fx_edit = Some(FxForm::of(r));
-                }
-            }
-            if let Some(cur) = del {
-                match fx_delete(ctx.db(), p, &cur) {
-                    Ok(()) => {
-                        ctx.log("期末", "删除汇率", &format!("{} {}", p.label(), cur));
-                        ctx.info(format!("已删除 {} 的汇率", cur));
-                        self.dirty = true;
+                if let Some(cur) = edit {
+                    if let Some(r) = self.fx_rates.iter().find(|r| r.currency == cur) {
+                        self.fx_edit = Some(FxForm::of(r));
                     }
-                    Err(e) => ctx.error(e.to_string()),
                 }
-            }
-        });
+                if let Some(cur) = del {
+                    match fx_delete(ctx.db(), p, &cur) {
+                        Ok(()) => {
+                            ctx.log("期末", "删除汇率", &format!("{} {}", p.label(), cur));
+                            ctx.info(format!("已删除 {} 的汇率", cur));
+                            self.dirty = true;
+                        }
+                        Err(e) => ctx.error(e.to_string()),
+                    }
+                }
+            },
+        );
 
         // 试算：只算不写库，用户先看差额再决定要不要出凭证
         widgets::card(ui, "本期汇兑损益测算", |ui| {
@@ -452,9 +458,15 @@ impl AutomationView {
             widgets::grid(ui, "fx_calc", &cols, rows.len(), 24.0, |i, c, ui| {
                 let l = &rows[i];
                 match c {
-                    0 => { ui.label(format!("{} {}", l.account_code, names[i])); }
-                    1 => { ui.label(&l.aux_key); }
-                    2 => { ui.label(&l.currency); }
+                    0 => {
+                        ui.label(format!("{} {}", l.account_code, names[i]));
+                    }
+                    1 => {
+                        ui.label(&l.aux_key);
+                    }
+                    2 => {
+                        ui.label(&l.currency);
+                    }
                     3 => widgets::amount_label(ui, l.foreign),
                     4 => widgets::amount_label(ui, l.book),
                     5 => widgets::amount_label(ui, l.restated),
@@ -491,38 +503,51 @@ impl AutomationView {
         let mut close = false;
         let is_new = f.is_new;
 
-        egui::Window::new(if is_new { "新增汇率" } else { "修改汇率" })
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                egui::Grid::new("fx_edit")
-                    .num_columns(2)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("币种：");
-                        ui.add_sized([160.0, 22.0], egui::TextEdit::singleline(&mut f.currency).hint_text("USD"));
-                        ui.end_row();
-                        ui.label("期间：");
-                        ui.add_sized([160.0, 22.0], egui::TextEdit::singleline(&mut f.period).hint_text("202601"));
-                        ui.end_row();
-                        ui.label("汇率：");
-                        ui.add_sized([160.0, 22.0], egui::TextEdit::singleline(&mut f.rate).hint_text("7.2000"));
-                        ui.end_row();
-                    });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("取消").clicked() {
-                            close = true;
-                        }
-                        if ui.button("保存").clicked() {
-                            save = true;
-                        }
-                    });
+        egui::Window::new(if is_new {
+            "新增汇率"
+        } else {
+            "修改汇率"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ui.ctx(), |ui| {
+            egui::Grid::new("fx_edit")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("币种：");
+                    ui.add_sized(
+                        [160.0, 22.0],
+                        egui::TextEdit::singleline(&mut f.currency).hint_text("USD"),
+                    );
+                    ui.end_row();
+                    ui.label("期间：");
+                    ui.add_sized(
+                        [160.0, 22.0],
+                        egui::TextEdit::singleline(&mut f.period).hint_text("202601"),
+                    );
+                    ui.end_row();
+                    ui.label("汇率：");
+                    ui.add_sized(
+                        [160.0, 22.0],
+                        egui::TextEdit::singleline(&mut f.rate).hint_text("7.2000"),
+                    );
+                    ui.end_row();
+                });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                    if ui.button("保存").clicked() {
+                        save = true;
+                    }
                 });
             });
+        });
 
         if close || !open {
             self.fx_edit = None;
@@ -563,7 +588,12 @@ impl AutomationView {
                     "维护汇率",
                     &format!("{} {} = {}", p.label(), cur, rate.fmt_money()),
                 );
-                ctx.info(format!("已保存 {} {} 的汇率 {}", p.label(), cur, rate.fmt_money()));
+                ctx.info(format!(
+                    "已保存 {} {} 的汇率 {}",
+                    p.label(),
+                    cur,
+                    rate.fmt_money()
+                ));
                 self.dirty = true;
                 self.fx_edit = None;
             }
@@ -632,11 +662,21 @@ impl AutomationView {
             widgets::grid(ui, "at_rules", &cols, rows.len(), 26.0, |i, c, ui| {
                 let r = &rows[i];
                 match c {
-                    0 => { ui.label(r.sort.to_string()); }
-                    1 => { ui.label(&r.name); }
-                    2 => { ui.label(format!("{} {}", r.src_account, names[i].0)); }
-                    3 => { ui.label(r.src_kind.label()); }
-                    4 => { ui.label(r.src_dir.label()); }
+                    0 => {
+                        ui.label(r.sort.to_string());
+                    }
+                    1 => {
+                        ui.label(&r.name);
+                    }
+                    2 => {
+                        ui.label(format!("{} {}", r.src_account, names[i].0));
+                    }
+                    3 => {
+                        ui.label(r.src_kind.label());
+                    }
+                    4 => {
+                        ui.label(r.src_dir.label());
+                    }
                     5 => {
                         let txt = if r.ratio_mode_is_ratio {
                             format!("{}%", (r.ratio * Money::from_i64(100)).fmt_money())
@@ -645,7 +685,14 @@ impl AutomationView {
                         };
                         ui.label(txt);
                     }
-                    6 => { ui.label(format!("{} {}（{}）", r.dst_account, names[i].1, r.dst_dir.label())); }
+                    6 => {
+                        ui.label(format!(
+                            "{} {}（{}）",
+                            r.dst_account,
+                            names[i].1,
+                            r.dst_dir.label()
+                        ));
+                    }
                     7 => {
                         if r.offset_account.trim().is_empty() {
                             ui.label(RichText::new("同来源科目（结平）").weak());
@@ -716,17 +763,22 @@ impl AutomationView {
             widgets::grid(ui, "at_preview", &cols, rows.len(), 24.0, |i, c, ui| {
                 let r = &rows[i];
                 match c {
-                    0 => { ui.label(&r.rule.name); }
+                    0 => {
+                        ui.label(&r.rule.name);
+                    }
                     1 => widgets::amount_label(ui, r.base),
                     2 => widgets::amount_label(ui, r.amount),
-                    3 => { ui.label(RichText::new(&r.note).weak()); }
+                    3 => {
+                        ui.label(RichText::new(&r.note).weak());
+                    }
                     _ => {}
                 }
             });
             ui.separator();
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("生成自动转账凭证").clicked() && ctx.can(Perm::CarryForward) {
+                    if ui.button("生成自动转账凭证").clicked() && ctx.can(Perm::CarryForward)
+                    {
                         self.do_at_run(ctx, p);
                     }
                 });
@@ -767,7 +819,11 @@ impl AutomationView {
         } else {
             ctx.info("已调整执行顺序");
         }
-        ctx.log("期末", "调整转账规则顺序", &format!("{}↔{}", idx + 1, j + 1));
+        ctx.log(
+            "期末",
+            "调整转账规则顺序",
+            &format!("{}↔{}", idx + 1, j + 1),
+        );
         self.dirty = true;
     }
 
@@ -780,93 +836,118 @@ impl AutomationView {
         let mut close = false;
         let is_new = f.is_new;
         let kinds: Vec<String> = SrcKind::ALL.iter().map(|k| k.label().to_string()).collect();
-        let dirs: Vec<String> = EntryDir::ALL.iter().map(|d| d.label().to_string()).collect();
+        let dirs: Vec<String> = EntryDir::ALL
+            .iter()
+            .map(|d| d.label().to_string())
+            .collect();
 
-        egui::Window::new(if is_new { "新增转账规则" } else { "修改转账规则" })
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([640.0, 460.0])
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                egui::Grid::new("at_edit")
-                    .num_columns(2)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("名称：");
-                        widgets::text_input(ui, &mut f.name, 320.0, "如：结转制造费用");
-                        ui.end_row();
-                        ui.label("凭证摘要：");
-                        widgets::text_input(ui, &mut f.summary, 320.0, "留空则取规则名");
-                        ui.end_row();
-                        ui.label("序号：");
-                        ui.add(egui::DragValue::new(&mut f.sort).range(0..=9990));
-                        ui.end_row();
-                        ui.label("来源科目：");
-                        widgets::account_combo(ui, "at_src", &mut f.src_account, ctx.chart(), true, 260.0);
-                        ui.end_row();
-                        ui.label("来源辅助：");
-                        widgets::text_input(ui, &mut f.src_aux, 260.0, "可空，如 customer:C01");
-                        ui.end_row();
-                        ui.label("取数类型：");
-                        widgets::combo(ui, "at_kind", &mut f.kind_txt, &kinds, 220.0);
-                        ui.end_row();
-                        ui.label("来源方向：");
-                        widgets::combo(ui, "at_srcdir", &mut f.src_dir_txt, &dirs, 120.0);
-                        ui.end_row();
-                        ui.label("目标科目：");
-                        widgets::account_combo(ui, "at_dst", &mut f.dst_account, ctx.chart(), true, 260.0);
-                        ui.end_row();
-                        ui.label("目标方向：");
-                        widgets::combo(ui, "at_dstdir", &mut f.dst_dir_txt, &dirs, 120.0);
-                        ui.end_row();
-                        ui.label("对方科目：");
-                        ui.horizontal(|ui| {
-                            widgets::account_combo(
-                                ui,
-                                "at_off",
-                                &mut f.offset_account,
-                                ctx.chart(),
-                                true,
-                                230.0,
-                            );
-                            if ui.small_button("清空").on_hover_text("留空=结平来源科目").clicked() {
-                                f.offset_account.clear();
-                            }
-                        });
-                        ui.end_row();
-                        ui.label("目标辅助：");
-                        widgets::text_input(ui, &mut f.dst_aux, 260.0, "可空");
-                        ui.end_row();
+        egui::Window::new(if is_new {
+            "新增转账规则"
+        } else {
+            "修改转账规则"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_size([640.0, 460.0])
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ui.ctx(), |ui| {
+            egui::Grid::new("at_edit")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("名称：");
+                    widgets::text_input(ui, &mut f.name, 320.0, "如：结转制造费用");
+                    ui.end_row();
+                    ui.label("凭证摘要：");
+                    widgets::text_input(ui, &mut f.summary, 320.0, "留空则取规则名");
+                    ui.end_row();
+                    ui.label("序号：");
+                    ui.add(egui::DragValue::new(&mut f.sort).range(0..=9990));
+                    ui.end_row();
+                    ui.label("来源科目：");
+                    widgets::account_combo(
+                        ui,
+                        "at_src",
+                        &mut f.src_account,
+                        ctx.chart(),
+                        true,
+                        260.0,
+                    );
+                    ui.end_row();
+                    ui.label("来源辅助：");
+                    widgets::text_input(ui, &mut f.src_aux, 260.0, "可空，如 customer:C01");
+                    ui.end_row();
+                    ui.label("取数类型：");
+                    widgets::combo(ui, "at_kind", &mut f.kind_txt, &kinds, 220.0);
+                    ui.end_row();
+                    ui.label("来源方向：");
+                    widgets::combo(ui, "at_srcdir", &mut f.src_dir_txt, &dirs, 120.0);
+                    ui.end_row();
+                    ui.label("目标科目：");
+                    widgets::account_combo(
+                        ui,
+                        "at_dst",
+                        &mut f.dst_account,
+                        ctx.chart(),
+                        true,
+                        260.0,
+                    );
+                    ui.end_row();
+                    ui.label("目标方向：");
+                    widgets::combo(ui, "at_dstdir", &mut f.dst_dir_txt, &dirs, 120.0);
+                    ui.end_row();
+                    ui.label("对方科目：");
+                    ui.horizontal(|ui| {
+                        widgets::account_combo(
+                            ui,
+                            "at_off",
+                            &mut f.offset_account,
+                            ctx.chart(),
+                            true,
+                            230.0,
+                        );
+                        if ui
+                            .small_button("清空")
+                            .on_hover_text("留空=结平来源科目")
+                            .clicked()
+                        {
+                            f.offset_account.clear();
+                        }
                     });
+                    ui.end_row();
+                    ui.label("目标辅助：");
+                    widgets::text_input(ui, &mut f.dst_aux, 260.0, "可空");
+                    ui.end_row();
+                });
 
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut f.by_ratio, "按比例");
-                    if f.by_ratio {
-                        ui.label("比例：");
-                        widgets::text_input(ui, &mut f.ratio_txt, 120.0, "1 = 100%");
-                    } else {
-                        ui.label("固定金额：");
-                        widgets::text_input(ui, &mut f.ratio_txt, 120.0, "0.00");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut f.by_ratio, "按比例");
+                if f.by_ratio {
+                    ui.label("比例：");
+                    widgets::text_input(ui, &mut f.ratio_txt, 120.0, "1 = 100%");
+                } else {
+                    ui.label("固定金额：");
+                    widgets::text_input(ui, &mut f.ratio_txt, 120.0, "0.00");
+                }
+            });
+            ui.checkbox(&mut f.active, "启用（不启用的规则不参与预览和执行）");
+            ui.add_space(4.0);
+            ui.label("备注：");
+            widgets::text_input(ui, &mut f.memo, 480.0, "可空");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                    if ui.button("保存").clicked() {
+                        save = true;
                     }
                 });
-                ui.checkbox(&mut f.active, "启用（不启用的规则不参与预览和执行）");
-                ui.add_space(4.0);
-                ui.label("备注：");
-                widgets::text_input(ui, &mut f.memo, 480.0, "可空");
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("取消").clicked() {
-                            close = true;
-                        }
-                        if ui.button("保存").clicked() {
-                            save = true;
-                        }
-                    });
-                });
             });
+        });
 
         if close || !open {
             self.at_edit = None;
@@ -926,7 +1007,11 @@ impl AutomationView {
             Ok(()) => {
                 ctx.log(
                     "期末",
-                    if f.is_new { "新增转账规则" } else { "修改转账规则" },
+                    if f.is_new {
+                        "新增转账规则"
+                    } else {
+                        "修改转账规则"
+                    },
                     &r.name,
                 );
                 ctx.info("已保存规则");
@@ -944,7 +1029,11 @@ impl AutomationView {
                 if ids.is_empty() {
                     ctx.info("本期没有需要生成的自动转账凭证");
                 } else {
-                    ctx.log("期末", "自动转账", &format!("{} 生成 {} 张", p.label(), ids.len()));
+                    ctx.log(
+                        "期末",
+                        "自动转账",
+                        &format!("{} 生成 {} 张", p.label(), ids.len()),
+                    );
                     ctx.info(format!("已生成 {} 张自动转账凭证", ids.len()));
                 }
                 // 跳过原因（取数为零 / 本期已生成 / 保存失败）逐条报出来，
@@ -966,15 +1055,24 @@ impl AutomationView {
             widgets::empty_hint(ui, "暂无检查项");
         } else if todo == 0 {
             ui.label(
-                RichText::new(format!("✔ {} 全部 {} 项检查通过，可以结账", p.label(), total))
-                    .color(palette::OK)
-                    .strong(),
+                RichText::new(format!(
+                    "✔ {} 全部 {} 项检查通过，可以结账",
+                    p.label(),
+                    total
+                ))
+                .color(palette::OK)
+                .strong(),
             );
         } else {
             ui.label(
-                RichText::new(format!("{} 还有 {} 项待办（共 {} 项）", p.label(), todo, total))
-                    .color(palette::WARN)
-                    .strong(),
+                RichText::new(format!(
+                    "{} 还有 {} 项待办（共 {} 项）",
+                    p.label(),
+                    todo,
+                    total
+                ))
+                .color(palette::WARN)
+                .strong(),
             );
         }
         ui.add_space(6.0);
@@ -995,15 +1093,16 @@ impl AutomationView {
                         ui.label(RichText::new("✖").color(palette::WARN).strong());
                     }
                 }
-                1 => { ui.label(
-                    RichText::new(&it.label).color(if it.ok {
+                1 => {
+                    ui.label(RichText::new(&it.label).color(if it.ok {
                         palette::OK
                     } else {
                         palette::WARN
-                    }),
-                );
+                    }));
                 }
-                2 => { ui.label(RichText::new(&it.hint).weak()); }
+                2 => {
+                    ui.label(RichText::new(&it.hint).weak());
+                }
                 _ => {}
             }
         });
@@ -1030,11 +1129,7 @@ impl AutomationView {
         for (i, (name, done, detail)) in steps.iter().enumerate() {
             ui.group(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(format!("第 {} 步", i + 1))
-                            .weak()
-                            .monospace(),
-                    );
+                    ui.label(RichText::new(format!("第 {} 步", i + 1)).weak().monospace());
                     ui.label(RichText::new(*name).strong());
                     ui.label(if *done {
                         RichText::new("✔ 已完成").color(palette::OK).strong()

@@ -138,7 +138,10 @@ pub fn sc_save(db: &Db, c: &mut StockCount) -> DbResult<i64> {
         tx.last_insert_rowid()
     };
     // 重建明细
-    tx.execute("DELETE FROM stock_count_line WHERE sc_id=?1", rusqlite::params![id])?;
+    tx.execute(
+        "DELETE FROM stock_count_line WHERE sc_id=?1",
+        rusqlite::params![id],
+    )?;
     for l in &c.lines {
         tx.execute(
             "INSERT INTO stock_count_line(sc_id,item,book_qty,count_qty,memo) VALUES(?1,?2,?3,?4,?5)",
@@ -237,9 +240,9 @@ pub struct BatchBalance {
 
 /// 按批次汇总结存数量（Rust 侧 Decimal 累加）
 pub fn batch_balances(db: &Db, item: &str) -> DbResult<Vec<BatchBalance>> {
-    let mut st = db.conn().prepare(
-        "SELECT batch_no, qty FROM stock_move WHERE item=?1 AND batch_no <> ''",
-    )?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT batch_no, qty FROM stock_move WHERE item=?1 AND batch_no <> ''")?;
     let rows = st
         .query_map(rusqlite::params![item], |r| {
             Ok((r.get::<_, String>(0)?, read_m(&r.get::<_, String>(1)?)))
@@ -282,11 +285,24 @@ mod tests {
     fn count_flow_and_post() {
         let db = tmpdb("count");
         let p = Period::new(2026, 1).unwrap();
-        stock_insert(&db, &StockMove {
-            id: 0, period: p, biz_date: d(2026, 1, 5), kind: StockKind::Purchase,
-            item: "P001".into(), warehouse: "主仓".into(), batch_no: String::new(),
-            qty: m("100"), price: m("10"), amount: m("1000"), voucher_id: None, memo: String::new(),
-        }).unwrap();
+        stock_insert(
+            &db,
+            &StockMove {
+                id: 0,
+                period: p,
+                biz_date: d(2026, 1, 5),
+                kind: StockKind::Purchase,
+                item: "P001".into(),
+                warehouse: "主仓".into(),
+                batch_no: String::new(),
+                qty: m("100"),
+                price: m("10"),
+                amount: m("1000"),
+                voucher_id: None,
+                memo: String::new(),
+            },
+        )
+        .unwrap();
         let mut c = StockCount {
             id: 0,
             no: sc_next_no(&db, p).unwrap(),
@@ -297,7 +313,13 @@ mod tests {
             prepared_by: "张三".into(),
             memo: String::new(),
             created_at: String::new(),
-            lines: vec![CountLine { id: 0, item: "P001".into(), book_qty: m("100"), count_qty: m("95"), memo: String::new() }],
+            lines: vec![CountLine {
+                id: 0,
+                item: "P001".into(),
+                book_qty: m("100"),
+                count_qty: m("95"),
+                memo: String::new(),
+            }],
         };
         let id = sc_save(&db, &mut c).unwrap();
         assert!(id > 0);
@@ -319,13 +341,28 @@ mod tests {
         let db = tmpdb("batch");
         let p = Period::new(2026, 1).unwrap();
         for (batch, qty) in [("B1", "100"), ("B2", "50"), ("B1", "-30")] {
-            stock_insert(&db, &StockMove {
-                id: 0, period: p, biz_date: d(2026, 1, 5),
-                kind: if qty.starts_with('-') { StockKind::Sale } else { StockKind::Purchase },
-                item: "P001".into(), warehouse: "主仓".into(), batch_no: batch.into(),
-                qty: m(qty), price: m("10"), amount: m(qty).abs() * m("10"),
-                voucher_id: None, memo: String::new(),
-            }).unwrap();
+            stock_insert(
+                &db,
+                &StockMove {
+                    id: 0,
+                    period: p,
+                    biz_date: d(2026, 1, 5),
+                    kind: if qty.starts_with('-') {
+                        StockKind::Sale
+                    } else {
+                        StockKind::Purchase
+                    },
+                    item: "P001".into(),
+                    warehouse: "主仓".into(),
+                    batch_no: batch.into(),
+                    qty: m(qty),
+                    price: m("10"),
+                    amount: m(qty).abs() * m("10"),
+                    voucher_id: None,
+                    memo: String::new(),
+                },
+            )
+            .unwrap();
         }
         let b = batch_balances(&db, "P001").unwrap();
         let b1 = b.iter().find(|x| x.batch_no == "B1").unwrap();

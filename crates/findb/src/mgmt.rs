@@ -3,8 +3,8 @@
 //! 与财务会计最大的区别是**没有标准答案**。预算怎么编、部门损益怎么分摊，
 //! 每家公司都不一样，所以这里只提供取数与对比的骨架，口径留给用户在界面上定。
 
-use fincore::engine::formula::{self, FormulaSource};
 use fincore::account::AuxKind;
+use fincore::engine::formula::{self, FormulaSource};
 use fincore::voucher::AuxRef;
 use fincore::{Money, Period};
 use rusqlite::OptionalExtension;
@@ -54,7 +54,11 @@ pub fn budget_list(db: &Db, period: Period) -> DbResult<Vec<Budget>> {
 }
 
 /// 按版本列预算（period 为 None 时列全部期间）
-pub fn budget_list_version(db: &Db, period: Option<Period>, version: &str) -> DbResult<Vec<Budget>> {
+pub fn budget_list_version(
+    db: &Db,
+    period: Option<Period>,
+    version: &str,
+) -> DbResult<Vec<Budget>> {
     let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match period {
         Some(p) => (
             format!("SELECT {BG_COLS} FROM budget WHERE period=?1 AND version=?2 ORDER BY account_code, dept"),
@@ -202,11 +206,7 @@ impl BudgetRow {
 ///
 /// `expense_like` 决定"超支"的判定方向：费用类科目实际 > 预算算超支，
 /// 收入类则相反。用一个闭包交给调用方判断，避免把行业惯例写死。
-pub fn budget_vs_actual(
-    db: &Db,
-    period: Period,
-    from: Period,
-) -> DbResult<Vec<BudgetRow>> {
+pub fn budget_vs_actual(db: &Db, period: Period, from: Period) -> DbResult<Vec<BudgetRow>> {
     let budgets = budget_list(db, period)?;
     let snap = BalanceSnapshot::load(db, &BalanceQuery::range(from, period))?;
     let chart = crate::accounts::chart(db)?;
@@ -225,10 +225,8 @@ pub fn budget_vs_actual(
         let is_expense = chart
             .get(&b.account_code)
             .map(|a| {
-                !matches!(
-                    a.category,
-                    fincore::account::AcctCategory::Income
-                ) && (a.code.starts_with('6') || a.code.starts_with('5'))
+                !matches!(a.category, fincore::account::AcctCategory::Income)
+                    && (a.code.starts_with('6') || a.code.starts_with('5'))
             })
             .unwrap_or(true);
         let diff = if is_expense {
@@ -239,7 +237,7 @@ pub fn budget_vs_actual(
         let rate = if b.amount.is_zero() {
             Money::ZERO
         } else {
-            ((actual.abs() * Money::parse("100").unwrap()))
+            (actual.abs() * Money::parse("100").unwrap())
                 .checked_div(b.amount.abs().inner())
                 .expect("b.amount 已判非零")
                 .round2()
@@ -258,7 +256,11 @@ pub fn budget_vs_actual(
             over: diff.is_positive() && !b.amount.is_zero(),
         });
     }
-    out.sort_by(|a, b| b.over.cmp(&a.over).then(a.account_code.cmp(&b.account_code)));
+    out.sort_by(|a, b| {
+        b.over
+            .cmp(&a.over)
+            .then(a.account_code.cmp(&b.account_code))
+    });
     Ok(out)
 }
 
@@ -373,7 +375,7 @@ pub fn budget_alerts(
         if r.budget.is_zero() {
             continue;
         }
-        let pct = ((r.actual.abs() * Money::from_i64(100)))
+        let pct = (r.actual.abs() * Money::from_i64(100))
             .checked_div(r.budget.abs().inner())
             .expect("budget 已判非零")
             .round2();
@@ -385,11 +387,15 @@ pub fn budget_alerts(
                 budget: r.budget,
                 actual: r.actual,
                 rate: pct,
-                over_amount: if r.diff.is_positive() { r.diff } else { Money::ZERO },
+                over_amount: if r.diff.is_positive() {
+                    r.diff
+                } else {
+                    Money::ZERO
+                },
             });
         }
     }
-    out.sort_by(|a, b| b.over_amount.cmp(&a.over_amount));
+    out.sort_by_key(|a| std::cmp::Reverse(a.over_amount));
     Ok(out)
 }
 
@@ -441,7 +447,8 @@ pub fn budget_analysis(
         if b.period.year() != year {
             continue;
         }
-        *bmap.entry((b.period.ymm(), b.account_code.clone(), b.dept.clone()))
+        *bmap
+            .entry((b.period.ymm(), b.account_code.clone(), b.dept.clone()))
             .or_insert(Money::ZERO) += b.amount;
     }
     if bmap.is_empty() {
@@ -470,7 +477,7 @@ pub fn budget_analysis(
             let rate = if budget.is_zero() {
                 Money::ZERO
             } else {
-                ((actual.abs() * Money::from_i64(100)))
+                (actual.abs() * Money::from_i64(100))
                     .checked_div(budget.abs().inner())
                     .expect("budget 已判非零")
                     .round2()
@@ -531,7 +538,7 @@ pub fn budget_analysis_summary(
         let rate = if budget.is_zero() {
             Money::ZERO
         } else {
-            ((actual.abs() * Money::from_i64(100)))
+            (actual.abs() * Money::from_i64(100))
                 .checked_div(budget.abs().inner())
                 .expect("budget 已判非零")
                 .round2()
@@ -545,7 +552,11 @@ pub fn budget_analysis_summary(
             rate,
         });
     }
-    out.sort_by(|a, b| a.account_code.cmp(&b.account_code).then(a.dept.cmp(&b.dept)));
+    out.sort_by(|a, b| {
+        a.account_code
+            .cmp(&b.account_code)
+            .then(a.dept.cmp(&b.dept))
+    });
     Ok(out)
 }
 
@@ -574,20 +585,18 @@ pub struct DimProfit {
 ///
 /// 分摊规则很公司特化，这里只做**直接归属**：分录上带了某部门/项目就算它的，
 /// 共同费用不摊——宁可显示"未分配"，也不要编一个假的分摊率出来。
-pub fn dim_profit(
-    db: &Db,
-    period: Period,
-    dim: AuxKind,
-) -> DbResult<Vec<DimProfit>> {
+pub fn dim_profit(db: &Db, period: Period, dim: AuxKind) -> DbResult<Vec<DimProfit>> {
     let mut q = BalanceQuery::period(period).with_leaf_only(true);
     q.aux = None;
     let snap = BalanceSnapshot::load(db, &q)?;
     let chart = crate::accounts::chart(db)?;
     let names = crate::auxs::full_name_map(db)?;
 
-    let mut map: std::collections::BTreeMap<String, DimProfit> =
-        std::collections::BTreeMap::new();
-    for a in crate::accounts::list(db)?.iter().filter(|a| a.category.is_profit_loss()) {
+    let mut map: std::collections::BTreeMap<String, DimProfit> = std::collections::BTreeMap::new();
+    for a in crate::accounts::list(db)?
+        .iter()
+        .filter(|a| a.category.is_profit_loss())
+    {
         for row in snap.aux_breakdown(&a.code) {
             let Some(v) = row.aux.get(dim) else {
                 continue;
@@ -596,20 +605,18 @@ pub fn dim_profit(
             if signed.is_zero() {
                 continue;
             }
-            let e = map
-                .entry(v.clone())
-                .or_insert_with(|| DimProfit {
-                    key: v.clone(),
-                    name: names
-                        .get(&format!("{}:{}", dim.code(), v))
-                        .cloned()
-                        .unwrap_or_else(|| v.clone()),
-                    revenue: Money::ZERO,
-                    cost: Money::ZERO,
-                    expense: Money::ZERO,
-                    tax: Money::ZERO,
-                    profit: Money::ZERO,
-                });
+            let e = map.entry(v.clone()).or_insert_with(|| DimProfit {
+                key: v.clone(),
+                name: names
+                    .get(&format!("{}:{}", dim.code(), v))
+                    .cloned()
+                    .unwrap_or_else(|| v.clone()),
+                revenue: Money::ZERO,
+                cost: Money::ZERO,
+                expense: Money::ZERO,
+                tax: Money::ZERO,
+                profit: Money::ZERO,
+            });
             // 损益科目：收入类贷方为正，成本费用类借方为正
             let amount = if a.category == fincore::account::AcctCategory::Income {
                 -signed
@@ -676,13 +683,28 @@ impl<'a> ReportCtx<'a> {
 }
 
 impl<'a> FormulaSource for ReportCtx<'a> {
-    fn qc(&self, code: &str, period: Period, _dir: Option<&str>) -> Result<Money, fincore::FinError> {
+    fn qc(
+        &self,
+        code: &str,
+        period: Period,
+        _dir: Option<&str>,
+    ) -> Result<Money, fincore::FinError> {
         Ok(self.snap(period)?.for_account(code, None).begin)
     }
-    fn qm(&self, code: &str, period: Period, _dir: Option<&str>) -> Result<Money, fincore::FinError> {
+    fn qm(
+        &self,
+        code: &str,
+        period: Period,
+        _dir: Option<&str>,
+    ) -> Result<Money, fincore::FinError> {
         Ok(self.snap(period)?.for_account(code, None).end())
     }
-    fn fs(&self, code: &str, period: Period, dir: Option<&str>) -> Result<Money, fincore::FinError> {
+    fn fs(
+        &self,
+        code: &str,
+        period: Period,
+        dir: Option<&str>,
+    ) -> Result<Money, fincore::FinError> {
         let r = self.snap(period)?.for_account(code, None);
         Ok(match dir {
             Some(d) if d.starts_with('借') || d.eq_ignore_ascii_case("J") => r.debit,
@@ -690,7 +712,12 @@ impl<'a> FormulaSource for ReportCtx<'a> {
             _ => r.debit - r.credit,
         })
     }
-    fn lfs(&self, code: &str, period: Period, dir: Option<&str>) -> Result<Money, fincore::FinError> {
+    fn lfs(
+        &self,
+        code: &str,
+        period: Period,
+        dir: Option<&str>,
+    ) -> Result<Money, fincore::FinError> {
         let r = self.snap(period)?.for_account(code, None);
         Ok(match dir {
             Some(d) if d.starts_with('借') || d.eq_ignore_ascii_case("J") => r.ytd_debit,
@@ -789,9 +816,9 @@ pub fn custom_report_values_detailed(
 
 /// 列出全部自定义报表
 pub fn custom_list(db: &Db) -> DbResult<Vec<CustomReport>> {
-    let mut st = db.conn().prepare(
-        "SELECT key,name,columns_json,lines_json FROM custom_report ORDER BY key",
-    )?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT key,name,columns_json,lines_json FROM custom_report ORDER BY key")?;
     let rows = st
         .query_map([], |r| {
             Ok(CustomReport {
@@ -842,8 +869,10 @@ pub fn custom_save(db: &Db, r: &CustomReport) -> DbResult<()> {
 }
 
 pub fn custom_delete(db: &Db, key: &str) -> DbResult<()> {
-    db.conn()
-        .execute("DELETE FROM custom_report WHERE key=?1", rusqlite::params![key])?;
+    db.conn().execute(
+        "DELETE FROM custom_report WHERE key=?1",
+        rusqlite::params![key],
+    )?;
     Ok(())
 }
 
@@ -945,7 +974,15 @@ mod tests {
         assert_eq!(budget_list(&db, p).unwrap()[0].amount, m("12000"));
 
         // 实际发生 15000 → 超支 3000
-        post(&db, p, 1, &[("660201", "15000", "0", None), ("100201", "0", "15000", None)]);
+        post(
+            &db,
+            p,
+            1,
+            &[
+                ("660201", "15000", "0", None),
+                ("100201", "0", "15000", None),
+            ],
+        );
         let rows = budget_vs_actual(&db, p, p).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].actual, m("15000"));
@@ -960,7 +997,12 @@ mod tests {
     fn budget_from_actual_copies() {
         let db = tmpdb("bfa");
         let p1 = Period::new(2026, 1).unwrap();
-        post(&db, p1, 1, &[("660201", "8000", "0", None), ("100201", "0", "8000", None)]);
+        post(
+            &db,
+            p1,
+            1,
+            &[("660201", "8000", "0", None), ("100201", "0", "8000", None)],
+        );
         let n = budget_from_actual(&db, p1, Period::new(2026, 2).unwrap(), m("1.1")).unwrap();
         assert!(n > 0);
         let b = budget_list(&db, Period::new(2026, 2).unwrap())
@@ -990,20 +1032,29 @@ mod tests {
             &db,
             p,
             1,
-            &[("100201", "100000", "0", Some("D01")), ("600101", "0", "100000", Some("D01"))],
+            &[
+                ("100201", "100000", "0", Some("D01")),
+                ("600101", "0", "100000", Some("D01")),
+            ],
         );
         post(
             &db,
             p,
             2,
-            &[("660201", "20000", "0", Some("D01")), ("100201", "0", "20000", Some("D01"))],
+            &[
+                ("660201", "20000", "0", Some("D01")),
+                ("100201", "0", "20000", Some("D01")),
+            ],
         );
         // 研发部：只有费用 50000
         post(
             &db,
             p,
             3,
-            &[("660201", "50000", "0", Some("D02")), ("100201", "0", "50000", Some("D02"))],
+            &[
+                ("660201", "50000", "0", Some("D02")),
+                ("100201", "0", "50000", Some("D02")),
+            ],
         );
 
         let rows = dim_profit(&db, p, AuxKind::Dept).unwrap();
@@ -1021,12 +1072,23 @@ mod tests {
     fn custom_report_eval() {
         let db = tmpdb("custom");
         let p = Period::new(2026, 1).unwrap();
-        post(&db, p, 1, &[("100201", "50000", "0", None), ("600101", "0", "50000", None)]);
+        post(
+            &db,
+            p,
+            1,
+            &[
+                ("100201", "50000", "0", None),
+                ("600101", "0", "50000", None),
+            ],
+        );
         let mut r = CustomReport::new("custom.r1", "资金情况", vec!["本月".into(), "占比".into()]);
         r.lines.push(CustomLine {
             name: "银行存款".into(),
             indent: 0,
-            formulas: vec!["QM(\"1002\")".into(), "QM(\"1002\")/QM(\"1001\")*100".into()],
+            formulas: vec![
+                "QM(\"1002\")".into(),
+                "QM(\"1002\")/QM(\"1001\")*100".into(),
+            ],
             bold: false,
         });
         r.lines.push(CustomLine {
@@ -1051,7 +1113,15 @@ mod tests {
     fn custom_report_surfaces_formula_errors_as_warnings() {
         let db = tmpdb("custom_err");
         let p = Period::new(2026, 1).unwrap();
-        post(&db, p, 1, &[("100201", "50000", "0", None), ("600101", "0", "50000", None)]);
+        post(
+            &db,
+            p,
+            1,
+            &[
+                ("100201", "50000", "0", None),
+                ("600101", "0", "50000", None),
+            ],
+        );
         let mut r = CustomReport::new("custom.err", "错误报表", vec!["金额".into()]);
         r.lines.push(CustomLine {
             name: "正常".into(),
@@ -1075,7 +1145,10 @@ mod tests {
         assert_eq!(vals[0][0], m("50000"), "正常格仍应取到数");
         assert_eq!(warns.len(), 2, "两个坏公式都要报出来：{warns:?}");
         assert!(warns.iter().any(|w| w.contains("除零")), "{warns:?}");
-        assert!(warns.iter().any(|w| w.contains("不支持的函数")), "{warns:?}");
+        assert!(
+            warns.iter().any(|w| w.contains("不支持的函数")),
+            "{warns:?}"
+        );
         // 旧接口保持签名，坏格仍按 0 占位（整张报表要能显示出来）
         let vals2 = custom_report_values(&db, &r, p, None).unwrap();
         assert_eq!(vals2[1][0], Money::ZERO);
@@ -1124,8 +1197,24 @@ mod tests {
             .unwrap();
         }
         // 1 月实际 12000（超支），2 月实际 8000
-        post(&db, Period::new(2026, 1).unwrap(), 1, &[("660201", "12000", "0", Some("D01")), ("100201", "0", "12000", Some("D01"))]);
-        post(&db, Period::new(2026, 2).unwrap(), 2, &[("660201", "8000", "0", Some("D01")), ("100201", "0", "8000", Some("D01"))]);
+        post(
+            &db,
+            Period::new(2026, 1).unwrap(),
+            1,
+            &[
+                ("660201", "12000", "0", Some("D01")),
+                ("100201", "0", "12000", Some("D01")),
+            ],
+        );
+        post(
+            &db,
+            Period::new(2026, 2).unwrap(),
+            2,
+            &[
+                ("660201", "8000", "0", Some("D01")),
+                ("100201", "0", "8000", Some("D01")),
+            ],
+        );
 
         let rows = budget_analysis(&db, 2026, "v1", None).unwrap();
         assert_eq!(rows.len(), 2);

@@ -183,10 +183,8 @@ pub fn cash_flow_amounts(
          WHERE v.status = 'posted' AND e.period BETWEEN ?1 AND ?2
            AND e.account_code IN ({placeholders})"
     );
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
-        Box::new(from.ymm()),
-        Box::new(to.ymm()),
-    ];
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        vec![Box::new(from.ymm()), Box::new(to.ymm())];
     for c in &codes {
         params.push(Box::new(c.clone()));
     }
@@ -355,17 +353,24 @@ pub fn report_compare(
     }
     let cur_snap = BalanceSnapshot::load(db, &cur_bq)?;
     let prev_snap = BalanceSnapshot::load(db, &prev_bq)?;
-    let cur_table = fincore::report::render_single(&def, &cur_snap, "", "", fincore::report::identity);
-    let prev_table = fincore::report::render_single(&def, &prev_snap, "", "", fincore::report::identity);
+    let cur_table =
+        fincore::report::render_single(&def, &cur_snap, "", "", fincore::report::identity);
+    let prev_table =
+        fincore::report::render_single(&def, &prev_snap, "", "", fincore::report::identity);
     let mut out = Vec::with_capacity(cur_table.rows.len());
     for (i, r) in cur_table.rows.iter().enumerate() {
         let cur = r.values.first().copied().unwrap_or(Money::ZERO);
-        let prev = prev_table.rows.get(i).and_then(|x| x.values.first()).copied().unwrap_or(Money::ZERO);
+        let prev = prev_table
+            .rows
+            .get(i)
+            .and_then(|x| x.values.first())
+            .copied()
+            .unwrap_or(Money::ZERO);
         let diff = cur - prev;
         let rate = if prev.is_zero() {
             Money::ZERO
         } else {
-            ((diff.abs() * Money::from_i64(100)))
+            (diff.abs() * Money::from_i64(100))
                 .checked_div(prev.abs().inner())
                 .expect("prev 已判非零")
                 .round2()
@@ -431,7 +436,8 @@ pub fn account_daily_report(
     let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
     let mut rows = stmt.query(refs.as_slice())?;
     // 按日期聚合
-    let mut map: std::collections::BTreeMap<String, (Money, Money)> = std::collections::BTreeMap::new();
+    let mut map: std::collections::BTreeMap<String, (Money, Money)> =
+        std::collections::BTreeMap::new();
     while let Some(r) = rows.next()? {
         let d: String = r.get(0)?;
         let dr = read_money(r, 1)?;
@@ -444,7 +450,12 @@ pub fn account_daily_report(
     let mut out = Vec::with_capacity(map.len());
     for (date, (debit, credit)) in map {
         running += debit - credit;
-        out.push(DailyRow { date, debit, credit, balance: running });
+        out.push(DailyRow {
+            date,
+            debit,
+            credit,
+            balance: running,
+        });
     }
     Ok(out)
 }
@@ -512,10 +523,19 @@ pub fn period_reconcile(db: &Db, period: fincore::Period) -> DbResult<Vec<Reconc
         name: "试算平衡".into(),
         ok: balanced,
         detail: if balanced {
-            format!("借方 {} = 贷方 {}", trial.period_debit.fmt_money(), trial.period_credit.fmt_money())
+            format!(
+                "借方 {} = 贷方 {}",
+                trial.period_debit.fmt_money(),
+                trial.period_credit.fmt_money()
+            )
         } else {
             let diff = (trial.period_debit - trial.period_credit).abs();
-            format!("借方 {} ≠ 贷方 {}，差 {}", trial.period_debit.fmt_money(), trial.period_credit.fmt_money(), diff.fmt_money())
+            format!(
+                "借方 {} ≠ 贷方 {}，差 {}",
+                trial.period_debit.fmt_money(),
+                trial.period_credit.fmt_money(),
+                diff.fmt_money()
+            )
         },
     });
 
@@ -537,12 +557,25 @@ pub fn period_reconcile(db: &Db, period: fincore::Period) -> DbResult<Vec<Reconc
         }
     }
     if wrong_dir.is_empty() {
-        out.push(ReconcileItem { name: "余额方向检查".into(), ok: true, detail: "全部科目余额方向正常".into() });
+        out.push(ReconcileItem {
+            name: "余额方向检查".into(),
+            ok: true,
+            detail: "全部科目余额方向正常".into(),
+        });
     } else {
         out.push(ReconcileItem {
             name: "余额方向检查".into(),
             ok: false,
-            detail: format!("{} 个科目余额方向异常：{}", wrong_dir.len(), wrong_dir.iter().take(5).cloned().collect::<Vec<_>>().join("、")),
+            detail: format!(
+                "{} 个科目余额方向异常：{}",
+                wrong_dir.len(),
+                wrong_dir
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("、")
+            ),
         });
     }
 
@@ -684,9 +717,15 @@ mod tests {
         let mut def = get_def(&db, "income_statement").unwrap().unwrap();
         def.name = "自定义利润表".into();
         save_def(&db, &def).unwrap();
-        assert_eq!(get_def(&db, "income_statement").unwrap().unwrap().name, "自定义利润表");
+        assert_eq!(
+            get_def(&db, "income_statement").unwrap().unwrap().name,
+            "自定义利润表"
+        );
         reset_def(&db, "income_statement").unwrap();
-        assert_eq!(get_def(&db, "income_statement").unwrap().unwrap().name, "利润表");
+        assert_eq!(
+            get_def(&db, "income_statement").unwrap().unwrap().name,
+            "利润表"
+        );
     }
 
     fn cash_voucher(db: &Db, p: Period, day: u32, entries: Vec<(&str, &str, &str, Option<&str>)>) {
@@ -713,7 +752,6 @@ mod tests {
         vouchers::post(db, id, "王五").unwrap();
     }
 
-
     /// 按科目表补齐辅助核算与数量（save 会强校验，测试分录必须先合规）
     fn fill_required(db: &Db, e: &mut Entry) {
         let Ok(chart) = crate::accounts::chart(db) else {
@@ -739,7 +777,11 @@ mod tests {
             e.aux.set(k, Some(v.to_string()));
         }
         if a.has_qty && e.qty.is_none() {
-            let amt = if e.debit.is_positive() { e.debit } else { e.credit };
+            let amt = if e.debit.is_positive() {
+                e.debit
+            } else {
+                e.credit
+            };
             e.qty = Some(Money::ONE);
             e.price = Some(amt);
         }
@@ -844,8 +886,24 @@ mod tests {
     fn daily_report_rolls_balance() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        cash_voucher(&db, p, 5, vec![("1001", "借", "1000", Some("0101")), ("600101", "贷", "1000", None)]);
-        cash_voucher(&db, p, 9, vec![("1001", "借", "500", Some("0103")), ("6301", "贷", "500", None)]);
+        cash_voucher(
+            &db,
+            p,
+            5,
+            vec![
+                ("1001", "借", "1000", Some("0101")),
+                ("600101", "贷", "1000", None),
+            ],
+        );
+        cash_voucher(
+            &db,
+            p,
+            9,
+            vec![
+                ("1001", "借", "500", Some("0103")),
+                ("6301", "贷", "500", None),
+            ],
+        );
         let rows = account_daily_report(&db, "1001", p, p, None, true).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].balance, Money::parse("1000").unwrap());
@@ -857,8 +915,24 @@ mod tests {
         let db = mem();
         let p1 = Period::new(2026, 1).unwrap();
         let p2 = Period::new(2026, 2).unwrap();
-        cash_voucher(&db, p1, 5, vec![("1001", "借", "1000", Some("0101")), ("600101", "贷", "1000", None)]);
-        cash_voucher(&db, p2, 5, vec![("1001", "借", "3000", Some("0101")), ("600101", "贷", "3000", None)]);
+        cash_voucher(
+            &db,
+            p1,
+            5,
+            vec![
+                ("1001", "借", "1000", Some("0101")),
+                ("600101", "贷", "1000", None),
+            ],
+        );
+        cash_voucher(
+            &db,
+            p2,
+            5,
+            vec![
+                ("1001", "借", "3000", Some("0101")),
+                ("600101", "贷", "3000", None),
+            ],
+        );
         let rows = report_compare(&db, "income_statement", p2, p2, p1, p1, None).unwrap();
         // 营业收入行：本期 3000 vs 上期 1000 → 差额 2000
         let rev = rows.iter().find(|r| r.no == "1").unwrap();
@@ -871,10 +945,22 @@ mod tests {
     fn period_reconcile_lists_checks() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        cash_voucher(&db, p, 5, vec![("1001", "借", "500", Some("0101")), ("600101", "贷", "500", None)]);
+        cash_voucher(
+            &db,
+            p,
+            5,
+            vec![
+                ("1001", "借", "500", Some("0101")),
+                ("600101", "贷", "500", None),
+            ],
+        );
         let items = period_reconcile(&db, p).unwrap();
         assert!(items.len() >= 3);
-        assert!(items.iter().all(|i| i.ok), "空账套+平衡凭证应全部通过：{:?}", items.iter().map(|i| &i.name).collect::<Vec<_>>());
+        assert!(
+            items.iter().all(|i| i.ok),
+            "空账套+平衡凭证应全部通过：{:?}",
+            items.iter().map(|i| &i.name).collect::<Vec<_>>()
+        );
     }
 
     /// 回归：COUNT 查询失败绝不能当成"0 笔未处理"让对账通过。
@@ -884,7 +970,15 @@ mod tests {
     fn period_reconcile_reports_query_failure_instead_of_zero() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        cash_voucher(&db, p, 5, vec![("1001", "借", "500", Some("0101")), ("600101", "贷", "500", None)]);
+        cash_voucher(
+            &db,
+            p,
+            5,
+            vec![
+                ("1001", "借", "500", Some("0101")),
+                ("600101", "贷", "500", None),
+            ],
+        );
         // 正常时全部通过
         assert!(period_reconcile(&db, p).unwrap().iter().all(|i| i.ok));
 
@@ -920,7 +1014,15 @@ mod tests {
     fn overview_aggregates() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        cash_voucher(&db, p, 5, vec![("1001", "借", "1000", Some("0101")), ("600101", "贷", "1000", None)]);
+        cash_voucher(
+            &db,
+            p,
+            5,
+            vec![
+                ("1001", "借", "1000", Some("0101")),
+                ("600101", "贷", "1000", None),
+            ],
+        );
 
         let inv = invoices::Invoice {
             id: 0,
@@ -946,7 +1048,11 @@ mod tests {
         let o = overview(&db, p).unwrap();
         assert_eq!(o.vouchers, 1, "凭证总数=1");
         assert_eq!(o.entries, 2, "分录总数=2");
-        assert_eq!(o.accounts, fincore::chart::default_accounts().len() as i64, "科目数=内置科目数");
+        assert_eq!(
+            o.accounts,
+            fincore::chart::default_accounts().len() as i64,
+            "科目数=内置科目数"
+        );
         assert_eq!(o.unposted, 0);
         assert_eq!(o.posted, 1);
         assert_eq!(o.totals.total_asset, Money::parse("1000").unwrap());
@@ -957,4 +1063,3 @@ mod tests {
         assert_eq!(o.recent[0].debit_total(), Money::parse("1000").unwrap());
     }
 }
-

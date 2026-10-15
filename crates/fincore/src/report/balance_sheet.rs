@@ -14,7 +14,10 @@ pub fn balance_sheet_def() -> ReportDef {
         "1",
         "货币资金",
         1,
-        vec![Term::acct(&["1001", "1002", "1012", "1015"], AmountKind::End)],
+        vec![Term::acct(
+            &["1001", "1002", "1012", "1015"],
+            AmountKind::End,
+        )],
     ));
 
     let i_fin_asset = lines.len();
@@ -323,10 +326,7 @@ pub fn balance_sheet_def() -> ReportDef {
         "30",
         "负 债 合 计",
         0,
-        vec![
-            Term::line(i_cur_liab_total),
-            Term::line(i_ncur_liab_total),
-        ],
+        vec![Term::line(i_cur_liab_total), Term::line(i_ncur_liab_total)],
     ));
 
     lines.push(ReportLine::blank());

@@ -195,11 +195,7 @@ impl VoucherList {
                     .sel
                     .iter()
                     .copied()
-                    .filter(|id| {
-                        self.rows
-                            .iter()
-                            .any(|v| v.id == *id && v.status.can_post())
-                    })
+                    .filter(|id| self.rows.iter().any(|v| v.id == *id && v.status.can_post()))
                     .collect();
                 if ids.is_empty() {
                     ctx.error("请先勾选未记账的凭证");
@@ -229,7 +225,11 @@ impl VoucherList {
                     Ok(0) => ctx.info("当期无凭证，无需重排"),
                     Ok(n) => {
                         ctx.info(format!("已重排 {n} 张凭证号"));
-                        ctx.log("凭证", "重排断号", &format!("{}-{} 共 {n} 张", p.label(), word));
+                        ctx.log(
+                            "凭证",
+                            "重排断号",
+                            &format!("{}-{} 共 {n} 张", p.label(), word),
+                        );
                         self.dirty = true;
                     }
                     Err(e) => ctx.error(e.to_string()),
@@ -378,7 +378,8 @@ impl VoucherList {
         let company = ctx.db().options().company.clone();
         let chart = ctx.chart().clone();
         let aux_names = &ctx.st.aux_names;
-        let aux_label = |aux: &fincore::AuxRef| crate::views::voucher_edit::aux_text(aux, aux_names);
+        let aux_label =
+            |aux: &fincore::AuxRef| crate::views::voucher_edit::aux_text(aux, aux_names);
         let prints = findb::printform::vouchers_to_print(&self.rows, &chart, &aux_label);
         if prints.is_empty() {
             ctx.error("没有未作废的凭证可打印");

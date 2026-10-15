@@ -1,8 +1,8 @@
 //! 科目余额表
 
 use egui::{RichText, Ui};
-use findb::balances::{BalanceQuery, BalanceSnapshot};
 use fincore::{signed_to_dir_amount, BalanceRow, Money, Period};
+use findb::balances::{BalanceQuery, BalanceSnapshot};
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -71,8 +71,15 @@ impl BalanceTableView {
     fn reload(&mut self, ctx: &mut AppCtx<'_>) {
         let key = format!(
             "{}|{}|{}|{}|{}|{}|{}|{}|{:?}",
-            self.from, self.to, self.level, self.leaf_only, self.non_zero, self.code_from,
-            self.code_to, self.mode, self.aux_kind
+            self.from,
+            self.to,
+            self.level,
+            self.leaf_only,
+            self.non_zero,
+            self.code_from,
+            self.code_to,
+            self.mode,
+            self.aux_kind
         );
         if !self.dirty && self.key == key {
             return;
@@ -83,7 +90,8 @@ impl BalanceTableView {
         let from = Period::parse(&self.from).unwrap_or_else(|_| ctx.period());
         let to = Period::parse(&self.to).unwrap_or_else(|_| ctx.period());
         if self.mode == 1 {
-            match findb::balances::aux_balance(ctx.db(), self.aux_kind, from, to, Some(ctx.user())) {
+            match findb::balances::aux_balance(ctx.db(), self.aux_kind, from, to, Some(ctx.user()))
+            {
                 Ok(rows) => {
                     self.aux_rows = rows;
                     self.rows.clear();
@@ -171,7 +179,8 @@ impl BalanceTableView {
                 .selected_text(mode_title)
                 .width(110.0)
                 .show_ui(ui, |ui| {
-                    for (i, s) in ["科目余额表", "辅助账", "数量金额账"].iter().enumerate() {
+                    for (i, s) in ["科目余额表", "辅助账", "数量金额账"].iter().enumerate()
+                    {
                         ui.selectable_value(&mut self.mode, i, *s);
                     }
                 });
@@ -198,7 +207,10 @@ impl BalanceTableView {
             ui.checkbox(&mut self.leaf_only, "只显示末级");
             ui.checkbox(&mut self.non_zero, "只显示有发生额/余额的");
             ui.label("科目范围");
-            ui.add_sized([80.0, 22.0], egui::TextEdit::singleline(&mut self.code_from));
+            ui.add_sized(
+                [80.0, 22.0],
+                egui::TextEdit::singleline(&mut self.code_from),
+            );
             ui.label("—");
             ui.add_sized([80.0, 22.0], egui::TextEdit::singleline(&mut self.code_to));
             if ui.button("查询").clicked() {
@@ -206,7 +218,9 @@ impl BalanceTableView {
             }
             if ui.button("本年").clicked() {
                 let p = ctx.period();
-                self.from = Period::new(p.year(), 1).map(|x| x.code()).unwrap_or(p.code());
+                self.from = Period::new(p.year(), 1)
+                    .map(|x| x.code())
+                    .unwrap_or(p.code());
                 self.to = p.code();
                 self.dirty = true;
             }
@@ -228,7 +242,9 @@ impl BalanceTableView {
             widgets::grid(ui, "aux_balance", &cols, rows.len(), 24.0, |i, c, ui| {
                 let r = &rows[i];
                 match c {
-                    0 => { ui.label(&r.key); }
+                    0 => {
+                        ui.label(&r.key);
+                    }
                     1 => widgets::amount_label(ui, r.begin),
                     2 => widgets::amount_label(ui, r.debit),
                     3 => widgets::amount_label(ui, r.credit),
@@ -255,12 +271,24 @@ impl BalanceTableView {
             widgets::grid(ui, "qty_balance", &cols, rows.len(), 24.0, |i, c, ui| {
                 let r = &rows[i];
                 match c {
-                    0 => { ui.label(RichText::new(&r.account_code).monospace()); }
-                    1 => { ui.label(&r.account_name); }
-                    2 => { ui.label(RichText::new(r.qty_begin.fmt_qty()).monospace()); }
-                    3 => { ui.label(RichText::new(r.qty_in.fmt_qty()).monospace()); }
-                    4 => { ui.label(RichText::new(r.qty_out.fmt_qty()).monospace()); }
-                    5 => { ui.label(RichText::new(r.qty_end.fmt_qty()).monospace()); }
+                    0 => {
+                        ui.label(RichText::new(&r.account_code).monospace());
+                    }
+                    1 => {
+                        ui.label(&r.account_name);
+                    }
+                    2 => {
+                        ui.label(RichText::new(r.qty_begin.fmt_qty()).monospace());
+                    }
+                    3 => {
+                        ui.label(RichText::new(r.qty_in.fmt_qty()).monospace());
+                    }
+                    4 => {
+                        ui.label(RichText::new(r.qty_out.fmt_qty()).monospace());
+                    }
+                    5 => {
+                        ui.label(RichText::new(r.qty_end.fmt_qty()).monospace());
+                    }
                     6 => widgets::amount_label(ui, r.amount_begin),
                     7 => widgets::amount_label(ui, r.amount_debit),
                     8 => widgets::amount_label(ui, r.amount_credit),
@@ -288,8 +316,12 @@ impl BalanceTableView {
             let (bd, ba) = signed_to_dir_amount(r.begin);
             let (ed, ea) = signed_to_dir_amount(r.end());
             match c {
-                0 => { ui.label(RichText::new(&r.account_code).monospace()); }
-                1 => { ui.label(&r.account_name); }
+                0 => {
+                    ui.label(RichText::new(&r.account_code).monospace());
+                }
+                1 => {
+                    ui.label(&r.account_name);
+                }
                 2 => {
                     if bd == fincore::Direction::Debit && !ba.is_zero() {
                         widgets::amount_label(ui, ba);
@@ -309,10 +341,8 @@ impl BalanceTableView {
                         widgets::amount_label(ui, ea);
                     }
                 }
-                9 => {
-                    if ed == fincore::Direction::Credit && !ea.is_zero() {
-                        widgets::amount_label(ui, ea);
-                    }
+                9 if ed == fincore::Direction::Credit && !ea.is_zero() => {
+                    widgets::amount_label(ui, ea);
                 }
                 _ => {}
             }
@@ -408,7 +438,12 @@ impl BalanceTableView {
                 ]);
             }
             let file_name = format!("{}辅助账_{}_{}", self.aux_kind.label(), self.from, self.to);
-            let title = format!("{}辅助账（{} ~ {}）", self.aux_kind.label(), self.from, self.to);
+            let title = format!(
+                "{}辅助账（{} ~ {}）",
+                self.aux_kind.label(),
+                self.from,
+                self.to
+            );
             match crate::views::export::run_export(&sh, &file_name, &title, mode) {
                 Ok(m) => ctx.info(m),
                 Err(e) => ctx.error(e),

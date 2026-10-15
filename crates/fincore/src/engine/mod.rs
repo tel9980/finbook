@@ -2,8 +2,8 @@
 
 pub mod aging;
 pub mod costing;
-pub mod formula;
 pub mod depreciation;
+pub mod formula;
 pub mod period_end;
 pub mod tax;
 pub mod validate;
@@ -13,12 +13,12 @@ pub use aging::{
     column_totals as aging_column_totals, default_bad_debt_rates, AgingBucket, AgingItem,
     AgingLine,
 };
-pub use formula::{
-    check as check_formula, eval as eval_formula, referenced_accounts, FormulaSource,
-};
 pub use costing::{run as run_costing, CostMethod, Lot, Move, StockState};
 pub use depreciation::{
     amount_at as dep_amount_at, schedule as dep_schedule, DepInput, DepMethod, DepRow,
+};
+pub use formula::{
+    check as check_formula, eval as eval_formula, referenced_accounts, FormulaSource,
 };
 pub use period_end::{
     check_can_close, check_can_unclose, generate_carry_forward, generate_year_end_carry,

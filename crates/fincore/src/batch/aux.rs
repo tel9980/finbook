@@ -52,7 +52,11 @@ pub struct Parsed {
 impl Parsed {
     /// 可导入的行
     pub fn importable(&self) -> Vec<ParsedRow> {
-        self.rows.iter().filter(|r| r.skip.is_none()).cloned().collect()
+        self.rows
+            .iter()
+            .filter(|r| r.skip.is_none())
+            .cloned()
+            .collect()
     }
     /// 一条都没解析出来（整段是垃圾，或全空）
     pub fn is_empty(&self) -> bool {
@@ -129,7 +133,12 @@ impl<'a> CodeGen<'a> {
             })
             .max()
             .unwrap_or(0);
-        Self { prefix, existing, taken: Vec::new(), next }
+        Self {
+            prefix,
+            existing,
+            taken: Vec::new(),
+            next,
+        }
     }
 
     /// 记下一个**显式写入**的编码，让自动发号避开它
@@ -148,7 +157,7 @@ impl<'a> CodeGen<'a> {
         loop {
             let code = format!("{}{:02}", self.prefix, self.next);
             self.next += 1;
-            if self.taken.iter().any(|c| *c == code) || self.existing.iter().any(|c| *c == code) {
+            if self.taken.contains(&code) || self.existing.contains(&code) {
                 continue;
             }
             self.taken.push(code.clone());
@@ -212,9 +221,9 @@ pub fn parse(text: &str, kind: AuxKind, existing: &[String]) -> Parsed {
             code.trim().to_string()
         };
 
-        let skip = if seen_in_batch.iter().any(|c| *c == code) {
+        let skip = if seen_in_batch.contains(&code) {
             Some(SkipReason::DuplicateInBatch)
-        } else if existing.iter().any(|c| *c == code) {
+        } else if existing.contains(&code) {
             Some(SkipReason::ExistsInBook)
         } else {
             seen_in_batch.push(code.clone());
@@ -222,7 +231,11 @@ pub fn parse(text: &str, kind: AuxKind, existing: &[String]) -> Parsed {
             None
         };
 
-        rows.push(ParsedRow { code, name: name.trim().to_string(), skip });
+        rows.push(ParsedRow {
+            code,
+            name: name.trim().to_string(),
+            skip,
+        });
     }
 
     Parsed { rows }
@@ -252,11 +265,9 @@ pub fn template(kind: AuxKind) -> super::Template {
         help: vec![
             "第一页第一行是表头，从第二行开始填你自己的数据。".to_string(),
             "先把两行示例删掉，再填。".to_string(),
-            "只写名称也行（不用填编码）：编码会自动编号，不会撞上已有的。"
-                .to_string(),
+            "只写名称也行（不用填编码）：编码会自动编号，不会撞上已有的。".to_string(),
             "编码已存在的那行会被跳过，不会覆盖你原来的档案。".to_string(),
-            "填完后回软件：点「从 Excel 文件载入」直接读进来，或复制粘贴到输入框。"
-                .to_string(),
+            "填完后回软件：点「从 Excel 文件载入」直接读进来，或复制粘贴到输入框。".to_string(),
             "载入后先预览，确认条数对了再点「确认导入」。".to_string(),
         ],
     }
@@ -303,7 +314,11 @@ mod tests {
     /// 自动编号从库里最大号 +1 接着走，不撞已有编码
     #[test]
     fn 编号接库中最大号() {
-        let p = parse("甲公司\n乙公司", AuxKind::Customer, &["C01".into(), "C05".into()]);
+        let p = parse(
+            "甲公司\n乙公司",
+            AuxKind::Customer,
+            &["C01".into(), "C05".into()],
+        );
         assert_eq!(codes(&p), vec!["C06", "C07"]);
     }
 
@@ -331,7 +346,11 @@ mod tests {
 
     #[test]
     fn 库中已有标跳过() {
-        let p = parse("C01,杭州明远\nC02,宁波华信", AuxKind::Customer, &["C01".into()]);
+        let p = parse(
+            "C01,杭州明远\nC02,宁波华信",
+            AuxKind::Customer,
+            &["C01".into()],
+        );
         assert_eq!(p.rows.len(), 2);
         assert_eq!(p.rows[0].skip, Some(SkipReason::ExistsInBook));
         assert_eq!(p.rows[1].skip, None);
@@ -346,7 +365,11 @@ mod tests {
 
     #[test]
     fn 清理空行与空白() {
-        let p = parse("\n\nC01,杭州明远\n\n   \nC02,宁波华信\n", AuxKind::Customer, &[]);
+        let p = parse(
+            "\n\nC01,杭州明远\n\n   \nC02,宁波华信\n",
+            AuxKind::Customer,
+            &[],
+        );
         assert_eq!(codes(&p), vec!["C01", "C02"]);
     }
 
@@ -386,7 +409,10 @@ mod tests {
             cs.len(),
             "编码撞车了：{cs:?} —— 粘 3 行只能进 3 条，少一条是静默丢数据"
         );
-        assert!(p.rows.iter().all(|r| r.skip.is_none()), "不该有跳过行：{cs:?}");
+        assert!(
+            p.rows.iter().all(|r| r.skip.is_none()),
+            "不该有跳过行：{cs:?}"
+        );
     }
 
     /// 三列以上时不能把编码拼进名称（从 Excel 多带一列备注时）
@@ -425,7 +451,11 @@ mod tests {
             }
             let p = parse(&text, kind, &[]);
             assert_eq!(p.rows.len(), t.examples.len(), "{kind:?}：表头应被跳过");
-            assert_eq!(p.importable().len(), t.examples.len(), "{kind:?}：示例行都该可导入");
+            assert_eq!(
+                p.importable().len(),
+                t.examples.len(),
+                "{kind:?}：示例行都该可导入"
+            );
             assert!(p.rows[0].code.starts_with(code_prefix(kind)));
         }
     }

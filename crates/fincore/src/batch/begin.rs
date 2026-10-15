@@ -49,7 +49,9 @@ impl SkipReason {
     /// 界面上给用户看的中文说明。两个端点共用，避免两边文案漂移
     pub fn label(&self) -> String {
         match self {
-            SkipReason::UnknownCode { suggestion: Some(sg) } => format!("跳过：无此科目，像不像 {sg}？"),
+            SkipReason::UnknownCode {
+                suggestion: Some(sg),
+            } => format!("跳过：无此科目，像不像 {sg}？"),
             SkipReason::UnknownCode { suggestion: None } => "跳过：无此科目".to_string(),
             SkipReason::DuplicateInBatch => "跳过：本批内重复".to_string(),
             SkipReason::ExistsInBook => "跳过：已填过".to_string(),
@@ -67,7 +69,11 @@ pub struct Parsed {
 impl Parsed {
     /// 可并入的行
     pub fn importable(&self) -> Vec<ParsedRow> {
-        self.rows.iter().filter(|r| r.skip.is_none()).cloned().collect()
+        self.rows
+            .iter()
+            .filter(|r| r.skip.is_none())
+            .cloned()
+            .collect()
     }
     /// 一条都没解析出来
     pub fn is_empty(&self) -> bool {
@@ -92,8 +98,22 @@ impl Parsed {
 
 /// 表头词表。**大小写敏感、精确全等**。
 const HEADER_WORDS: &[&str] = &[
-    "编码", "科目编码", "代码", "编号", "code", "金额", "余额", "期末余额", "借方", "贷方", "借",
-    "贷", "借方余额", "贷方余额", "名称", "科目名称",
+    "编码",
+    "科目编码",
+    "代码",
+    "编号",
+    "code",
+    "金额",
+    "余额",
+    "期末余额",
+    "借方",
+    "贷方",
+    "借",
+    "贷",
+    "借方余额",
+    "贷方余额",
+    "名称",
+    "科目名称",
 ];
 
 fn is_header(cols: &[String]) -> bool {
@@ -118,7 +138,7 @@ fn dir_word(s: &str) -> Option<Direction> {
 /// 容忍的写法都是财报/Excel 里的实际产物：千分位逗号、括号负数（`(5000)`
 /// 即 -5000）、破折号占位（`-` / `—` / `--` 视为「没填」而不是 0）。
 fn parse_amount(s: &str) -> Option<Money> {
-    let s = s.replace(',', "").replace('，', "").trim().to_string();
+    let s = s.replace([',', '，'], "").trim().to_string();
     if s.is_empty() || s == "-" || s == "—" || s == "--" {
         return None;
     }
@@ -280,9 +300,9 @@ pub fn parse(
         // 没声明方向 → 按科目的余额方向自动归位（期初最关键的一步）
         let dir = dir.or_else(|| dir_of(&code)).unwrap_or(Direction::Debit);
 
-        let skip = if seen.iter().any(|c| *c == code) {
+        let skip = if seen.contains(&code) {
             Some(SkipReason::DuplicateInBatch)
-        } else if existing.iter().any(|c| *c == code) {
+        } else if existing.contains(&code) {
             Some(SkipReason::ExistsInBook)
         } else if dir_of(&code).is_none() {
             let sg = suggest(&code, leaf_codes.iter().map(|s| s.as_str()));
@@ -292,7 +312,12 @@ pub fn parse(
             None
         };
 
-        rows.push(ParsedRow { code, dir, amount, skip });
+        rows.push(ParsedRow {
+            code,
+            dir,
+            amount,
+            skip,
+        });
     }
 
     Parsed { rows }
@@ -313,12 +338,9 @@ pub fn template() -> super::Template {
             "第一页第一行是表头，从第二行开始填你自己的数据。".to_string(),
             "先把两行示例删掉，再填。".to_string(),
             "方向不用填：资产自动记借、负债权益自动记贷；负数/红字括号自动转反方向。".to_string(),
-            "想自己写方向也行：加一列，写成「编码,方向,金额」（方向填 借/贷）。"
-                .to_string(),
-            "填完后回软件：点「从 Excel 文件载入」直接读进来，或复制粘贴到输入框。"
-                .to_string(),
-            "载入后先看预览里的试算（借方合计/贷方合计/差额），平了再点「并入草稿」。"
-                .to_string(),
+            "想自己写方向也行：加一列，写成「编码,方向,金额」（方向填 借/贷）。".to_string(),
+            "填完后回软件：点「从 Excel 文件载入」直接读进来，或复制粘贴到输入框。".to_string(),
+            "载入后先看预览里的试算（借方合计/贷方合计/差额），平了再点「并入草稿」。".to_string(),
         ],
     }
 }
@@ -367,7 +389,11 @@ mod tests {
     #[test]
     fn 负数表示反方向() {
         let r = p("1001,-5000");
-        assert_eq!(r.rows[0].amount, Money::parse_or_zero("5000"), "金额取绝对值");
+        assert_eq!(
+            r.rows[0].amount,
+            Money::parse_or_zero("5000"),
+            "金额取绝对值"
+        );
         assert_eq!(r.rows[0].dir, Direction::Credit, "负数翻转方向");
     }
 
@@ -414,7 +440,12 @@ mod tests {
 
     #[test]
     fn 库中已有的标跳过() {
-        let r = parse("1001,58000\n1002,1000", &dir_of, &leaves(), &["1001".into()]);
+        let r = parse(
+            "1001,58000\n1002,1000",
+            &dir_of,
+            &leaves(),
+            &["1001".into()],
+        );
         assert_eq!(r.rows[0].skip, Some(SkipReason::ExistsInBook));
         assert_eq!(r.rows[1].skip, None);
         assert_eq!(r.importable().len(), 1);
@@ -480,14 +511,26 @@ mod tests {
 
         let r2 = p("1001,50000\n2001,40000");
         let (_, _, diff2) = r2.trial();
-        assert_eq!(diff2, Money::parse_or_zero("10000"), "差 10000 应该在试算里看见");
+        assert_eq!(
+            diff2,
+            Money::parse_or_zero("10000"),
+            "差 10000 应该在试算里看见"
+        );
     }
 
     /// 试算只算可并入的行 —— 跳过的不该影响用户对平不平的判断
     #[test]
     fn 试算跳过坏行() {
-        let r = parse("1001,50000\n2001,40000\n9999,99999", &dir_of, &leaves(), &[]);
-        assert!(matches!(r.rows[2].skip, Some(SkipReason::UnknownCode { .. })));
+        let r = parse(
+            "1001,50000\n2001,40000\n9999,99999",
+            &dir_of,
+            &leaves(),
+            &[],
+        );
+        assert!(matches!(
+            r.rows[2].skip,
+            Some(SkipReason::UnknownCode { .. })
+        ));
         let (d, c, _) = r.trial();
         assert_eq!(d, Money::parse_or_zero("50000"), "未知科目不该计入借方");
         assert_eq!(c, Money::parse_or_zero("40000"));
@@ -500,14 +543,18 @@ mod tests {
             SkipReason::ExistsInBook,
             SkipReason::BadAmount,
             SkipReason::UnknownCode { suggestion: None },
-            SkipReason::UnknownCode { suggestion: Some("1001".into()) },
+            SkipReason::UnknownCode {
+                suggestion: Some("1001".into()),
+            },
         ] {
             let label = r.label();
             assert!(!label.is_empty(), "{r:?} 缺文案");
         }
-        assert!(SkipReason::UnknownCode { suggestion: Some("1001".into()) }
-            .label()
-            .contains("1001"));
+        assert!(SkipReason::UnknownCode {
+            suggestion: Some("1001".into())
+        }
+        .label()
+        .contains("1001"));
     }
 
     /// 方向词大小写敏感：DR / Debit 不认（手打的人写「借」或「贷」）
@@ -545,7 +592,11 @@ mod tests {
             text.push_str(&r.join(","));
         }
         let parsed = parse(&text, &dir_of, &leaves(), &[]);
-        assert_eq!(parsed.rows.len(), t.examples.len(), "表头应被跳过，只剩示例行");
+        assert_eq!(
+            parsed.rows.len(),
+            t.examples.len(),
+            "表头应被跳过，只剩示例行"
+        );
         assert_eq!(
             parsed.importable().len(),
             t.examples.len(),

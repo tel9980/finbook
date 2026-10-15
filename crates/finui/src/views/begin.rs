@@ -2,8 +2,8 @@
 
 use egui::{Align, Color32, Layout, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
-use findb::balances::{BeginRow, BalanceQuery};
 use fincore::{dir_amount_to_signed, signed_to_dir_amount, AuxRef, Direction, Money, Period, Perm};
+use findb::balances::{BalanceQuery, BeginRow};
 
 use crate::state::{AppCtx, ConfirmAction};
 use crate::theme::palette;
@@ -157,7 +157,13 @@ impl BeginView {
                     },
                     qty: b
                         .qty_begin
-                        .map(|q| if q.is_zero() { String::new() } else { q.fmt_plain() })
+                        .map(|q| {
+                            if q.is_zero() {
+                                String::new()
+                            } else {
+                                q.fmt_plain()
+                            }
+                        })
                         .unwrap_or_default(),
                     changed: false,
                 }
@@ -206,10 +212,7 @@ impl BeginView {
         };
 
         widgets::page_header(ui, "期初建账", |ui| {
-            ui.label(
-                RichText::new(format!("启用期间：{}", self.start_period.label()))
-                    .weak(),
-            );
+            ui.label(RichText::new(format!("启用期间：{}", self.start_period.label())).weak());
         });
 
         widgets::toolbar(ui, |ui| {
@@ -577,7 +580,7 @@ impl BeginView {
                     } else if ui.button(format!("{label} — {act}")).clicked() {
                         true
                     } else {
-                        ui.link(format!("{label}")).clicked()
+                        ui.link(label.to_string()).clicked()
                     };
                     if clicked {
                         match f.kind {
@@ -611,12 +614,14 @@ impl BeginView {
         // 金额和方向由差额直接算出，用户只需选科目，不用自己算该填多少。
         if let Some((dir, amt)) = begin_diag::counterpart_fill(diff) {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(if fixes.is_empty() {
-                    "没找到能解释差额的行。通常是只填了一边 —— 补上对方科目："
-                } else {
-                    "都不对？补一笔对方的："
-                })
-                .weak());
+                ui.label(
+                    RichText::new(if fixes.is_empty() {
+                        "没找到能解释差额的行。通常是只填了一边 —— 补上对方科目："
+                    } else {
+                        "都不对？补一笔对方的："
+                    })
+                    .weak(),
+                );
                 if ui
                     .button(format!(
                         "新增一行{} {}",
@@ -642,7 +647,11 @@ impl BeginView {
 
         // ---------------- 科目选择 ----------------
         if let Some(code) = self.picker.show(&ectx, ctx.chart()) {
-            let dir = ctx.chart().get(&code).map(|a| a.dir).unwrap_or(Direction::Debit);
+            let dir = ctx
+                .chart()
+                .get(&code)
+                .map(|a| a.dir)
+                .unwrap_or(Direction::Debit);
             self.rows.push(EditRow::blank_dir(code, dir));
             self.recount();
         }
@@ -651,9 +660,17 @@ impl BeginView {
         if self.batch.open {
             let chart = ctx.chart().clone();
             let dir_of = |code: &str| chart.get(code).map(|a| a.dir);
-            let leaf_codes: Vec<String> =
-                chart.all().into_iter().filter(|a| chart.is_leaf(&a.code)).map(|a| a.code.clone()).collect();
-            let existing: Vec<String> = self.rows.iter().map(|r| r.code.trim().to_string()).collect();
+            let leaf_codes: Vec<String> = chart
+                .all()
+                .into_iter()
+                .filter(|a| chart.is_leaf(&a.code))
+                .map(|a| a.code.clone())
+                .collect();
+            let existing: Vec<String> = self
+                .rows
+                .iter()
+                .map(|r| r.code.trim().to_string())
+                .collect();
             let rows = &mut self.rows;
             let mut on_import = |items: Vec<super::begin_batch::ParsedRow>| {
                 let mut n = 0;
@@ -672,7 +689,10 @@ impl BeginView {
                 rows.sort_by(|a, b| a.code.cmp(&b.code));
                 n
             };
-            if self.batch.window(&dir_of, &leaf_codes, &existing, &mut on_import, ui) {
+            if self
+                .batch
+                .window(&dir_of, &leaf_codes, &existing, &mut on_import, ui)
+            {
                 self.recount();
             }
         }
@@ -681,12 +701,7 @@ impl BeginView {
     fn save(&mut self, ctx: &mut AppCtx<'_>) {
         let mut ok = 0usize;
         let mut errs = Vec::new();
-        let snapshot: Vec<EditRow> = self
-            .rows
-            .iter()
-            .filter(|r| r.changed)
-            .cloned()
-            .collect();
+        let snapshot: Vec<EditRow> = self.rows.iter().filter(|r| r.changed).cloned().collect();
         for r in snapshot {
             if r.code.trim().is_empty() {
                 continue;
@@ -726,7 +741,11 @@ impl BeginView {
         let mut n = 0;
         for c in codes {
             if !have.contains(&c) {
-                let dir = ctx.chart().get(&c).map(|a| a.dir).unwrap_or(Direction::Debit);
+                let dir = ctx
+                    .chart()
+                    .get(&c)
+                    .map(|a| a.dir)
+                    .unwrap_or(Direction::Debit);
                 self.rows.push(EditRow::blank_dir(c, dir));
                 n += 1;
             }
@@ -769,7 +788,11 @@ impl BeginView {
                 if v.is_zero() {
                     "0.00".to_string()
                 } else {
-                    format!("{}{}", if d == Direction::Credit { "-" } else { "" }, amt.fmt_plain())
+                    format!(
+                        "{}{}",
+                        if d == Direction::Credit { "-" } else { "" },
+                        amt.fmt_plain()
+                    )
                 },
             ]);
         }
@@ -854,9 +877,15 @@ mod mismatch_tests {
     #[test]
     fn 方向相反标出() {
         let r = row("2001", Direction::Debit, "3000");
-        assert!(r.dir_mismatch(Some(Direction::Credit)), "负债放借方必须被标出");
+        assert!(
+            r.dir_mismatch(Some(Direction::Credit)),
+            "负债放借方必须被标出"
+        );
         let r = row("1001", Direction::Credit, "5000");
-        assert!(r.dir_mismatch(Some(Direction::Debit)), "资产放贷方必须被标出");
+        assert!(
+            r.dir_mismatch(Some(Direction::Debit)),
+            "资产放贷方必须被标出"
+        );
     }
 
     /// 金额为 0 的行不标 —— 刚补全出来的空行全是 0，不该一上来就满屏红
@@ -873,7 +902,10 @@ mod mismatch_tests {
     fn 有累计发生额时不误标() {
         let mut r = row("2001", Direction::Debit, "3000");
         r.ad = "100".to_string();
-        assert!(!r.dir_mismatch(Some(Direction::Credit)), "有累计数时不该按方向标");
+        assert!(
+            !r.dir_mismatch(Some(Direction::Credit)),
+            "有累计数时不该按方向标"
+        );
     }
 
     /// 科目表里没有这个编码 → 不标（未知科目那一列已经是红字提示了）

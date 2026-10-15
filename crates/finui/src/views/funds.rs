@@ -108,7 +108,21 @@ impl FundsView {
         });
 
         widgets::toolbar(ui, |ui| {
-            for (i, label) in ["资金日报", "票据", "融资", "现金盘点", "支票簿", "日记账", "借支", "资金预算", "收付款", "资金预测"].iter().enumerate() {
+            for (i, label) in [
+                "资金日报",
+                "票据",
+                "融资",
+                "现金盘点",
+                "支票簿",
+                "日记账",
+                "借支",
+                "资金预算",
+                "收付款",
+                "资金预测",
+            ]
+            .iter()
+            .enumerate()
+            {
                 if ui.selectable_label(self.tab == i as u8, *label).clicked() {
                     self.tab = i as u8;
                     self.dirty = true;
@@ -143,50 +157,103 @@ impl FundsView {
                 let rows = findb::funds::funds_daily_by_date(ctx.db(), date).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "资金日报",
-                    vec!["科目".to_string(), "科目名称".to_string(), "上日结余".to_string(), "本日收入".to_string(), "本日支出".to_string(), "日末结存".to_string()],
+                    vec![
+                        "科目".to_string(),
+                        "科目名称".to_string(),
+                        "上日结余".to_string(),
+                        "本日收入".to_string(),
+                        "本日支出".to_string(),
+                        "日末结存".to_string(),
+                    ],
                 );
                 for r in rows {
-                    sh.push(vec![r.account_code.clone(), r.account_name.clone(), r.begin.fmt_plain(), r.income.fmt_plain(), r.expense.fmt_plain(), r.end.fmt_plain()]);
+                    sh.push(vec![
+                        r.account_code.clone(),
+                        r.account_name.clone(),
+                        r.begin.fmt_plain(),
+                        r.income.fmt_plain(),
+                        r.expense.fmt_plain(),
+                        r.end.fmt_plain(),
+                    ]);
                 }
                 ("资金日报", sh)
             }
             1 => {
-                let kind = if self.bill_kind.is_empty() { None } else { Some(self.bill_kind.as_str()) };
+                let kind = if self.bill_kind.is_empty() {
+                    None
+                } else {
+                    Some(self.bill_kind.as_str())
+                };
                 let rows = findb::funds::bill_list(ctx.db(), kind).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "票据",
-                    vec!["类型".to_string(), "票据号".to_string(), "出票日".to_string(), "到期日".to_string(), "对方单位".to_string(), "金额".to_string(), "状态".to_string()],
+                    vec![
+                        "类型".to_string(),
+                        "票据号".to_string(),
+                        "出票日".to_string(),
+                        "到期日".to_string(),
+                        "对方单位".to_string(),
+                        "金额".to_string(),
+                        "状态".to_string(),
+                    ],
                 );
                 for b in rows {
                     sh.push(vec![
-                        if b.kind == "receivable" { "应收".to_string() } else { "应付".to_string() },
+                        if b.kind == "receivable" {
+                            "应收".to_string()
+                        } else {
+                            "应付".to_string()
+                        },
                         b.no.clone(),
                         b.issue_date.format("%Y-%m-%d").to_string(),
                         b.due_date.format("%Y-%m-%d").to_string(),
                         b.counterpart.clone(),
                         b.amount.fmt_plain(),
-                        findb::funds::BillStatus::parse(&b.status).label().to_string(),
+                        findb::funds::BillStatus::parse(&b.status)
+                            .label()
+                            .to_string(),
                     ]);
                 }
                 ("票据", sh)
             }
             2 => {
-                let kind = if self.loan_kind.is_empty() { None } else { Some(self.loan_kind.as_str()) };
+                let kind = if self.loan_kind.is_empty() {
+                    None
+                } else {
+                    Some(self.loan_kind.as_str())
+                };
                 let rows = findb::funds::loan_list(ctx.db(), kind).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "融资",
-                    vec!["类型".to_string(), "编号".to_string(), "机构".to_string(), "本金".to_string(), "年利率%".to_string(), "起息日".to_string(), "到期日".to_string(), "状态".to_string()],
+                    vec![
+                        "类型".to_string(),
+                        "编号".to_string(),
+                        "机构".to_string(),
+                        "本金".to_string(),
+                        "年利率%".to_string(),
+                        "起息日".to_string(),
+                        "到期日".to_string(),
+                        "状态".to_string(),
+                    ],
                 );
                 for l in rows {
                     sh.push(vec![
-                        if l.kind == "borrow" { "借款".to_string() } else { "放款".to_string() },
+                        if l.kind == "borrow" {
+                            "借款".to_string()
+                        } else {
+                            "放款".to_string()
+                        },
                         l.no.clone(),
                         l.bank.clone(),
                         l.principal.fmt_plain(),
                         l.rate_pct.fmt_qty(),
                         l.start_date.format("%Y-%m-%d").to_string(),
                         l.end_date.format("%Y-%m-%d").to_string(),
-                        if l.status == "active" { "存续".to_string() } else { "已结清".to_string() },
+                        if l.status == "active" {
+                            "存续".to_string()
+                        } else {
+                            "已结清".to_string()
+                        },
                     ]);
                 }
                 ("融资", sh)
@@ -195,7 +262,14 @@ impl FundsView {
                 let rows = findb::funds::cash_count_list(ctx.db()).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "现金盘点",
-                    vec!["日期".to_string(), "科目".to_string(), "账面余额".to_string(), "实盘金额".to_string(), "差异".to_string(), "备注".to_string()],
+                    vec![
+                        "日期".to_string(),
+                        "科目".to_string(),
+                        "账面余额".to_string(),
+                        "实盘金额".to_string(),
+                        "差异".to_string(),
+                        "备注".to_string(),
+                    ],
                 );
                 for c in rows {
                     sh.push(vec![
@@ -213,17 +287,34 @@ impl FundsView {
                 let rows = findb::funds::check_list(ctx.db()).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "支票登记簿",
-                    vec!["票号".to_string(), "类型".to_string(), "付款科目".to_string(), "收款人".to_string(), "金额".to_string(), "开出日".to_string(), "状态".to_string(), "备注".to_string()],
+                    vec![
+                        "票号".to_string(),
+                        "类型".to_string(),
+                        "付款科目".to_string(),
+                        "收款人".to_string(),
+                        "金额".to_string(),
+                        "开出日".to_string(),
+                        "状态".to_string(),
+                        "备注".to_string(),
+                    ],
                 );
                 for c in rows {
                     sh.push(vec![
                         c.no.clone(),
-                        if c.kind == "cash" { "现金支票".to_string() } else { "转账支票".to_string() },
+                        if c.kind == "cash" {
+                            "现金支票".to_string()
+                        } else {
+                            "转账支票".to_string()
+                        },
                         c.bank_account.clone(),
                         c.payee.clone(),
                         c.amount.fmt_plain(),
                         c.issued_date.format("%Y-%m-%d").to_string(),
-                        if c.status == "void" { "已作废".to_string() } else { "已开出".to_string() },
+                        if c.status == "void" {
+                            "已作废".to_string()
+                        } else {
+                            "已开出".to_string()
+                        },
                         c.memo.clone(),
                     ]);
                 }
@@ -251,7 +342,15 @@ impl FundsView {
                 let rows = findb::balances::journal(ctx.db(), ctx.chart(), &q).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "出纳日记账",
-                    vec!["日期".to_string(), "凭证号".to_string(), "摘要".to_string(), "对方科目".to_string(), "借方".to_string(), "贷方".to_string(), "余额".to_string()],
+                    vec![
+                        "日期".to_string(),
+                        "凭证号".to_string(),
+                        "摘要".to_string(),
+                        "对方科目".to_string(),
+                        "借方".to_string(),
+                        "贷方".to_string(),
+                        "余额".to_string(),
+                    ],
                 );
                 for r in rows {
                     sh.push(vec![
@@ -270,7 +369,15 @@ impl FundsView {
                 let rows = findb::funds::advance_list(ctx.db()).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "员工借支",
-                    vec!["编号".to_string(), "日期".to_string(), "借支人".to_string(), "事由".to_string(), "金额".to_string(), "支付账户".to_string(), "状态".to_string()],
+                    vec![
+                        "编号".to_string(),
+                        "日期".to_string(),
+                        "借支人".to_string(),
+                        "事由".to_string(),
+                        "金额".to_string(),
+                        "支付账户".to_string(),
+                        "状态".to_string(),
+                    ],
                 );
                 for a in rows {
                     sh.push(vec![
@@ -294,7 +401,15 @@ impl FundsView {
                 let rows = findb::funds::funds_budget(ctx.db(), ctx.period()).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "资金预算",
-                    vec!["科目".to_string(), "科目名称".to_string(), "预算".to_string(), "实际".to_string(), "差异".to_string(), "执行率".to_string(), "状态".to_string()],
+                    vec![
+                        "科目".to_string(),
+                        "科目名称".to_string(),
+                        "预算".to_string(),
+                        "实际".to_string(),
+                        "差异".to_string(),
+                        "执行率".to_string(),
+                        "状态".to_string(),
+                    ],
                 );
                 for r in rows {
                     sh.push(vec![
@@ -304,7 +419,11 @@ impl FundsView {
                         r.actual.fmt_plain(),
                         r.diff.fmt_plain(),
                         r.rate_pct(),
-                        if r.over { "超预算".to_string() } else { "正常".to_string() },
+                        if r.over {
+                            "超预算".to_string()
+                        } else {
+                            "正常".to_string()
+                        },
                     ]);
                 }
                 ("资金预算", sh)
@@ -313,13 +432,26 @@ impl FundsView {
                 let rows = findb::receipt::receipt_list(ctx.db()).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "收付款单",
-                    vec!["单号".to_string(), "日期".to_string(), "类型".to_string(), "资金账户".to_string(), "往来单位".to_string(), "金额".to_string(), "凭证".to_string(), "备注".to_string()],
+                    vec![
+                        "单号".to_string(),
+                        "日期".to_string(),
+                        "类型".to_string(),
+                        "资金账户".to_string(),
+                        "往来单位".to_string(),
+                        "金额".to_string(),
+                        "凭证".to_string(),
+                        "备注".to_string(),
+                    ],
                 );
                 for d in rows {
                     sh.push(vec![
                         d.no.clone(),
                         d.date.format("%Y-%m-%d").to_string(),
-                        if d.kind == "receipt" { "收款".to_string() } else { "付款".to_string() },
+                        if d.kind == "receipt" {
+                            "收款".to_string()
+                        } else {
+                            "付款".to_string()
+                        },
                         d.fund_account.clone(),
                         d.party.clone(),
                         d.amount.fmt_plain(),
@@ -335,8 +467,14 @@ impl FundsView {
                     "资金预测",
                     vec!["项目".to_string(), "金额".to_string()],
                 );
-                sh.push(vec!["现金/银行结存".to_string(), fc.cash_balance.fmt_plain()]);
-                sh.push(vec!["在库应收票据".to_string(), fc.receivable_bills.fmt_plain()]);
+                sh.push(vec![
+                    "现金/银行结存".to_string(),
+                    fc.cash_balance.fmt_plain(),
+                ]);
+                sh.push(vec![
+                    "在库应收票据".to_string(),
+                    fc.receivable_bills.fmt_plain(),
+                ]);
                 sh.push(vec!["应付票据".to_string(), fc.payable_bills.fmt_plain()]);
                 sh.push(vec!["放款可收回".to_string(), fc.lend.fmt_plain()]);
                 sh.push(vec!["借款需偿还".to_string(), fc.borrow.fmt_plain()]);
@@ -385,8 +523,12 @@ impl FundsView {
         widgets::grid(ui, "funds_daily", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.account_code).monospace()); }
-                1 => { ui.label(&r.account_name); }
+                0 => {
+                    ui.label(RichText::new(&r.account_code).monospace());
+                }
+                1 => {
+                    ui.label(&r.account_name);
+                }
                 2 => widgets::amount_label(ui, r.begin),
                 3 => widgets::amount_label(ui, r.income),
                 4 => widgets::amount_label(ui, r.expense),
@@ -441,8 +583,15 @@ impl FundsView {
             }
         });
 
-        let rows = findb::funds::bill_list(ctx.db(), if self.bill_kind.is_empty() { None } else { Some(&self.bill_kind) })
-            .unwrap_or_default();
+        let rows = findb::funds::bill_list(
+            ctx.db(),
+            if self.bill_kind.is_empty() {
+                None
+            } else {
+                Some(&self.bill_kind)
+            },
+        )
+        .unwrap_or_default();
         let cols = [
             widgets::TCol::new("类型", 70.0).fixed(),
             widgets::TCol::new("票据号", 130.0).fixed(),
@@ -458,11 +607,29 @@ impl FundsView {
         widgets::grid(ui, "bills", &cols, rows.len(), 24.0, |i, c, ui| {
             let b = &rows[i];
             match c {
-                0 => { ui.label(if b.kind == "receivable" { "应收" } else { "应付" }); }
-                1 => { ui.label(&b.no); }
-                2 => { ui.label(b.issue_date.format("%Y-%m-%d").to_string()); }
-                3 => { ui.label(b.due_date.format("%Y-%m-%d").to_string()); }
-                4 => { ui.label(if b.counterpart.is_empty() { "—".to_string() } else { b.counterpart.clone() }); }
+                0 => {
+                    ui.label(if b.kind == "receivable" {
+                        "应收"
+                    } else {
+                        "应付"
+                    });
+                }
+                1 => {
+                    ui.label(&b.no);
+                }
+                2 => {
+                    ui.label(b.issue_date.format("%Y-%m-%d").to_string());
+                }
+                3 => {
+                    ui.label(b.due_date.format("%Y-%m-%d").to_string());
+                }
+                4 => {
+                    ui.label(if b.counterpart.is_empty() {
+                        "—".to_string()
+                    } else {
+                        b.counterpart.clone()
+                    });
+                }
                 5 => widgets::amount_label(ui, b.amount),
                 6 => {
                     let s = findb::funds::BillStatus::parse(&b.status);
@@ -574,8 +741,15 @@ impl FundsView {
             }
         });
 
-        let rows = findb::funds::loan_list(ctx.db(), if self.loan_kind.is_empty() { None } else { Some(&self.loan_kind) })
-            .unwrap_or_default();
+        let rows = findb::funds::loan_list(
+            ctx.db(),
+            if self.loan_kind.is_empty() {
+                None
+            } else {
+                Some(&self.loan_kind)
+            },
+        )
+        .unwrap_or_default();
         let cols = [
             widgets::TCol::new("类型", 70.0).fixed(),
             widgets::TCol::new("编号", 130.0).fixed(),
@@ -592,13 +766,33 @@ impl FundsView {
         widgets::grid(ui, "loans", &cols, rows.len(), 24.0, |i, c, ui| {
             let l = &rows[i];
             match c {
-                0 => { ui.label(if l.kind == "borrow" { "借款" } else { "放款" }); }
-                1 => { ui.label(&l.no); }
-                2 => { ui.label(if l.bank.is_empty() { "—".to_string() } else { l.bank.clone() }); }
+                0 => {
+                    ui.label(if l.kind == "borrow" {
+                        "借款"
+                    } else {
+                        "放款"
+                    });
+                }
+                1 => {
+                    ui.label(&l.no);
+                }
+                2 => {
+                    ui.label(if l.bank.is_empty() {
+                        "—".to_string()
+                    } else {
+                        l.bank.clone()
+                    });
+                }
                 3 => widgets::amount_label(ui, l.principal),
-                4 => { ui.label(l.rate_pct.fmt_qty()); }
-                5 => { ui.label(l.start_date.format("%Y-%m-%d").to_string()); }
-                6 => { ui.label(l.end_date.format("%Y-%m-%d").to_string()); }
+                4 => {
+                    ui.label(l.rate_pct.fmt_qty());
+                }
+                5 => {
+                    ui.label(l.start_date.format("%Y-%m-%d").to_string());
+                }
+                6 => {
+                    ui.label(l.end_date.format("%Y-%m-%d").to_string());
+                }
                 7 => {
                     if l.status == "active" {
                         if ui.small_button("结清").clicked() {
@@ -613,10 +807,11 @@ impl FundsView {
                         if ui.small_button("到账凭证").clicked() {
                             gen = Some(l.id);
                         }
-                    } else if l.status != "active" && l.settle_voucher_id.is_none() {
-                        if ui.small_button("还本凭证").clicked() {
-                            gen = Some(l.id);
-                        }
+                    } else if l.status != "active"
+                        && l.settle_voucher_id.is_none()
+                        && ui.small_button("还本凭证").clicked()
+                    {
+                        gen = Some(l.id);
                     }
                 }
                 _ => {}
@@ -624,8 +819,7 @@ impl FundsView {
         });
         if let Some(id) = settle {
             let who = ctx.user().username.clone();
-            match findb::funds::loan_settle(ctx.db(), id, chrono::Local::now().date_naive(), &who)
-            {
+            match findb::funds::loan_settle(ctx.db(), id, chrono::Local::now().date_naive(), &who) {
                 Ok(vid) => {
                     ctx.log("资金", "结清融资", &format!("#{id}"));
                     ctx.info(match vid {
@@ -649,7 +843,10 @@ impl FundsView {
     }
 
     fn show_counts(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
-        let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
         if self.cc_date.is_empty() {
             self.cc_date = today.clone();
         }
@@ -657,9 +854,15 @@ impl FundsView {
             ui.label("日期");
             ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.cc_date));
             ui.label("科目");
-            ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.cc_account));
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.cc_account),
+            );
             ui.label("实盘金额");
-            ui.add_sized([100.0, 22.0], egui::TextEdit::singleline(&mut self.cc_counted));
+            ui.add_sized(
+                [100.0, 22.0],
+                egui::TextEdit::singleline(&mut self.cc_counted),
+            );
             ui.label("备注");
             ui.add_sized([140.0, 22.0], egui::TextEdit::singleline(&mut self.cc_memo));
             if ui.button("新增盘点").clicked() {
@@ -748,10 +951,11 @@ impl FundsView {
                 }
                 6 => {
                     ui.horizontal(|ui| {
-                        if r.voucher_id.is_none() && !r.diff.is_zero() {
-                            if ui.small_button("生成凭证").clicked() {
-                                gen = Some(r.id);
-                            }
+                        if r.voucher_id.is_none()
+                            && !r.diff.is_zero()
+                            && ui.small_button("生成凭证").clicked()
+                        {
+                            gen = Some(r.id);
                         }
                         if r.voucher_id.is_some() {
                             ui.label(RichText::new("已出凭证").weak());
@@ -786,7 +990,10 @@ impl FundsView {
     }
 
     fn show_checks(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
-        let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
         if self.ck_date.is_empty() {
             self.ck_date = today.clone();
         }
@@ -795,7 +1002,11 @@ impl FundsView {
             ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.ck_no));
             ui.label("类型");
             egui::ComboBox::from_id_salt("ck_kind")
-                .selected_text(if self.ck_kind == "cash" { "现金支票" } else { "转账支票" })
+                .selected_text(if self.ck_kind == "cash" {
+                    "现金支票"
+                } else {
+                    "转账支票"
+                })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.ck_kind, "transfer".to_string(), "转账支票");
                     ui.selectable_value(&mut self.ck_kind, "cash".to_string(), "现金支票");
@@ -803,9 +1014,15 @@ impl FundsView {
             ui.label("付款科目");
             ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.ck_bank));
             ui.label("收款人");
-            ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.ck_payee));
+            ui.add_sized(
+                [110.0, 22.0],
+                egui::TextEdit::singleline(&mut self.ck_payee),
+            );
             ui.label("金额");
-            ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.ck_amount));
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.ck_amount),
+            );
             ui.label("开出日");
             ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.ck_date));
             ui.label("备注");
@@ -831,7 +1048,11 @@ impl FundsView {
                             };
                             match findb::funds::check_save(ctx.db(), &mut c) {
                                 Ok(_) => {
-                                    ctx.log("资金", "登记支票", &format!("{} {}", c.no, c.amount.fmt_money()));
+                                    ctx.log(
+                                        "资金",
+                                        "登记支票",
+                                        &format!("{} {}", c.no, c.amount.fmt_money()),
+                                    );
                                     ctx.info("已登记支票");
                                     self.ck_no.clear();
                                     self.ck_amount.clear();
@@ -863,12 +1084,30 @@ impl FundsView {
         widgets::grid(ui, "check_register", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.no).monospace()); }
-                1 => { ui.label(if r.kind == "cash" { "现金支票" } else { "转账支票" }); }
-                2 => { ui.label(RichText::new(&r.bank_account).monospace()); }
-                3 => { ui.label(if r.payee.is_empty() { "—".to_string() } else { r.payee.clone() }); }
+                0 => {
+                    ui.label(RichText::new(&r.no).monospace());
+                }
+                1 => {
+                    ui.label(if r.kind == "cash" {
+                        "现金支票"
+                    } else {
+                        "转账支票"
+                    });
+                }
+                2 => {
+                    ui.label(RichText::new(&r.bank_account).monospace());
+                }
+                3 => {
+                    ui.label(if r.payee.is_empty() {
+                        "—".to_string()
+                    } else {
+                        r.payee.clone()
+                    });
+                }
                 4 => widgets::amount_label(ui, r.amount),
-                5 => { ui.label(r.issued_date.format("%Y-%m-%d").to_string()); }
+                5 => {
+                    ui.label(r.issued_date.format("%Y-%m-%d").to_string());
+                }
                 6 => {
                     ui.label(if r.status == "void" {
                         RichText::new("已作废").color(palette::WARN)
@@ -897,7 +1136,11 @@ impl FundsView {
             match findb::funds::check_set_status(ctx.db(), id, &status) {
                 Ok(()) => {
                     ctx.log("资金", "支票状态", &format!("#{id} → {status}"));
-                    ctx.info(if status == "void" { "支票已作废" } else { "支票已恢复" });
+                    ctx.info(if status == "void" {
+                        "支票已作废"
+                    } else {
+                        "支票已恢复"
+                    });
                 }
                 Err(e) => ctx.error(e.to_string()),
             }
@@ -915,7 +1158,10 @@ impl FundsView {
 
     /// 出纳日记账：只读已记账逐笔滚动 + 日清标记 + 收付登记（跳凭证录入预填科目）
     fn show_journal(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
-        let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
         if self.j_date.is_empty() {
             self.j_date = today.clone();
         }
@@ -927,7 +1173,10 @@ impl FundsView {
         };
         widgets::toolbar(ui, |ui| {
             ui.label("科目");
-            ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.j_account));
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.j_account),
+            );
             ui.separator();
             ui.label("日清日期");
             ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.j_date));
@@ -989,9 +1238,8 @@ impl FundsView {
         }
         .with_user_scope(ctx.user());
         let rows = findb::balances::journal(ctx.db(), ctx.chart(), &q).unwrap_or_default();
-        let cleared =
-            findb::funds::day_clear_dates(ctx.db(), &code, p.first_day(), p.last_day())
-                .unwrap_or_default();
+        let cleared = findb::funds::day_clear_dates(ctx.db(), &code, p.first_day(), p.last_day())
+            .unwrap_or_default();
         let cols = [
             widgets::TCol::new("日期", 92.0).fixed(),
             widgets::TCol::new("凭证号", 88.0).fixed(),
@@ -1002,26 +1250,41 @@ impl FundsView {
             widgets::TCol::new("余额", 130.0).right(),
             widgets::TCol::new("日清", 80.0).fixed(),
         ];
-        widgets::grid(ui, "cashier_journal", &cols, rows.len(), 24.0, |i, c, ui| {
-            let r = &rows[i];
-            match c {
-                0 => { ui.label(r.date.format("%Y-%m-%d").to_string()); }
-                1 => { ui.label(RichText::new(&r.voucher_no).monospace()); }
-                2 => { ui.label(&r.summary); }
-                3 => { ui.label(RichText::new(&r.opposite_accounts).weak()); }
-                4 => widgets::amount_label(ui, r.debit),
-                5 => widgets::amount_label(ui, r.credit),
-                6 => widgets::amount_label(ui, r.balance),
-                7 => {
-                    if cleared.contains(&r.date.format("%Y-%m-%d").to_string()) {
-                        ui.label(RichText::new("✓ 已日清").color(palette::OK));
-                    } else {
-                        ui.label(RichText::new("—").weak());
+        widgets::grid(
+            ui,
+            "cashier_journal",
+            &cols,
+            rows.len(),
+            24.0,
+            |i, c, ui| {
+                let r = &rows[i];
+                match c {
+                    0 => {
+                        ui.label(r.date.format("%Y-%m-%d").to_string());
                     }
+                    1 => {
+                        ui.label(RichText::new(&r.voucher_no).monospace());
+                    }
+                    2 => {
+                        ui.label(&r.summary);
+                    }
+                    3 => {
+                        ui.label(RichText::new(&r.opposite_accounts).weak());
+                    }
+                    4 => widgets::amount_label(ui, r.debit),
+                    5 => widgets::amount_label(ui, r.credit),
+                    6 => widgets::amount_label(ui, r.balance),
+                    7 => {
+                        if cleared.contains(&r.date.format("%Y-%m-%d").to_string()) {
+                            ui.label(RichText::new("✓ 已日清").color(palette::OK));
+                        } else {
+                            ui.label(RichText::new("—").weak());
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            }
-        });
+            },
+        );
         if rows.is_empty() {
             widgets::empty_hint(ui, "该科目本期无已记账记录");
         }
@@ -1029,7 +1292,10 @@ impl FundsView {
 
     /// 员工借支：建单 → 支付（出凭证）→ 核销冲账（出凭证）
     fn show_advances(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
-        let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
         if self.ad_date.is_empty() {
             self.ad_date = today.clone();
         }
@@ -1039,11 +1305,20 @@ impl FundsView {
             ui.label("借支人");
             ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.ad_emp));
             ui.label("事由");
-            ui.add_sized([140.0, 22.0], egui::TextEdit::singleline(&mut self.ad_purpose));
+            ui.add_sized(
+                [140.0, 22.0],
+                egui::TextEdit::singleline(&mut self.ad_purpose),
+            );
             ui.label("金额");
-            ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.ad_amount));
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.ad_amount),
+            );
             ui.label("支付账户");
-            ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.ad_account));
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.ad_account),
+            );
             ui.label("备注");
             ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.ad_memo));
             if ui.button("新增借支").clicked() {
@@ -1095,9 +1370,15 @@ impl FundsView {
         widgets::toolbar(ui, |ui| {
             ui.label(RichText::new("核销参数（支付/核销按今天记账）：").weak());
             ui.label("冲账费用科目");
-            ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.ad_exp_account));
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.ad_exp_account),
+            );
             ui.label("冲账金额");
-            ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.ad_exp_amount));
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.ad_exp_amount),
+            );
         });
 
         let rows = findb::funds::advance_list(ctx.db()).unwrap_or_default();
@@ -1116,10 +1397,18 @@ impl FundsView {
         widgets::grid(ui, "advances", &cols, rows.len(), 24.0, |i, c, ui| {
             let a = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&a.no).monospace()); }
-                1 => { ui.label(a.date.format("%Y-%m-%d").to_string()); }
-                2 => { ui.label(&a.employee); }
-                3 => { ui.label(&a.purpose); }
+                0 => {
+                    ui.label(RichText::new(&a.no).monospace());
+                }
+                1 => {
+                    ui.label(a.date.format("%Y-%m-%d").to_string());
+                }
+                2 => {
+                    ui.label(&a.employee);
+                }
+                3 => {
+                    ui.label(&a.purpose);
+                }
                 4 => widgets::amount_label(ui, a.amount),
                 5 => {
                     ui.label(match a.status.as_str() {
@@ -1172,7 +1461,11 @@ impl FundsView {
                 let who = ctx.user().username.clone();
                 match findb::funds::advance_settle(ctx.db(), id, &exp_acct, exp, today_d, &who) {
                     Ok(vid) => {
-                        ctx.log("资金", "借支核销", &format!("#{id} 冲账 {}", exp.fmt_money()));
+                        ctx.log(
+                            "资金",
+                            "借支核销",
+                            &format!("#{id} 冲账 {}", exp.fmt_money()),
+                        );
                         ctx.info(match vid {
                             Some(v) => format!("已核销，生成凭证 #{v}"),
                             None => "该借支已核销过".to_string(),
@@ -1216,12 +1509,18 @@ impl FundsView {
         widgets::grid(ui, "funds_budget", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.account_code).monospace()); }
-                1 => { ui.label(&r.account_name); }
+                0 => {
+                    ui.label(RichText::new(&r.account_code).monospace());
+                }
+                1 => {
+                    ui.label(&r.account_name);
+                }
                 2 => widgets::amount_label(ui, r.budget),
                 3 => widgets::amount_label(ui, r.actual),
                 4 => widgets::amount_label(ui, r.diff),
-                5 => { ui.label(r.rate_pct()); }
+                5 => {
+                    ui.label(r.rate_pct());
+                }
                 6 => {
                     ui.label(if r.over {
                         RichText::new("超预算").color(palette::WARN)
@@ -1236,7 +1535,10 @@ impl FundsView {
 
     /// 收付款单：保存即出凭证 + 按往来单位 FIFO 自动核销（对标金蝶收款单/付款单）
     fn show_receipts(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
-        let today = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
         if self.rc_date.is_empty() {
             self.rc_date = today.clone();
         }
@@ -1245,7 +1547,11 @@ impl FundsView {
             ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.rc_date));
             ui.label("类型");
             egui::ComboBox::from_id_salt("rc_kind")
-                .selected_text(if self.rc_kind == "payment" { "付款" } else { "收款" })
+                .selected_text(if self.rc_kind == "payment" {
+                    "付款"
+                } else {
+                    "收款"
+                })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.rc_kind, "receipt".to_string(), "收款");
                     ui.selectable_value(&mut self.rc_kind, "payment".to_string(), "付款");
@@ -1261,7 +1567,10 @@ impl FundsView {
                 egui::TextEdit::singleline(&mut self.rc_party).hint_text("辅助编码 C01/S01"),
             );
             ui.label("金额");
-            ui.add_sized([100.0, 22.0], egui::TextEdit::singleline(&mut self.rc_amount));
+            ui.add_sized(
+                [100.0, 22.0],
+                egui::TextEdit::singleline(&mut self.rc_amount),
+            );
             ui.label("备注");
             ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut self.rc_memo));
             if ui.button("新增收付款").clicked() {
@@ -1283,7 +1592,11 @@ impl FundsView {
                                 ctx.log(
                                     "资金",
                                     "新增收付款（待审核）",
-                                    &format!("{} {} 单 #{doc_id}", self.rc_kind, amount.fmt_money()),
+                                    &format!(
+                                        "{} {} 单 #{doc_id}",
+                                        self.rc_kind,
+                                        amount.fmt_money()
+                                    ),
                                 );
                                 ctx.info("已保存为草稿；审核后生成凭证并自动核销");
                                 self.rc_amount.clear();
@@ -1307,8 +1620,12 @@ impl FundsView {
                         .map(|d| findb::printform::ReceiptPrint {
                             no: d.no,
                             date: d.date.format("%Y-%m-%d").to_string(),
-                            kind_label: if d.kind == "receipt" { "收款" } else { "付款" }
-                                .to_string(),
+                            kind_label: if d.kind == "receipt" {
+                                "收款"
+                            } else {
+                                "付款"
+                            }
+                            .to_string(),
                             fund: d.fund_account,
                             party: d.party,
                             amount: d.amount,
@@ -1319,8 +1636,11 @@ impl FundsView {
                                 .unwrap_or_default(),
                         })
                         .collect();
-                    let html =
-                        findb::printform::receipt_forms_html(&company, &prints, &Default::default());
+                    let html = findb::printform::receipt_forms_html(
+                        &company,
+                        &prints,
+                        &Default::default(),
+                    );
                     match crate::views::export::print_html_content("收付款单套打", &html) {
                         Ok(m) => {
                             ctx.log("资金", "收付款单套打", &format!("{n} 张"));
@@ -1332,8 +1652,10 @@ impl FundsView {
             }
         });
         ui.label(
-            RichText::new("保存即生成记账凭证草稿（记账后入账），并按往来单位对未清挂账 FIFO 自动核销")
-                .weak(),
+            RichText::new(
+                "保存即生成记账凭证草稿（记账后入账），并按往来单位对未清挂账 FIFO 自动核销",
+            )
+            .weak(),
         );
 
         let rows = findb::receipt::receipt_list(ctx.db()).unwrap_or_default();
@@ -1354,18 +1676,34 @@ impl FundsView {
         widgets::grid(ui, "receipt_docs", &cols, rows.len(), 24.0, |i, c, ui| {
             let d = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&d.no).monospace()); }
-                1 => { ui.label(d.date.format("%Y-%m-%d").to_string()); }
-                2 => { ui.label(if d.kind == "receipt" { "收款" } else { "付款" }); }
-                3 => { ui.label(RichText::new(&d.fund_account).monospace()); }
-                4 => { ui.label(&d.party); }
-                5 => widgets::amount_label(ui, d.amount),
-                6 => {
-                    match d.voucher_id {
-                        Some(v) => { ui.label(RichText::new(format!("#{v}")).color(palette::CREDIT)); }
-                        None => { ui.label("—"); }
-                    }
+                0 => {
+                    ui.label(RichText::new(&d.no).monospace());
                 }
+                1 => {
+                    ui.label(d.date.format("%Y-%m-%d").to_string());
+                }
+                2 => {
+                    ui.label(if d.kind == "receipt" {
+                        "收款"
+                    } else {
+                        "付款"
+                    });
+                }
+                3 => {
+                    ui.label(RichText::new(&d.fund_account).monospace());
+                }
+                4 => {
+                    ui.label(&d.party);
+                }
+                5 => widgets::amount_label(ui, d.amount),
+                6 => match d.voucher_id {
+                    Some(v) => {
+                        ui.label(RichText::new(format!("#{v}")).color(palette::CREDIT));
+                    }
+                    None => {
+                        ui.label("—");
+                    }
+                },
                 7 => {
                     if d.status == "audited" {
                         ui.label("已审核");
@@ -1373,16 +1711,19 @@ impl FundsView {
                         ui.label(RichText::new("待审核").weak());
                     }
                 }
-                8 => { ui.label(&d.memo); }
+                8 => {
+                    ui.label(&d.memo);
+                }
                 9 => {
                     if d.status == "draft" && ctx.can(fincore::Perm::VoucherAudit) {
                         if ui.small_button("审核").clicked() {
                             act = Some((d.id, true));
                         }
-                    } else if d.status == "audited" && ctx.can(fincore::Perm::VoucherAudit) {
-                        if ui.small_button("撤审").clicked() {
-                            act = Some((d.id, false));
-                        }
+                    } else if d.status == "audited"
+                        && ctx.can(fincore::Perm::VoucherAudit)
+                        && ui.small_button("撤审").clicked()
+                    {
+                        act = Some((d.id, false));
                     }
                     if ui.small_button("删除").clicked() {
                         del = Some(d.id);
@@ -1489,12 +1830,18 @@ impl BudgetAnalysisView {
         });
         widgets::toolbar(ui, |ui| {
             ui.label("年度");
-            let r = ui.add_sized([60.0, 22.0], egui::TextEdit::singleline(&mut self.year_text));
+            let r = ui.add_sized(
+                [60.0, 22.0],
+                egui::TextEdit::singleline(&mut self.year_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
             ui.label("版本");
-            let r2 = ui.add_sized([100.0, 22.0], egui::TextEdit::singleline(&mut self.version).hint_text("留空=当前"));
+            let r2 = ui.add_sized(
+                [100.0, 22.0],
+                egui::TextEdit::singleline(&mut self.version).hint_text("留空=当前"),
+            );
             if r2.changed() {
                 self.dirty = true;
             }
@@ -1503,16 +1850,31 @@ impl BudgetAnalysisView {
             }
             ui.separator();
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
-                let year: i32 = self.year_text.trim().parse().unwrap_or_else(|_| ctx.period().year());
-                let rows = findb::mgmt::budget_analysis_summary(ctx.db(), year, &self.version).unwrap_or_default();
+                let year: i32 = self
+                    .year_text
+                    .trim()
+                    .parse()
+                    .unwrap_or_else(|_| ctx.period().year());
+                let rows = findb::mgmt::budget_analysis_summary(ctx.db(), year, &self.version)
+                    .unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "预算分析",
-                    vec!["科目".to_string(), "部门".to_string(), "预算".to_string(), "实际".to_string(), "执行率%".to_string()],
+                    vec![
+                        "科目".to_string(),
+                        "部门".to_string(),
+                        "预算".to_string(),
+                        "实际".to_string(),
+                        "执行率%".to_string(),
+                    ],
                 );
                 for r in rows {
                     sh.push(vec![
                         format!("{} {}", r.account_code, r.account_name),
-                        if r.dept.is_empty() { "—".to_string() } else { r.dept.clone() },
+                        if r.dept.is_empty() {
+                            "—".to_string()
+                        } else {
+                            r.dept.clone()
+                        },
                         r.budget.fmt_plain(),
                         r.actual.fmt_plain(),
                         r.rate.fmt_qty(),
@@ -1526,9 +1888,15 @@ impl BudgetAnalysisView {
             }
         });
 
-        let year: i32 = self.year_text.trim().parse().unwrap_or_else(|_| ctx.period().year());
-        let rows = findb::mgmt::budget_analysis(ctx.db(), year, &self.version, None).unwrap_or_default();
-        let summary = findb::mgmt::budget_analysis_summary(ctx.db(), year, &self.version).unwrap_or_default();
+        let year: i32 = self
+            .year_text
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| ctx.period().year());
+        let rows =
+            findb::mgmt::budget_analysis(ctx.db(), year, &self.version, None).unwrap_or_default();
+        let summary =
+            findb::mgmt::budget_analysis_summary(ctx.db(), year, &self.version).unwrap_or_default();
 
         ui.separator();
         ui.label(RichText::new("年度汇总（科目 × 部门）").strong());
@@ -1539,20 +1907,39 @@ impl BudgetAnalysisView {
             widgets::TCol::new("实际", 130.0).right(),
             widgets::TCol::new("执行率%", 100.0).right(),
         ];
-        widgets::grid(ui, "budget_ana_sum", &cols, summary.len(), 24.0, |i, c, ui| {
-            let r = &summary[i];
-            match c {
-                0 => { ui.label(format!("{} {}", r.account_code, r.account_name)); }
-                1 => { ui.label(if r.dept.is_empty() { "—".to_string() } else { r.dept.clone() }); }
-                2 => widgets::amount_label(ui, r.budget),
-                3 => widgets::amount_label(ui, r.actual),
-                4 => {
-                    let over = r.rate.to_f64() >= 100.0;
-                    ui.label(RichText::new(r.rate.fmt_qty()).color(if over { palette::CREDIT } else { palette::OK }));
+        widgets::grid(
+            ui,
+            "budget_ana_sum",
+            &cols,
+            summary.len(),
+            24.0,
+            |i, c, ui| {
+                let r = &summary[i];
+                match c {
+                    0 => {
+                        ui.label(format!("{} {}", r.account_code, r.account_name));
+                    }
+                    1 => {
+                        ui.label(if r.dept.is_empty() {
+                            "—".to_string()
+                        } else {
+                            r.dept.clone()
+                        });
+                    }
+                    2 => widgets::amount_label(ui, r.budget),
+                    3 => widgets::amount_label(ui, r.actual),
+                    4 => {
+                        let over = r.rate.to_f64() >= 100.0;
+                        ui.label(RichText::new(r.rate.fmt_qty()).color(if over {
+                            palette::CREDIT
+                        } else {
+                            palette::OK
+                        }));
+                    }
+                    _ => {}
                 }
-                _ => {}
-            }
-        });
+            },
+        );
 
         if !rows.is_empty() {
             ui.add_space(10.0);
@@ -1566,18 +1953,43 @@ impl BudgetAnalysisView {
                 widgets::TCol::new("实际", 130.0).right(),
                 widgets::TCol::new("执行率%", 100.0).right(),
             ];
-            widgets::grid(ui, "budget_ana_detail", &cols2, rows.len(), 24.0, |i, c, ui| {
-                let r = &rows[i];
-                match c {
-                    0 => { ui.label(r.period.label()); }
-                    1 => { ui.label(format!("{} {}", r.account_code, r.account_name)); }
-                    2 => { ui.label(if r.dept.is_empty() { "—".to_string() } else { r.dept.clone() }); }
-                    3 => widgets::amount_label(ui, r.budget),
-                    4 => widgets::amount_label(ui, r.actual),
-                    5 => { ui.label(RichText::new(r.rate.fmt_qty()).color(if r.rate.to_f64() >= 100.0 { palette::CREDIT } else { palette::OK })); }
-                    _ => {}
-                }
-            });
+            widgets::grid(
+                ui,
+                "budget_ana_detail",
+                &cols2,
+                rows.len(),
+                24.0,
+                |i, c, ui| {
+                    let r = &rows[i];
+                    match c {
+                        0 => {
+                            ui.label(r.period.label());
+                        }
+                        1 => {
+                            ui.label(format!("{} {}", r.account_code, r.account_name));
+                        }
+                        2 => {
+                            ui.label(if r.dept.is_empty() {
+                                "—".to_string()
+                            } else {
+                                r.dept.clone()
+                            });
+                        }
+                        3 => widgets::amount_label(ui, r.budget),
+                        4 => widgets::amount_label(ui, r.actual),
+                        5 => {
+                            ui.label(RichText::new(r.rate.fmt_qty()).color(
+                                if r.rate.to_f64() >= 100.0 {
+                                    palette::CREDIT
+                                } else {
+                                    palette::OK
+                                },
+                            ));
+                        }
+                        _ => {}
+                    }
+                },
+            );
         }
     }
 }
@@ -1649,14 +2061,24 @@ impl CostView {
         let p = Period::parse(&self.period_text).unwrap_or_else(|_| ctx.period());
         widgets::toolbar(ui, |ui| {
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
             ui.separator();
             ui.label("分摊费用");
-            ui.add_sized([90.0, 22.0], egui::TextEdit::singleline(&mut self.oh_amount));
-            for (code, label) in [("cost", "按成本占比"), ("labor", "按直接人工"), ("qty", "按计划产量")] {
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.oh_amount),
+            );
+            for (code, label) in [
+                ("cost", "按成本占比"),
+                ("labor", "按直接人工"),
+                ("qty", "按计划产量"),
+            ] {
                 if ui.selectable_label(self.oh_base == code, label).clicked() {
                     self.oh_base = code.to_string();
                 }
@@ -1689,12 +2111,24 @@ impl CostView {
             widgets::grid(ui, "cost_wip", &cols, wip.len(), 22.0, |i, c, ui| {
                 let r = &wip[i];
                 match c {
-                    0 => { ui.label(RichText::new(&r.no).monospace()); }
-                    1 => { ui.label(&r.item_name); }
-                    2 => { widgets::amount_label(ui, r.material); }
-                    3 => { widgets::amount_label(ui, r.labor); }
-                    4 => { widgets::amount_label(ui, r.overhead); }
-                    5 => { widgets::amount_label(ui, r.total); }
+                    0 => {
+                        ui.label(RichText::new(&r.no).monospace());
+                    }
+                    1 => {
+                        ui.label(&r.item_name);
+                    }
+                    2 => {
+                        widgets::amount_label(ui, r.material);
+                    }
+                    3 => {
+                        widgets::amount_label(ui, r.labor);
+                    }
+                    4 => {
+                        widgets::amount_label(ui, r.overhead);
+                    }
+                    5 => {
+                        widgets::amount_label(ui, r.total);
+                    }
                     _ => {}
                 }
             });
@@ -1714,12 +2148,24 @@ impl CostView {
             widgets::grid(ui, "cost_var", &cols, var.len(), 22.0, |i, c, ui| {
                 let r = &var[i];
                 match c {
-                    0 => { ui.label(RichText::new(&r.no).monospace()); }
-                    1 => { ui.label(&r.item_name); }
-                    2 => { widgets::amount_label(ui, r.actual); }
-                    3 => { widgets::amount_label(ui, r.standard); }
-                    4 => { ui.label(r.variance.fmt_plain()); }
-                    5 => { ui.label(format!("{:.1}%", r.variance_pct)); }
+                    0 => {
+                        ui.label(RichText::new(&r.no).monospace());
+                    }
+                    1 => {
+                        ui.label(&r.item_name);
+                    }
+                    2 => {
+                        widgets::amount_label(ui, r.actual);
+                    }
+                    3 => {
+                        widgets::amount_label(ui, r.standard);
+                    }
+                    4 => {
+                        ui.label(r.variance.fmt_plain());
+                    }
+                    5 => {
+                        ui.label(format!("{:.1}%", r.variance_pct));
+                    }
                     _ => {}
                 }
             });
@@ -1737,10 +2183,18 @@ impl CostView {
             widgets::grid(ui, "cost_fc", &cols, fc.len(), 22.0, |i, c, ui| {
                 let r = &fc[i];
                 match c {
-                    0 => { ui.label(RichText::new(&r.no).monospace()); }
-                    1 => { ui.label(&r.item_name); }
-                    2 => { widgets::amount_label(ui, r.planned_qty); }
-                    3 => { widgets::amount_label(ui, r.forecast); }
+                    0 => {
+                        ui.label(RichText::new(&r.no).monospace());
+                    }
+                    1 => {
+                        ui.label(&r.item_name);
+                    }
+                    2 => {
+                        widgets::amount_label(ui, r.planned_qty);
+                    }
+                    3 => {
+                        widgets::amount_label(ui, r.forecast);
+                    }
                     _ => {}
                 }
             });
@@ -1753,10 +2207,18 @@ impl CostView {
                 let rows = findb::business::cost_configs(ctx.db()).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "计价方式配置",
-                    vec!["存货".to_string(), "计价方式".to_string(), "标准成本".to_string()],
+                    vec![
+                        "存货".to_string(),
+                        "计价方式".to_string(),
+                        "标准成本".to_string(),
+                    ],
                 );
                 for r in rows {
-                    sh.push(vec![r.item.clone(), r.method_label.clone(), r.standard_cost.fmt_plain()]);
+                    sh.push(vec![
+                        r.item.clone(),
+                        r.method_label.clone(),
+                        r.standard_cost.fmt_plain(),
+                    ]);
                 }
                 ("计价方式配置", sh)
             }
@@ -1765,10 +2227,24 @@ impl CostView {
                 let rows = findb::business::period_end_cost(ctx.db(), p, false).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "期末结价",
-                    vec!["存货".to_string(), "计价方式".to_string(), "结存数量".to_string(), "结存金额".to_string(), "单价".to_string(), "调整额".to_string()],
+                    vec![
+                        "存货".to_string(),
+                        "计价方式".to_string(),
+                        "结存数量".to_string(),
+                        "结存金额".to_string(),
+                        "单价".to_string(),
+                        "调整额".to_string(),
+                    ],
                 );
                 for r in rows {
-                    sh.push(vec![r.item.clone(), r.method.clone(), r.end_qty.fmt_qty(), r.end_amount.fmt_plain(), r.unit_cost.fmt_plain(), r.adjust.fmt_plain()]);
+                    sh.push(vec![
+                        r.item.clone(),
+                        r.method.clone(),
+                        r.end_qty.fmt_qty(),
+                        r.end_amount.fmt_plain(),
+                        r.unit_cost.fmt_plain(),
+                        r.adjust.fmt_plain(),
+                    ]);
                 }
                 ("期末结价", sh)
             }
@@ -1789,7 +2265,12 @@ impl CostView {
             if ui.button("新增配置").clicked() {
                 let item = "ITEM".to_string();
                 let method = "moving_average".to_string();
-                match findb::business::item_cost_method_set(ctx.db(), &item, Some(&method), Money::ZERO) {
+                match findb::business::item_cost_method_set(
+                    ctx.db(),
+                    &item,
+                    Some(&method),
+                    Money::ZERO,
+                ) {
                     Ok(()) => {
                         ctx.log("成本", "设置计价方式", &format!("{item} → {method}"));
                         self.dirty = true;
@@ -1809,13 +2290,15 @@ impl CostView {
         widgets::grid(ui, "cost_configs", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.item).monospace()); }
-                1 => { ui.label(&r.method_label); }
+                0 => {
+                    ui.label(RichText::new(&r.item).monospace());
+                }
+                1 => {
+                    ui.label(&r.method_label);
+                }
                 2 => widgets::amount_label(ui, r.standard_cost),
-                3 => {
-                    if ui.small_button("清除").clicked() {
-                        clear = Some(r.item.clone());
-                    }
+                3 if ui.small_button("清除").clicked() => {
+                    clear = Some(r.item.clone());
                 }
                 _ => {}
             }
@@ -1834,7 +2317,10 @@ impl CostView {
     fn show_period_end(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         widgets::toolbar(ui, |ui| {
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -1846,7 +2332,7 @@ impl CostView {
                 match findb::business::period_end_cost(ctx.db(), p, true) {
                     Ok(rows) => {
                         self.close_rows = rows;
-                        ctx.log("成本", "期末结价", &format!("{}", p.label()));
+                        ctx.log("成本", "期末结价", &p.label().to_string());
                         ctx.info("已写入成本调整");
                     }
                     Err(e) => ctx.error(e.to_string()),
@@ -1869,17 +2355,24 @@ impl CostView {
         widgets::grid(ui, "period_end", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.item).monospace()); }
-                1 => { ui.label(&r.method); }
-                2 => { ui.label(r.end_qty.fmt_qty()); }
+                0 => {
+                    ui.label(RichText::new(&r.item).monospace());
+                }
+                1 => {
+                    ui.label(&r.method);
+                }
+                2 => {
+                    ui.label(r.end_qty.fmt_qty());
+                }
                 3 => widgets::amount_label(ui, r.end_amount),
                 4 => widgets::amount_label(ui, r.unit_cost),
                 5 => {
                     let neg = r.adjust.is_negative();
-                    ui.label(
-                        RichText::new(r.adjust.fmt_money())
-                            .color(if neg { palette::CREDIT } else { palette::OK }),
-                    );
+                    ui.label(RichText::new(r.adjust.fmt_money()).color(if neg {
+                        palette::CREDIT
+                    } else {
+                        palette::OK
+                    }));
                 }
                 _ => {}
             }

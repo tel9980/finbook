@@ -225,10 +225,7 @@ pub fn preset_aux(kind: AuxKind) -> Vec<AuxPreset> {
 
 /// 全部可预置条目（新建账套时一次性灌进去用）
 pub fn all_preset_aux() -> Vec<AuxPreset> {
-    AuxKind::ALL
-        .iter()
-        .flat_map(|k| preset_aux(*k))
-        .collect()
+    AuxKind::ALL.iter().flat_map(|k| preset_aux(*k)).collect()
 }
 
 /// 该类别有没有可预置的常用档案（界面据此隐藏按钮）
@@ -257,7 +254,9 @@ mod tests {
         let bad = AuxEntity::new(AuxKind::Customer, "", "");
         assert_eq!(validate_aux(&bad, &[]).len(), 2);
         let item = AuxEntity::new(AuxKind::Item, "I001", "钢板");
-        assert!(validate_aux(&item, &[]).iter().any(|s| s.contains("计量单位")));
+        assert!(validate_aux(&item, &[])
+            .iter()
+            .any(|s| s.contains("计量单位")));
     }
 
     /// 只预置部门 + 银行账户：这两类的名字有通用值，其余的是用户自己的数据

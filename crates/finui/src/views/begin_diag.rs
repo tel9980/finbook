@@ -238,13 +238,19 @@ mod tests {
         ];
         for (rows, diffs) in cases {
             let diff = Money::parse_or_zero(diffs);
-            assert_eq!(diff, rows.iter().map(|r| r.begin_signed()).sum::<Money>(), "diff 要等于实际 Σs");
+            assert_eq!(
+                diff,
+                rows.iter().map(|r| r.begin_signed()).sum::<Money>(),
+                "diff 要等于实际 Σs"
+            );
             for f in explain(diff, &rows) {
                 let after = match f.kind {
-                    FixKind::FlipDir => diff - rows[f.row].begin_signed()
-                        + signed_flipped_dir(&rows[f.row]),
-                    FixKind::SwapAccum => diff - rows[f.row].begin_signed()
-                        + signed_swapped_accum(&rows[f.row]),
+                    FixKind::FlipDir => {
+                        diff - rows[f.row].begin_signed() + signed_flipped_dir(&rows[f.row])
+                    }
+                    FixKind::SwapAccum => {
+                        diff - rows[f.row].begin_signed() + signed_swapped_accum(&rows[f.row])
+                    }
                     // 这一类不是改这行，单独验证：抹掉它应该归零
                     FixKind::MissingCounterpart => {
                         let rest: Money = rows
@@ -304,7 +310,8 @@ mod tests {
         let diff = Money::parse_or_zero("2000");
         let got = explain(diff, &rows);
         assert!(
-            got.iter().any(|f| f.kind == FixKind::SwapAccum && f.row == 0),
+            got.iter()
+                .any(|f| f.kind == FixKind::SwapAccum && f.row == 0),
             "应报出对调累计借/贷的解：{got:?}"
         );
         let after = diff - rows[0].begin_signed() + signed_swapped_accum(&rows[0]);
@@ -327,7 +334,8 @@ mod tests {
         assert_eq!(diff, Money::parse_or_zero("10000"));
         let got = explain(diff, &rows);
         assert!(
-            got.iter().any(|f| f.kind == FixKind::MissingCounterpart && f.row == 0),
+            got.iter()
+                .any(|f| f.kind == FixKind::MissingCounterpart && f.row == 0),
             "应报出漏填对方科目：{got:?}"
         );
     }
@@ -358,7 +366,10 @@ mod tests {
             row("1002", Direction::Debit, "0", "", ""),
         ];
         let got = explain(Money::parse_or_zero("1000"), &rows);
-        assert!(!got.iter().any(|f| f.row == 1), "空行不该出现在解里：{got:?}");
+        assert!(
+            !got.iter().any(|f| f.row == 1),
+            "空行不该出现在解里：{got:?}"
+        );
     }
 
     /// 补一行对方科目：借方多就补贷方，贷方多就补借方
@@ -387,7 +398,9 @@ mod tests {
         let diff: Money = rows.iter().map(|r| r.begin_signed()).sum();
         let got = explain(diff, &rows);
         assert_eq!(
-            got.iter().filter(|f| f.kind == FixKind::MissingCounterpart).count(),
+            got.iter()
+                .filter(|f| f.kind == FixKind::MissingCounterpart)
+                .count(),
             1,
             "行 0 应报漏填对方：{got:?}"
         );
@@ -396,10 +409,7 @@ mod tests {
             "行 1 翻方向能平：{got:?}"
         );
         for w in got.windows(2) {
-            assert!(
-                w[0].kind.rank() <= w[1].kind.rank(),
-                "顺序没排开：{got:?}"
-            );
+            assert!(w[0].kind.rank() <= w[1].kind.rank(), "顺序没排开：{got:?}");
         }
         assert_eq!(got.first().unwrap().kind, FixKind::FlipDir);
     }

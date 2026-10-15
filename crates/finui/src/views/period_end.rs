@@ -1,12 +1,12 @@
 //! 期末处理：结转损益、期末结账、反结账
 
 use egui::{RichText, Ui};
-use findb::balances::BalanceQuery;
 use fincore::engine::{
     generate_carry_forward, generate_year_end_carry, is_year_end, PROFIT_ACCOUNT,
     UNDISTRIBUTED_ACCOUNT,
 };
 use fincore::{BalanceRow, Money, Period, Perm};
+use findb::balances::BalanceQuery;
 
 use crate::state::{AppCtx, ConfirmAction};
 use crate::theme::palette;
@@ -82,8 +82,7 @@ impl PeriodEndView {
 
         self.closed_upto = findb::periods::closed_upto(ctx.db()).unwrap_or(None);
         self.closed = findb::periods::list_closed(ctx.db()).unwrap_or_default();
-        self.issues =
-            findb::periods::precheck(ctx.db(), p, self.require_carry).unwrap_or_default();
+        self.issues = findb::periods::precheck(ctx.db(), p, self.require_carry).unwrap_or_default();
         self.reconcile = findb::reports::period_reconcile(ctx.db(), p).unwrap_or_default();
 
         // 含草稿取数：与 Web 结转一致——结转凭证本身是草稿，年末结转靠
@@ -131,7 +130,10 @@ impl PeriodEndView {
             ui.selectable_value(&mut self.tab, Tab::Maintain, "数据维护");
             ui.separator();
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -160,10 +162,8 @@ impl PeriodEndView {
     // ------------------------- 期末对账 -------------------------
     fn show_reconcile(&mut self, ui: &mut Ui) {
         ui.label(
-            RichText::new(
-                "期末对账：检查试算平衡、余额方向、银行未达账项与未生成凭证的业务单据。",
-            )
-            .weak(),
+            RichText::new("期末对账：检查试算平衡、余额方向、银行未达账项与未生成凭证的业务单据。")
+                .weak(),
         );
         ui.add_space(6.0);
 
@@ -221,8 +221,12 @@ impl PeriodEndView {
             widgets::grid(ui, "pl_rows", &cols, rows.len(), 24.0, |i, c, ui| {
                 let r = &rows[i];
                 match c {
-                    0 => { ui.label(RichText::new(&r.account_code).monospace()); }
-                    1 => { ui.label(&r.account_name); }
+                    0 => {
+                        ui.label(RichText::new(&r.account_code).monospace());
+                    }
+                    1 => {
+                        ui.label(&r.account_name);
+                    }
                     2 => widgets::amount_label(ui, r.debit),
                     3 => widgets::amount_label(ui, r.credit),
                     4 => widgets::amount_label(ui, r.end()),
@@ -232,11 +236,15 @@ impl PeriodEndView {
             ui.separator();
             ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new(format!("损益净额（正为净亏损）：{}", self.pl_net.fmt_money()))
-                        .strong(),
+                    RichText::new(format!(
+                        "损益净额（正为净亏损）：{}",
+                        self.pl_net.fmt_money()
+                    ))
+                    .strong(),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("生成结转损益凭证").clicked() && ctx.can(Perm::CarryForward) {
+                    if ui.button("生成结转损益凭证").clicked() && ctx.can(Perm::CarryForward)
+                    {
                         ctx.confirm(
                             "结转损益",
                             &format!(
@@ -274,8 +282,11 @@ impl PeriodEndView {
         });
         if !is_year_end(p) {
             ui.label(
-                RichText::new(format!("提示：当前期间 {} 不是 12 期，通常次年再做年末结转", p.label()))
-                    .weak(),
+                RichText::new(format!(
+                    "提示：当前期间 {} 不是 12 期，通常次年再做年末结转",
+                    p.label()
+                ))
+                .weak(),
             );
         }
     }
@@ -325,16 +336,8 @@ impl PeriodEndView {
         let no = findb::vouchers::next_no(ctx.db(), p, &word).unwrap_or(1);
         let who = ctx.user().display_name.clone();
         let rows = self.pl_rows.clone();
-        let r = generate_carry_forward(
-            p,
-            date,
-            &word,
-            no,
-            &rows,
-            ctx.chart(),
-            PROFIT_ACCOUNT,
-            &who,
-        );
+        let r =
+            generate_carry_forward(p, date, &word, no, &rows, ctx.chart(), PROFIT_ACCOUNT, &who);
         match r {
             Ok(mut v) => match findb::vouchers::save(ctx.db(), &mut v) {
                 Ok(id) => {
@@ -376,7 +379,8 @@ impl PeriodEndView {
         ui.add_space(10.0);
 
         ui.horizontal(|ui| {
-            if ui.button("批量记账本期已审核凭证").clicked() && ctx.can(Perm::VoucherPost) {
+            if ui.button("批量记账本期已审核凭证").clicked() && ctx.can(Perm::VoucherPost)
+            {
                 let who = ctx.user().display_name.clone();
                 let r = findb::periods::post_all(ctx.db(), p, &who);
                 if let Some((n, errs)) = ctx.handle(r) {
@@ -428,14 +432,15 @@ impl PeriodEndView {
         match self.closed_upto {
             None => widgets::empty_hint(ui, "当前没有任何已结账期间"),
             Some(u) => {
-                ui.label(
-                    RichText::new(format!("最后结账期间：{}", u.label()))
-                        .strong(),
-                );
+                ui.label(RichText::new(format!("最后结账期间：{}", u.label())).strong());
                 if p != u {
                     ui.colored_label(
                         palette::WARN,
-                        format!("当前选择的 {} 不是最后结账期间，请先反结账 {}", p.label(), u.label()),
+                        format!(
+                            "当前选择的 {} 不是最后结账期间，请先反结账 {}",
+                            p.label(),
+                            u.label()
+                        ),
                     );
                 }
                 ui.add_space(8.0);
@@ -480,7 +485,12 @@ impl PeriodEndView {
                 let show: Vec<String> = gaps.iter().take(20).map(|g| g.to_string()).collect();
                 ui.colored_label(
                     palette::WARN,
-                    format!("{} 存在 {} 个断号：{}", p.label(), gaps.len(), show.join("、")),
+                    format!(
+                        "{} 存在 {} 个断号：{}",
+                        p.label(),
+                        gaps.len(),
+                        show.join("、")
+                    ),
                 );
             }
         });

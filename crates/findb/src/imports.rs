@@ -148,7 +148,9 @@ fn extract_begin_line(tmpl: ImportTemplate, f: &[String]) -> Option<BeginLine> {
 
 /// 取 CSV 第 `i` 列（0 起），空串返回 None
 fn opt_field(f: &[String], i: usize) -> Option<String> {
-    f.get(i).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    f.get(i)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// 按模板从 CSV 行提取凭证行
@@ -221,8 +223,8 @@ fn extract_voucher_line(tmpl: ImportTemplate, f: &[String]) -> Option<VoucherLin
 
 /// 读取 Excel 文件（.xlsx/.xls/.ods）第一个 sheet，返回所有行（每行是单元格列表）
 pub fn read_xlsx(path: &std::path::Path) -> Result<Vec<Vec<String>>, fincore::FinError> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| fincore::FinError::io(format!("读取文件失败：{e}")))?;
+    let bytes =
+        std::fs::read(path).map_err(|e| fincore::FinError::io(format!("读取文件失败：{e}")))?;
     read_xlsx_bytes(&bytes)
 }
 
@@ -273,7 +275,8 @@ pub fn read_xlsx_bytes(bytes: &[u8]) -> Result<Vec<Vec<String>>, fincore::FinErr
     // 解析后再兜一道行数/单元格数上限：即使解压体积没超，超大表也没有导入意义
     const MAX_IMPORT_ROWS: usize = 200_000;
     const MAX_IMPORT_CELLS: usize = 2_000_000;
-    if range.height() > MAX_IMPORT_ROWS || range.height().saturating_mul(range.width()) > MAX_IMPORT_CELLS
+    if range.height() > MAX_IMPORT_ROWS
+        || range.height().saturating_mul(range.width()) > MAX_IMPORT_CELLS
     {
         return Err(fincore::FinError::validate(format!(
             "Excel 规模过大（{} 行 × {} 列），最多支持 {MAX_IMPORT_ROWS} 行 / {MAX_IMPORT_CELLS} 个单元格",
@@ -413,7 +416,10 @@ impl MoneyWarn {
 }
 
 fn parse_date(s: &str) -> Option<chrono::NaiveDate> {
-    let cleaned: String = s.chars().filter(|c| c.is_ascii_digit() || *c == '-').collect();
+    let cleaned: String = s
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '-')
+        .collect();
     chrono::NaiveDate::parse_from_str(&cleaned, "%Y-%m-%d")
         .ok()
         .or_else(|| chrono::NaiveDate::parse_from_str(&cleaned, "%Y/%m/%d").ok())
@@ -504,9 +510,9 @@ impl ImportPreview {
     /// 注意这不是硬门 —— 真正把关仍在写入路径（这里是「早告诉」，
     /// 不是「唯一拦点」）。缺失科目例外：那个可以靠映射解决，不算阻断。
     pub fn blocking(&self) -> bool {
-        self.issues.iter().any(|i| {
-            i.level == "error" && i.category != CATEGORY_MISSING
-        })
+        self.issues
+            .iter()
+            .any(|i| i.level == "error" && i.category != CATEGORY_MISSING)
     }
 }
 
@@ -564,7 +570,9 @@ fn collect_code_counts(
 }
 
 fn collect_codes(rows: &[Vec<String>], tmpl: ImportTemplate, is_begin: bool) -> Vec<String> {
-    let mut out: Vec<String> = collect_code_counts(rows, tmpl, is_begin).into_keys().collect();
+    let mut out: Vec<String> = collect_code_counts(rows, tmpl, is_begin)
+        .into_keys()
+        .collect();
     out.sort();
     out
 }
@@ -573,7 +581,7 @@ fn collect_codes(rows: &[Vec<String>], tmpl: ImportTemplate, is_begin: bool) -> 
 ///
 /// - `tmpl`：来源模板（决定凭证的科目列位置）
 /// - `is_begin = true`：期初余额表（第 1 列是科目）；`false`：凭证
-/// 类型别名 → AuxKind（客户/供应商/部门/职员/项目/银行/存货 + 英文）
+///   类型别名 → AuxKind（客户/供应商/部门/职员/项目/银行/存货 + 英文）
 fn aux_kind_of(s: &str) -> Option<fincore::AuxKind> {
     let t = s.trim().to_ascii_lowercase();
     Some(match t.as_str() {
@@ -628,7 +636,11 @@ pub fn import_aux_bytes(db: &Db, bytes: &[u8], who: &str) -> DbResult<ImportResu
 }
 
 fn import_aux_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportResult> {
-    let mut res = ImportResult { ok: 0, skipped: 0, warnings: Vec::new() };
+    let mut res = ImportResult {
+        ok: 0,
+        skipped: 0,
+        warnings: Vec::new(),
+    };
     for (i, f) in rows.iter().enumerate() {
         if f.len() < 3 {
             continue; // 空行/说明行
@@ -639,13 +651,15 @@ fn import_aux_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportR
             continue; // 表头
         }
         let Some(kind) = aux_kind_of(&kind_s) else {
-            res.warnings.push(format!("第 {} 行：类型「{kind_s}」无法识别，已跳过", i + 1));
+            res.warnings
+                .push(format!("第 {} 行：类型「{kind_s}」无法识别，已跳过", i + 1));
             res.skipped += 1;
             continue;
         };
         let name = master_cell(f, 2);
         if name.is_empty() {
-            res.warnings.push(format!("第 {} 行：{code} 名称为空，已跳过", i + 1));
+            res.warnings
+                .push(format!("第 {} 行：{code} 名称为空，已跳过", i + 1));
             res.skipped += 1;
             continue;
         }
@@ -675,7 +689,11 @@ pub fn import_items_bytes(db: &Db, bytes: &[u8], who: &str) -> DbResult<ImportRe
 }
 
 fn import_items_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportResult> {
-    let mut res = ImportResult { ok: 0, skipped: 0, warnings: Vec::new() };
+    let mut res = ImportResult {
+        ok: 0,
+        skipped: 0,
+        warnings: Vec::new(),
+    };
     for (i, f) in rows.iter().enumerate() {
         if f.len() < 2 {
             continue;
@@ -686,7 +704,8 @@ fn import_items_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<Impor
         }
         let name = master_cell(f, 1);
         if name.is_empty() {
-            res.warnings.push(format!("第 {} 行：{code} 名称为空，已跳过", i + 1));
+            res.warnings
+                .push(format!("第 {} 行：{code} 名称为空，已跳过", i + 1));
             res.skipped += 1;
             continue;
         }
@@ -732,18 +751,27 @@ pub fn import_accounts_bytes(db: &Db, bytes: &[u8], who: &str) -> DbResult<Impor
 }
 
 fn import_accounts_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportResult> {
-    let mut res = ImportResult { ok: 0, skipped: 0, warnings: Vec::new() };
+    let mut res = ImportResult {
+        ok: 0,
+        skipped: 0,
+        warnings: Vec::new(),
+    };
     for (i, f) in rows.iter().enumerate() {
         if f.len() < 2 {
             continue;
         }
         let code = master_cell(f, 0);
-        if code.is_empty() || code == "编码" || code == "科目编码" || code.eq_ignore_ascii_case("code") {
+        if code.is_empty()
+            || code == "编码"
+            || code == "科目编码"
+            || code.eq_ignore_ascii_case("code")
+        {
             continue;
         }
         let name = master_cell(f, 1);
         if name.is_empty() {
-            res.warnings.push(format!("第 {} 行：{code} 名称为空，已跳过", i + 1));
+            res.warnings
+                .push(format!("第 {} 行：{code} 名称为空，已跳过", i + 1));
             res.skipped += 1;
             continue;
         }
@@ -781,7 +809,11 @@ pub fn import_opening_stock_bytes(db: &Db, bytes: &[u8], who: &str) -> DbResult<
 }
 
 fn import_opening_stock_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportResult> {
-    let mut res = ImportResult { ok: 0, skipped: 0, warnings: Vec::new() };
+    let mut res = ImportResult {
+        ok: 0,
+        skipped: 0,
+        warnings: Vec::new(),
+    };
     let period = db.options().start_period;
     let date = period.first_day();
     let tx = db.write_tx()?;
@@ -796,12 +828,16 @@ fn import_opening_stock_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResu
         let warehouse = master_cell(f, 1);
         let qty = Money::parse_or_zero(&master_cell(f, 2));
         if warehouse.is_empty() || !qty.is_positive() {
-            res.warnings.push(format!("第 {} 行：仓库为空或数量非正，已跳过", i + 1));
+            res.warnings
+                .push(format!("第 {} 行：仓库为空或数量非正，已跳过", i + 1));
             res.skipped += 1;
             continue;
         }
         if crate::auxs::get(db, fincore::AuxKind::Item, &item)?.is_none() {
-            res.warnings.push(format!("第 {} 行：存货 {item} 未建档（先导存货档案），已跳过", i + 1));
+            res.warnings.push(format!(
+                "第 {} 行：存货 {item} 未建档（先导存货档案），已跳过",
+                i + 1
+            ));
             res.skipped += 1;
             continue;
         }
@@ -824,7 +860,11 @@ fn import_opening_stock_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResu
                 price,
                 amount: Money::ZERO,
                 voucher_id: None,
-                memo: if memo.is_empty() { "期初库存".into() } else { format!("期初 {memo}") },
+                memo: if memo.is_empty() {
+                    "期初库存".into()
+                } else {
+                    format!("期初 {memo}")
+                },
             },
         )?;
         // 批次建档（OR IGNORE；失效日=生产日期+档案保质期）
@@ -838,7 +878,9 @@ fn import_opening_stock_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResu
                 Ok(d) => {
                     let days = crate::batch::shelf_life_days(db, &item);
                     if days > 0 {
-                        (d + chrono::Duration::days(days)).format("%Y-%m-%d").to_string()
+                        (d + chrono::Duration::days(days))
+                            .format("%Y-%m-%d")
+                            .to_string()
                     } else {
                         String::new()
                     }
@@ -889,7 +931,11 @@ fn arap_kind_of(s: &str) -> Option<&'static str> {
 }
 
 fn import_arap_opening_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportResult> {
-    let mut res = ImportResult { ok: 0, skipped: 0, warnings: Vec::new() };
+    let mut res = ImportResult {
+        ok: 0,
+        skipped: 0,
+        warnings: Vec::new(),
+    };
     for (i, f) in rows.iter().enumerate() {
         if f.len() < 5 {
             continue;
@@ -899,7 +945,10 @@ fn import_arap_opening_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResul
             continue; // 表头
         }
         let Some(kind) = arap_kind_of(&type_s) else {
-            res.warnings.push(format!("第 {} 行：类型「{type_s}」应为 应收/应付，已跳过", i + 1));
+            res.warnings.push(format!(
+                "第 {} 行：类型「{type_s}」应为 应收/应付，已跳过",
+                i + 1
+            ));
             res.skipped += 1;
             continue;
         };
@@ -908,7 +957,8 @@ fn import_arap_opening_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResul
         let doc_date = master_cell(f, 3);
         let amount = Money::parse_or_zero(&master_cell(f, 4));
         if party.is_empty() || doc_no.is_empty() {
-            res.warnings.push(format!("第 {} 行：客商编码或单据号为空，已跳过", i + 1));
+            res.warnings
+                .push(format!("第 {} 行：客商编码或单据号为空，已跳过", i + 1));
             res.skipped += 1;
             continue;
         }
@@ -921,7 +971,8 @@ fn import_arap_opening_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResul
             continue;
         }
         if !amount.is_positive() {
-            res.warnings.push(format!("第 {} 行：金额必须大于 0，已跳过", i + 1));
+            res.warnings
+                .push(format!("第 {} 行：金额必须大于 0，已跳过", i + 1));
             res.skipped += 1;
             continue;
         }
@@ -1010,7 +1061,11 @@ fn analyze_vouchers(
 
     fn close(pending: &mut Option<Open>, issues: &mut Vec<ImportIssue>) {
         if let Some(v) = pending.take() {
-            let tag = if v.word.trim().is_empty() { "记" } else { v.word.trim() };
+            let tag = if v.word.trim().is_empty() {
+                "记"
+            } else {
+                v.word.trim()
+            };
             if v.entries == 0 {
                 // 整张凭证一条分录都没进来 —— 导入时会**静默丢弃**
                 issues.push(ImportIssue {
@@ -1080,9 +1135,8 @@ fn analyze_vouchers(
             Some(v) => {
                 let date_changed = v.date != line.date;
                 let no_changed = tmpl == ImportTemplate::Kingdee && pending_no != line.no;
-                let balanced_boundary = tmpl != ImportTemplate::Kingdee
-                    && v.entries > 0
-                    && v.debit == v.credit;
+                let balanced_boundary =
+                    tmpl != ImportTemplate::Kingdee && v.entries > 0 && v.debit == v.credit;
                 date_changed || no_changed || balanced_boundary
             }
             None => true,
@@ -1152,18 +1206,20 @@ pub fn analyze_import_mapped(
     // ① 期间已结账 —— 这是最该提前拦的一条：导入写的是草稿没错，但凭证一旦
     //    要记账就会撞「期间不能已结账」，而那时用户已经导完并以为完事了。
     if let Some(p) = period {
-        let closed: Option<i32> = db.conn().query_row(
-            "SELECT 1 FROM period_state WHERE period=?1 AND closed=1",
-            [p.ymm()],
-            |r| r.get(0),
-        )
-        .optional()?;
+        let closed: Option<i32> = db
+            .conn()
+            .query_row(
+                "SELECT 1 FROM period_state WHERE period=?1 AND closed=1",
+                [p.ymm()],
+                |r| r.get(0),
+            )
+            .optional()?;
         if closed.is_some() {
             pv.issues.push(ImportIssue {
                 level: "error",
                 category: CATEGORY_CLOSED,
                 row: None,
-            detail: format!("期间 {} 已结账，数据导进去也无法记账（需先反结账）", p),
+                detail: format!("期间 {} 已结账，数据导进去也无法记账（需先反结账）", p),
             });
         }
     }
@@ -1224,7 +1280,10 @@ pub fn analyze_import_mapped(
 /// 执行导入：把源科目编码按 `mapping`（源编码 → 目标编码）替换后再写入。
 /// 不在 mapping 里的缺失科目会跳过并警告；已存在科目不受影响。
 pub fn apply_mapping(code: &str, mapping: &std::collections::HashMap<String, String>) -> String {
-    mapping.get(code).cloned().unwrap_or_else(|| code.to_string())
+    mapping
+        .get(code)
+        .cloned()
+        .unwrap_or_else(|| code.to_string())
 }
 
 /// 按科目表的辅助核算要求补齐分录的必填辅助字段（导入 CSV 常省略，需自动填默认值）
@@ -1253,7 +1312,11 @@ fn fill_required(db: &Db, e: &mut Entry) {
     }
     if a.has_qty && e.qty.is_none() {
         e.qty = Some(Money::ONE);
-        e.price = Some(if e.debit.is_positive() { e.debit } else { e.credit });
+        e.price = Some(if e.debit.is_positive() {
+            e.debit
+        } else {
+            e.credit
+        });
     }
 }
 
@@ -1495,17 +1558,16 @@ fn import_vouchers_rows(
                 return Ok(());
             }
             if !v.balanced() {
-                res.warnings.push(format!(
-                    "凭证 {} 借贷不平衡，已跳过",
-                    v.voucher_no()
-                ));
+                res.warnings
+                    .push(format!("凭证 {} 借贷不平衡，已跳过", v.voucher_no()));
                 res.skipped += 1;
                 return Ok(());
             }
             match save_voucher_in_tx(&tx, &mut v) {
                 Ok(_) => res.ok += 1,
                 Err(e) => {
-                    res.warnings.push(format!("凭证 {} 导入失败：{e}", v.voucher_no()));
+                    res.warnings
+                        .push(format!("凭证 {} 导入失败：{e}", v.voucher_no()));
                     res.skipped += 1;
                 }
             }
@@ -1543,7 +1605,11 @@ fn import_vouchers_rows(
         if new_voucher {
             flush(&mut pending, &mut res, who)?;
             pending_no = line.no;
-            let word = if line.word.trim().is_empty() { "记" } else { line.word.trim() };
+            let word = if line.word.trim().is_empty() {
+                "记"
+            } else {
+                line.word.trim()
+            };
             let no = vouchers::next_no_of(&tx, period, word)?;
             let mut v = Voucher::new(period, date, word.to_string(), no);
             v.source = VoucherSource::Import; // 导入后为未记账，与录入一致，核对后在期末处理批量记账
@@ -1589,7 +1655,8 @@ mod tests {
     #[test]
     fn import_begin_basic() {
         let db = mem();
-        let csv = "\u{feff}科目,方向,金额\n1001,借,10000\n100201,贷,2000\n600101,借,5000\n9999,借,1\n";
+        let csv =
+            "\u{feff}科目,方向,金额\n1001,借,10000\n100201,贷,2000\n600101,借,5000\n9999,借,1\n";
         let empty = std::collections::HashMap::new();
         let res = import_begin(&db, csv, "u1", &empty, ImportTemplate::Generic).unwrap();
         assert_eq!(res.ok, 3, "应导入 3 条：{:?}", res.warnings);
@@ -1635,7 +1702,11 @@ mod tests {
         .unwrap();
         assert!(!pv.blocking(), "干净账套不该阻断：{:?}", pv.issues);
         assert_eq!(pv.total_rows, 1, "应数出 1 行数据（不含表头）：{:?}", pv);
-        assert!(pv.missing_accounts.is_empty(), "1001 存在：{:?}", pv.missing_accounts);
+        assert!(
+            pv.missing_accounts.is_empty(),
+            "1001 存在：{:?}",
+            pv.missing_accounts
+        );
 
         // ① 期间已结账 → 必须拦
         db.conn()
@@ -1679,7 +1750,9 @@ mod tests {
         );
 
         // ② 科目已停用 → 必须拦
-        db.conn().execute("UPDATE account SET disabled=1 WHERE code='1001'", []).unwrap();
+        db.conn()
+            .execute("UPDATE account SET disabled=1 WHERE code='1001'", [])
+            .unwrap();
         let pv2 = analyze_import(
             &db,
             csv,
@@ -1844,15 +1917,8 @@ mod tests {
         assert_eq!(pv.missing_accounts.len(), 1, "未映射时应报缺失：{:?}", pv);
 
         // 带映射：不该再报缺失（否则用户刚选完映射，预检还是说缺，会开始不信它）
-        let pv2 = analyze_import_mapped(
-            &db,
-            csv,
-            ImportTemplate::Generic,
-            true,
-            None,
-            &mapping,
-        )
-        .unwrap();
+        let pv2 =
+            analyze_import_mapped(&db, csv, ImportTemplate::Generic, true, None, &mapping).unwrap();
         assert!(
             pv2.missing_accounts.is_empty(),
             "已映射的科目不该再报缺失：{:?}",
@@ -1881,9 +1947,14 @@ mod tests {
                    1001,库存现金,借,10000,50000,30000\n\
                    100201,银行存款-工行,贷,2000,0,2000\n\
                    600101,主营业务收入,贷,0,0,0\n";
-        let res =
-            import_begin(&db, csv, "u1", &std::collections::HashMap::new(), ImportTemplate::Kingdee)
-                .unwrap();
+        let res = import_begin(
+            &db,
+            csv,
+            "u1",
+            &std::collections::HashMap::new(),
+            ImportTemplate::Kingdee,
+        )
+        .unwrap();
         assert_eq!(res.ok, 3, "金蝶模板应导入 3 条：{:?}", res.warnings);
         assert_eq!(res.skipped, 0, "全部存在：{:?}", res.warnings);
         let rows = balances::list_begin(&db).unwrap();
@@ -1902,9 +1973,14 @@ mod tests {
         let csv = "\u{feff}科目编码,科目名称,期初借方,期初贷方,累计借方,累计贷方\n\
                    1001,库存现金,10000,0,50000,0\n\
                    100201,银行存款-工行,0,2000,0,2000\n";
-        let res =
-            import_begin(&db, csv, "u1", &std::collections::HashMap::new(), ImportTemplate::Yonyou)
-                .unwrap();
+        let res = import_begin(
+            &db,
+            csv,
+            "u1",
+            &std::collections::HashMap::new(),
+            ImportTemplate::Yonyou,
+        )
+        .unwrap();
         assert_eq!(res.ok, 2, "用友模板应导入 2 条：{:?}", res.warnings);
         let rows = balances::list_begin(&db).unwrap();
         let cash = rows.iter().find(|r| r.account_code == "1001").unwrap();
@@ -1987,7 +2063,9 @@ mod tests {
         assert_eq!(res.ok, 2, "金蝶模板应导入 2 张：{:?}", res.warnings);
         let all = vouchers::list(&db, &vouchers::VoucherQuery::period(p)).unwrap();
         assert_eq!(all.len(), 2);
-        assert!(all.iter().all(|v| v.entries.is_empty() || v.entries.len() >= 2));
+        assert!(all
+            .iter()
+            .all(|v| v.entries.is_empty() || v.entries.len() >= 2));
     }
 
     #[test]
@@ -1996,20 +2074,33 @@ mod tests {
         // 通用：日期,凭证字,摘要,科目,借,贷[,客户,银行]
         let f = split_csv("2026-01-05,记,收货款,100201,0,1000,C01,B01");
         let line = extract_voucher_line(ImportTemplate::Generic, &f).unwrap();
-        assert_eq!(line.aux.get(AuxKind::Customer).map(|s| s.as_str()), Some("C01"));
+        assert_eq!(
+            line.aux.get(AuxKind::Customer).map(|s| s.as_str()),
+            Some("C01")
+        );
         assert_eq!(line.aux.get(AuxKind::Bank).map(|s| s.as_str()), Some("B01"));
         // 金蝶：日期,凭证字,凭证号,摘要,科目,科目名,借,贷[,客户,银行]
         let f = split_csv("2026-01-05,记,1,收货款,100201,银行存款,0,1000,C01,B01");
         let line = extract_voucher_line(ImportTemplate::Kingdee, &f).unwrap();
-        assert_eq!(line.aux.get(AuxKind::Customer).map(|s| s.as_str()), Some("C01"));
+        assert_eq!(
+            line.aux.get(AuxKind::Customer).map(|s| s.as_str()),
+            Some("C01")
+        );
         assert_eq!(line.aux.get(AuxKind::Bank).map(|s| s.as_str()), Some("B01"));
         // 用友：日期,凭证字号,摘要,科目,借,贷[,客户,银行]
         let f = split_csv("2026-01-05,记,收货款,100201,0,1000,C01,B01");
         let line = extract_voucher_line(ImportTemplate::Yonyou, &f).unwrap();
-        assert_eq!(line.aux.get(AuxKind::Customer).map(|s| s.as_str()), Some("C01"));
+        assert_eq!(
+            line.aux.get(AuxKind::Customer).map(|s| s.as_str()),
+            Some("C01")
+        );
         assert_eq!(line.aux.get(AuxKind::Bank).map(|s| s.as_str()), Some("B01"));
         // 无辅助列时保持空
-        let line = extract_voucher_line(ImportTemplate::Generic, &split_csv("2026-01-05,记,收货款,100201,0,1000")).unwrap();
+        let line = extract_voucher_line(
+            ImportTemplate::Generic,
+            &split_csv("2026-01-05,记,收货款,100201,0,1000"),
+        )
+        .unwrap();
         assert!(line.aux.is_empty());
     }
 
@@ -2031,7 +2122,10 @@ mod tests {
     #[test]
     fn read_xlsx_fixture_parses_rows() {
         // fixture：用友模板期初表（科目编码,科目名称,期初借方,期初贷方,累计借方,累计贷方）
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/yonyou_begin.xlsx");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/yonyou_begin.xlsx"
+        );
         let rows = read_xlsx(std::path::Path::new(path)).expect("读取 fixture xlsx 应成功");
         assert_eq!(rows.len(), 3, "应为表头 + 2 行数据");
         assert_eq!(rows[0][0], "科目编码");
@@ -2045,7 +2139,10 @@ mod tests {
     fn xlsx转文本可喂给粘贴解析() {
         // 桌面端「从 Excel 文件载入」链路：读 xlsx → 转 CSV 文本 → 粘贴解析。
         // 转出来的文本必须是行列完整的 CSV，首行是表头、后跟数据行。
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/yonyou_begin.xlsx");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/yonyou_begin.xlsx"
+        );
         let rows = read_xlsx(std::path::Path::new(path)).expect("读取 fixture xlsx 应成功");
         let text = xlsx_to_csv_text(&rows);
         let lines: Vec<&str> = text.lines().collect();
@@ -2058,10 +2155,19 @@ mod tests {
     #[test]
     fn import_begin_from_excel_bytes() {
         let db = mem();
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/yonyou_begin.xlsx");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/yonyou_begin.xlsx"
+        );
         let bytes = std::fs::read(path).unwrap();
-        let res = import_begin_bytes(&db, &bytes, "u1", &std::collections::HashMap::new(), ImportTemplate::Yonyou)
-            .unwrap();
+        let res = import_begin_bytes(
+            &db,
+            &bytes,
+            "u1",
+            &std::collections::HashMap::new(),
+            ImportTemplate::Yonyou,
+        )
+        .unwrap();
         assert_eq!(res.ok, 2, "Excel 用友模板应导入 2 条：{:?}", res.warnings);
         let rows = balances::list_begin(&db).unwrap();
         let cash = rows.iter().find(|r| r.account_code == "1001").unwrap();
@@ -2076,7 +2182,10 @@ mod tests {
     fn parse_money_fullwidth_digits() {
         // 全角数字是中文用户最常粘贴的格式：偏移写错会导致金额静默归零/错乱
         assert_eq!(parse_money("１００"), Money::parse("100").unwrap());
-        assert_eq!(parse_money("１，２３４．５６"), Money::parse("1234.56").unwrap());
+        assert_eq!(
+            parse_money("１，２３４．５６"),
+            Money::parse("1234.56").unwrap()
+        );
         assert_eq!(parse_money("－１２．３０"), Money::parse("-12.30").unwrap());
         // 全角字母不应变成数字（旧的 0xFFEE 偏移会把 Ａ 映射成 3）
         assert_eq!(parse_money("ＡＢＣ"), Money::ZERO);
@@ -2096,8 +2205,15 @@ mod tests {
             Money::parse("-1234.56").unwrap(),
             "全角括号应解析为负数"
         );
-        assert_eq!(parse_money("( 1,234.56 )"), Money::parse("-1234.56").unwrap());
-        assert_eq!(parse_money("(0)"), Money::ZERO, "红字 0 不应变成 -0 影响比较");
+        assert_eq!(
+            parse_money("( 1,234.56 )"),
+            Money::parse("-1234.56").unwrap()
+        );
+        assert_eq!(
+            parse_money("(0)"),
+            Money::ZERO,
+            "红字 0 不应变成 -0 影响比较"
+        );
         // 括号未闭合时不做取反，按原样过滤
         assert_eq!(parse_money("(1234.56"), Money::parse("1234.56").unwrap());
     }
@@ -2208,7 +2324,11 @@ mod tests {
             res.warnings
         );
         let cnt = |sql: &str| -> i64 { db.conn().query_row(sql, [], |r| r.get(0)).unwrap() };
-        assert_eq!(cnt("SELECT COUNT(*) FROM voucher"), 1, "失败凭证的表头不应留下");
+        assert_eq!(
+            cnt("SELECT COUNT(*) FROM voucher"),
+            1,
+            "失败凭证的表头不应留下"
+        );
         assert_eq!(
             cnt("SELECT COUNT(*) FROM voucher_entry"),
             2,
@@ -2225,7 +2345,11 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         drop(st);
-        for id in rows.iter().map(|(id, _, _)| *id).collect::<std::collections::BTreeSet<_>>() {
+        for id in rows
+            .iter()
+            .map(|(id, _, _)| *id)
+            .collect::<std::collections::BTreeSet<_>>()
+        {
             let d: Money = rows
                 .iter()
                 .filter(|(i, _, _)| *i == id)

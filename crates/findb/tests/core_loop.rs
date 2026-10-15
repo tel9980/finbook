@@ -7,8 +7,6 @@
 //! 所有金额均为手工推导的固定值，断言写死，任何一处回归都会立刻暴露。
 
 use chrono::NaiveDate;
-use findb::balances::{BalanceQuery, BalanceSnapshot, BeginRow, LedgerQuery};
-use findb::{accounts, auxs, periods, reports, users, vouchers, Db};
 use fincore::engine::period_end::PROFIT_ACCOUNT;
 use fincore::report::balance_sheet::{asset_total_row, liab_equity_total_row};
 use fincore::report::income::net_profit_row;
@@ -16,6 +14,8 @@ use fincore::{
     Account, AcctCategory, AuxEntity, AuxKind, AuxRef, BookOptions, Chart, Entry, Money, Period,
     Voucher,
 };
+use findb::balances::{BalanceQuery, BalanceSnapshot, BeginRow, LedgerQuery};
+use findb::{accounts, auxs, periods, reports, users, vouchers, Db};
 
 // ---------------------------------------------------------------------------
 // 测试数据
@@ -35,7 +35,11 @@ fn m(s: &str) -> Money {
 }
 
 /// 期初余额：借 1,700,000 = 贷 1,700,000
-fn opening_rows() -> Vec<(&'static str, Option<(&'static str, &'static str)>, &'static str)> {
+fn opening_rows() -> Vec<(
+    &'static str,
+    Option<(&'static str, &'static str)>,
+    &'static str,
+)> {
     vec![
         ("100201", None, "700000.00"),
         ("112201", Some(("customer", "C01")), "120000.00"),
@@ -137,7 +141,11 @@ fn t02_account_rules() {
     // 新增下级后，父科目自动变成非末级
     let before = chart.is_leaf("660201");
     assert!(before);
-    accounts::insert(&db, &Account::new("66020101", "基本工资", AcctCategory::Expense)).unwrap();
+    accounts::insert(
+        &db,
+        &Account::new("66020101", "基本工资", AcctCategory::Expense),
+    )
+    .unwrap();
     let chart2 = accounts::chart(&db).unwrap();
     assert!(!chart2.is_leaf("660201"));
 }
@@ -216,7 +224,10 @@ fn t03_opening_balance() {
     // 应收账款按客户拆分，合计 200,000
     let mut cust = AuxRef::default();
     cust.customer = Some("C01".to_string());
-    assert_eq!(snap.for_account("112201", Some(&cust)).begin, m("120000.00"));
+    assert_eq!(
+        snap.for_account("112201", Some(&cust)).begin,
+        m("120000.00")
+    );
 
     let tb = snap.trial_balance(&chart);
     assert!(tb.begin_balanced(), "期初试算应平衡");
@@ -485,8 +496,10 @@ fn enter_all_vouchers(db: &Db, chart: &Chart) -> Vec<i64> {
         let mut v = build_voucher(p1(), date, "记", no, &spec);
 
         // 保存前校验：应当没有任何问题
-        let iss =
-            fincore::engine::validate_voucher(&v, &fincore::engine::ValidateCtx::new(chart, &opts, None));
+        let iss = fincore::engine::validate_voucher(
+            &v,
+            &fincore::engine::ValidateCtx::new(chart, &opts, None),
+        );
         assert!(
             iss.is_empty(),
             "第 {} 号凭证校验未通过：{:?}",
@@ -634,8 +647,7 @@ fn t07_unpost_and_void() {
         .for_account("100201", None)
         .end();
     // 已记账的凭证不能直接作废
-    vouchers::set_void(&db, ids[0], true, "李主管")
-        .expect_err("已记账凭证不能作废，应先反记账");
+    vouchers::set_void(&db, ids[0], true, "李主管").expect_err("已记账凭证不能作废，应先反记账");
     vouchers::unpost(&db, ids[0]).unwrap();
     vouchers::set_void(&db, ids[0], true, "李主管").unwrap();
     let after = BalanceSnapshot::load(&db, &BalanceQuery::period(p1()))
@@ -738,12 +750,18 @@ fn t10_balance_table_and_trial() {
     let tb = snap.trial_balance(&chart);
 
     // 本期发生额
-    let total_d: Money = m("120000.00") + m("100000.00") + m("13000.00") + m("226000.00")
+    let total_d: Money = m("120000.00")
+        + m("100000.00")
+        + m("13000.00")
+        + m("226000.00")
         + m("160000.00")
         + m("5000.00")
         + m("20000.00")
         + m("150000.00");
-    let total_c: Money = m("120000.00") + m("113000.00") + m("200000.00") + m("26000.00")
+    let total_c: Money = m("120000.00")
+        + m("113000.00")
+        + m("200000.00")
+        + m("26000.00")
         + m("160000.00")
         + m("5000.00")
         + m("20000.00")
@@ -769,15 +787,13 @@ fn t10_balance_table_and_trial() {
 
     // 余额表按级次过滤：一级科目行数应远少于全表
     let all = snap.account_table(&chart, &BalanceQuery::period(p1()));
-    let l1 = snap
-        .account_table(&chart, &BalanceQuery::period(p1()).with_max_level(Some(1)));
+    let l1 = snap.account_table(&chart, &BalanceQuery::period(p1()).with_max_level(Some(1)));
     assert!(l1.len() < all.len());
     assert!(l1.iter().all(|r| r.account_code.len() == 4));
 
     // 非零过滤：默认余额表已只显示有数据的科目（不显示没用到的科目），
     // 因此 non_zero 结果应是全表的子集
-    let nz = snap
-        .account_table(&chart, &BalanceQuery::period(p1()).with_non_zero(true));
+    let nz = snap.account_table(&chart, &BalanceQuery::period(p1()).with_non_zero(true));
     assert!(nz.len() <= all.len());
     assert!(!all.is_empty());
 }
@@ -790,8 +806,14 @@ fn t11_aux_breakdown() {
     // 应收账款按客户
     let rows = snap.aux_breakdown("112201");
     assert_eq!(rows.len(), 2, "应收账款应有两个客户的辅助余额");
-    let c1 = rows.iter().find(|r| r.aux.customer.as_deref() == Some("C01")).unwrap();
-    let c2 = rows.iter().find(|r| r.aux.customer.as_deref() == Some("C02")).unwrap();
+    let c1 = rows
+        .iter()
+        .find(|r| r.aux.customer.as_deref() == Some("C01"))
+        .unwrap();
+    let c2 = rows
+        .iter()
+        .find(|r| r.aux.customer.as_deref() == Some("C02"))
+        .unwrap();
     // C01: 期初 120,000 - 收款 120,000 = 0
     assert_eq!(c1.end(), Money::ZERO);
     // C02: 期初 80,000 + 226,000 = 306,000
@@ -835,7 +857,11 @@ fn t12_balance_sheet() {
         .iter()
         .find(|r| r.name == "未分配利润")
         .expect("未分配利润行");
-    assert_eq!(undistributed.values[0], m("-55000.00"), "未分配利润（本期亏损 55,000，权益减少为负）");
+    assert_eq!(
+        undistributed.values[0],
+        m("-55000.00"),
+        "未分配利润（本期亏损 55,000，权益减少为负）"
+    );
 
     // 年初列 = 期初
     let assets_begin = table.rows[at].values[1];
@@ -858,7 +884,11 @@ fn t13_income_statement() {
 
     let np = net_profit_row(&def).expect("净利润行");
     // 收入 200,000 - 成本 150,000 - 工资 80,000 - 折旧 5,000 - 房租 20,000 = -55,000
-    assert_eq!(table.rows[np].values[0], m("-55000.00"), "本月净利润（亏损）");
+    assert_eq!(
+        table.rows[np].values[0],
+        m("-55000.00"),
+        "本月净利润（亏损）"
+    );
 
     // 营业收入行
     let rev = table
@@ -1011,7 +1041,9 @@ fn t16_close_and_unclose() {
     assert_eq!(periods::closed_upto(&db).unwrap(), None);
 
     // 反结账后可以再结账
-    assert!(periods::close(&db, p1(), "李主管", true).unwrap().is_empty());
+    assert!(periods::close(&db, p1(), "李主管", true)
+        .unwrap()
+        .is_empty());
 
     // 不能跳过期间结账（1 月未结时不能结 3 月）
     periods::unclose(&db, p1(), "李主管").unwrap();
@@ -1118,7 +1150,9 @@ fn t19_year_end_carry() {
     assert_eq!(after.for_account("4103", None).end(), Money::ZERO);
     // 亏损结转到未分配利润的借方，权益相应减少
     assert_eq!(
-        after.for_account(fincore::engine::UNDISTRIBUTED_ACCOUNT, None).end(),
+        after
+            .for_account(fincore::engine::UNDISTRIBUTED_ACCOUNT, None)
+            .end(),
         m("55000.00")
     );
 }
@@ -1151,7 +1185,8 @@ fn t20_backup_and_integrity() {
         assert_eq!(d, m("1700000.00"));
         assert_eq!(c, m("1700000.00"));
     }
-    std::fs::remove_dir_all(&dir).expect("临时备份目录必须删干净 —— 连接没 drop 就会删不掉，残留会撞上下次 PID 复用");
+    std::fs::remove_dir_all(&dir)
+        .expect("临时备份目录必须删干净 —— 连接没 drop 就会删不掉，残留会撞上下次 PID 复用");
 }
 
 #[test]

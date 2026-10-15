@@ -13,13 +13,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Align, Color32, Layout, RichText, Ui};
-use findb::Db;
 use fincore::{AuxKind, Period, Perm};
+use findb::Db;
 
 use state::{AppCtx, AppState, ConfirmAction, NavItem};
 
 /// 需要跨会话记住的东西：最近账套、上次登录名、精简模式开关
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 pub struct Persist {
     pub recent: Vec<PathBuf>,
     pub last_user: String,
@@ -42,20 +42,11 @@ pub struct Persist {
     pub simple_nav: Option<bool>,
 }
 
-impl Default for Persist {
-    fn default() -> Self {
-        Self { recent: Vec::new(), last_user: String::new(), simple_nav: None }
-    }
-}
-
 /// 实际生效的精简模式取值。
 ///
 /// 一句话规则：**没明确关掉就精简，用户的明确选择永远优先。**
 pub fn effective_simple_nav(p: &Persist) -> bool {
-    match p.simple_nav {
-        Some(b) => b,
-        None => true,
-    }
+    p.simple_nav.unwrap_or(true)
 }
 
 /// 启动桌面应用
@@ -107,6 +98,8 @@ impl FinBookApp {
     }
 
     /// 危险 / 不可逆动作的统一执行入口
+    // 同 login::open_book：单线程 UI 内 Arc 共享 Db，不跨线程。
+    #[allow(clippy::arc_with_non_send_sync)]
     fn run_action(&mut self, act: ConfirmAction) {
         let Self { st, views, .. } = self;
         let mut ctx = AppCtx { st, now: 0.0 };
@@ -229,7 +222,10 @@ impl FinBookApp {
                 // 清空全部凭证与期初是高危不可逆操作，不能只靠期末处理入口的
                 // CarryForward 权限：要求备份权限（默认仅管理员）。
                 if !ctx.can(Perm::Backup) {
-                    ctx.error(format!("没有「{}」权限，无法清空业务数据", Perm::Backup.label()));
+                    ctx.error(format!(
+                        "没有「{}」权限，无法清空业务数据",
+                        Perm::Backup.label()
+                    ));
                     return;
                 }
                 let r = ctx.db().clear_vouchers();
@@ -337,7 +333,11 @@ impl FinBookApp {
                 let who = ctx.user().username.clone();
                 let r = findb::assets::dispose(ctx.db(), id, p, fincore::Money::ZERO, &who);
                 if ctx.handle(r).is_some() {
-                    ctx.log("固定资产", "资产清理", &format!("#{id}（已生成清理转销凭证）"));
+                    ctx.log(
+                        "固定资产",
+                        "资产清理",
+                        &format!("#{id}（已生成清理转销凭证）"),
+                    );
                     ctx.info("已清理并生成转销凭证草稿（变卖收款与净损益结转请另行制单）");
                     views.data_changed(crate::state::DataKind::Asset);
                 }
@@ -404,11 +404,8 @@ impl FinBookApp {
                 }
             }
             ConfirmAction::ClearBudget => {
-                let r = ctx
-                    .db()
-                    .conn()
-                    .execute("DELETE FROM budget", []);
-                if let Some(_) = ctx.handle(r.map(|n| n).map_err(findb::DbError::from)) {
+                let r = ctx.db().conn().execute("DELETE FROM budget", []);
+                if ctx.handle(r.map_err(findb::DbError::from)).is_some() {
                     ctx.log("预算", "清空预算", "全部");
                     ctx.info("已清空全部预算");
                     views.data_changed(crate::state::DataKind::Mgmt);
@@ -418,7 +415,9 @@ impl FinBookApp {
                 let r = findb::users::reset_device(ctx.db(), &username);
                 if ctx.handle(r).is_some() {
                     ctx.log("安全", "重置设备绑定", &username);
-                    ctx.info(format!("已重置「{username}」的设备绑定，该账号可在新设备重新绑定"));
+                    ctx.info(format!(
+                        "已重置「{username}」的设备绑定，该账号可在新设备重新绑定"
+                    ));
                     views.data_changed(crate::state::DataKind::User);
                 }
             }
@@ -457,7 +456,12 @@ impl eframe::App for FinBookApp {
 
         // 会话空闲超时：代账会计离开工位忘记锁屏，是单机财务软件最常见的泄露场景
         if self.st.user.is_some() && self.st.session.expired() {
-            let who = self.st.user.as_ref().map(|u| u.username.clone()).unwrap_or_default();
+            let who = self
+                .st
+                .user
+                .as_ref()
+                .map(|u| u.username.clone())
+                .unwrap_or_default();
             if let Some(db) = self.st.db.clone() {
                 let _ = db.log(&who, "系统", "自动登出", "会话空闲超时");
             }
@@ -474,11 +478,10 @@ impl eframe::App for FinBookApp {
 
         if self.st.user.is_none() || self.st.db.is_none() {
             egui::CentralPanel::default().show(ctx, |ui| {
-                self.login
-                    .show(ui, &mut self.st, &mut self.persist.recent);
+                self.login.show(ui, &mut self.st, &mut self.persist.recent);
             });
-            if self.st.user.is_some() && self.st.db.is_some() {
-                self.persist.last_user = self.st.user.as_ref().unwrap().username.clone();
+            if let (Some(u), Some(_)) = (&self.st.user, &self.st.db) {
+                self.persist.last_user = u.username.clone();
                 self.views.invalidate_all();
             }
             widgets::toasts(ctx, &mut self.st.toasts, now);
@@ -491,17 +494,30 @@ impl eframe::App for FinBookApp {
             .show(ctx, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.add_space(8.0);
-                    ui.label(RichText::new("FinBook").size(19.0).strong().color(theme::palette::PRIMARY));
+                    ui.label(
+                        RichText::new("FinBook")
+                            .size(19.0)
+                            .strong()
+                            .color(theme::palette::PRIMARY),
+                    );
                     ui.add_space(14.0);
                     if ui.button("填制凭证").clicked() {
                         // 顶栏入口必须与侧栏同一套权限门槛，否则 Viewer/Auditor 可绕过导航限制
-                        if self.st.user.as_ref().map(|u| u.can(Perm::VoucherNew)).unwrap_or(false) {
+                        if self
+                            .st
+                            .user
+                            .as_ref()
+                            .map(|u| u.can(Perm::VoucherNew))
+                            .unwrap_or(false)
+                        {
                             self.st.nav = NavItem::VoucherNew;
                         } else {
                             let now = ui.input(|i| i.time);
-                            self.st
-                                .toasts
-                                .push(format!("没有「{}」权限", Perm::VoucherNew.label()), true, now);
+                            self.st.toasts.push(
+                                format!("没有「{}」权限", Perm::VoucherNew.label()),
+                                true,
+                                now,
+                            );
                         }
                     }
                     if ui.button("凭证查询").clicked() {
@@ -644,7 +660,7 @@ fn period_selector(st: &mut AppState, views: &mut views::Views, ui: &mut Ui) {
     let Some(db) = st.db.clone() else { return };
     let start = db.options().start_period;
     let this_year = Period::default().year();
-    let end = Period::new(this_year + 1, 12).unwrap_or(Period::default());
+    let end = Period::new(this_year + 1, 12).unwrap_or_default();
     let list = if end >= start {
         Period::range(start, end)
     } else {
@@ -671,11 +687,14 @@ fn period_selector(st: &mut AppState, views: &mut views::Views, ui: &mut Ui) {
                     p.label()
                 };
                 if ui
-                    .selectable_label(p == cur, RichText::new(t).color(if locked {
-                        ui.visuals().weak_text_color()
-                    } else {
-                        Color32::BLACK
-                    }))
+                    .selectable_label(
+                        p == cur,
+                        RichText::new(t).color(if locked {
+                            ui.visuals().weak_text_color()
+                        } else {
+                            Color32::BLACK
+                        }),
+                    )
                     .clicked()
                     && p != cur
                 {
@@ -698,7 +717,8 @@ fn side_bar(st: &mut AppState, ui: &mut Ui, simple_nav: &mut bool) {
                 let mut last_group = String::new();
                 for item in NavItem::menu() {
                     // 管理员专属入口：非管理员连分组标题一起隐藏
-                    if item.admin_only() && !st.user.as_ref().map(|u| u.is_admin()).unwrap_or(false) {
+                    if item.admin_only() && !st.user.as_ref().map(|u| u.is_admin()).unwrap_or(false)
+                    {
                         continue;
                     }
                     // 精简模式：只留日常财务够用的菜单，其余（生产制造 / 供应链 / 成本 /
@@ -847,7 +867,9 @@ mod onboarding_tests {
 
     fn p(simple: Option<bool>, n_recent: usize) -> Persist {
         Persist {
-            recent: std::iter::repeat_with(|| std::path::PathBuf::from("/x.fbk")).take(n_recent).collect(),
+            recent: std::iter::repeat_with(|| std::path::PathBuf::from("/x.fbk"))
+                .take(n_recent)
+                .collect(),
             last_user: String::new(),
             simple_nav: simple,
         }
@@ -858,18 +880,33 @@ mod onboarding_tests {
     /// 看到 47 项正是要解决的问题；开关与「临时看全部」一键即回，无功能损失。
     #[test]
     fn undecided_user_gets_simple_nav_by_default() {
-        assert!(effective_simple_nav(&p(None, 0)), "新用户首次打开必须默认精简");
-        assert!(effective_simple_nav(&p(None, 3)), "有历史但没明确关过也要精简");
+        assert!(
+            effective_simple_nav(&p(None, 0)),
+            "新用户首次打开必须默认精简"
+        );
+        assert!(
+            effective_simple_nav(&p(None, 3)),
+            "有历史但没明确关过也要精简"
+        );
     }
 
     /// 用户的明确选择永远优先，两个方向都要能覆盖默认推断。
     #[test]
     fn explicit_choice_overrides_inference() {
         // 主动关掉 → 保持关（含老用户：关了就是关了，不会被默认值顶回来）
-        assert!(!effective_simple_nav(&p(Some(false), 0)), "用户主动关掉后不能被默认值顶回来");
-        assert!(!effective_simple_nav(&p(Some(false), 5)), "老用户明确关掉后也要保持完整菜单");
+        assert!(
+            !effective_simple_nav(&p(Some(false), 0)),
+            "用户主动关掉后不能被默认值顶回来"
+        );
+        assert!(
+            !effective_simple_nav(&p(Some(false), 5)),
+            "老用户明确关掉后也要保持完整菜单"
+        );
         // 主动打开 → 保持开
-        assert!(effective_simple_nav(&p(Some(true), 5)), "用户主动打开后要保持");
+        assert!(
+            effective_simple_nav(&p(Some(true), 5)),
+            "用户主动打开后要保持"
+        );
     }
 
     /// 反序列化老版本配置（没有 simple_nav 字段）不能崩，且落到 None。

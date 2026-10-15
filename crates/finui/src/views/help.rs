@@ -34,7 +34,7 @@ enum HelpTab {
     /// 用户权限
     Security,
     /// 常见问题
-    FAQ,
+    Faq,
 }
 
 impl HelpTab {
@@ -53,7 +53,7 @@ impl HelpTab {
             HelpTab::PeriodEnd,
             HelpTab::Automation,
             HelpTab::Security,
-            HelpTab::FAQ,
+            HelpTab::Faq,
         ]
     }
 
@@ -72,7 +72,7 @@ impl HelpTab {
             HelpTab::PeriodEnd => "期末处理",
             HelpTab::Automation => "月末自动化",
             HelpTab::Security => "用户权限",
-            HelpTab::FAQ => "常见问题",
+            HelpTab::Faq => "常见问题",
         }
     }
 }
@@ -109,10 +109,7 @@ impl HelpView {
 
         ui.horizontal(|ui| {
             for tab in HelpTab::all() {
-                if ui
-                    .selectable_label(self.tab == *tab, tab.label())
-                    .clicked()
-                {
+                if ui.selectable_label(self.tab == *tab, tab.label()).clicked() {
                     self.tab = *tab;
                 }
             }
@@ -120,23 +117,21 @@ impl HelpView {
 
         ui.separator();
 
-        ScrollArea::vertical().show(ui, |ui| {
-            match self.tab {
-                HelpTab::QuickStart => self.show_quick_start(ui),
-                HelpTab::Voucher => self.show_voucher_help(ui),
-                HelpTab::Account => self.show_account_help(ui),
-                HelpTab::Reports => self.show_reports_help(ui),
-                HelpTab::Assets => self.show_assets_help(ui),
-                HelpTab::Inventory => self.show_inventory_help(ui),
-                HelpTab::Payroll => self.show_payroll_help(ui),
-                HelpTab::Claims => self.show_claims_help(ui),
-                HelpTab::BankRec => self.show_bank_rec_help(ui),
-                HelpTab::Settle => self.show_settle_help(ui),
-                HelpTab::PeriodEnd => self.show_period_end_help(ui),
-                HelpTab::Automation => self.show_automation_help(ui),
-                HelpTab::Security => self.show_security_help(ui),
-                HelpTab::FAQ => self.show_faq(ui),
-            }
+        ScrollArea::vertical().show(ui, |ui| match self.tab {
+            HelpTab::QuickStart => self.show_quick_start(ui),
+            HelpTab::Voucher => self.show_voucher_help(ui),
+            HelpTab::Account => self.show_account_help(ui),
+            HelpTab::Reports => self.show_reports_help(ui),
+            HelpTab::Assets => self.show_assets_help(ui),
+            HelpTab::Inventory => self.show_inventory_help(ui),
+            HelpTab::Payroll => self.show_payroll_help(ui),
+            HelpTab::Claims => self.show_claims_help(ui),
+            HelpTab::BankRec => self.show_bank_rec_help(ui),
+            HelpTab::Settle => self.show_settle_help(ui),
+            HelpTab::PeriodEnd => self.show_period_end_help(ui),
+            HelpTab::Automation => self.show_automation_help(ui),
+            HelpTab::Security => self.show_security_help(ui),
+            HelpTab::Faq => self.show_faq(ui),
         });
     }
 
@@ -158,7 +153,10 @@ impl HelpView {
     fn show_quick_start(&self, ui: &mut Ui) {
         self.section_title(ui, "快速入门指南");
 
-        self.help_text(ui, "欢迎使用 FinBook 财务管理系统！本指南将帮助您快速上手。");
+        self.help_text(
+            ui,
+            "欢迎使用 FinBook 财务管理系统！本指南将帮助您快速上手。",
+        );
 
         self.section_title(ui, "1. 初始化设置");
         self.help_text(ui, "• 进入「账套参数」设置公司名称、税号等基本信息");
@@ -459,27 +457,51 @@ impl HelpView {
         self.section_title(ui, "常见问题");
 
         self.section_title(ui, "Q: 凭证保存提示借贷不平衡？");
-        self.help_text(ui, "A: 请检查借方合计是否等于贷方合计。可以使用「补平」功能自动补齐差额。");
+        self.help_text(
+            ui,
+            "A: 请检查借方合计是否等于贷方合计。可以使用「补平」功能自动补齐差额。",
+        );
 
         self.section_title(ui, "Q: 无法修改已审核的凭证？");
-        self.help_text(ui, "A: 已审核凭证需要先取消审核才能修改。在凭证查询界面选中凭证，点击「取消审核」。");
+        self.help_text(
+            ui,
+            "A: 已审核凭证需要先取消审核才能修改。在凭证查询界面选中凭证，点击「取消审核」。",
+        );
 
         self.section_title(ui, "Q: 资产负债表不平？");
-        self.help_text(ui, "A: 请检查：1. 期初余额是否正确；2. 本期凭证是否全部记账；3. 损益是否已结转。");
+        self.help_text(
+            ui,
+            "A: 请检查：1. 期初余额是否正确；2. 本期凭证是否全部记账；3. 损益是否已结转。",
+        );
 
         self.section_title(ui, "Q: 如何导出报表？");
-        self.help_text(ui, "A: 在报表界面点击「导出」按钮，选择Excel或CSV格式即可。");
+        self.help_text(
+            ui,
+            "A: 在报表界面点击「导出」按钮，选择Excel或CSV格式即可。",
+        );
 
         self.section_title(ui, "Q: 如何备份数据？");
-        self.help_text(ui, "A: 进入「备份恢复」界面，点击「备份」按钮，选择保存路径即可。");
+        self.help_text(
+            ui,
+            "A: 进入「备份恢复」界面，点击「备份」按钮，选择保存路径即可。",
+        );
 
         self.section_title(ui, "Q: 如何设置自动备份？");
-        self.help_text(ui, "A: 在「账套参数」中设置自动备份路径和频率，系统将自动备份。");
+        self.help_text(
+            ui,
+            "A: 在「账套参数」中设置自动备份路径和频率，系统将自动备份。",
+        );
 
         self.section_title(ui, "Q: 如何导入银行流水？");
-        self.help_text(ui, "A: 在「银行对账」界面点击「导入」，选择银行导出的CSV文件即可。");
+        self.help_text(
+            ui,
+            "A: 在「银行对账」界面点击「导入」，选择银行导出的CSV文件即可。",
+        );
 
         self.section_title(ui, "Q: 如何计提折旧？");
-        self.help_text(ui, "A: 在「固定资产」界面点击「计提折旧」，系统自动计算并生成凭证。");
+        self.help_text(
+            ui,
+            "A: 在「固定资产」界面点击「计提折旧」，系统自动计算并生成凭证。",
+        );
     }
 }

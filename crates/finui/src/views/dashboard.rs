@@ -1,8 +1,8 @@
 //! 首页工作台
 
 use egui::{Color32, RichText, Ui};
-use findb::balances::BalanceQuery;
 use fincore::{Money, Period, Voucher};
+use findb::balances::BalanceQuery;
 
 use crate::state::{AppCtx, NavItem};
 use crate::theme::palette;
@@ -72,7 +72,8 @@ impl Dashboard {
         self.key = key;
 
         let db = ctx.db();
-        let (draft, audited, posted, void) = findb::vouchers::status_summary(db, p).unwrap_or((0, 0, 0, 0));
+        let (draft, audited, posted, void) =
+            findb::vouchers::status_summary(db, p).unwrap_or((0, 0, 0, 0));
         self.draft = draft;
         self.audited = audited;
         self.posted = posted;

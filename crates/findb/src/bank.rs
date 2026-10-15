@@ -59,7 +59,10 @@ enum Counterparty {
 /// 没法可靠解析。唯一稳的锚点是**对方名称作为子串出现在摘要里**。
 /// 多个都命中时取**名称最长**的 —— 最长的那个通常是最具体的那个
 /// （「深圳市XX有限公司」比「XX」更可能是真名）。
-fn match_counterparty(summary: &str, map: &std::collections::HashMap<String, String>) -> Option<(String, String)> {
+fn match_counterparty(
+    summary: &str,
+    map: &std::collections::HashMap<String, String>,
+) -> Option<(String, String)> {
     let mut best: Option<(String, String)> = None;
     for (code, name) in map {
         if name.is_empty() || !summary.contains(name.as_str()) {
@@ -132,7 +135,11 @@ pub fn gen_vouchers(db: &Db, period: Period, account: &str, who: &str) -> DbResu
         }
         let in_flow = amt.is_positive();
         // 进账找客户、支出找供应商（方向与往来类型是对偶的，见 Counterparty 说明）
-        let want = if in_flow { Counterparty::Customer } else { Counterparty::Supplier };
+        let want = if in_flow {
+            Counterparty::Customer
+        } else {
+            Counterparty::Supplier
+        };
         let map = match want {
             Counterparty::Customer => &customers,
             Counterparty::Supplier => &suppliers,
@@ -145,7 +152,11 @@ pub fn gen_vouchers(db: &Db, period: Period, account: &str, who: &str) -> DbResu
             ));
             continue;
         };
-        let other = if in_flow { biz.ar.as_str() } else { biz.ap.as_str() };
+        let other = if in_flow {
+            biz.ar.as_str()
+        } else {
+            biz.ap.as_str()
+        };
         if other.trim().is_empty() {
             res.skipped.push(skip_of(
                 s,
@@ -244,10 +255,7 @@ fn want_aux_kind(c: Counterparty) -> AuxKind {
     }
 }
 
-fn aux_map(
-    db: &Db,
-    kind: AuxKind,
-) -> DbResult<std::collections::HashMap<String, String>> {
+fn aux_map(db: &Db, kind: AuxKind) -> DbResult<std::collections::HashMap<String, String>> {
     let mut m = std::collections::HashMap::new();
     for code in crate::auxs::codes(db, kind)? {
         if let Some(e) = crate::auxs::get(db, kind, &code)? {
@@ -328,9 +336,8 @@ fn map_stmt(r: &rusqlite::Row) -> rusqlite::Result<Statement> {
         id: r.get(0)?,
         period: Period::from_ymm(r.get(1)?),
         account_code: r.get(2)?,
-        biz_date: NaiveDate::parse_from_str(&d, "%Y-%m-%d").unwrap_or_else(|_| {
-            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()
-        }),
+        biz_date: NaiveDate::parse_from_str(&d, "%Y-%m-%d")
+            .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
         summary: r.get(4)?,
         settle_no: r.get(5)?,
         debit: Money::parse_or_zero(&r.get::<_, String>(6)?),
@@ -388,8 +395,10 @@ pub fn insert(c: &impl crate::AsConn, s: &Statement) -> DbResult<i64> {
 }
 
 pub fn delete(db: &Db, id: i64) -> DbResult<()> {
-    db.conn()
-        .execute("DELETE FROM bank_statement WHERE id=?1", rusqlite::params![id])?;
+    db.conn().execute(
+        "DELETE FROM bank_statement WHERE id=?1",
+        rusqlite::params![id],
+    )?;
     Ok(())
 }
 
@@ -435,7 +444,11 @@ pub fn unlink_all(db: &Db, period: Period, account: &str) -> DbResult<usize> {
 // ---------------- 账面侧 ----------------
 
 /// 取出某科目某期所有已记账的银行收支分录（含是否已被勾对）
-pub fn book_side(c: &impl crate::AsConn, period: Period, account: &str) -> DbResult<Vec<BookEntry>> {
+pub fn book_side(
+    c: &impl crate::AsConn,
+    period: Period,
+    account: &str,
+) -> DbResult<Vec<BookEntry>> {
     let mut st = c.conn_ref().prepare(
         "SELECT e.id, v.id, v.date, v.word, v.no, e.summary,
                 COALESCE(e.settle_no,''), e.debit, e.credit
@@ -465,7 +478,11 @@ pub fn book_side(c: &impl crate::AsConn, period: Period, account: &str) -> DbRes
 }
 
 /// 账面侧已被勾对的分录 id
-pub fn linked_entry_ids(c: &impl crate::AsConn, period: Period, account: &str) -> DbResult<Vec<i64>> {
+pub fn linked_entry_ids(
+    c: &impl crate::AsConn,
+    period: Period,
+    account: &str,
+) -> DbResult<Vec<i64>> {
     let mut st = c.conn_ref().prepare(
         "SELECT entry_id FROM bank_statement
          WHERE period=?1 AND account_code=?2 AND entry_id IS NOT NULL",
@@ -641,9 +658,8 @@ impl Reconciliation {
 pub fn reconcile(db: &Db, period: Period, account: &str) -> DbResult<Reconciliation> {
     let stmts = list(db, period, account)?;
     let books = book_side(db, period, account)?;
-    let linked: std::collections::HashSet<i64> = linked_entry_ids(db, period, account)?
-        .into_iter()
-        .collect();
+    let linked: std::collections::HashSet<i64> =
+        linked_entry_ids(db, period, account)?.into_iter().collect();
 
     let bank_balance = stmts.last().map(|s| s.balance).unwrap_or(Money::ZERO);
 
@@ -796,12 +812,13 @@ pub fn import_template() -> fincore::batch::Template {
             "先把两行示例删掉，再填。".to_string(),
             "借方发生额＝收入（银行存款增加），贷方发生额＝支出；只填一边，另一边留空。"
                 .to_string(),
-            "注意：银行导出的对账单借贷是反的（银行视角：借＝支出）——从网银复制过来时，".to_string(),
-            "把借贷两列对调一下再粘，否则自动勾对不上。".to_string(),
-            "银行给的表只有一列金额也行：写成「日期,摘要,结算号,金额,余额」，支出记负数。".to_string(),
-            "第一列不是日期会被当表头跳过 —— 表头只能放第一行。".to_string(),
-            "填完后回软件：银行对账页点「导入 CSV」→「从 Excel 文件载入」直接读进来。"
+            "注意：银行导出的对账单借贷是反的（银行视角：借＝支出）——从网银复制过来时，"
                 .to_string(),
+            "把借贷两列对调一下再粘，否则自动勾对不上。".to_string(),
+            "银行给的表只有一列金额也行：写成「日期,摘要,结算号,金额,余额」，支出记负数。"
+                .to_string(),
+            "第一列不是日期会被当表头跳过 —— 表头只能放第一行。".to_string(),
+            "填完后回软件：银行对账页点「导入 CSV」→「从 Excel 文件载入」直接读进来。".to_string(),
         ],
     }
 }
@@ -944,11 +961,7 @@ mod tests {
         )
         .unwrap();
         // 银行科目本身带「银行账户」辅助，不建一个过不了记账校验
-        crate::auxs::insert(
-            &db,
-            &AuxEntity::new(AuxKind::Bank, "B01", "工行基本户"),
-        )
-        .unwrap();
+        crate::auxs::insert(&db, &AuxEntity::new(AuxKind::Bank, "B01", "工行基本户")).unwrap();
 
         // ① 进账，摘要含客户名 → 应生成
         // ② 支出，摘要含供应商名 → 应生成
@@ -1042,7 +1055,11 @@ mod tests {
             summary: summary.into(),
             settle_no: no.into(),
             debit: if v.is_positive() { v } else { Money::ZERO },
-            credit: if v.is_negative() { v.abs() } else { Money::ZERO },
+            credit: if v.is_negative() {
+                v.abs()
+            } else {
+                Money::ZERO
+            },
             balance: Money::parse(bal).unwrap(),
             entry_id: None,
             matched_at: None,

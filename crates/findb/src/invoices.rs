@@ -119,7 +119,11 @@ pub fn list(db: &Db, q: &InvoiceQuery) -> DbResult<Vec<Invoice>> {
 /// 按 id 取发票
 pub fn get(db: &Db, id: i64) -> DbResult<Option<Invoice>> {
     db.conn()
-        .query_row(&format!("SELECT {COLS} FROM invoice WHERE id=?1"), [id], map)
+        .query_row(
+            &format!("SELECT {COLS} FROM invoice WHERE id=?1"),
+            [id],
+            map,
+        )
         .optional()
         .map_err(Into::into)
 }
@@ -161,7 +165,11 @@ pub fn insert(db: &Db, inv: &Invoice, who: &str) -> DbResult<i64> {
             inv.amount.fmt_plain(),
             inv.tax.fmt_plain(),
             inv.tax_rate,
-            if inv.status.is_empty() { "pending" } else { &inv.status },
+            if inv.status.is_empty() {
+                "pending"
+            } else {
+                &inv.status
+            },
             inv.memo,
             inv.attach_id,
             who,
@@ -170,7 +178,12 @@ pub fn insert(db: &Db, inv: &Invoice, who: &str) -> DbResult<i64> {
         ],
     )?;
     let id = db.conn().last_insert_rowid();
-    db.log(who, "发票", "新增", &format!("#{id} {}{}", inv.kind, inv.number))?;
+    db.log(
+        who,
+        "发票",
+        "新增",
+        &format!("#{id} {}{}", inv.kind, inv.number),
+    )?;
     Ok(id)
 }
 
@@ -218,7 +231,16 @@ pub fn set_status(db: &Db, id: i64, status: &str, who: &str) -> DbResult<Invoice
     if n == 0 {
         return Err(FinError::not_found("发票不存在").into());
     }
-    db.log(who, "发票", if status == "verified" { "认证" } else { "标记状态" }, &format!("#{id} → {status}"))?;
+    db.log(
+        who,
+        "发票",
+        if status == "verified" {
+            "认证"
+        } else {
+            "标记状态"
+        },
+        &format!("#{id} → {status}"),
+    )?;
     get(db, id)?.ok_or_else(|| FinError::not_found("发票不存在").into())
 }
 
@@ -242,11 +264,9 @@ fn next_invoice_no(db: &Db) -> DbResult<String> {
         let no = format!("FP{n:06}");
         let exists: Option<i64> = db
             .conn()
-            .query_row(
-                "SELECT id FROM invoice WHERE number=?1",
-                [&no],
-                |r| r.get(0),
-            )
+            .query_row("SELECT id FROM invoice WHERE number=?1", [&no], |r| {
+                r.get(0)
+            })
             .optional()?;
         if exists.is_none() {
             return Ok(no);
@@ -258,8 +278,7 @@ fn next_invoice_no(db: &Db) -> DbResult<String> {
 /// 下推：采购订单 → 采购（进项）发票——金额=订单不含税/税额/价税合计，卖方=供应商、
 /// 买方=本企业，状态 pending（待认证），票面代码留空、号码自动 FP 序号；记录 doc_link 勾稽。
 pub fn push_from_po(db: &Db, po_id: i64, who: &str) -> DbResult<i64> {
-    let po = crate::scm::po_get(db, po_id)?
-        .ok_or_else(|| FinError::not_found("采购订单不存在"))?;
+    let po = crate::scm::po_get(db, po_id)?.ok_or_else(|| FinError::not_found("采购订单不存在"))?;
     if !po.total_amount.is_positive() {
         return Err(FinError::state("采购订单金额为 0，请先补价再下推发票").into());
     }
@@ -291,8 +310,7 @@ pub fn push_from_po(db: &Db, po_id: i64, who: &str) -> DbResult<i64> {
 /// 下推：销售订单 → 销售（销项）发票——金额=订单整单（不含税/税额），买方=客户、
 /// 卖方=本企业；状态 pending；记录 doc_link 勾稽。
 pub fn push_from_so(db: &Db, so_id: i64, who: &str) -> DbResult<i64> {
-    let so = crate::scm::so_get(db, so_id)?
-        .ok_or_else(|| FinError::not_found("销售订单不存在"))?;
+    let so = crate::scm::so_get(db, so_id)?.ok_or_else(|| FinError::not_found("销售订单不存在"))?;
     if !so.total_amount.is_positive() {
         return Err(FinError::state("销售订单金额为 0，无法下推发票").into());
     }
@@ -324,9 +342,9 @@ pub fn push_from_so(db: &Db, so_id: i64, who: &str) -> DbResult<i64> {
 /// 汇总：进项/销项各自的金额与税额（用于发票台账统计）
 /// 遵循全库约定：金额存 TEXT、不在 SQL 里 SUM，Rust 侧用 Decimal 累加。
 pub fn summary(db: &Db) -> DbResult<Vec<(String, Money, Money, i64)>> {
-    let mut stmt = db.conn().prepare(
-        "SELECT kind, amount_tax, tax FROM invoice ORDER BY id",
-    )?;
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT kind, amount_tax, tax FROM invoice ORDER BY id")?;
     let mut by_kind: std::collections::HashMap<String, (Money, Money, i64)> =
         std::collections::HashMap::new();
     let rows = stmt
@@ -339,15 +357,15 @@ pub fn summary(db: &Db) -> DbResult<Vec<(String, Money, Money, i64)>> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     for (kind, tax_total, tax_amt) in rows {
-        let e = by_kind
-            .entry(kind)
-            .or_insert((Money::ZERO, Money::ZERO, 0));
+        let e = by_kind.entry(kind).or_insert((Money::ZERO, Money::ZERO, 0));
         e.0 += Money::parse_or_zero(&tax_total);
         e.1 += Money::parse_or_zero(&tax_amt);
         e.2 += 1;
     }
-    let mut out: Vec<(String, Money, Money, i64)> =
-        by_kind.into_iter().map(|(k, v)| (k, v.0, v.1, v.2)).collect();
+    let mut out: Vec<(String, Money, Money, i64)> = by_kind
+        .into_iter()
+        .map(|(k, v)| (k, v.0, v.1, v.2))
+        .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
 }
@@ -416,10 +434,24 @@ mod tests {
         insert(&db, &sample("out", "B001"), "u1").unwrap();
 
         // 按类型过滤
-        let ins = list(&db, &InvoiceQuery { kind: Some("in".into()), ..Default::default() }).unwrap();
+        let ins = list(
+            &db,
+            &InvoiceQuery {
+                kind: Some("in".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(ins.len(), 2);
         // 关键字搜索
-        let kw = list(&db, &InvoiceQuery { keyword: Some("B001".into()), ..Default::default() }).unwrap();
+        let kw = list(
+            &db,
+            &InvoiceQuery {
+                keyword: Some("B001".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(kw.len(), 1);
         assert_eq!(kw[0].kind, "out");
 

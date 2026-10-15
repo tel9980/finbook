@@ -127,13 +127,7 @@ fn sid_from(resp: &axum::http::Response<Body>) -> String {
     cookie.split(';').next().unwrap().to_string()
 }
 
-
-
-pub async fn login(
-    state: &Arc<WebState>,
-    username: &str,
-    password: &str,
-) -> (StatusCode, String) {
+pub async fn login(state: &Arc<WebState>, username: &str, password: &str) -> (StatusCode, String) {
     login_with_device(state, username, password, "dev-test-0001").await
 }
 
@@ -151,6 +145,8 @@ pub async fn select_book(state: &Arc<WebState>, sid: &str, key: &str) -> StatusC
 }
 
 /// 普通用户自助建账套（返回 (status, body)）
+// 跨 test target 共享的 helper：某些 target 用不到，dead_code 是误报，别删。
+#[allow(dead_code)]
 pub async fn create_book(state: &Arc<WebState>, sid: &str, company: &str) -> (StatusCode, String) {
     // 治理收归（账号模型二元化）：建套仅管理员——helper 内部改用管理员建套，并把原
     // 调用者（会话反查 username）邀请进套为会计，既有测试的「进入/协作」语义不变；
@@ -222,6 +218,8 @@ pub fn authed_post(uri: &str, sid: &str, body: serde_json::Value) -> Request<Bod
 }
 
 /// 带会话 cookie 的 PUT（批量导入用 PUT 与解析区分：解析不写库，导入写库）
+// 跨 test target 共享：batch_paste.rs 在用，本 target 不用是误报，别删。
+#[allow(dead_code)]
 pub fn authed_put(uri: &str, sid: &str, body: serde_json::Value) -> Request<Body> {
     Request::builder()
         .method("PUT")
@@ -246,6 +244,8 @@ pub async fn boss_in_b1(state: &Arc<WebState>) -> String {
     sid
 }
 
+// 跨 test target 共享（customers.rs 在用），本 target 不用是误报，别删。
+#[allow(dead_code)]
 pub fn money_num(s: &str) -> f64 {
     s.replace(',', "").parse::<f64>().unwrap_or(0.0)
 }

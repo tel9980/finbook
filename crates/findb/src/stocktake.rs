@@ -111,16 +111,18 @@ fn batch_book_qty(db: &Db, item: &str, batch_no: &str, warehouse: &str) -> DbRes
         "SELECT qty FROM stock_move WHERE item=?1 AND batch_no=?2 AND (?3='' OR warehouse=?3)",
     )?;
     let rows = st
-        .query_map(rusqlite::params![item, batch_no, warehouse], |r| r.get::<_, String>(0))?
+        .query_map(rusqlite::params![item, batch_no, warehouse], |r| {
+            r.get::<_, String>(0)
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows.iter().map(|s| Money::parse_or_zero(s)).sum())
 }
 
 /// 盘点单列表（含明细）
 pub fn count_list(db: &Db) -> DbResult<Vec<StockCount>> {
-    let mut st = db
-        .conn()
-        .prepare(&format!("SELECT {C_COLS} FROM inv_count ORDER BY date DESC, id DESC"))?;
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {C_COLS} FROM inv_count ORDER BY date DESC, id DESC"
+    ))?;
     let mut items = st
         .query_map([], map_count)?
         .collect::<Result<Vec<_>, _>>()?;
@@ -273,8 +275,16 @@ pub fn count_apply(db: &Db, id: i64, who: &str) -> DbResult<(i64, Option<i64>, M
     if rows.is_empty() {
         return Err(fincore::FinError::msg("实盘与账面一致，无需应用").into());
     }
-    let gain: Money = rows.iter().filter(|r| r.diff.is_positive()).map(|r| r.value).sum();
-    let loss: Money = rows.iter().filter(|r| r.diff.is_negative()).map(|r| r.value).sum();
+    let gain: Money = rows
+        .iter()
+        .filter(|r| r.diff.is_positive())
+        .map(|r| r.value)
+        .sum();
+    let loss: Money = rows
+        .iter()
+        .filter(|r| r.diff.is_negative())
+        .map(|r| r.value)
+        .sum();
 
     // 盘盈盘亏凭证腿（价值≠0 才出；金额口径=标准价，与计价配置一致时无口径差）
     let memo = format!("盘点盈亏 {}", doc.no);
@@ -372,9 +382,7 @@ pub fn count_apply(db: &Db, id: i64, who: &str) -> DbResult<(i64, Option<i64>, M
         rusqlite::params![id, vid, now()],
     )?;
     if n == 0 {
-        return Err(
-            fincore::FinError::state("盘点单状态已变化（可能已被应用）").into(),
-        );
+        return Err(fincore::FinError::state("盘点单状态已变化（可能已被应用）").into());
     }
     tx.commit()?;
     Ok((id, vid, total_value))

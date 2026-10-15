@@ -4,9 +4,9 @@
 
 use chrono::NaiveDate;
 use egui::{RichText, Ui};
+use fincore::{Money, Period, Perm};
 use findb::business::{self, StockMove};
 use findb::inventory2::{self, AbcRow, InvAging, ItemUnit, Serial, WhStock};
-use fincore::{Money, Perm, Period};
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -160,7 +160,11 @@ impl InventoryDeepView {
         self.items = business::stock_items(ctx.db()).unwrap_or_default();
         match self.tab {
             Tab::Serial => {
-                let item = if self.item == ALL_ITEMS { "" } else { &self.item };
+                let item = if self.item == ALL_ITEMS {
+                    ""
+                } else {
+                    &self.item
+                };
                 self.serials = inventory2::serial_list(ctx.db(), item).unwrap_or_default();
             }
             Tab::Unit => {
@@ -173,7 +177,8 @@ impl InventoryDeepView {
                 self.abc = inventory2::abc_analysis(ctx.db(), p).unwrap_or_default();
             }
             Tab::Warehouse => {
-                self.wh_rows = inventory2::warehouse_stock(ctx.db(), &self.wh_item).unwrap_or_default();
+                self.wh_rows =
+                    inventory2::warehouse_stock(ctx.db(), &self.wh_item).unwrap_or_default();
             }
             Tab::Transfer => {
                 self.transfer = inventory2::transfer_report(ctx.db(), p).unwrap_or_default();
@@ -188,7 +193,9 @@ impl InventoryDeepView {
         let p = self.period(ctx);
 
         widgets::page_header(ui, "库存深度", |ui| {
-            ui.label(RichText::new("序列号 / 多单位 / 账龄 / ABC / 组装拆卸 / 分仓库 / 调拨").weak());
+            ui.label(
+                RichText::new("序列号 / 多单位 / 账龄 / ABC / 组装拆卸 / 分仓库 / 调拨").weak(),
+            );
         });
 
         widgets::toolbar(ui, |ui| {
@@ -197,7 +204,10 @@ impl InventoryDeepView {
             }
             ui.separator();
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -238,13 +248,17 @@ impl InventoryDeepView {
                 if self.serial_date.is_empty() {
                     self.serial_date = self.today().format("%Y-%m-%d").to_string();
                 }
-                ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.serial_date));
+                ui.add_sized(
+                    [110.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.serial_date),
+                );
                 ui.label("批次");
                 widgets::text_input(ui, &mut self.serial_batch, 120.0, "可留空");
                 ui.label("序列号(逗号/换行分隔)");
                 ui.add_sized(
                     [260.0, 44.0],
-                    egui::TextEdit::multiline(&mut self.serial_in_text).hint_text("S001, S002, S003"),
+                    egui::TextEdit::multiline(&mut self.serial_in_text)
+                        .hint_text("S001, S002, S003"),
                 );
                 if ui.button("批量入库").clicked() && ctx.can(Perm::AccountEdit) {
                     self.do_serial_in(ctx);
@@ -258,7 +272,10 @@ impl InventoryDeepView {
                 if self.serial_date.is_empty() {
                     self.serial_date = self.today().format("%Y-%m-%d").to_string();
                 }
-                ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.serial_date));
+                ui.add_sized(
+                    [110.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.serial_date),
+                );
                 ui.label("序列号");
                 ui.add_sized(
                     [260.0, 44.0],
@@ -279,27 +296,48 @@ impl InventoryDeepView {
             widgets::TCol::new("入库日期", 110.0).fixed(),
             widgets::TCol::new("出库日期", 110.0).fixed(),
         ];
-        widgets::grid(ui, "invdeep_serials", &cols, rows.len(), 22.0, |i, c, ui| {
-            let s = &rows[i];
-            match c {
-                0 => { ui.label(RichText::new(&s.serial).monospace()); }
-                1 => { ui.label(&s.item); }
-                2 => { ui.label(&s.batch_no); }
-                3 => {
-                    ui.label(
-                        RichText::new(match s.status.as_str() {
-                            "in" => "在库",
-                            "out" => "已出库",
-                            _ => "报废",
-                        })
-                        .color(if s.status == "in" { palette::OK } else { palette::CREDIT }),
-                    );
+        widgets::grid(
+            ui,
+            "invdeep_serials",
+            &cols,
+            rows.len(),
+            22.0,
+            |i, c, ui| {
+                let s = &rows[i];
+                match c {
+                    0 => {
+                        ui.label(RichText::new(&s.serial).monospace());
+                    }
+                    1 => {
+                        ui.label(&s.item);
+                    }
+                    2 => {
+                        ui.label(&s.batch_no);
+                    }
+                    3 => {
+                        ui.label(
+                            RichText::new(match s.status.as_str() {
+                                "in" => "在库",
+                                "out" => "已出库",
+                                _ => "报废",
+                            })
+                            .color(if s.status == "in" {
+                                palette::OK
+                            } else {
+                                palette::CREDIT
+                            }),
+                        );
+                    }
+                    4 => {
+                        ui.label(&s.in_date);
+                    }
+                    5 => {
+                        ui.label(s.out_date.clone().unwrap_or_else(|| "—".to_string()));
+                    }
+                    _ => {}
                 }
-                4 => { ui.label(&s.in_date); }
-                5 => { ui.label(s.out_date.clone().unwrap_or_else(|| "—".to_string())); }
-                _ => {}
-            }
-        });
+            },
+        );
     }
 
     fn split_serials(text: &str) -> Vec<String> {
@@ -311,7 +349,11 @@ impl InventoryDeepView {
 
     fn do_serial_in(&mut self, ctx: &mut AppCtx<'_>) {
         self.err.clear();
-        let item = if self.item == ALL_ITEMS { "" } else { &self.item };
+        let item = if self.item == ALL_ITEMS {
+            ""
+        } else {
+            &self.item
+        };
         if item.is_empty() {
             self.err = "请先在上方选择存货".to_string();
             return;
@@ -399,7 +441,16 @@ impl InventoryDeepView {
                 self.unit_conv = if factor.is_zero() {
                     "请先填写有效系数".to_string()
                 } else {
-                    format!("50 {} = {} {}", self.unit_base, Money::from_i64(50).checked_div(factor.inner()).expect("factor 已判非零").round_dp(fincore::money::QTY_DP).fmt_qty(), self.unit_alt)
+                    format!(
+                        "50 {} = {} {}",
+                        self.unit_base,
+                        Money::from_i64(50)
+                            .checked_div(factor.inner())
+                            .expect("factor 已判非零")
+                            .round_dp(fincore::money::QTY_DP)
+                            .fmt_qty(),
+                        self.unit_alt
+                    )
                 };
             }
             if !self.unit_conv.is_empty() {
@@ -426,7 +477,11 @@ impl InventoryDeepView {
         }
         match inventory2::unit_set(ctx.db(), &u) {
             Ok(()) => {
-                ctx.log("库存深度", "单位换算", &format!("{} {}→{}", self.item, self.unit_base, self.unit_alt));
+                ctx.log(
+                    "库存深度",
+                    "单位换算",
+                    &format!("{} {}→{}", self.item, self.unit_base, self.unit_alt),
+                );
                 ctx.info("已保存单位换算");
                 self.dirty = true;
             }
@@ -447,10 +502,18 @@ impl InventoryDeepView {
         widgets::grid(ui, "invdeep_aging", &cols, rows.len(), 24.0, |i, c, ui| {
             let a = &rows[i];
             match c {
-                0 => { ui.label(&a.item); }
-                1 => { ui.label(a.last_in.clone().unwrap_or_else(|| "—".to_string())); }
-                2 => { ui.label(a.days.to_string()); }
-                3 => { ui.label(a.qty.fmt_qty()); }
+                0 => {
+                    ui.label(&a.item);
+                }
+                1 => {
+                    ui.label(a.last_in.clone().unwrap_or_else(|| "—".to_string()));
+                }
+                2 => {
+                    ui.label(a.days.to_string());
+                }
+                3 => {
+                    ui.label(a.qty.fmt_qty());
+                }
                 4 => widgets::amount_label(ui, a.amount),
                 _ => {}
             }
@@ -468,9 +531,13 @@ impl InventoryDeepView {
         widgets::grid(ui, "invdeep_abc", &cols, rows.len(), 24.0, |i, c, ui| {
             let a = &rows[i];
             match c {
-                0 => { ui.label(&a.item); }
+                0 => {
+                    ui.label(&a.item);
+                }
                 1 => widgets::amount_label(ui, a.amount),
-                2 => { ui.label(a.cum_pct.fmt_qty()); }
+                2 => {
+                    ui.label(a.cum_pct.fmt_qty());
+                }
                 3 => {
                     let color = match a.class.as_str() {
                         "A" => palette::CREDIT,
@@ -490,20 +557,28 @@ impl InventoryDeepView {
             self.asm_date = self.today().format("%Y-%m-%d").to_string();
         }
         widgets::card(ui, "组装 / 拆卸", |ui| {
-            ui.label(RichText::new(
-                "组装：子件出库、成品入库（成品数量记 1）；拆卸：成品出库、子件入库。",
-            ).weak());
+            ui.label(
+                RichText::new(
+                    "组装：子件出库、成品入库（成品数量记 1）；拆卸：成品出库、子件入库。",
+                )
+                .weak(),
+            );
             ui.add_space(4.0);
             egui::Grid::new("invdeep_asm_form")
                 .num_columns(2)
                 .spacing([10.0, 8.0])
                 .show(ui, |ui| {
                     ui.label("日期");
-                    ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut self.asm_date));
+                    ui.add_sized(
+                        [120.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.asm_date),
+                    );
                     ui.end_row();
                     ui.label("成品/母件");
                     let opts = self.items.clone();
-                    if widgets::combo(ui, "invdeep_asm_parent", &mut self.asm_parent, &opts, 180.0).changed() {
+                    if widgets::combo(ui, "invdeep_asm_parent", &mut self.asm_parent, &opts, 180.0)
+                        .changed()
+                    {
                         // 无需额外处理，仅记录父件选择
                     }
                     ui.end_row();
@@ -567,14 +642,32 @@ impl InventoryDeepView {
             }
         };
         let r = if disassemble {
-            inventory2::disassemble(ctx.db(), p, date, &self.asm_parent, &children, &self.asm_memo)
+            inventory2::disassemble(
+                ctx.db(),
+                p,
+                date,
+                &self.asm_parent,
+                &children,
+                &self.asm_memo,
+            )
         } else {
-            inventory2::assemble(ctx.db(), p, date, &self.asm_parent, &children, &self.asm_memo)
+            inventory2::assemble(
+                ctx.db(),
+                p,
+                date,
+                &self.asm_parent,
+                &children,
+                &self.asm_memo,
+            )
         };
         match r {
             Ok(()) => {
                 let action = if disassemble { "拆卸" } else { "组装" };
-                ctx.log("库存深度", action, &format!("{} {}", self.asm_parent, p.label()));
+                ctx.log(
+                    "库存深度",
+                    action,
+                    &format!("{} {}", self.asm_parent, p.label()),
+                );
                 ctx.info(format!("已{action}"));
                 self.dirty = true;
             }
@@ -600,9 +693,15 @@ impl InventoryDeepView {
         widgets::grid(ui, "invdeep_wh", &cols, rows.len(), 24.0, |i, c, ui| {
             let w = &rows[i];
             match c {
-                0 => { ui.label(&w.warehouse); }
-                1 => { ui.label(&w.item); }
-                2 => { ui.label(w.qty.fmt_qty()); }
+                0 => {
+                    ui.label(&w.warehouse);
+                }
+                1 => {
+                    ui.label(&w.item);
+                }
+                2 => {
+                    ui.label(w.qty.fmt_qty());
+                }
                 _ => {}
             }
         });
@@ -618,16 +717,33 @@ impl InventoryDeepView {
             widgets::TCol::new("数量", 100.0).right(),
             widgets::TCol::new("备注", 220.0),
         ];
-        widgets::grid(ui, "invdeep_transfer", &cols, rows.len(), 24.0, |i, c, ui| {
-            let m = &rows[i];
-            match c {
-                0 => { ui.label(m.biz_date.format("%Y-%m-%d").to_string()); }
-                1 => { ui.label(&m.item); }
-                2 => { ui.label(&m.warehouse); }
-                3 => { ui.label(m.qty.fmt_qty()); }
-                4 => { ui.label(&m.memo); }
-                _ => {}
-            }
-        });
+        widgets::grid(
+            ui,
+            "invdeep_transfer",
+            &cols,
+            rows.len(),
+            24.0,
+            |i, c, ui| {
+                let m = &rows[i];
+                match c {
+                    0 => {
+                        ui.label(m.biz_date.format("%Y-%m-%d").to_string());
+                    }
+                    1 => {
+                        ui.label(&m.item);
+                    }
+                    2 => {
+                        ui.label(&m.warehouse);
+                    }
+                    3 => {
+                        ui.label(m.qty.fmt_qty());
+                    }
+                    4 => {
+                        ui.label(&m.memo);
+                    }
+                    _ => {}
+                }
+            },
+        );
     }
 }

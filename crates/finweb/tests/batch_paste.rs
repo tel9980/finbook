@@ -192,7 +192,10 @@ async fn 辅助档案预览标出库中已有的() {
     assert_eq!(v["skipped"], 1);
     // 跳过原因必须是**中文文案**（两端共用 fincore 的 label()）
     let skip = v["rows"][0]["skip"].as_str().unwrap_or("");
-    assert!(skip.contains("已存在"), "跳过原因应说清为什么，实际：{skip}");
+    assert!(
+        skip.contains("已存在"),
+        "跳过原因应说清为什么，实际：{skip}"
+    );
     assert!(v["rows"][1]["skip"].is_null());
 }
 
@@ -322,10 +325,7 @@ async fn 期初导入落库并可再读回() {
     // 「贷方余额应存成负数，实际 0」，看起来像产品 bug，其实是取值方式错了。
     let r2001 = rows.iter().find(|r| r["account_code"] == "2001").unwrap();
     let amt = r2001["year_begin"].as_str().unwrap_or("0");
-    assert!(
-        amt.starts_with('-'),
-        "贷方余额应存成负数，实际 {amt}"
-    );
+    assert!(amt.starts_with('-'), "贷方余额应存成负数，实际 {amt}");
     assert_eq!(amt, "-50000.00");
 }
 
@@ -400,5 +400,9 @@ async fn 期初导入批次内重复只进一条() {
     let rows = list.as_array().cloned().unwrap_or_default();
     assert_eq!(rows.len(), 1);
     // Money 是字符串（见上面那条注释）
-    assert_eq!(rows[0]["year_begin"].as_str(), Some("5000.00"), "应保留第一条的金额");
+    assert_eq!(
+        rows[0]["year_begin"].as_str(),
+        Some("5000.00"),
+        "应保留第一条的金额"
+    );
 }

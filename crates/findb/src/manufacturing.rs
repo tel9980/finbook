@@ -6,8 +6,8 @@ use chrono::NaiveDate;
 use fincore::{Money, Period};
 use rusqlite::OptionalExtension;
 
-use crate::{Db, DbError, DbResult, FinError};
 use crate::scm::{ProdStatus, ProductionOrder};
+use crate::{Db, DbError, DbResult, FinError};
 
 // ===========================================================================
 // 成本归集
@@ -50,7 +50,13 @@ pub struct ProdCostItem {
 // 数据库操作
 // ===========================================================================
 
-pub fn add_cost(db: &Db, po_id: i64, cost_type: CostType, amount: Money, memo: &str) -> DbResult<i64> {
+pub fn add_cost(
+    db: &Db,
+    po_id: i64,
+    cost_type: CostType,
+    amount: Money,
+    memo: &str,
+) -> DbResult<i64> {
     let id = add_cost_of(db.conn(), po_id, cost_type, amount, memo)?;
     Ok(id)
 }
@@ -83,26 +89,27 @@ pub fn get_prod_cost(db: &Db, po_id: i64) -> DbResult<(Money, Money, Money)> {
     let mat_sql = "SELECT COALESCE(GROUP_CONCAT(amount, '+'), '0') FROM prod_cost WHERE po_id=? AND cost_type='material'";
     let lab_sql = "SELECT COALESCE(GROUP_CONCAT(amount, '+'), '0') FROM prod_cost WHERE po_id=? AND cost_type='labor'";
     let oh_sql = "SELECT COALESCE(GROUP_CONCAT(amount, '+'), '0') FROM prod_cost WHERE po_id=? AND cost_type='overhead'";
-    
+
     let mat_str: String = db.conn().query_row(mat_sql, [po_id], |r| r.get(0))?;
     let lab_str: String = db.conn().query_row(lab_sql, [po_id], |r| r.get(0))?;
     let oh_str: String = db.conn().query_row(oh_sql, [po_id], |r| r.get(0))?;
-    
+
     // 解析累加公式
     let parse_sum = |s: &str| -> Money {
-        if s == "0" { return Money::ZERO; }
-        s.split('+').map(|x| Money::parse_or_zero(x)).sum()
+        if s == "0" {
+            return Money::ZERO;
+        }
+        s.split('+').map(Money::parse_or_zero).sum()
     };
-    
-    Ok((
-        parse_sum(&mat_str),
-        parse_sum(&lab_str),
-        parse_sum(&oh_str),
-    ))
+
+    Ok((parse_sum(&mat_str), parse_sum(&lab_str), parse_sum(&oh_str)))
 }
 
 /// 同 `get_prod_cost`，但只依赖连接：完工结转要在自己的事务里读归集成本。
-pub fn get_prod_cost_of(conn: &rusqlite::Connection, po_id: i64) -> DbResult<(Money, Money, Money)> {
+pub fn get_prod_cost_of(
+    conn: &rusqlite::Connection,
+    po_id: i64,
+) -> DbResult<(Money, Money, Money)> {
     let mat_sql = "SELECT COALESCE(GROUP_CONCAT(amount, '+'), '0') FROM prod_cost WHERE po_id=? AND cost_type='material'";
     let lab_sql = "SELECT COALESCE(GROUP_CONCAT(amount, '+'), '0') FROM prod_cost WHERE po_id=? AND cost_type='labor'";
     let oh_sql = "SELECT COALESCE(GROUP_CONCAT(amount, '+'), '0') FROM prod_cost WHERE po_id=? AND cost_type='overhead'";
@@ -115,7 +122,7 @@ pub fn get_prod_cost_of(conn: &rusqlite::Connection, po_id: i64) -> DbResult<(Mo
         if s == "0" {
             return Money::ZERO;
         }
-        s.split('+').map(|x| Money::parse_or_zero(x)).sum()
+        s.split('+').map(Money::parse_or_zero).sum()
     };
 
     Ok((parse_sum(&mat_str), parse_sum(&lab_str), parse_sum(&oh_str)))
@@ -252,7 +259,7 @@ pub fn overhead_allocate_with(
         } else {
             // 分摊基数合计为 0 → 按 0 分摊，差额全部由最后一单吸收
             //（原"除零返 0"口径显式化，行为不变）
-            ((b * amount.inner()))
+            (b * amount.inner())
                 .checked_div(base_sum.inner())
                 .unwrap_or(Money::ZERO)
                 .round2()
@@ -368,19 +375,19 @@ pub fn prod_issue_materials(
     period: Period,
     who: &str,
 ) -> DbResult<Vec<(String, Money, Money)>> {
+    use crate::business::{stock_insert_of, StockKind, StockMove};
     use crate::scm::bom_list;
-    use crate::business::{stock_insert_of, StockMove, StockKind};
-    
+
     let order = match get_prod_order(db, po_id)? {
         Some(o) => o,
         None => return Err(FinError::msg("生产订单不存在").into()),
     };
-    
+
     let bom_items = bom_list(db, &order.item_code)?;
     if bom_items.is_empty() {
         return Err(FinError::msg(format!("产品 {} 无BOM，无法领料", order.item_code)).into());
     }
-    
+
     // 先把所有物料的单位成本算完再开始写库：`get_item_cost` 对没有采购记录的物料会
     // 报「物料成本未知」，若留在写入循环里，前面的领料已经落了库和成本归集、后面的
     // 没做，这张订单的成本就永久停在半路上。
@@ -388,7 +395,11 @@ pub fn prod_issue_materials(
     for item in &bom_items {
         let qty_required = (item.qty * order.planned_qty * (Money::ONE + item.loss_rate)).abs();
         let unit_cost = get_item_cost(db, &item.child_code, period.ymm())?;
-        planned.push((item.child_code.clone(), qty_required, qty_required * unit_cost));
+        planned.push((
+            item.child_code.clone(),
+            qty_required,
+            qty_required * unit_cost,
+        ));
     }
 
     let mut results = Vec::new();
@@ -400,7 +411,7 @@ pub fn prod_issue_materials(
     // 半成品，这张订单的成本再也补不齐。
     let tx = db.write_tx()?;
     for (child_code, qty, amount) in planned {
-        let mut move_record = StockMove {
+        let move_record = StockMove {
             id: 0,
             period,
             biz_date: issue_date,
@@ -415,7 +426,7 @@ pub fn prod_issue_materials(
             memo: format!("生产领料 PO#{}", order.no),
         };
 
-        stock_insert_of(&tx, &mut move_record)?;
+        stock_insert_of(&tx, &move_record)?;
         // 归集材料成本到 prod_cost（供完工结转取用）
         add_cost_of(&tx, po_id, CostType::Material, amount, "生产领料")?;
         credit_entries.push((child_code.clone(), qty, amount));
@@ -472,7 +483,10 @@ pub fn material_voucher_in(
     for (idx, (code, qty, amount)) in issues.iter().enumerate() {
         v.push_entry(Entry {
             credit: *amount,
-            aux: AuxRef { item: Some(code.clone()), ..Default::default() },
+            aux: AuxRef {
+                item: Some(code.clone()),
+                ..Default::default()
+            },
             qty: Some(*qty),
             ..Entry::new(idx as i32 + 2, code, "生产领料")
         });
@@ -488,7 +502,9 @@ fn get_item_cost(db: &Db, item_code: &str, period_ymm: i32) -> DbResult<Money> {
 
     if let Some(price) = db
         .conn()
-        .query_row(sql, [item_code, &period_ymm.to_string()], |r| r.get::<_, String>(0))
+        .query_row(sql, [item_code, &period_ymm.to_string()], |r| {
+            r.get::<_, String>(0)
+        })
         .optional()?
     {
         let p = Money::parse_or_zero(&price);
@@ -524,7 +540,7 @@ pub fn prod_return_materials(
     memo: &str,
     who: &str,
 ) -> DbResult<i64> {
-    use crate::business::{stock_insert_of, StockMove, StockKind};
+    use crate::business::{stock_insert_of, StockKind, StockMove};
 
     let order = get_prod_order(db, po_id)?.ok_or_else(|| FinError::msg("生产订单不存在"))?;
     if order.status != ProdStatus::InProgress && order.status != ProdStatus::Released {
@@ -536,7 +552,7 @@ pub fn prod_return_materials(
     let unit_cost = get_item_cost(db, item_code, period.ymm())?;
     let amount = (qty * unit_cost).round2();
     let tx = db.write_tx()?;
-    let mut move_record = StockMove {
+    let move_record = StockMove {
         id: 0,
         period,
         biz_date: return_date,
@@ -550,11 +566,20 @@ pub fn prod_return_materials(
         voucher_id: None,
         memo: format!("生产退料 PO#{} {}", order.no, memo),
     };
-    stock_insert_of(&tx, &mut move_record)?;
+    stock_insert_of(&tx, &move_record)?;
     // 冲减已归集的直接材料成本（与 prod_issue_materials 的 add_cost_of 口径对称）
     add_cost_of(&tx, po_id, CostType::Material, amount.negated(), "生产退料")?;
     // 冲回领料结转凭证
-    return_voucher_in(&tx, period, return_date, &order, item_code, qty, amount, who)?;
+    return_voucher_in(
+        &tx,
+        period,
+        return_date,
+        &order,
+        item_code,
+        qty,
+        amount,
+        who,
+    )?;
     tx.commit()?;
     Ok(move_record.id)
 }
@@ -584,7 +609,10 @@ pub fn return_voucher_in(
     v.memo = format!("生产退料 PO#{}", order.no);
     v.push_entry(Entry {
         debit: amount,
-        aux: AuxRef { item: Some(item_code.to_string()), ..Default::default() },
+        aux: AuxRef {
+            item: Some(item_code.to_string()),
+            ..Default::default()
+        },
         qty: Some(qty),
         ..Entry::new(1, item_code, "生产退料")
     });
@@ -608,13 +636,13 @@ pub fn prod_complete(
     completed_qty: Money,
     who: &str,
 ) -> DbResult<i64> {
-    use crate::business::{stock_insert_of, StockMove, StockKind};
-    
+    use crate::business::{stock_insert_of, StockKind, StockMove};
+
     let order = match get_prod_order(db, po_id)? {
         Some(o) => o,
         None => return Err(FinError::msg("生产订单不存在").into()),
     };
-    
+
     if order.status != ProdStatus::InProgress {
         return Err(FinError::msg("只有进行中的订单才能完工入库").into());
     }
@@ -626,7 +654,7 @@ pub fn prod_complete(
         )
         .into());
     }
-    
+
     // 归集成本、推进订单、入库、结转凭证收进同一事务：
     // - 订单推进是条件更新（只允许 in_progress → completed），抢输的一方整体回滚，
     //   不会各入库一次、重复结转成本，也不再需要「抢输后手工回收入库行」的补丁；
@@ -652,7 +680,7 @@ pub fn prod_complete(
         return Err(FinError::state("订单状态已被他人变更，请刷新后重试").into());
     }
 
-    let mut move_record = StockMove {
+    let move_record = StockMove {
         id: 0,
         period,
         biz_date: complete_date,
@@ -666,7 +694,7 @@ pub fn prod_complete(
         voucher_id: None,
         memo: format!("完工入库 PO#{}", order.no),
     };
-    let move_id = stock_insert_of(&tx, &mut move_record)?;
+    let move_id = stock_insert_of(&tx, &move_record)?;
 
     // 生成完工结转凭证：借 库存商品(140501) / 贷 生产成本各要素。
     // 材料、人工、制造费用分别由 500101 / 500102 / 500103 承接。
@@ -739,7 +767,10 @@ pub fn completion_voucher_in(
     v.memo = format!("完工入库 PO#{}", order.no);
     v.push_entry(Entry {
         debit: total,
-        aux: AuxRef { item: Some(order.item_code.clone()), ..Default::default() },
+        aux: AuxRef {
+            item: Some(order.item_code.clone()),
+            ..Default::default()
+        },
         qty: Some(completed_qty),
         ..Entry::new(1, "140501", "完工入库")
     });
@@ -886,7 +917,15 @@ pub fn prod_cancel(db: &Db, po_id: i64, who: &str) -> DbResult<()> {
     if n == 0 {
         return Err(FinError::state("状态已被他人变更，请刷新后重试").into());
     }
-    crate::scm2::change_log_add_conn(&tx, "prod", po_id, "状态", order.status.code(), "cancelled", who)?;
+    crate::scm2::change_log_add_conn(
+        &tx,
+        "prod",
+        po_id,
+        "状态",
+        order.status.code(),
+        "cancelled",
+        who,
+    )?;
     tx.commit()?;
     Ok(())
 }
@@ -1070,7 +1109,13 @@ pub fn prod_qc_save(
 
 /// 委外加工费确认：归集人工（CostType::Labor → 完工结转由 500102 承接）
 /// + 生成应付凭证 借 500102 / 贷 应付科目（供应商辅助）。仅委外订单、金额 > 0；期间随订单。
-pub fn outsource_fee(db: &Db, po_id: i64, amount: Money, date: NaiveDate, who: &str) -> DbResult<i64> {
+pub fn outsource_fee(
+    db: &Db,
+    po_id: i64,
+    amount: Money,
+    date: NaiveDate,
+    who: &str,
+) -> DbResult<i64> {
     if !amount.is_positive() {
         return Err(FinError::msg("加工费必须大于 0").into());
     }
@@ -1151,12 +1196,12 @@ mod tests {
     fn m(s: &str) -> Money {
         Money::parse(s).unwrap()
     }
-    
+
     #[test]
     fn cost_tracking() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        
+
         let tx = db.write_tx().unwrap();
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         tx.execute(
@@ -1170,16 +1215,37 @@ mod tests {
         ).unwrap();
         let po_id = tx.last_insert_rowid();
         tx.commit().unwrap();
-        
-        add_cost(&db, po_id, CostType::Material, Money::parse("5000").unwrap(), "领料").unwrap();
-        add_cost(&db, po_id, CostType::Labor, Money::parse("1000").unwrap(), "人工").unwrap();
-        add_cost(&db, po_id, CostType::Overhead, Money::parse("500").unwrap(), "制造费用").unwrap();
-        
+
+        add_cost(
+            &db,
+            po_id,
+            CostType::Material,
+            Money::parse("5000").unwrap(),
+            "领料",
+        )
+        .unwrap();
+        add_cost(
+            &db,
+            po_id,
+            CostType::Labor,
+            Money::parse("1000").unwrap(),
+            "人工",
+        )
+        .unwrap();
+        add_cost(
+            &db,
+            po_id,
+            CostType::Overhead,
+            Money::parse("500").unwrap(),
+            "制造费用",
+        )
+        .unwrap();
+
         let (mat, lab, oh) = get_prod_cost(&db, po_id).unwrap();
         assert_eq!(mat, Money::parse("5000").unwrap());
         assert_eq!(lab, Money::parse("1000").unwrap());
         assert_eq!(oh, Money::parse("500").unwrap());
-        
+
         let total = get_prod_total_cost(&db, po_id).unwrap();
         assert_eq!(total, Money::parse("6500").unwrap());
 
@@ -1273,8 +1339,14 @@ mod tests {
         let cr: Money = v.entries.iter().map(|e| e.credit).sum();
         assert_eq!(dr, m("30"), "冲回金额应与退料金额一致");
         assert_eq!(cr, m("30"));
-        assert!(v.entries.iter().any(|e| e.account_code == "140301" && e.debit == m("30")));
-        assert!(v.entries.iter().any(|e| e.account_code == "500101" && e.credit == m("30")));
+        assert!(v
+            .entries
+            .iter()
+            .any(|e| e.account_code == "140301" && e.debit == m("30")));
+        assert!(v
+            .entries
+            .iter()
+            .any(|e| e.account_code == "500101" && e.credit == m("30")));
         // 入库流水也在
         let n: i64 = db
             .conn()
@@ -1344,8 +1416,15 @@ mod tests {
         let order = order_in_progress(&db, p1, "SC2026019003", "140501");
         add_cost(&db, order.id, CostType::Material, m("100"), "生产领料").unwrap();
         // 2 月完工，但订单期间是 1 月：流水与凭证都必须在 2 月（调用方期间）
-        prod_complete(&db, order.id, NaiveDate::from_ymd_opt(2026, 2, 10).unwrap(), p2, m("5"), "u1")
-            .unwrap();
+        prod_complete(
+            &db,
+            order.id,
+            NaiveDate::from_ymd_opt(2026, 2, 10).unwrap(),
+            p2,
+            m("5"),
+            "u1",
+        )
+        .unwrap();
         let mv_period: i32 = db
             .conn()
             .query_row(
@@ -1363,18 +1442,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(mv_period, p2.ymm(), "库存流水应在调用方期间");
-        assert_eq!(v_period, p2.ymm(), "结转凭证必须与库存流水同期（回归前落在订单期间）");
+        assert_eq!(
+            v_period,
+            p2.ymm(),
+            "结转凭证必须与库存流水同期（回归前落在订单期间）"
+        );
     }
 
     #[test]
     fn transfer_vouchers_balanced() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        let date = NaiveDate::from_ymd(2026, 1, 15);
+        let date = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
 
         fn dc(db: &Db, id: i64) -> (Money, Money) {
             let v = crate::vouchers::get(db, id).unwrap().unwrap();
-            (v.entries.iter().map(|e| e.debit).sum(), v.entries.iter().map(|e| e.credit).sum())
+            (
+                v.entries.iter().map(|e| e.debit).sum(),
+                v.entries.iter().map(|e| e.credit).sum(),
+            )
         }
 
         // 生产订单
@@ -1393,11 +1479,19 @@ mod tests {
         tx.commit().unwrap();
 
         let order = ProductionOrder {
-            id: po_id, no: "SC2026010002".into(), period: p, date,
-            item_code: "140501".into(), item_name: "成品X".into(),
-            planned_qty: m("3"), completed_qty: m("0"),
-            status: ProdStatus::InProgress, work_center: "WC01".into(), so_id: 0,
-            prepared_by: "u1".into(), memo: "".into(),
+            id: po_id,
+            no: "SC2026010002".into(),
+            period: p,
+            date,
+            item_code: "140501".into(),
+            item_name: "成品X".into(),
+            planned_qty: m("3"),
+            completed_qty: m("0"),
+            status: ProdStatus::InProgress,
+            work_center: "WC01".into(),
+            so_id: 0,
+            prepared_by: "u1".into(),
+            memo: "".into(),
             order_kind: "inhouse".into(),
             supplier_code: String::new(),
             supplier_name: String::new(),
@@ -1406,7 +1500,15 @@ mod tests {
         };
 
         // 领料结转：借 500101=60 / 贷 140301=60
-        let vid = material_voucher(&db, p, date, &order, &[("140301".into(), m("2"), m("60"))], "u1").unwrap();
+        let vid = material_voucher(
+            &db,
+            p,
+            date,
+            &order,
+            &[("140301".into(), m("2"), m("60"))],
+            "u1",
+        )
+        .unwrap();
         let (di, ce) = dc(&db, vid);
         assert_eq!(di, m("60"));
         assert_eq!(ce, m("60"));
@@ -1422,9 +1524,24 @@ mod tests {
         assert_eq!(ce, m("90"));
 
         let v = crate::vouchers::get(&db, vcid).unwrap().unwrap();
-        let debit140501 = v.entries.iter().find(|e| e.account_code == "140501").unwrap().debit;
-        let credit500101 = v.entries.iter().find(|e| e.account_code == "500101").unwrap().credit;
-        let credit500102 = v.entries.iter().find(|e| e.account_code == "500102").unwrap().credit;
+        let debit140501 = v
+            .entries
+            .iter()
+            .find(|e| e.account_code == "140501")
+            .unwrap()
+            .debit;
+        let credit500101 = v
+            .entries
+            .iter()
+            .find(|e| e.account_code == "500101")
+            .unwrap()
+            .credit;
+        let credit500102 = v
+            .entries
+            .iter()
+            .find(|e| e.account_code == "500102")
+            .unwrap()
+            .credit;
         assert_eq!(debit140501, m("90"));
         assert_eq!(credit500101, m("60"));
         assert_eq!(credit500102, m("30"));

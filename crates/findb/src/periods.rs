@@ -186,9 +186,10 @@ pub fn precheck(db: &Db, p: Period, require_carry: bool) -> DbResult<Vec<String>
 
 /// 强制删除某期间的结账标记（仅供数据修复，界面不暴露）
 pub fn force_reset(db: &Db, p: Period) -> DbResult<()> {
-    let n = db
-        .conn()
-        .execute("DELETE FROM period_state WHERE period=?1", rusqlite::params![p.ymm()])?;
+    let n = db.conn().execute(
+        "DELETE FROM period_state WHERE period=?1",
+        rusqlite::params![p.ymm()],
+    )?;
     if n == 0 {
         return Err(FinError::not_found(format!("期间 {} 无结账记录", p.label())).into());
     }

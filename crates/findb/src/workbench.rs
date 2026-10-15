@@ -40,7 +40,9 @@ pub fn period_labels(ps: &[Period]) -> Vec<String> {
 }
 
 fn fill(ps: &[Period], map: &BTreeMap<i32, f64>) -> Vec<f64> {
-    ps.iter().map(|p| *map.get(&p.ymm()).unwrap_or(&0.0)).collect()
+    ps.iter()
+        .map(|p| *map.get(&p.ymm()).unwrap_or(&0.0))
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -179,9 +181,22 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
         // 回归：旧写法是 `status<>'void'` + `SUM(CAST(e.debit AS REAL))`，
         // 工作台首页的「本期发生额」既含草稿又带浮点误差，与其他所有口径都对不上。
         let turnover: f64 = sum_posted_debit(db, cur, cur)?.to_f64();
-        out.cards.push(card("凭证", "unposted", "未记账凭证", unposted.to_string(), "张"));
-        out.cards.push(card("凭证", "posted", "已记账凭证", posted.to_string(), "张"));
-        out.cards.push(card("凭证", "turnover", "本期发生额", fmt2(turnover), "元"));
+        out.cards.push(card(
+            "凭证",
+            "unposted",
+            "未记账凭证",
+            unposted.to_string(),
+            "张",
+        ));
+        out.cards.push(card(
+            "凭证",
+            "posted",
+            "已记账凭证",
+            posted.to_string(),
+            "张",
+        ));
+        out.cards
+            .push(card("凭证", "turnover", "本期发生额", fmt2(turnover), "元"));
         let mut m: BTreeMap<i32, f64> = BTreeMap::new();
         let mut st = db.conn().prepare(
             "SELECT e.period, e.debit
@@ -214,7 +229,13 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             vec![series("发生额", "#1976d2", fill(&ps, &m))],
         ));
         if user.can(Perm::VoucherPost) {
-            out.todos.push(todo("凭证", "voucher_unposted", "未记账凭证待记账", unposted, "vouchers"));
+            out.todos.push(todo(
+                "凭证",
+                "voucher_unposted",
+                "未记账凭证待记账",
+                unposted,
+                "vouchers",
+            ));
         }
     }
 
@@ -240,9 +261,17 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
                 }
             }
         }
-        out.cards.push(card("资金", "receipt_pending", "待审核收付款", draft.to_string(), "单"));
-        out.cards.push(card("资金", "receipt_in", "本期收款额", fmt2(rec), "元"));
-        out.cards.push(card("资金", "receipt_out", "本期付款额", fmt2(pay), "元"));
+        out.cards.push(card(
+            "资金",
+            "receipt_pending",
+            "待审核收付款",
+            draft.to_string(),
+            "单",
+        ));
+        out.cards
+            .push(card("资金", "receipt_in", "本期收款额", fmt2(rec), "元"));
+        out.cards
+            .push(card("资金", "receipt_out", "本期付款额", fmt2(pay), "元"));
         out.trends.push(trend(
             "资金",
             "funds_flow",
@@ -255,7 +284,13 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             ],
         ));
         if user.can(Perm::VoucherAudit) {
-            out.todos.push(todo("资金", "receipt_todo", "待审核收付款单", draft, "funds"));
+            out.todos.push(todo(
+                "资金",
+                "receipt_todo",
+                "待审核收付款单",
+                draft,
+                "funds",
+            ));
         }
     }
 
@@ -270,19 +305,43 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             .count() as i64;
         let (mut so_amt, mut ship_amt): (Money, Money) = (Money::ZERO, Money::ZERO);
         for o in &sos {
-            so_amt = so_amt + o.total_amount;
-            ship_amt = ship_amt + o.shipped_amount;
+            so_amt += o.total_amount;
+            ship_amt += o.shipped_amount;
         }
-        out.cards.push(card("销售", "quotes", "本期报价单", quotes.len().to_string(), "份"));
-        out.cards.push(card("销售", "orders", "本期销售订单", sos.len().to_string(), "份"));
-        out.cards.push(card("销售", "order_amt", "本期订单金额", fmt2(money_f64(so_amt)), "元"));
-        out.cards.push(card("销售", "ship_amt", "本期发货额", fmt2(money_f64(ship_amt)), "元"));
+        out.cards.push(card(
+            "销售",
+            "quotes",
+            "本期报价单",
+            quotes.len().to_string(),
+            "份",
+        ));
+        out.cards.push(card(
+            "销售",
+            "orders",
+            "本期销售订单",
+            sos.len().to_string(),
+            "份",
+        ));
+        out.cards.push(card(
+            "销售",
+            "order_amt",
+            "本期订单金额",
+            fmt2(money_f64(so_amt)),
+            "元",
+        ));
+        out.cards.push(card(
+            "销售",
+            "ship_amt",
+            "本期发货额",
+            fmt2(money_f64(ship_amt)),
+            "元",
+        ));
         let mut m: BTreeMap<i32, f64> = BTreeMap::new();
         for p in &ps {
             let list = crate::scm::so_list(db, *p, None)?;
             let mut s = Money::ZERO;
             for o in &list {
-                s = s + o.total_amount;
+                s += o.total_amount;
             }
             m.insert(p.ymm(), money_f64(s));
         }
@@ -294,8 +353,20 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             &ps,
             vec![series("订单金额", "#1565c0", fill(&ps, &m))],
         ));
-        out.todos.push(todo("销售", "quote_todo", "待审批报价单", q_pending, "so-doc"));
-        out.todos.push(todo("销售", "so_todo", "待确认销售订单", so_pending, "so-doc"));
+        out.todos.push(todo(
+            "销售",
+            "quote_todo",
+            "待审批报价单",
+            q_pending,
+            "so-doc",
+        ));
+        out.todos.push(todo(
+            "销售",
+            "so_todo",
+            "待确认销售订单",
+            so_pending,
+            "so-doc",
+        ));
     }
 
     // ---- 采购（订单权限，单据类型区分）----
@@ -305,17 +376,35 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
         let pos = crate::scm::po_list(db, cur, None)?;
         let mut po_amt = Money::ZERO;
         for o in &pos {
-            po_amt = po_amt + o.total_amount;
+            po_amt += o.total_amount;
         }
-        out.cards.push(card("采购", "reqs", "本期请购单", prs.len().to_string(), "份"));
-        out.cards.push(card("采购", "pos", "本期采购订单", pos.len().to_string(), "份"));
-        out.cards.push(card("采购", "po_amt", "本期采购金额", fmt2(money_f64(po_amt)), "元"));
+        out.cards.push(card(
+            "采购",
+            "reqs",
+            "本期请购单",
+            prs.len().to_string(),
+            "份",
+        ));
+        out.cards.push(card(
+            "采购",
+            "pos",
+            "本期采购订单",
+            pos.len().to_string(),
+            "份",
+        ));
+        out.cards.push(card(
+            "采购",
+            "po_amt",
+            "本期采购金额",
+            fmt2(money_f64(po_amt)),
+            "元",
+        ));
         let mut m: BTreeMap<i32, f64> = BTreeMap::new();
         for p in &ps {
             let list = crate::scm::po_list(db, *p, None)?;
             let mut s = Money::ZERO;
             for o in &list {
-                s = s + o.total_amount;
+                s += o.total_amount;
             }
             m.insert(p.ymm(), money_f64(s));
         }
@@ -327,7 +416,13 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             &ps,
             vec![series("采购金额", "#6a1b9a", fill(&ps, &m))],
         ));
-        out.todos.push(todo("采购", "pr_todo", "待审批请购单", pr_pending, "po-doc"));
+        out.todos.push(todo(
+            "采购",
+            "pr_todo",
+            "待审批请购单",
+            pr_pending,
+            "po-doc",
+        ));
     }
 
     // ---- 仓管 ----
@@ -338,10 +433,29 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
         let counts = crate::stocktake::count_list(db)?;
         let pending = counts.iter().filter(|c| c.status == "draft").count() as i64;
         let low = crate::inventory2::below_safety(db)?;
-        out.cards.push(card("仓管", "batch_expiry", "临期批次(30天)", exp.len().to_string(), "个"));
-        out.cards.push(card("仓管", "batch_on", "在库批次", on.to_string(), "个"));
-        out.cards.push(card("仓管", "count_pending", "未完成盘点", pending.to_string(), "单"));
-        out.cards.push(card("仓管", "below_safety", "低于安全库存", low.len().to_string(), "项"));
+        out.cards.push(card(
+            "仓管",
+            "batch_expiry",
+            "临期批次(30天)",
+            exp.len().to_string(),
+            "个",
+        ));
+        out.cards
+            .push(card("仓管", "batch_on", "在库批次", on.to_string(), "个"));
+        out.cards.push(card(
+            "仓管",
+            "count_pending",
+            "未完成盘点",
+            pending.to_string(),
+            "单",
+        ));
+        out.cards.push(card(
+            "仓管",
+            "below_safety",
+            "低于安全库存",
+            low.len().to_string(),
+            "项",
+        ));
         let mut in_m: BTreeMap<i32, f64> = BTreeMap::new();
         let mut out_m: BTreeMap<i32, f64> = BTreeMap::new();
         let mut st = db.conn().prepare(
@@ -374,9 +488,27 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
                 series("出库量", "#ef6c00", fill(&ps, &out_m)),
             ],
         ));
-        out.todos.push(todo("仓管", "expiry_todo", "临期批次处理", exp.len() as i64, "inv-batch"));
-        out.todos.push(todo("仓管", "count_todo", "未完成盘点单", pending, "inv-count"));
-        out.todos.push(todo("仓管", "safety_todo", "低于安全库存", low.len() as i64, "inv-warehouse"));
+        out.todos.push(todo(
+            "仓管",
+            "expiry_todo",
+            "临期批次处理",
+            exp.len() as i64,
+            "inv-batch",
+        ));
+        out.todos.push(todo(
+            "仓管",
+            "count_todo",
+            "未完成盘点单",
+            pending,
+            "inv-count",
+        ));
+        out.todos.push(todo(
+            "仓管",
+            "safety_todo",
+            "低于安全库存",
+            low.len() as i64,
+            "inv-warehouse",
+        ));
     }
 
     // ---- 生产 ----
@@ -390,9 +522,17 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             .iter()
             .filter(|o| matches!(o.status, crate::scm::ProdStatus::Completed))
             .count() as i64;
-        out.cards.push(card("生产", "orders", "本期生产订单", pos.len().to_string(), "份"));
-        out.cards.push(card("生产", "running", "在产中", running.to_string(), "份"));
-        out.cards.push(card("生产", "done", "已完工", done.to_string(), "份"));
+        out.cards.push(card(
+            "生产",
+            "orders",
+            "本期生产订单",
+            pos.len().to_string(),
+            "份",
+        ));
+        out.cards
+            .push(card("生产", "running", "在产中", running.to_string(), "份"));
+        out.cards
+            .push(card("生产", "done", "已完工", done.to_string(), "份"));
         // 生产投入（料工费归集）按期 —— 同样在 Rust 侧用 Decimal 累加
         let mut cost_m: BTreeMap<i32, f64> = BTreeMap::new();
         let mut st = db.conn().prepare(
@@ -448,7 +588,13 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             &ps,
             vec![series("完工入库量", "#66bb6a", fill(&ps, &out_m))],
         ));
-        out.todos.push(todo("生产", "prod_todo", "在产生产订单", running, "work-report"));
+        out.todos.push(todo(
+            "生产",
+            "prod_todo",
+            "在产生产订单",
+            running,
+            "work-report",
+        ));
     }
 
     // ---- 成本 ----
@@ -457,21 +603,35 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
         let (mut mat, mut lab, mut oh, mut tot): (Money, Money, Money, Money) =
             (Money::ZERO, Money::ZERO, Money::ZERO, Money::ZERO);
         for r in &wip {
-            mat = mat + r.material;
-            lab = lab + r.labor;
-            oh = oh + r.overhead;
-            tot = tot + r.total;
+            mat += r.material;
+            lab += r.labor;
+            oh += r.overhead;
+            tot += r.total;
         }
-        out.cards.push(card("成本", "wip_total", "在产品总额", fmt2(money_f64(tot)), "元"));
-        out.cards.push(card("成本", "wip_mat", "材料", fmt2(money_f64(mat)), "元"));
-        out.cards.push(card("成本", "wip_lab", "人工", fmt2(money_f64(lab)), "元"));
-        out.cards.push(card("成本", "wip_oh", "制造费用", fmt2(money_f64(oh)), "元"));
+        out.cards.push(card(
+            "成本",
+            "wip_total",
+            "在产品总额",
+            fmt2(money_f64(tot)),
+            "元",
+        ));
+        out.cards
+            .push(card("成本", "wip_mat", "材料", fmt2(money_f64(mat)), "元"));
+        out.cards
+            .push(card("成本", "wip_lab", "人工", fmt2(money_f64(lab)), "元"));
+        out.cards.push(card(
+            "成本",
+            "wip_oh",
+            "制造费用",
+            fmt2(money_f64(oh)),
+            "元",
+        ));
         let mut m: BTreeMap<i32, f64> = BTreeMap::new();
         for p in &ps {
             let rows = crate::manufacturing::wip_cost(db, *p)?;
             let mut s = Money::ZERO;
             for r in &rows {
-                s = s + r.total;
+                s += r.total;
             }
             m.insert(p.ymm(), money_f64(s));
         }
@@ -495,7 +655,7 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
                 continue;
             }
             cnt += 1;
-            amt = amt + c.amount;
+            amt += c.amount;
             if matches!(c.status, crate::business::ClaimStatus::Submitted) {
                 sub += 1;
             }
@@ -503,16 +663,25 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
                 rej += 1;
             }
         }
-        out.cards.push(card("报销", "mine", "本期我的报销", cnt.to_string(), "份"));
-        out.cards.push(card("报销", "submitted", "待审批", sub.to_string(), "份"));
-        out.cards.push(card("报销", "rejected", "被驳回", rej.to_string(), "份"));
-        out.cards.push(card("报销", "amount", "本期报销额", fmt2(money_f64(amt)), "元"));
+        out.cards
+            .push(card("报销", "mine", "本期我的报销", cnt.to_string(), "份"));
+        out.cards
+            .push(card("报销", "submitted", "待审批", sub.to_string(), "份"));
+        out.cards
+            .push(card("报销", "rejected", "被驳回", rej.to_string(), "份"));
+        out.cards.push(card(
+            "报销",
+            "amount",
+            "本期报销额",
+            fmt2(money_f64(amt)),
+            "元",
+        ));
         let mut m: BTreeMap<i32, f64> = BTreeMap::new();
         for p in &ps {
             let mut s = Money::ZERO;
             for c in crate::business::claim_list(db, *p, None)? {
                 if c.applicant == me {
-                    s = s + c.amount;
+                    s += c.amount;
                 }
             }
             m.insert(p.ymm(), money_f64(s));
@@ -525,7 +694,13 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             &ps,
             vec![series("报销额", "#ad1457", fill(&ps, &m))],
         ));
-        out.todos.push(todo("报销", "claim_todo", "我的报销 待审批/被驳回", sub + rej, "claims"));
+        out.todos.push(todo(
+            "报销",
+            "claim_todo",
+            "我的报销 待审批/被驳回",
+            sub + rej,
+            "claims",
+        ));
     }
 
     // ---- 审批（人人可见运行中；待办按参与人匹配）----
@@ -535,8 +710,20 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             .filter(|i| i.status == "running")
             .count() as i64;
         let pend = crate::workflow::pending_for(db, user)?.len() as i64;
-        out.cards.push(card("审批", "wf_running", "运行中审批流程", running.to_string(), "个"));
-        out.todos.push(todo("审批", "wf_pending", "待我审批的流程", pend, "workflow"));
+        out.cards.push(card(
+            "审批",
+            "wf_running",
+            "运行中审批流程",
+            running.to_string(),
+            "个",
+        ));
+        out.todos.push(todo(
+            "审批",
+            "wf_pending",
+            "待我审批的流程",
+            pend,
+            "workflow",
+        ));
     }
     // ---- 税务：申报日历提醒（窗口期内才出现；与 collect_todos 同口径）----
     if user.can(Perm::FinReport) {
@@ -566,7 +753,13 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         if user.can(Perm::VoucherPost) {
-            todos.push(todo("凭证", "voucher_unposted", "未记账凭证待记账", unposted, "vouchers"));
+            todos.push(todo(
+                "凭证",
+                "voucher_unposted",
+                "未记账凭证待记账",
+                unposted,
+                "vouchers",
+            ));
         }
     }
     // 资金：待审核收付款
@@ -576,7 +769,13 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             .filter(|d| d.status == "draft" && d.period == cur)
             .count() as i64;
         if user.can(Perm::VoucherAudit) {
-            todos.push(todo("资金", "receipt_todo", "待审核收付款单", draft, "funds"));
+            todos.push(todo(
+                "资金",
+                "receipt_todo",
+                "待审核收付款单",
+                draft,
+                "funds",
+            ));
         }
     }
     // 销售 / 采购
@@ -590,13 +789,31 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             .iter()
             .filter(|o| matches!(o.status, crate::scm::SoStatus::Draft))
             .count() as i64;
-        todos.push(todo("销售", "quote_todo", "待审批报价单", q_pending, "so-doc"));
-        todos.push(todo("销售", "so_todo", "待确认销售订单", so_pending, "so-doc"));
+        todos.push(todo(
+            "销售",
+            "quote_todo",
+            "待审批报价单",
+            q_pending,
+            "so-doc",
+        ));
+        todos.push(todo(
+            "销售",
+            "so_todo",
+            "待确认销售订单",
+            so_pending,
+            "so-doc",
+        ));
         let pr_pending = crate::procurement::pr_list(db, cur)?
             .iter()
             .filter(|p| p.status == "draft")
             .count() as i64;
-        todos.push(todo("采购", "pr_todo", "待审批请购单", pr_pending, "po-doc"));
+        todos.push(todo(
+            "采购",
+            "pr_todo",
+            "待审批请购单",
+            pr_pending,
+            "po-doc",
+        ));
     }
     // 仓管
     if user.can(Perm::Warehouse) {
@@ -606,9 +823,27 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             .filter(|c| c.status == "draft")
             .count() as i64;
         let low = crate::inventory2::below_safety(db)?;
-        todos.push(todo("仓管", "expiry_todo", "临期批次处理", exp.len() as i64, "inv-batch"));
-        todos.push(todo("仓管", "count_todo", "未完成盘点单", pending, "inv-count"));
-        todos.push(todo("仓管", "safety_todo", "低于安全库存", low.len() as i64, "inv-warehouse"));
+        todos.push(todo(
+            "仓管",
+            "expiry_todo",
+            "临期批次处理",
+            exp.len() as i64,
+            "inv-batch",
+        ));
+        todos.push(todo(
+            "仓管",
+            "count_todo",
+            "未完成盘点单",
+            pending,
+            "inv-count",
+        ));
+        todos.push(todo(
+            "仓管",
+            "safety_todo",
+            "低于安全库存",
+            low.len() as i64,
+            "inv-warehouse",
+        ));
     }
     // 生产
     if user.can(Perm::ProductionOps) {
@@ -616,7 +851,13 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             .iter()
             .filter(|o| matches!(o.status, crate::scm::ProdStatus::InProgress))
             .count() as i64;
-        todos.push(todo("生产", "prod_todo", "在产生产订单", running, "work-report"));
+        todos.push(todo(
+            "生产",
+            "prod_todo",
+            "在产生产订单",
+            running,
+            "work-report",
+        ));
     }
     // 报销（本人视角）
     {
@@ -632,12 +873,24 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
                 rej += 1;
             }
         }
-        todos.push(todo("报销", "claim_todo", "我的报销 待审批/被驳回", sub + rej, "claims"));
+        todos.push(todo(
+            "报销",
+            "claim_todo",
+            "我的报销 待审批/被驳回",
+            sub + rej,
+            "claims",
+        ));
     }
     // 审批：待我审批的流程实例
     {
         let pend = crate::workflow::pending_for(db, user)?.len() as i64;
-        todos.push(todo("审批", "wf_pending", "待我审批的流程", pend, "workflow"));
+        todos.push(todo(
+            "审批",
+            "wf_pending",
+            "待我审批的流程",
+            pend,
+            "workflow",
+        ));
     }
     // 税务：申报日历提醒（窗口期内才出现；小规模/一般人按账套税务设置区分）
     if user.can(Perm::FinReport) {
@@ -705,11 +958,7 @@ mod tests {
         // 期望 = 已记账两张的借方合计，Rust 侧 Decimal 累加
         let expect = Money::parse("0.10").unwrap() + Money::parse("0.20").unwrap();
         let got = sum_posted_debit(&db, p, p).unwrap();
-        assert_eq!(
-            got,
-            expect,
-            "已记账发生额应为 0.30，草稿的 999.00 不得计入"
-        );
+        assert_eq!(got, expect, "已记账发生额应为 0.30，草稿的 999.00 不得计入");
 
         // 卡片上的「本期发生额」用的是同一个函数，且经 f64/2 位格式化后仍一致
         let admin = User::new("a", "管理员", Role::Admin);
@@ -734,10 +983,15 @@ mod tests {
         let admin = User::new("a", "管理员", Role::Admin);
         let out = collect(&db, &admin, p, 6).unwrap();
         let d = domains(&out);
-        for expect in ["凭证", "资金", "销售", "采购", "仓管", "生产", "成本", "报销", "审批"] {
+        for expect in [
+            "凭证", "资金", "销售", "采购", "仓管", "生产", "成本", "报销", "审批",
+        ] {
             assert!(d.contains(&expect), "admin 应含 {expect} 域：{d:?}");
         }
-        assert!(out.trends.iter().all(|t| t.periods.len() == 6), "趋势期数应为6");
+        assert!(
+            out.trends.iter().all(|t| t.periods.len() == 6),
+            "趋势期数应为6"
+        );
         assert_eq!(out.trends[0].periods[0], "2025-08", "序列从当期往前第6期");
         assert_eq!(out.trends[0].periods[5], "2026-01");
         // 待办结构存在

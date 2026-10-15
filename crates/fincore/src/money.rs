@@ -74,7 +74,8 @@ impl Money {
         if t.is_empty() {
             return Ok(Money::ZERO);
         }
-        let d = Decimal::from_str_exact(&t).map_err(|_| FinError::msg(format!("金额格式不正确：{s}")))?;
+        let d = Decimal::from_str_exact(&t)
+            .map_err(|_| FinError::msg(format!("金额格式不正确：{s}")))?;
         let v = if negative_paren { -d } else { d };
         Ok(Self(v))
     }
@@ -220,12 +221,11 @@ impl Money {
         let v = self.round2();
         let neg = v.0.is_sign_negative();
         // Decimal 乘法溢出会 panic；超出 i64 分范围的极端值按上限处理，绝不崩溃
-        let cents = v
-            .0
-            .abs()
-            .checked_mul(Decimal::from(100))
-            .and_then(|d| d.to_i64())
-            .unwrap_or(i64::MAX);
+        let cents =
+            v.0.abs()
+                .checked_mul(Decimal::from(100))
+                .and_then(|d| d.to_i64())
+                .unwrap_or(i64::MAX);
         let yuan = cents / 100;
         let jiao = (cents % 100) / 10;
         let fen = cents % 10;
@@ -255,12 +255,7 @@ impl Money {
         let mut need_zero = false; // 组内是否需要在下一位前补零
         for (gi, &g) in groups.iter().enumerate().rev() {
             let mut gstr = String::new();
-            let digits = [
-                g / 1000,
-                (g % 1000) / 100,
-                (g % 100) / 10,
-                g % 10,
-            ];
+            let digits = [g / 1000, (g % 1000) / 100, (g % 100) / 10, g % 10];
             let mut wrote_any = false;
             for (i, &d) in digits.iter().enumerate() {
                 if d == 0 {
@@ -566,7 +561,10 @@ mod tests {
 
     #[test]
     fn thousands_and_dp() {
-        assert_eq!(Money::parse("1234567.891").unwrap().fmt_money(), "1,234,567.89");
+        assert_eq!(
+            Money::parse("1234567.891").unwrap().fmt_money(),
+            "1,234,567.89"
+        );
         assert_eq!(Money::parse("-1234.5").unwrap().fmt_money(), "-1,234.50");
         assert_eq!(Money::ZERO.fmt_money(), "0.00");
         assert_eq!(Money::parse("100").unwrap().fmt_plain(), "100.00");
@@ -592,7 +590,10 @@ mod tests {
         // 因为 from_str_exact 读不回科学计数法
         assert_eq!(Money::parse("100").unwrap().fmt_exact(), "100");
         assert_eq!(Money::new(Decimal::new(10000, 2)).fmt_exact(), "100.00");
-        assert_eq!(Money::parse("1234567.89").unwrap().fmt_exact(), "1234567.89");
+        assert_eq!(
+            Money::parse("1234567.89").unwrap().fmt_exact(),
+            "1234567.89"
+        );
 
         for s in ["7.2345", "0.123456", "0.095", "100", "1234567.89", "-0.5"] {
             let m = Money::parse(s).unwrap();
@@ -615,7 +616,10 @@ mod tests {
         assert_eq!(Money::parse("0.005").unwrap().round2().fmt_plain(), "0.01");
         assert_eq!(Money::parse("0.015").unwrap().round2().fmt_plain(), "0.02");
         assert_eq!(Money::parse("0.125").unwrap().round2().fmt_plain(), "0.13");
-        assert_eq!(Money::parse("-0.005").unwrap().round2().fmt_plain(), "-0.01");
+        assert_eq!(
+            Money::parse("-0.005").unwrap().round2().fmt_plain(),
+            "-0.01"
+        );
         assert_eq!(Money::parse("2.675").unwrap().round2().fmt_plain(), "2.68");
         // 非中点保持最近舍入
         assert_eq!(Money::parse("0.004").unwrap().round2().fmt_plain(), "0.00");
@@ -624,13 +628,22 @@ mod tests {
 
     #[test]
     fn capital() {
-        assert_eq!(Money::parse("1001.00").unwrap().to_capital(), "壹仟零壹元整");
+        assert_eq!(
+            Money::parse("1001.00").unwrap().to_capital(),
+            "壹仟零壹元整"
+        );
         assert_eq!(Money::parse("100000000").unwrap().to_capital(), "壹亿元整");
         assert_eq!(Money::parse("0.05").unwrap().to_capital(), "零元零伍分");
-        assert_eq!(Money::parse("1234.56").unwrap().to_capital(), "壹仟贰佰叁拾肆元伍角陆分");
+        assert_eq!(
+            Money::parse("1234.56").unwrap().to_capital(),
+            "壹仟贰佰叁拾肆元伍角陆分"
+        );
         assert_eq!(Money::parse("10.40").unwrap().to_capital(), "壹拾元肆角整");
         assert_eq!(Money::parse("10001").unwrap().to_capital(), "壹万零壹元整");
-        assert_eq!(Money::parse("100000001").unwrap().to_capital(), "壹亿零壹元整");
+        assert_eq!(
+            Money::parse("100000001").unwrap().to_capital(),
+            "壹亿零壹元整"
+        );
         assert_eq!(Money::parse("-8.20").unwrap().to_capital(), "负捌元贰角整");
     }
 

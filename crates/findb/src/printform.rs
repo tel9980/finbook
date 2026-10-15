@@ -143,7 +143,9 @@ pub fn voucher_form_html(
     let forms: String = vouchers
         .iter()
         .enumerate()
-        .map(|(i, v)| one_voucher_form(company, period_label, v, page_from_1, i + 1, vouchers.len()))
+        .map(|(i, v)| {
+            one_voucher_form(company, period_label, v, page_from_1, i + 1, vouchers.len())
+        })
         .collect();
     format!(
         r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
@@ -208,7 +210,11 @@ fn one_voucher_form(
              <td class='num sel'></td><td class='num sel'></td></tr>",
         );
     }
-    let page = if page_from_1 { format!("第 {idx} / 共 {total} 页") } else { String::new() };
+    let page = if page_from_1 {
+        format!("第 {idx} / 共 {total} 页")
+    } else {
+        String::new()
+    };
     let caption = if v.debit_total.is_zero() {
         "".to_string()
     } else {
@@ -287,7 +293,7 @@ pub struct LedgerPrintRow {
 
 /// 账簿套打整页的输入
 pub struct LedgerPrint {
-    pub title: String,      // 总账 / 明细账 / 日记账
+    pub title: String,        // 总账 / 明细账 / 日记账
     pub account_name: String, // 科目（编码 + 全路径名）
     pub period_label: String,
     /// 期初余额方向（借 / 贷 / 平）与金额
@@ -313,13 +319,20 @@ pub fn ledger_form_html(company: &str, ledger: &LedgerPrint) -> String {
             r.balance.fmt_money(),
         ));
     }
-    let page = if ledger.page_from_1 { "第 1 页 / 共 1 页".to_string() } else { String::new() };
+    let page = if ledger.page_from_1 {
+        "第 1 页 / 共 1 页".to_string()
+    } else {
+        String::new()
+    };
     let head_row = format!(
         "<tr><td>{}</td><td>{}</td><td>{}</td><td></td><td></td><td class='c'>{}</td>\
          <td class='num'>{}</td></tr>",
         "",
         "",
-        esc(&format!("期初余额：{}{}", ledger.begin_dir, ledger.begin_balance)),
+        esc(&format!(
+            "期初余额：{}{}",
+            ledger.begin_dir, ledger.begin_balance
+        )),
         esc(&ledger.begin_dir),
         ledger.begin_balance.fmt_money(),
     );
@@ -383,13 +396,13 @@ td.c{text-align:center;}
 
 /// 由一组账簿行计算本期合计与静态页元，供上层组装 [`LedgerPrint`]。
 #[allow(clippy::too_many_arguments)]
-pub fn summarize_ledger<'a>(
+pub fn summarize_ledger(
     title: &str,
     account_name: &str,
     period: Period,
     begin_dir: &str,
     begin_balance: Money,
-    rows: &'a [LedgerPrintRow],
+    rows: &[LedgerPrintRow],
 ) -> LedgerPrint {
     LedgerPrint {
         title: title.to_string(),
@@ -673,14 +686,30 @@ fn doc_shell(title: &str, body: &str, size: &str, auto_print: bool) -> String {
 /// 可见列（th 文本, token, 基准宽度%）；基准宽度合计 100，子集渲染时归一化
 fn order_columns(f: &DocPrintFields) -> Vec<(&'static str, &'static str, u32)> {
     let mut cols: Vec<(&'static str, &'static str, u32)> = Vec::new();
-    if f.col_code { cols.push(("存货编码", "code", 10)); }
-    if f.col_name { cols.push(("名称", "name", 24)); }
-    if f.col_qty { cols.push(("数量", "qty", 8)); }
-    if f.col_price { cols.push(("单价", "price", 11)); }
-    if f.col_rate { cols.push(("税率", "rate", 6)); }
-    if f.col_amount { cols.push(("金额", "amount", 13)); }
-    if f.col_tax { cols.push(("税额", "tax", 10)); }
-    if f.col_memo { cols.push(("备注", "linememo", 18)); }
+    if f.col_code {
+        cols.push(("存货编码", "code", 10));
+    }
+    if f.col_name {
+        cols.push(("名称", "name", 24));
+    }
+    if f.col_qty {
+        cols.push(("数量", "qty", 8));
+    }
+    if f.col_price {
+        cols.push(("单价", "price", 11));
+    }
+    if f.col_rate {
+        cols.push(("税率", "rate", 6));
+    }
+    if f.col_amount {
+        cols.push(("金额", "amount", 13));
+    }
+    if f.col_tax {
+        cols.push(("税额", "tax", 10));
+    }
+    if f.col_memo {
+        cols.push(("备注", "linememo", 18));
+    }
     cols
 }
 
@@ -770,11 +799,12 @@ fn one_order_doc(o: &OrderPrint, f: &DocPrintFields) -> String {
     if f.memo && !o.memo.trim().is_empty() {
         meta_bits.push(format!("备注：{}", esc(o.memo.trim())));
     }
-    let meta = if meta_bits.is_empty() {
-        String::new()
-    } else {
-        format!(r#"<div class="dmeta">{}</div>"#, meta_bits.join(""))
-    };
+    let mut meta = String::new();
+    if !meta_bits.is_empty() {
+        meta.push_str(r#"<div class="dmeta">"#);
+        meta.push_str(&meta_bits.join(""));
+        meta.push_str("</div>");
+    }
 
     // 列头（可见列归一化宽度到 100%）
     let cols = order_columns(f);
@@ -925,7 +955,14 @@ fn one_receipt_doc(d: &ReceiptPrint, f: &DocPrintFields) -> String {
         meta_bits.push(format!("类型：{}单", esc(&d.kind_label)));
     }
     if f.prepared {
-        meta_bits.push(format!("凭证：{}", esc(if d.voucher_no.is_empty() { "未生成" } else { &d.voucher_no })));
+        meta_bits.push(format!(
+            "凭证：{}",
+            esc(if d.voucher_no.is_empty() {
+                "未生成"
+            } else {
+                &d.voucher_no
+            })
+        ));
     }
 
     // 双列信息格（label:value ×2/行，节省竖向空间）
@@ -969,18 +1006,19 @@ fn one_receipt_doc(d: &ReceiptPrint, f: &DocPrintFields) -> String {
     } else {
         String::new()
     };
-    let meta = if meta_bits.is_empty() {
-        String::new()
-    } else {
-        format!(r#"<div class="dmeta">{}</div>"#, meta_bits.join(""))
-    };
+    let mut meta = String::new();
+    if !meta_bits.is_empty() {
+        meta.push_str(r#"<div class="dmeta">"#);
+        meta.push_str(&meta_bits.join(""));
+        meta.push_str("</div>");
+    }
     format!(
         r#"<div class="doc">
-<div class="dtitle"><span class="t">{title}</span><span class="no">{no}</span></div>
+<div class="dtitle"><span class="t">{kind}单</span><span class="no">{no}</span></div>
 {meta}
 <table><tbody>{rows}</tbody></table>
 {sign}</div>"#,
-        title = format!("{}单", esc(&d.kind_label)),
+        kind = esc(&d.kind_label),
         no = no_bits.join("　"),
         meta = meta,
         rows = rows,
@@ -1020,10 +1058,16 @@ mod tests {
 
     #[test]
     fn doc_fields_tokens() {
-        assert!(super::fields_from_tokens("").col_rate, "空 fields = 全部默认显示");
+        assert!(
+            super::fields_from_tokens("").col_rate,
+            "空 fields = 全部默认显示"
+        );
         let f = super::fields_from_tokens("no,date,sign");
         assert!(f.no && f.date && f.sign);
-        assert!(!f.col_rate && !f.totals && !f.col_amount, "白名单未列的字段应关闭");
+        assert!(
+            !f.col_rate && !f.totals && !f.col_amount,
+            "白名单未列的字段应关闭"
+        );
         assert!(f.pack, "pack 不受 fields 白名单影响，默认开启");
         let f = super::fields_from_tokens("fund,voucher");
         assert!(f.fund && f.voucher);
@@ -1033,7 +1077,11 @@ mod tests {
     fn order_forms_pack_and_fields() {
         let two = vec![mk_order("XS001", 2), mk_order("XS002", 2)];
         let html = super::order_forms_html("甲公司", &two, &Default::default());
-        assert_eq!(html.matches("class=\"page\"").count(), 1, "两张小单应紧凑同页");
+        assert_eq!(
+            html.matches("class=\"page\"").count(),
+            1,
+            "两张小单应紧凑同页"
+        );
         assert_eq!(html.matches("class=\"doc\"").count(), 2, "同页两张单据");
         assert!(html.contains("销售订单") && html.contains("税率") && html.contains("签收"));
 
@@ -1043,15 +1091,25 @@ mod tests {
         assert_eq!(html.matches("class=\"page\"").count(), 2, "超页单据应换页");
 
         // pack 关闭 → 一单一页
-        let f = super::DocPrintFields { pack: false, ..Default::default() };
+        let f = super::DocPrintFields {
+            pack: false,
+            ..Default::default()
+        };
         let html = super::order_forms_html("甲公司", &two, &f);
-        assert_eq!(html.matches("class=\"page\"").count(), 2, "pack=0 应一单一页");
+        assert_eq!(
+            html.matches("class=\"page\"").count(),
+            2,
+            "pack=0 应一单一页"
+        );
 
         // 字段收窄：不打税率列与合计，公司抬头始终保留
         let f = super::fields_from_tokens("no,date,code,qty,price,amount");
         let html = super::order_forms_html("甲公司", &two, &f);
         assert!(html.contains("单号") && html.contains("存货编码"));
-        assert!(!html.contains("税率") && !html.contains("合计"), "未勾选字段不应出现");
+        assert!(
+            !html.contains("税率") && !html.contains("合计"),
+            "未勾选字段不应出现"
+        );
         assert!(html.contains("甲公司"), "公司抬头始终保留");
     }
 
@@ -1067,7 +1125,8 @@ mod tests {
             memo: "回款".to_string(),
             voucher_no: "记-0007".to_string(),
         };
-        let html = super::receipt_forms_html("甲公司", &[d.clone()], &Default::default());
+        let html =
+            super::receipt_forms_html("甲公司", std::slice::from_ref(&d), &Default::default());
         assert!(html.contains("收款单"), "标题应为收款单");
         assert!(html.contains("壹仟贰佰叁拾肆元伍角陆分"), "金额大写");
         assert!(html.contains("记-0007") && html.contains("资金账户"));
@@ -1115,7 +1174,7 @@ mod tests {
 
     use super::*;
     use chrono::NaiveDate;
-    use fincore::{Account, AcctCategory, AuxRef, Chart, CodeScheme, Money, Period};
+    use fincore::{Account, AcctCategory, Chart, CodeScheme, Money, Period};
 
     fn sample_chart() -> Chart {
         let mut chart = Chart::new(CodeScheme::default());

@@ -3,7 +3,7 @@
 //! 财务数据导出有两个坑：
 //! 1. CSV 必须转义逗号、引号、换行，否则金额里的千分位会把列切错；
 //! 2. 直接用 Excel 打开 CSV 时，中文会因为缺 BOM 变乱码，科目编码 `001` 会被吃掉前导零。
-//! 所以 CSV 一律写 UTF-8 BOM，Excel 走真正的 xlsx。
+//!    所以 CSV 一律写 UTF-8 BOM，Excel 走真正的 xlsx。
 //!
 //! 打印预览：把二维表渲染成一张自带打印样式的 HTML，用系统默认浏览器打开，
 //! 用户按 Ctrl/Cmd+P 即可打印。这样普通账户（无导出权限）也能拿到纸面报表，
@@ -46,12 +46,12 @@ impl Sheet {
 fn csv_cell(s: &str) -> String {
     // 以 = + - @ 开头的文本在 Excel/LibreOffice 打开时会被当公式执行；
     // 摘要、客户名等常来自导入数据，必须在导出侧统一加单引号前缀。
-    let guarded = if s.starts_with('=') || s.starts_with('+') || s.starts_with('-') || s.starts_with('@')
-    {
-        format!("'{s}")
-    } else {
-        s.to_string()
-    };
+    let guarded =
+        if s.starts_with('=') || s.starts_with('+') || s.starts_with('-') || s.starts_with('@') {
+            format!("'{s}")
+        } else {
+            s.to_string()
+        };
     if guarded.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", guarded.replace('"', "\"\""))
     } else {
@@ -89,7 +89,9 @@ fn as_number(s: &str) -> Option<f64> {
     if t.starts_with('0') && !t.starts_with("0.") {
         return None;
     }
-    if t.chars().any(|c| !c.is_ascii_digit() && c != '.' && c != '-') {
+    if t.chars()
+        .any(|c| !c.is_ascii_digit() && c != '.' && c != '-')
+    {
         return None;
     }
     t.parse::<f64>().ok()
@@ -154,7 +156,9 @@ pub fn pick_save(default_name: &str, xlsx: bool) -> Option<PathBuf> {
 
 /// 弹出打开对话框
 pub fn pick_open(exts: &[&str]) -> Option<PathBuf> {
-    rfd::FileDialog::new().add_filter("数据文件", exts).pick_file()
+    rfd::FileDialog::new()
+        .add_filter("数据文件", exts)
+        .pick_file()
 }
 
 /// 统一的导出入口：弹出路径选择并按扩展名落盘
@@ -199,7 +203,10 @@ pub fn batch_template_sheets(data_name: &str, tpl: &fincore::batch::Template) ->
     for r in &tpl.examples {
         data.push(r.clone());
     }
-    let mut help = Sheet::new("填表说明", vec!["填表说明（本页不用导入，只看）".to_string()]);
+    let mut help = Sheet::new(
+        "填表说明",
+        vec!["填表说明（本页不用导入，只看）".to_string()],
+    );
     for h in &tpl.help {
         help.push(vec![h.clone()]);
     }
@@ -267,7 +274,13 @@ pub fn print_html_content(title: &str, html: &str) -> Result<String, String> {
     let _ = std::fs::create_dir_all(&dir);
     let safe = title
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     let path = dir.join(format!("{safe}.html"));
     std::fs::write(&path, html).map_err(|e| format!("生成打印页失败：{e}"))?;
@@ -318,10 +331,8 @@ pub fn export_print_controls(ui: &mut Ui, ctx: &AppCtx<'_>) -> Option<ExportMode
     } else {
         ui.label(RichText::new("（无导出权限，仅可打印预览）").small().weak());
     }
-    if ctx.user().can(Perm::Report) {
-        if ui.button("打印预览").clicked() {
-            return Some(ExportMode::Print);
-        }
+    if ctx.user().can(Perm::Report) && ui.button("打印预览").clicked() {
+        return Some(ExportMode::Print);
     }
     None
 }

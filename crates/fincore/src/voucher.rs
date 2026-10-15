@@ -245,7 +245,10 @@ impl AuxRef {
         let mut parts: Vec<String> = Vec::new();
         for k in AuxKind::ALL {
             if let Some(v) = self.get(*k) {
-                let shown = names.get(&format!("{}:{}", k.code(), v)).cloned().unwrap_or_else(|| v.clone());
+                let shown = names
+                    .get(&format!("{}:{}", k.code(), v))
+                    .cloned()
+                    .unwrap_or_else(|| v.clone());
                 parts.push(format!("{}:{}", k.label(), shown));
             }
         }
@@ -253,7 +256,11 @@ impl AuxRef {
     }
     /// 返回实际有值的维度编码列表（用于界面高亮必填项）
     pub fn filled(&self) -> Vec<AuxKind> {
-        AuxKind::ALL.iter().copied().filter(|k| self.get(*k).is_some()).collect()
+        AuxKind::ALL
+            .iter()
+            .copied()
+            .filter(|k| self.get(*k).is_some())
+            .collect()
     }
 }
 
@@ -427,7 +434,11 @@ impl Voucher {
 
     /// 空行（借贷均为零）行号
     pub fn blank_lines(&self) -> Vec<i32> {
-        self.entries.iter().filter(|e| e.is_blank()).map(|e| e.line).collect()
+        self.entries
+            .iter()
+            .filter(|e| e.is_blank())
+            .map(|e| e.line)
+            .collect()
     }
 
     /// 去掉首尾空行后的有效行数
@@ -543,16 +554,25 @@ mod tests {
         assert!(AuxRef::key_contains(two, "dept=D01"));
         assert!(AuxRef::key_contains(two, two), "整条相等也应命中");
         // 组合过滤：两个片段都要在
-        assert!(AuxRef::key_contains(two, &format!("customer=C001{sep}dept=D01")));
+        assert!(AuxRef::key_contains(
+            two,
+            &format!("customer=C001{sep}dept=D01")
+        ));
         // 顺序无关
-        assert!(AuxRef::key_contains(two, &format!("dept=D01{sep}customer=C001")));
+        assert!(AuxRef::key_contains(
+            two,
+            &format!("dept=D01{sep}customer=C001")
+        ));
         // 前缀不得命中
         assert!(!AuxRef::key_contains("customer=C0011", "customer=C001"));
         assert!(!AuxRef::key_contains(two, "customer=C0012"));
         // 片段级前缀也不得命中
         assert!(!AuxRef::key_contains(two, "dept=D0"));
         // 缺一个片段就不算命中
-        assert!(!AuxRef::key_contains(two, &format!("customer=C001{sep}dept=D02")));
+        assert!(!AuxRef::key_contains(
+            two,
+            &format!("customer=C001{sep}dept=D02")
+        ));
         // 空 want = 不限制
         assert!(AuxRef::key_contains(two, ""));
         assert!(AuxRef::key_contains("", ""));

@@ -3,9 +3,9 @@
 //! 数据层 `findb::scm2` 已就绪，这里只做展示与录入。
 
 use egui::{RichText, Ui};
+use fincore::{AuxKind, Money, Period, Perm};
 use findb::scm2::{self, PoEstimate, PoRecon, SoRecon};
 use findb::{auxs, business, scm};
-use fincore::{AuxKind, Money, Perm, Period};
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -199,15 +199,34 @@ impl ScmDeepView {
                 let list = scm::po_list(ctx.db(), p, None).unwrap_or_default();
                 self.po_rows = list
                     .iter()
-                    .map(|o| (o.id, o.no.clone(), o.supplier_name.clone(), o.status.label().to_string(), o.total_amount, o.received_amount))
+                    .map(|o| {
+                        (
+                            o.id,
+                            o.no.clone(),
+                            o.supplier_name.clone(),
+                            o.status.label().to_string(),
+                            o.total_amount,
+                            o.received_amount,
+                        )
+                    })
                     .collect();
-                self.po_track = findb::procurement::po_execution_track(ctx.db(), p).unwrap_or_default();
+                self.po_track =
+                    findb::procurement::po_execution_track(ctx.db(), p).unwrap_or_default();
             }
             Tab::SoDoc => {
                 let list = scm::so_list(ctx.db(), p, None).unwrap_or_default();
                 self.so_rows = list
                     .iter()
-                    .map(|o| (o.id, o.no.clone(), o.customer_name.clone(), o.status.label().to_string(), o.total_amount, o.shipped_amount))
+                    .map(|o| {
+                        (
+                            o.id,
+                            o.no.clone(),
+                            o.customer_name.clone(),
+                            o.status.label().to_string(),
+                            o.total_amount,
+                            o.shipped_amount,
+                        )
+                    })
                     .collect();
                 self.so_track = findb::sales::so_execution_track(ctx.db(), p).unwrap_or_default();
             }
@@ -232,14 +251,10 @@ impl ScmDeepView {
             }
             Tab::Quota => {
                 if !self.quota_supplier.is_empty() && !self.quota_item.is_empty() {
-                    self.quota_remaining = scm2::quota_remaining(
-                        ctx.db(),
-                        p,
-                        &self.quota_supplier,
-                        &self.quota_item,
-                    )
-                    .ok()
-                    .flatten();
+                    self.quota_remaining =
+                        scm2::quota_remaining(ctx.db(), p, &self.quota_supplier, &self.quota_item)
+                            .ok()
+                            .flatten();
                 }
             }
             Tab::ChangeLog => {}
@@ -258,7 +273,9 @@ impl ScmDeepView {
         self.reload(ctx);
 
         widgets::page_header(ui, "采购 / 销售深度", |ui| {
-            ui.label(RichText::new("采购暂估 / 采购对账 / 销售对账 / 供应商配额 / 订单变更").weak());
+            ui.label(
+                RichText::new("采购暂估 / 采购对账 / 销售对账 / 供应商配额 / 订单变更").weak(),
+            );
         });
 
         widgets::toolbar(ui, |ui| {
@@ -267,7 +284,10 @@ impl ScmDeepView {
             }
             ui.separator();
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -298,11 +318,20 @@ impl ScmDeepView {
         widgets::card(ui, "新增请购单", |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("存货");
-                widgets::combo(ui, "scmdeep_req_item", &mut self.req_item, &self.items, 160.0);
+                widgets::combo(
+                    ui,
+                    "scmdeep_req_item",
+                    &mut self.req_item,
+                    &self.items,
+                    160.0,
+                );
                 ui.label("数量");
                 widgets::money_input(ui, &mut self.req_qty, 100.0);
                 ui.label("备注");
-                ui.add_sized([160.0, 22.0], egui::TextEdit::singleline(&mut self.req_memo));
+                ui.add_sized(
+                    [160.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.req_memo),
+                );
                 if ui.button("保存请购单").clicked() && ctx.can(Perm::AccountEdit) {
                     self.do_save_requisition(ctx);
                 }
@@ -322,28 +351,40 @@ impl ScmDeepView {
         widgets::grid(ui, "scmdeep_req", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.no).monospace()); }
-                1 => { ui.label(&r.item_name); }
+                0 => {
+                    ui.label(RichText::new(&r.no).monospace());
+                }
+                1 => {
+                    ui.label(&r.item_name);
+                }
                 2 => widgets::amount_label(ui, r.qty),
                 3 => {
                     ui.label(
-                        RichText::new(r.status.clone())
-                            .color(if r.status == "approved" { palette::OK } else { palette::WARN }),
+                        RichText::new(r.status.clone()).color(if r.status == "approved" {
+                            palette::OK
+                        } else {
+                            palette::WARN
+                        }),
                     );
                 }
-                4 => { ui.label(&r.requester); }
-                5 => { ui.label(&r.memo); }
-                6 => {
-                    if r.status == "draft" && ui.small_button("审批").clicked() {
-                        approve = Some(r.id);
-                    }
+                4 => {
+                    ui.label(&r.requester);
+                }
+                5 => {
+                    ui.label(&r.memo);
+                }
+                6 if r.status == "draft" && ui.small_button("审批").clicked() => {
+                    approve = Some(r.id);
                 }
                 _ => {}
             }
         });
         if let Some(id) = approve {
             match findb::procurement::pr_approve(ctx.db(), id) {
-                Ok(()) => { ctx.info("已审批请购单"); self.dirty = true; }
+                Ok(()) => {
+                    ctx.info("已审批请购单");
+                    self.dirty = true;
+                }
                 Err(e) => ctx.error(e.to_string()),
             }
         }
@@ -380,7 +421,12 @@ impl ScmDeepView {
             memo: self.req_memo.clone(),
         };
         match findb::procurement::pr_save(ctx.db(), &mut r) {
-            Ok(_) => { ctx.info("已保存请购单"); self.req_qty.clear(); self.req_memo.clear(); self.dirty = true; }
+            Ok(_) => {
+                ctx.info("已保存请购单");
+                self.req_qty.clear();
+                self.req_memo.clear();
+                self.dirty = true;
+            }
             Err(e) => self.err = e.to_string(),
         }
     }
@@ -390,15 +436,30 @@ impl ScmDeepView {
             let customers = auxs::codes(ctx.db(), AuxKind::Customer).unwrap_or_default();
             ui.horizontal_wrapped(|ui| {
                 ui.label("客户");
-                widgets::combo(ui, "scmdeep_quo_cust", &mut self.quo_customer, &customers, 140.0);
+                widgets::combo(
+                    ui,
+                    "scmdeep_quo_cust",
+                    &mut self.quo_customer,
+                    &customers,
+                    140.0,
+                );
                 ui.label("存货");
-                widgets::combo(ui, "scmdeep_quo_item", &mut self.quo_item, &self.items, 140.0);
+                widgets::combo(
+                    ui,
+                    "scmdeep_quo_item",
+                    &mut self.quo_item,
+                    &self.items,
+                    140.0,
+                );
                 ui.label("数量");
                 widgets::money_input(ui, &mut self.quo_qty, 80.0);
                 ui.label("单价");
                 widgets::money_input(ui, &mut self.quo_price, 90.0);
                 ui.label("备注");
-                ui.add_sized([140.0, 22.0], egui::TextEdit::singleline(&mut self.quo_memo));
+                ui.add_sized(
+                    [140.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.quo_memo),
+                );
                 if ui.button("保存报价单").clicked() && ctx.can(Perm::AccountEdit) {
                     self.do_save_quotation(ctx);
                 }
@@ -418,28 +479,38 @@ impl ScmDeepView {
         widgets::grid(ui, "scmdeep_quo", &cols, rows.len(), 24.0, |i, c, ui| {
             let q = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&q.no).monospace()); }
-                1 => { ui.label(&q.customer_name); }
-                2 => { ui.label(&q.item_name); }
+                0 => {
+                    ui.label(RichText::new(&q.no).monospace());
+                }
+                1 => {
+                    ui.label(&q.customer_name);
+                }
+                2 => {
+                    ui.label(&q.item_name);
+                }
                 3 => widgets::amount_label(ui, q.qty),
                 4 => widgets::amount_label(ui, q.unit_price),
                 5 => {
                     ui.label(
-                        RichText::new(q.status.clone())
-                            .color(if q.status == "approved" { palette::OK } else { palette::WARN }),
+                        RichText::new(q.status.clone()).color(if q.status == "approved" {
+                            palette::OK
+                        } else {
+                            palette::WARN
+                        }),
                     );
                 }
-                6 => {
-                    if q.status == "draft" && ui.small_button("审批").clicked() {
-                        approve = Some(q.id);
-                    }
+                6 if q.status == "draft" && ui.small_button("审批").clicked() => {
+                    approve = Some(q.id);
                 }
                 _ => {}
             }
         });
         if let Some(id) = approve {
             match findb::sales::quo_approve(ctx.db(), id) {
-                Ok(()) => { ctx.info("已审批报价单"); self.dirty = true; }
+                Ok(()) => {
+                    ctx.info("已审批报价单");
+                    self.dirty = true;
+                }
                 Err(e) => ctx.error(e.to_string()),
             }
         }
@@ -471,7 +542,12 @@ impl ScmDeepView {
             customer_code: self.quo_customer.clone(),
             customer_name,
             item_code: self.quo_item.clone(),
-            item_name: self.items.iter().find(|i| **i == self.quo_item).cloned().unwrap_or_default(),
+            item_name: self
+                .items
+                .iter()
+                .find(|i| **i == self.quo_item)
+                .cloned()
+                .unwrap_or_default(),
             qty,
             unit_price: Money::parse_or_zero(&self.quo_price),
             status: "draft".to_string(),
@@ -479,7 +555,13 @@ impl ScmDeepView {
             memo: self.quo_memo.clone(),
         };
         match findb::sales::quo_save(ctx.db(), &mut q) {
-            Ok(_) => { ctx.info("已保存报价单"); self.quo_qty.clear(); self.quo_price.clear(); self.quo_memo.clear(); self.dirty = true; }
+            Ok(_) => {
+                ctx.info("已保存报价单");
+                self.quo_qty.clear();
+                self.quo_price.clear();
+                self.quo_memo.clear();
+                self.dirty = true;
+            }
             Err(e) => self.err = e.to_string(),
         }
     }
@@ -489,14 +571,26 @@ impl ScmDeepView {
         widgets::card(ui, "到货 / 退货 / 付款", |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("采购订单ID");
-                ui.add_sized([80.0, 22.0], egui::TextEdit::singleline(&mut self.doc_po_id));
+                ui.add_sized(
+                    [80.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.doc_po_id),
+                );
                 ui.label("数量/金额");
                 widgets::money_input(ui, &mut self.doc_amount, 100.0);
                 ui.label("备注");
-                ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut self.doc_memo));
-                if ui.button("到货").clicked() && ctx.can(Perm::AccountEdit) { self.do_po_receipt(ctx); }
-                if ui.button("退货").clicked() && ctx.can(Perm::AccountEdit) { self.do_po_return(ctx); }
-                if ui.button("付款").clicked() && ctx.can(Perm::AccountEdit) { self.do_po_payment(ctx); }
+                ui.add_sized(
+                    [120.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.doc_memo),
+                );
+                if ui.button("到货").clicked() && ctx.can(Perm::AccountEdit) {
+                    self.do_po_receipt(ctx);
+                }
+                if ui.button("退货").clicked() && ctx.can(Perm::AccountEdit) {
+                    self.do_po_return(ctx);
+                }
+                if ui.button("付款").clicked() && ctx.can(Perm::AccountEdit) {
+                    self.do_po_payment(ctx);
+                }
             });
         });
         let rows = self.po_rows.clone();
@@ -511,10 +605,18 @@ impl ScmDeepView {
         widgets::grid(ui, "scmdeep_po_doc", &cols, rows.len(), 24.0, |i, c, ui| {
             let (id, no, sup, st, amt, recv) = &rows[i];
             match c {
-                0 => { ui.label(id.to_string()); }
-                1 => { ui.label(RichText::new(no).monospace()); }
-                2 => { ui.label(sup); }
-                3 => { ui.label(st); }
+                0 => {
+                    ui.label(id.to_string());
+                }
+                1 => {
+                    ui.label(RichText::new(no).monospace());
+                }
+                2 => {
+                    ui.label(sup);
+                }
+                3 => {
+                    ui.label(st);
+                }
                 4 => widgets::amount_label(ui, *amt),
                 5 => widgets::amount_label(ui, *recv),
                 _ => {}
@@ -530,57 +632,127 @@ impl ScmDeepView {
         ];
         ui.add_space(6.0);
         ui.label(RichText::new("采购订单执行跟踪").strong());
-        widgets::grid(ui, "scmdeep_po_track", &tcols, track.len(), 24.0, |i, c, ui| {
-            let t = &track[i];
-            match c {
-                0 => { ui.label(RichText::new(&t.no).monospace()); }
-                1 => { ui.label(&t.supplier_name); }
-                2 => widgets::amount_label(ui, t.ordered_qty),
-                3 => widgets::amount_label(ui, t.received_qty),
-                4 => { ui.label(format!("{}%", t.rate.fmt_qty())); }
-                _ => {}
-            }
-        });
+        widgets::grid(
+            ui,
+            "scmdeep_po_track",
+            &tcols,
+            track.len(),
+            24.0,
+            |i, c, ui| {
+                let t = &track[i];
+                match c {
+                    0 => {
+                        ui.label(RichText::new(&t.no).monospace());
+                    }
+                    1 => {
+                        ui.label(&t.supplier_name);
+                    }
+                    2 => widgets::amount_label(ui, t.ordered_qty),
+                    3 => widgets::amount_label(ui, t.received_qty),
+                    4 => {
+                        ui.label(format!("{}%", t.rate.fmt_qty()));
+                    }
+                    _ => {}
+                }
+            },
+        );
     }
 
     fn do_po_receipt(&mut self, ctx: &mut AppCtx<'_>) {
         let po_id = self.doc_po_id.trim().parse::<i64>().unwrap_or(0);
-        if po_id == 0 { self.err = "请填写采购订单ID".into(); return; }
+        if po_id == 0 {
+            self.err = "请填写采购订单ID".into();
+            return;
+        }
         let qty = Money::parse_or_zero(&self.doc_amount);
-        if qty.is_zero() { self.err = "请填写数量".into(); return; }
+        if qty.is_zero() {
+            self.err = "请填写数量".into();
+            return;
+        }
         let p = self.period(ctx);
-        match findb::procurement::po_receipt_add(ctx.db(), &findb::procurement::PoReceipt {
-            id: 0, po_id, period: p, date: chrono::Local::now().date_naive(), qty, memo: self.doc_memo.clone(),
-            // TUI 只有「一张单一个数量」这一个输入位，行级收货留给 Web 端
-            item_code: String::new(), warehouse: String::new(),
-        }) {
-            Ok(_) => { ctx.info("已登记到货"); self.doc_amount.clear(); self.doc_memo.clear(); self.dirty = true; }
+        match findb::procurement::po_receipt_add(
+            ctx.db(),
+            &findb::procurement::PoReceipt {
+                id: 0,
+                po_id,
+                period: p,
+                date: chrono::Local::now().date_naive(),
+                qty,
+                memo: self.doc_memo.clone(),
+                // TUI 只有「一张单一个数量」这一个输入位，行级收货留给 Web 端
+                item_code: String::new(),
+                warehouse: String::new(),
+            },
+        ) {
+            Ok(_) => {
+                ctx.info("已登记到货");
+                self.doc_amount.clear();
+                self.doc_memo.clear();
+                self.dirty = true;
+            }
             Err(e) => self.err = e.to_string(),
         }
     }
 
     fn do_po_return(&mut self, ctx: &mut AppCtx<'_>) {
         let po_id = self.doc_po_id.trim().parse::<i64>().unwrap_or(0);
-        if po_id == 0 { self.err = "请填写采购订单ID".into(); return; }
+        if po_id == 0 {
+            self.err = "请填写采购订单ID".into();
+            return;
+        }
         let qty = Money::parse_or_zero(&self.doc_amount);
-        if qty.is_zero() { self.err = "请填写数量".into(); return; }
+        if qty.is_zero() {
+            self.err = "请填写数量".into();
+            return;
+        }
         let p = self.period(ctx);
-        match findb::procurement::po_return_add(ctx.db(), po_id, p, chrono::Local::now().date_naive(), qty, &self.doc_memo) {
-            Ok(_) => { ctx.info("已登记退货"); self.doc_amount.clear(); self.doc_memo.clear(); self.dirty = true; }
+        match findb::procurement::po_return_add(
+            ctx.db(),
+            po_id,
+            p,
+            chrono::Local::now().date_naive(),
+            qty,
+            &self.doc_memo,
+        ) {
+            Ok(_) => {
+                ctx.info("已登记退货");
+                self.doc_amount.clear();
+                self.doc_memo.clear();
+                self.dirty = true;
+            }
             Err(e) => self.err = e.to_string(),
         }
     }
 
     fn do_po_payment(&mut self, ctx: &mut AppCtx<'_>) {
         let po_id = self.doc_po_id.trim().parse::<i64>().unwrap_or(0);
-        if po_id == 0 { self.err = "请填写采购订单ID".into(); return; }
+        if po_id == 0 {
+            self.err = "请填写采购订单ID".into();
+            return;
+        }
         let amt = Money::parse_or_zero(&self.doc_amount);
-        if amt.is_zero() { self.err = "请填写金额".into(); return; }
+        if amt.is_zero() {
+            self.err = "请填写金额".into();
+            return;
+        }
         let p = self.period(ctx);
-        match findb::procurement::po_payment_add(ctx.db(), &findb::procurement::PoPayment {
-            id: 0, po_id, period: p, date: chrono::Local::now().date_naive(), amount: amt, memo: self.doc_memo.clone(),
-        }) {
-            Ok(_) => { ctx.info("已登记付款"); self.doc_amount.clear(); self.doc_memo.clear(); self.dirty = true; }
+        match findb::procurement::po_payment_add(
+            ctx.db(),
+            &findb::procurement::PoPayment {
+                id: 0,
+                po_id,
+                period: p,
+                date: chrono::Local::now().date_naive(),
+                amount: amt,
+                memo: self.doc_memo.clone(),
+            },
+        ) {
+            Ok(_) => {
+                ctx.info("已登记付款");
+                self.doc_amount.clear();
+                self.doc_memo.clear();
+                self.dirty = true;
+            }
             Err(e) => self.err = e.to_string(),
         }
     }
@@ -589,14 +761,26 @@ impl ScmDeepView {
         widgets::card(ui, "发货 / 退货 / 收款 / 信用检查", |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("销售订单ID");
-                ui.add_sized([80.0, 22.0], egui::TextEdit::singleline(&mut self.doc_so_id));
+                ui.add_sized(
+                    [80.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.doc_so_id),
+                );
                 ui.label("数量/金额");
                 widgets::money_input(ui, &mut self.doc_amount, 100.0);
                 ui.label("备注");
-                ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut self.doc_memo));
-                if ui.button("发货").clicked() && ctx.can(Perm::AccountEdit) { self.do_so_shipment(ctx); }
-                if ui.button("退货").clicked() && ctx.can(Perm::AccountEdit) { self.do_so_return(ctx); }
-                if ui.button("收款").clicked() && ctx.can(Perm::AccountEdit) { self.do_so_payment(ctx); }
+                ui.add_sized(
+                    [120.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.doc_memo),
+                );
+                if ui.button("发货").clicked() && ctx.can(Perm::AccountEdit) {
+                    self.do_so_shipment(ctx);
+                }
+                if ui.button("退货").clicked() && ctx.can(Perm::AccountEdit) {
+                    self.do_so_return(ctx);
+                }
+                if ui.button("收款").clicked() && ctx.can(Perm::AccountEdit) {
+                    self.do_so_payment(ctx);
+                }
             });
         });
         let rows = self.so_rows.clone();
@@ -611,10 +795,18 @@ impl ScmDeepView {
         widgets::grid(ui, "scmdeep_so_doc", &cols, rows.len(), 24.0, |i, c, ui| {
             let (id, no, cust, st, amt, ship) = &rows[i];
             match c {
-                0 => { ui.label(id.to_string()); }
-                1 => { ui.label(RichText::new(no).monospace()); }
-                2 => { ui.label(cust); }
-                3 => { ui.label(st); }
+                0 => {
+                    ui.label(id.to_string());
+                }
+                1 => {
+                    ui.label(RichText::new(no).monospace());
+                }
+                2 => {
+                    ui.label(cust);
+                }
+                3 => {
+                    ui.label(st);
+                }
                 4 => widgets::amount_label(ui, *amt),
                 5 => widgets::amount_label(ui, *ship),
                 _ => {}
@@ -630,51 +822,118 @@ impl ScmDeepView {
         ];
         ui.add_space(6.0);
         ui.label(RichText::new("销售订单执行跟踪").strong());
-        widgets::grid(ui, "scmdeep_so_track", &tcols, track.len(), 24.0, |i, c, ui| {
-            let t = &track[i];
-            match c {
-                0 => { ui.label(RichText::new(&t.no).monospace()); }
-                1 => { ui.label(&t.customer_name); }
-                2 => widgets::amount_label(ui, t.ordered_qty),
-                3 => widgets::amount_label(ui, t.shipped_qty),
-                4 => { ui.label(format!("{}%", t.rate.fmt_qty())); }
-                _ => {}
-            }
-        });
+        widgets::grid(
+            ui,
+            "scmdeep_so_track",
+            &tcols,
+            track.len(),
+            24.0,
+            |i, c, ui| {
+                let t = &track[i];
+                match c {
+                    0 => {
+                        ui.label(RichText::new(&t.no).monospace());
+                    }
+                    1 => {
+                        ui.label(&t.customer_name);
+                    }
+                    2 => widgets::amount_label(ui, t.ordered_qty),
+                    3 => widgets::amount_label(ui, t.shipped_qty),
+                    4 => {
+                        ui.label(format!("{}%", t.rate.fmt_qty()));
+                    }
+                    _ => {}
+                }
+            },
+        );
     }
 
     fn do_so_shipment(&mut self, ctx: &mut AppCtx<'_>) {
         let so_id = self.doc_so_id.trim().parse::<i64>().unwrap_or(0);
-        if so_id == 0 { self.err = "请填写销售订单ID".into(); return; }
+        if so_id == 0 {
+            self.err = "请填写销售订单ID".into();
+            return;
+        }
         let qty = Money::parse_or_zero(&self.doc_amount);
-        if qty.is_zero() { self.err = "请填写数量".into(); return; }
+        if qty.is_zero() {
+            self.err = "请填写数量".into();
+            return;
+        }
         let p = self.period(ctx);
-        match findb::sales::so_shipment_add(ctx.db(), so_id, p, chrono::Local::now().date_naive(), qty, &self.doc_memo) {
-            Ok(_) => { ctx.info("已登记发货"); self.doc_amount.clear(); self.doc_memo.clear(); self.dirty = true; }
+        match findb::sales::so_shipment_add(
+            ctx.db(),
+            so_id,
+            p,
+            chrono::Local::now().date_naive(),
+            qty,
+            &self.doc_memo,
+        ) {
+            Ok(_) => {
+                ctx.info("已登记发货");
+                self.doc_amount.clear();
+                self.doc_memo.clear();
+                self.dirty = true;
+            }
             Err(e) => self.err = e.to_string(),
         }
     }
 
     fn do_so_return(&mut self, ctx: &mut AppCtx<'_>) {
         let so_id = self.doc_so_id.trim().parse::<i64>().unwrap_or(0);
-        if so_id == 0 { self.err = "请填写销售订单ID".into(); return; }
+        if so_id == 0 {
+            self.err = "请填写销售订单ID".into();
+            return;
+        }
         let qty = Money::parse_or_zero(&self.doc_amount);
-        if qty.is_zero() { self.err = "请填写数量".into(); return; }
+        if qty.is_zero() {
+            self.err = "请填写数量".into();
+            return;
+        }
         let p = self.period(ctx);
-        match findb::sales::so_return_add(ctx.db(), so_id, p, chrono::Local::now().date_naive(), qty, &self.doc_memo) {
-            Ok(_) => { ctx.info("已登记退货"); self.doc_amount.clear(); self.doc_memo.clear(); self.dirty = true; }
+        match findb::sales::so_return_add(
+            ctx.db(),
+            so_id,
+            p,
+            chrono::Local::now().date_naive(),
+            qty,
+            &self.doc_memo,
+        ) {
+            Ok(_) => {
+                ctx.info("已登记退货");
+                self.doc_amount.clear();
+                self.doc_memo.clear();
+                self.dirty = true;
+            }
             Err(e) => self.err = e.to_string(),
         }
     }
 
     fn do_so_payment(&mut self, ctx: &mut AppCtx<'_>) {
         let so_id = self.doc_so_id.trim().parse::<i64>().unwrap_or(0);
-        if so_id == 0 { self.err = "请填写销售订单ID".into(); return; }
+        if so_id == 0 {
+            self.err = "请填写销售订单ID".into();
+            return;
+        }
         let amt = Money::parse_or_zero(&self.doc_amount);
-        if amt.is_zero() { self.err = "请填写金额".into(); return; }
+        if amt.is_zero() {
+            self.err = "请填写金额".into();
+            return;
+        }
         let p = self.period(ctx);
-        match findb::sales::so_payment_add(ctx.db(), so_id, p, chrono::Local::now().date_naive(), amt, &self.doc_memo) {
-            Ok(_) => { ctx.info("已登记收款"); self.doc_amount.clear(); self.doc_memo.clear(); self.dirty = true; }
+        match findb::sales::so_payment_add(
+            ctx.db(),
+            so_id,
+            p,
+            chrono::Local::now().date_naive(),
+            amt,
+            &self.doc_memo,
+        ) {
+            Ok(_) => {
+                ctx.info("已登记收款");
+                self.doc_amount.clear();
+                self.doc_memo.clear();
+                self.dirty = true;
+            }
             Err(e) => self.err = e.to_string(),
         }
     }
@@ -693,7 +952,11 @@ impl ScmDeepView {
                 .iter()
                 .position(|(id, _, _)| *id == self.est_po_id)
                 .unwrap_or(0);
-            let mut sel = if opts.is_empty() { String::new() } else { opts[idx].clone() };
+            let mut sel = if opts.is_empty() {
+                String::new()
+            } else {
+                opts[idx].clone()
+            };
             if widgets::combo(ui, "scmdeep_po", &mut sel, &opts, 240.0).changed() {
                 if let Some(i) = opts.iter().position(|o| *o == sel) {
                     self.est_po_id = self.pos[i].0;
@@ -705,7 +968,13 @@ impl ScmDeepView {
         widgets::card(ui, "新增暂估", |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("存货");
-                widgets::combo(ui, "scmdeep_est_item", &mut self.est_item, &self.items, 160.0);
+                widgets::combo(
+                    ui,
+                    "scmdeep_est_item",
+                    &mut self.est_item,
+                    &self.items,
+                    160.0,
+                );
                 ui.label("暂估金额");
                 widgets::money_input(ui, &mut self.est_amount, 120.0);
                 if ui.button("登记暂估").clicked() && ctx.can(Perm::AccountEdit) {
@@ -737,19 +1006,26 @@ impl ScmDeepView {
         widgets::grid(ui, "scmdeep_est", &cols, rows.len(), 24.0, |i, c, ui| {
             let e = &rows[i];
             match c {
-                0 => { ui.label(e.id.to_string()); }
-                1 => { ui.label(&e.item); }
+                0 => {
+                    ui.label(e.id.to_string());
+                }
+                1 => {
+                    ui.label(&e.item);
+                }
                 2 => widgets::amount_label(ui, e.est_amount),
                 3 => {
                     ui.label(
-                        RichText::new(if e.settled { "已冲回" } else { "未冲回" })
-                            .color(if e.settled { palette::OK } else { palette::WARN }),
+                        RichText::new(if e.settled { "已冲回" } else { "未冲回" }).color(
+                            if e.settled {
+                                palette::OK
+                            } else {
+                                palette::WARN
+                            },
+                        ),
                     );
                 }
-                4 => {
-                    if !e.settled && ui.small_button("冲回").clicked() {
-                        settle = Some(e.id);
-                    }
+                4 if !e.settled && ui.small_button("冲回").clicked() => {
+                    settle = Some(e.id);
                 }
                 _ => {}
             }
@@ -790,7 +1066,11 @@ impl ScmDeepView {
         let who = ctx.user().username.clone();
         match scm2::po_estimate_add(ctx.db(), self.est_po_id, p, &self.est_item, amount, &who) {
             Ok((est_id, vid)) => {
-                ctx.log("采购深度", "登记暂估", &format!("#{est_id} {amount} 凭证 #{vid}"));
+                ctx.log(
+                    "采购深度",
+                    "登记暂估",
+                    &format!("#{est_id} {amount} 凭证 #{vid}"),
+                );
                 ctx.info(format!("已登记暂估，生成凭证 #{vid}"));
                 self.est_amount.clear();
                 self.reload_estimates(ctx);
@@ -810,18 +1090,29 @@ impl ScmDeepView {
             widgets::TCol::new("未付款", 120.0).right(),
             widgets::TCol::new("未冲回暂估", 120.0).right(),
         ];
-        widgets::grid(ui, "scmdeep_po_recon", &cols, rows.len(), 24.0, |i, c, ui| {
-            let r = &rows[i];
-            match c {
-                0 => { ui.label(RichText::new(&r.no).monospace()); }
-                1 => { ui.label(&r.supplier); }
-                2 => widgets::amount_label(ui, r.order_amount),
-                3 => widgets::amount_label(ui, r.paid),
-                4 => widgets::amount_label(ui, r.unpaid),
-                5 => widgets::amount_label(ui, r.open_estimate),
-                _ => {}
-            }
-        });
+        widgets::grid(
+            ui,
+            "scmdeep_po_recon",
+            &cols,
+            rows.len(),
+            24.0,
+            |i, c, ui| {
+                let r = &rows[i];
+                match c {
+                    0 => {
+                        ui.label(RichText::new(&r.no).monospace());
+                    }
+                    1 => {
+                        ui.label(&r.supplier);
+                    }
+                    2 => widgets::amount_label(ui, r.order_amount),
+                    3 => widgets::amount_label(ui, r.paid),
+                    4 => widgets::amount_label(ui, r.unpaid),
+                    5 => widgets::amount_label(ui, r.open_estimate),
+                    _ => {}
+                }
+            },
+        );
     }
 
     fn show_so_recon(&self, ui: &mut Ui) {
@@ -833,17 +1124,28 @@ impl ScmDeepView {
             widgets::TCol::new("已收款", 120.0).right(),
             widgets::TCol::new("未收款", 120.0).right(),
         ];
-        widgets::grid(ui, "scmdeep_so_recon", &cols, rows.len(), 24.0, |i, c, ui| {
-            let r = &rows[i];
-            match c {
-                0 => { ui.label(RichText::new(&r.no).monospace()); }
-                1 => { ui.label(&r.customer); }
-                2 => widgets::amount_label(ui, r.order_amount),
-                3 => widgets::amount_label(ui, r.received),
-                4 => widgets::amount_label(ui, r.unreceived),
-                _ => {}
-            }
-        });
+        widgets::grid(
+            ui,
+            "scmdeep_so_recon",
+            &cols,
+            rows.len(),
+            24.0,
+            |i, c, ui| {
+                let r = &rows[i];
+                match c {
+                    0 => {
+                        ui.label(RichText::new(&r.no).monospace());
+                    }
+                    1 => {
+                        ui.label(&r.customer);
+                    }
+                    2 => widgets::amount_label(ui, r.order_amount),
+                    3 => widgets::amount_label(ui, r.received),
+                    4 => widgets::amount_label(ui, r.unreceived),
+                    _ => {}
+                }
+            },
+        );
     }
 
     // ------------------------- 配额 -------------------------
@@ -854,10 +1156,22 @@ impl ScmDeepView {
                 .spacing([10.0, 8.0])
                 .show(ui, |ui| {
                     ui.label("供应商");
-                    widgets::combo(ui, "scmdeep_quota_sup", &mut self.quota_supplier, &self.suppliers, 180.0);
+                    widgets::combo(
+                        ui,
+                        "scmdeep_quota_sup",
+                        &mut self.quota_supplier,
+                        &self.suppliers,
+                        180.0,
+                    );
                     ui.end_row();
                     ui.label("物料");
-                    widgets::combo(ui, "scmdeep_quota_item", &mut self.quota_item, &self.items, 180.0);
+                    widgets::combo(
+                        ui,
+                        "scmdeep_quota_item",
+                        &mut self.quota_item,
+                        &self.items,
+                        180.0,
+                    );
                     ui.end_row();
                     ui.label("配额数量");
                     widgets::money_input(ui, &mut self.quota_qty, 120.0);
@@ -892,7 +1206,16 @@ impl ScmDeepView {
         let p = self.period(ctx);
         match scm2::quota_set(ctx.db(), p, &self.quota_supplier, &self.quota_item, qty) {
             Ok(()) => {
-                ctx.log("采购深度", "供应商配额", &format!("{} {} {}", self.quota_supplier, self.quota_item, qty.fmt_qty()));
+                ctx.log(
+                    "采购深度",
+                    "供应商配额",
+                    &format!(
+                        "{} {} {}",
+                        self.quota_supplier,
+                        self.quota_item,
+                        qty.fmt_qty()
+                    ),
+                );
                 ctx.info("已保存配额");
                 self.quota_remaining = Some(qty);
             }
@@ -904,7 +1227,7 @@ impl ScmDeepView {
     fn show_change_log(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         widgets::toolbar(ui, |ui| {
             ui.label("订单类型");
-            let types = vec!["po".to_string(), "so".to_string()];
+            let types = ["po".to_string(), "so".to_string()];
             let labels = vec!["采购订单".to_string(), "销售订单".to_string()];
             let idx = types.iter().position(|t| *t == self.log_type).unwrap_or(0);
             let mut sel = labels[idx].clone();
@@ -917,7 +1240,9 @@ impl ScmDeepView {
             widgets::text_input(ui, &mut self.log_id, 90.0, "如 1");
             if ui.button("查询").clicked() {
                 self.log_rows = match self.log_id.trim().parse::<i64>() {
-                    Ok(id) => scm2::change_log_list(ctx.db(), &self.log_type, id).unwrap_or_default(),
+                    Ok(id) => {
+                        scm2::change_log_list(ctx.db(), &self.log_type, id).unwrap_or_default()
+                    }
                     Err(_) => {
                         self.err = "订单ID必须是数字".to_string();
                         Vec::new()
@@ -934,16 +1259,33 @@ impl ScmDeepView {
             widgets::TCol::new("操作人", 120.0),
             widgets::TCol::new("时间", 170.0),
         ];
-        widgets::grid(ui, "scmdeep_change_log", &cols, rows.len(), 24.0, |i, c, ui| {
-            let r = &rows[i];
-            match c {
-                0 => { ui.label(&r.0); }
-                1 => { ui.label(&r.1); }
-                2 => { ui.label(&r.2); }
-                3 => { ui.label(&r.3); }
-                4 => { ui.label(&r.4); }
-                _ => {}
-            }
-        });
+        widgets::grid(
+            ui,
+            "scmdeep_change_log",
+            &cols,
+            rows.len(),
+            24.0,
+            |i, c, ui| {
+                let r = &rows[i];
+                match c {
+                    0 => {
+                        ui.label(&r.0);
+                    }
+                    1 => {
+                        ui.label(&r.1);
+                    }
+                    2 => {
+                        ui.label(&r.2);
+                    }
+                    3 => {
+                        ui.label(&r.3);
+                    }
+                    4 => {
+                        ui.label(&r.4);
+                    }
+                    _ => {}
+                }
+            },
+        );
     }
 }

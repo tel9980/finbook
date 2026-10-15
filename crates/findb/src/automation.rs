@@ -19,9 +19,9 @@ pub struct FxRate {
 }
 
 pub fn fx_list(db: &Db, period: Period) -> DbResult<Vec<FxRate>> {
-    let mut st = db.conn().prepare(
-        "SELECT period, currency, rate FROM fx_rate WHERE period=?1 ORDER BY currency",
-    )?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT period, currency, rate FROM fx_rate WHERE period=?1 ORDER BY currency")?;
     let rows = st
         .query_map(rusqlite::params![period.ymm()], |r| {
             Ok(FxRate {
@@ -136,8 +136,10 @@ pub fn fx_calc(db: &Db, period: Period) -> DbResult<Vec<FxAdjLine>> {
                 r.get::<_, String>(2)?,
                 Money::parse_or_zero(&r.get::<_, String>(3)?),
                 Money::parse_or_zero(&r.get::<_, String>(4)?),
-                r.get::<_, Option<String>>(5)?.map(|s| Money::parse_or_zero(&s)),
-                r.get::<_, Option<String>>(6)?.map(|s| Money::parse_or_zero(&s)),
+                r.get::<_, Option<String>>(5)?
+                    .map(|s| Money::parse_or_zero(&s)),
+                r.get::<_, Option<String>>(6)?
+                    .map(|s| Money::parse_or_zero(&s)),
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -148,10 +150,18 @@ pub fn fx_calc(db: &Db, period: Period) -> DbResult<Vec<FxAdjLine>> {
     for (acct, aux, cur, d, c, _rate, amt_for) in rows {
         let signed = d - c;
         let foreign = match amt_for {
-            Some(f) => if signed.is_negative() { f.negated() } else { f },
+            Some(f) => {
+                if signed.is_negative() {
+                    f.negated()
+                } else {
+                    f
+                }
+            }
             None => Money::ZERO,
         };
-        let e = map.entry((acct, aux, cur)).or_insert((Money::ZERO, Money::ZERO));
+        let e = map
+            .entry((acct, aux, cur))
+            .or_insert((Money::ZERO, Money::ZERO));
         e.0 += foreign;
         e.1 += signed;
     }
@@ -204,8 +214,16 @@ pub fn fx_adjust(
     let mut total = Money::ZERO;
     for l in &lines {
         v.push_entry(Entry {
-            debit: if l.diff.is_positive() { l.diff } else { Money::ZERO },
-            credit: if l.diff.is_negative() { l.diff.abs() } else { Money::ZERO },
+            debit: if l.diff.is_positive() {
+                l.diff
+            } else {
+                Money::ZERO
+            },
+            credit: if l.diff.is_negative() {
+                l.diff.abs()
+            } else {
+                Money::ZERO
+            },
             aux: AuxRef::from_key(&l.aux_key),
             currency: Some(l.currency.clone()),
             amount_for: Some(l.foreign.abs()),
@@ -215,8 +233,16 @@ pub fn fx_adjust(
         i += 1;
     }
     v.push_entry(Entry {
-        debit: if total.is_negative() { total.abs() } else { Money::ZERO },
-        credit: if total.is_positive() { total } else { Money::ZERO },
+        debit: if total.is_negative() {
+            total.abs()
+        } else {
+            Money::ZERO
+        },
+        credit: if total.is_positive() {
+            total
+        } else {
+            Money::ZERO
+        },
         ..Entry::new(i, gain_account, "汇兑损益")
     });
     v.renumber();
@@ -360,9 +386,9 @@ const AT_COLS: &str = "id,name,sort,active,src_account,src_aux,src_kind,src_dir,
      dst_account,dst_aux,dst_dir,offset_account,summary,memo";
 
 pub fn at_list(db: &Db) -> DbResult<Vec<AutoTransfer>> {
-    let mut st = db
-        .conn()
-        .prepare(&format!("SELECT {AT_COLS} FROM auto_transfer ORDER BY sort, id"))?;
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {AT_COLS} FROM auto_transfer ORDER BY sort, id"
+    ))?;
     let rows = st.query_map([], map_at)?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -392,7 +418,11 @@ pub fn at_insert(db: &Db, r: &AutoTransfer) -> DbResult<i64> {
             r.src_kind.code(),
             r.src_dir.code(),
             crate::exact_param(r.ratio),
-            if r.ratio_mode_is_ratio { "ratio" } else { "amount" },
+            if r.ratio_mode_is_ratio {
+                "ratio"
+            } else {
+                "amount"
+            },
             r.dst_account,
             r.dst_aux,
             r.dst_dir.code(),
@@ -419,7 +449,11 @@ pub fn at_update(db: &Db, r: &AutoTransfer) -> DbResult<()> {
             r.src_kind.code(),
             r.src_dir.code(),
             crate::exact_param(r.ratio),
-            if r.ratio_mode_is_ratio { "ratio" } else { "amount" },
+            if r.ratio_mode_is_ratio {
+                "ratio"
+            } else {
+                "amount"
+            },
             r.dst_account,
             r.dst_aux,
             r.dst_dir.code(),
@@ -432,8 +466,10 @@ pub fn at_update(db: &Db, r: &AutoTransfer) -> DbResult<()> {
 }
 
 pub fn at_delete(db: &Db, id: i64) -> DbResult<()> {
-    db.conn()
-        .execute("DELETE FROM auto_transfer WHERE id=?1", rusqlite::params![id])?;
+    db.conn().execute(
+        "DELETE FROM auto_transfer WHERE id=?1",
+        rusqlite::params![id],
+    )?;
     Ok(())
 }
 
@@ -460,8 +496,20 @@ pub fn at_preview(db: &Db, r: &AutoTransfer, period: Period) -> DbResult<Transfe
         SrcKind::End => row.end(),
     };
     let base = match r.src_dir {
-        EntryDir::Debit => if signed.is_negative() { Money::ZERO } else { signed },
-        EntryDir::Credit => if signed.is_positive() { Money::ZERO } else { signed.abs() },
+        EntryDir::Debit => {
+            if signed.is_negative() {
+                Money::ZERO
+            } else {
+                signed
+            }
+        }
+        EntryDir::Credit => {
+            if signed.is_positive() {
+                Money::ZERO
+            } else {
+                signed.abs()
+            }
+        }
         EntryDir::Auto => signed.abs(),
     };
     let amount = if r.ratio_mode_is_ratio {
@@ -648,8 +696,7 @@ pub fn checklist(db: &Db, period: Period) -> DbResult<Vec<CheckItem>> {
     // 2. 试算平衡
     let snap = balances::BalanceSnapshot::load(db, &balances::BalanceQuery::period(period))?;
     let tb = snap.trial_balance(&crate::accounts::chart(db)?);
-    let balanced =
-        (tb.period_debit - tb.period_credit).abs() < Money::parse("0.01").unwrap();
+    let balanced = (tb.period_debit - tb.period_credit).abs() < Money::parse("0.01").unwrap();
     out.push(CheckItem {
         key: "trial",
         label: format!(
@@ -665,7 +712,11 @@ pub fn checklist(db: &Db, period: Period) -> DbResult<Vec<CheckItem>> {
     let deps = crate::assets::dep_list_period(db, period)?;
     out.push(CheckItem {
         key: "depreciation",
-        label: format!("折旧已计提（应提 {} 项 / 已提 {} 项）", assets.len(), deps.len()),
+        label: format!(
+            "折旧已计提（应提 {} 项 / 已提 {} 项）",
+            assets.len(),
+            deps.len()
+        ),
         ok: deps.len() >= assets.len(),
         hint: "到【固定资产】计提本月折旧".into(),
     });
@@ -1020,8 +1071,7 @@ mod tests {
     fn checklist_runs() {
         let db = tmpdb("check");
         let p = Period::new(2026, 1).unwrap();
-        crate::accounts::insert(&db, &Account::new("100201", "工行", AcctCategory::Asset))
-            .ok();
+        crate::accounts::insert(&db, &Account::new("100201", "工行", AcctCategory::Asset)).ok();
         let items = checklist(&db, p).unwrap();
         assert!(!items.is_empty());
         assert!(items.iter().any(|i| i.key == "depreciation"));

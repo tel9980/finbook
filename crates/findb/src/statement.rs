@@ -192,7 +192,11 @@ pub fn create(
     let kind = match kind.trim() {
         "ar" => "ar",
         "ap" => "ap",
-        _ => return Err(fincore::FinError::msg("类型只能是 ar（应收对账单）或 ap（应付对账单）").into()),
+        _ => {
+            return Err(
+                fincore::FinError::msg("类型只能是 ar（应收对账单）或 ap（应付对账单）").into(),
+            )
+        }
     };
     let party = party_code.trim();
     if party.is_empty() {
@@ -202,7 +206,11 @@ pub fn create(
         return Err(fincore::FinError::msg("截止期间不能早于起始期间").into());
     }
     let account = if account.trim().is_empty() {
-        if kind == "ar" { "1122" } else { "2202" }
+        if kind == "ar" {
+            "1122"
+        } else {
+            "2202"
+        }
     } else {
         account.trim()
     };
@@ -259,7 +267,11 @@ pub fn create(
             continue;
         }
         // ar：借方=债权增加；ap：贷方=债务增加。站在「对方欠我」这个角度统一看
-        let signed = if kind == "ar" { e.signed() } else { e.credit - e.debit };
+        let signed = if kind == "ar" {
+            e.signed()
+        } else {
+            e.credit - e.debit
+        };
         if signed.is_zero() {
             continue;
         }
@@ -379,7 +391,11 @@ impl Statement {
     }
     /// 状态标签（UI 用）
     pub fn kind_label(&self) -> &'static str {
-        if self.kind == "ar" { "应收对账单" } else { "应付对账单" }
+        if self.kind == "ar" {
+            "应收对账单"
+        } else {
+            "应付对账单"
+        }
     }
 }
 
@@ -424,7 +440,10 @@ mod tests {
         let a = m_(amt);
         v.push_entry(Entry {
             debit: a,
-            aux: AuxRef { customer: Some("C01".into()), ..Default::default() },
+            aux: AuxRef {
+                customer: Some("C01".into()),
+                ..Default::default()
+            },
             ..Entry::new(1, "112201", "销售应收")
         });
         v.push_entry(Entry {
@@ -448,7 +467,7 @@ mod tests {
         ar(&db, p2, 10, 2, "500", true); //  2 月再增 500
 
         let s = create(&db, "ar", "112201", "C01", "客户甲", p1, p2, "1-2月", "u").unwrap();
-        assert_eq!(s.no.starts_with(&format!("DB{}", p2.ymm())), true);
+        assert!(s.no.starts_with(&format!("DB{}", p2.ymm())));
         assert_eq!(s.begin_balance, m_("0"), "账套首期无期初");
         assert_eq!(s.period_increase, m_("1500"));
         assert_eq!(s.period_decrease, m_("0"));
@@ -487,7 +506,9 @@ mod tests {
         let s = create(&db, "ar", "112201", "C01", "", p, p, "", "u").unwrap();
         assert_eq!(s.end_balance, m_("1000"), "草稿不得进对账单");
         assert!(
-            !s.lines.iter().any(|l| l.summary.contains("销售应收") && l.increase == m_("500")),
+            !s.lines
+                .iter()
+                .any(|l| l.summary.contains("销售应收") && l.increase == m_("500")),
             "明细行也不该出现草稿那笔"
         );
     }
@@ -509,7 +530,10 @@ mod tests {
         });
         v.push_entry(Entry {
             credit: m_("400"),
-            aux: AuxRef { customer: Some("C01".into()), ..Default::default() },
+            aux: AuxRef {
+                customer: Some("C01".into()),
+                ..Default::default()
+            },
             ..Entry::new(2, "112201", "收货款")
         });
         let vid = crate::vouchers::save(&db, &mut v).unwrap();
@@ -582,7 +606,11 @@ mod tests {
         // 出账后再补一笔已记账业务
         ar(&db, p, 20, 2, "500", true);
         let after = get(&db, before.id).unwrap().unwrap();
-        assert_eq!(after.end_balance, m_("1000"), "已生成的对账单不得被后续业务改动");
+        assert_eq!(
+            after.end_balance,
+            m_("1000"),
+            "已生成的对账单不得被后续业务改动"
+        );
         assert_eq!(after.lines.len(), before.lines.len());
 
         // 新建的对账单则反映最新数据

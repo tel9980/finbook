@@ -92,11 +92,7 @@ impl Cumulative {
 
     /// 累计应纳税所得额（可为负，为负则本期不扣税）
     pub fn taxable(&self) -> Money {
-        let t = self.income
-            - self.basic_deduction()
-            - self.special
-            - self.additional
-            - self.other;
+        let t = self.income - self.basic_deduction() - self.special - self.additional - self.other;
         t.round2()
     }
 
@@ -127,9 +123,7 @@ pub fn current_tax(c: &Cumulative) -> Result<Money, FinError> {
 /// 一次性算全年的逐月税额（用于工资表批量计算 / 汇算预估）
 ///
 /// `monthly[i]` 为第 i+1 个月的（应发, 专项扣除, 专项附加扣除, 其他扣除）
-pub fn year_schedule(
-    monthly: &[(Money, Money, Money, Money)],
-) -> Vec<Money> {
+pub fn year_schedule(monthly: &[(Money, Money, Money, Money)]) -> Vec<Money> {
     let mut income = Money::ZERO;
     let mut special = Money::ZERO;
     let mut additional = Money::ZERO;
@@ -247,7 +241,9 @@ mod tests {
         let with: Vec<_> = (0..12)
             .map(|_| (m("15000"), m("2000"), m("4000"), Money::ZERO))
             .collect();
-        let a: Money = year_schedule(&without).iter().fold(Money::ZERO, |x, y| x + *y);
+        let a: Money = year_schedule(&without)
+            .iter()
+            .fold(Money::ZERO, |x, y| x + *y);
         let b: Money = year_schedule(&with).iter().fold(Money::ZERO, |x, y| x + *y);
         assert!(b < a);
     }

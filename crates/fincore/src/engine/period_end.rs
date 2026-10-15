@@ -215,7 +215,10 @@ pub fn check_can_close(input: &CloseCheckInput) -> Issues {
         iss.push(format!("本期还有 {} 张凭证未记账", input.unposted));
     }
     if input.drafts > 0 {
-        iss.push(format!("本期还有 {} 张草稿凭证，请检查是否需要记账或删除", input.drafts));
+        iss.push(format!(
+            "本期还有 {} 张草稿凭证，请检查是否需要记账或删除",
+            input.drafts
+        ));
     }
 
     // 用 is_balanced（期初 + 本期发生 + 期末）而不是只看本期发生额：
@@ -333,10 +336,7 @@ mod tests {
         let c = chart();
         let d = NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
         let p = Period::new(2026, 2).unwrap();
-        let rows = vec![
-            row("6001", "0", "10000"),
-            row("6602", "25000", "0"),
-        ];
+        let rows = vec![row("6001", "0", "10000"), row("6602", "25000", "0")];
         let v = generate_carry_forward(p, d, "转", 2, &rows, &c, "4103", "系统").unwrap();
         assert!(v.balanced());
         let last = v.entries.last().unwrap();
@@ -415,7 +415,9 @@ mod tests {
             closed_upto: Some(Period::new(2026, 1).unwrap()),
             ..input
         };
-        assert!(check_can_close(&input3).iter().any(|s| s.contains("已经结账")));
+        assert!(check_can_close(&input3)
+            .iter()
+            .any(|s| s.contains("已经结账")));
     }
 
     #[test]

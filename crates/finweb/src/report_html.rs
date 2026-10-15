@@ -71,7 +71,9 @@ pub fn cash_flow_html(
     subtitle: &str,
 ) -> String {
     let mut body = String::new();
-    let mut section = |title: &str, lines: &[fincore::report::cashflow::CashFlowLine], net: &fincore::Money| {
+    let mut section = |title: &str,
+                       lines: &[fincore::report::cashflow::CashFlowLine],
+                       net: &fincore::Money| {
         body.push_str(&format!(
             "<tr style='font-weight:600;background:#f5f7fa'><td colspan='3'>{}</td></tr>",
             esc(title)

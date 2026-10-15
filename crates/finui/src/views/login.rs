@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Align, Layout, RichText, Ui};
-use findb::Db;
 use fincore::{AuxKind, BookOptions, Period};
+use findb::Db;
 
 use crate::state::AppState;
 use crate::theme::palette;
@@ -252,12 +252,8 @@ impl LoginView {
                         [120.0, 22.0],
                         egui::TextEdit::singleline(&mut self.new_start).hint_text("2026-01"),
                     );
-                    ui.label(
-                        RichText::new("填你要开始记账的那个月，格式 2026-01").weak(),
-                    );
-                    ui.label(
-                        RichText::new("这个月之前的账，进软件后在「期初建账」录余额").weak(),
-                    );
+                    ui.label(RichText::new("填你要开始记账的那个月，格式 2026-01").weak());
+                    ui.label(RichText::new("这个月之前的账，进软件后在「期初建账」录余额").weak());
                 });
 
                 // ---- 预置常用档案（默认开）----
@@ -374,7 +370,11 @@ impl LoginView {
             }
         }
 
-        let company = st.db.as_ref().map(|d| d.options().company).unwrap_or_default();
+        let company = st
+            .db
+            .as_ref()
+            .map(|d| d.options().company)
+            .unwrap_or_default();
         let path = st
             .book_path
             .as_ref()
@@ -387,13 +387,15 @@ impl LoginView {
             .corner_radius(6.0)
             .inner_margin(16.0)
             .show(ui, |ui| {
-                ui.label(RichText::new(if company.is_empty() {
-                    "用户登录".to_string()
-                } else {
-                    company
-                })
-                .strong()
-                .size(18.0));
+                ui.label(
+                    RichText::new(if company.is_empty() {
+                        "用户登录".to_string()
+                    } else {
+                        company
+                    })
+                    .strong()
+                    .size(18.0),
+                );
                 ui.label(RichText::new(path).weak().size(12.0));
                 ui.add_space(14.0);
 
@@ -404,7 +406,10 @@ impl LoginView {
 
                 labeled(ui, "用户名", |ui| {
                     if self.users.is_empty() {
-                        ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut self.username));
+                        ui.add_sized(
+                            [200.0, 22.0],
+                            egui::TextEdit::singleline(&mut self.username),
+                        );
                     } else {
                         egui::ComboBox::from_id_salt("login_user")
                             .selected_text(&self.username)
@@ -443,6 +448,9 @@ impl LoginView {
     // --------------------------------------------------------------
     // 动作
     // --------------------------------------------------------------
+    // 桌面 UI 是单线程的：Db（内含 rusqlite 连接，不是 Send/Sync）只用 Arc
+    // 在 UI 线程内共享，从不跨线程传递 —— 包 Mutex 除了加噪音没有收益。
+    #[allow(clippy::arc_with_non_send_sync)]
     fn open_book(&mut self, st: &mut AppState, path: &PathBuf, recent: &mut Vec<PathBuf>) {
         match Db::open(path) {
             Ok(db) => {
@@ -457,7 +465,11 @@ impl LoginView {
                 // 往 schema 里加标记要多一次迁移，而文件名无需迁移、对用户透明。
                 // 代价是用户若把自己的账套改名成「示例账套.fbk」，会拿到免登录只读 ——
                 // 这只影响他自己这台机器（顶栏「退出登录」仍可回到选择页），不构成越权。
-                if path.file_name().map(|n| n == DEMO_BOOK_FILE).unwrap_or(false) {
+                if path
+                    .file_name()
+                    .map(|n| n == DEMO_BOOK_FILE)
+                    .unwrap_or(false)
+                {
                     st.user = Some(fincore::User::new(
                         "demo",
                         "示例账套（只读，随便点）",
@@ -477,6 +489,8 @@ impl LoginView {
         }
     }
 
+    // 同 open_book：单线程 UI 内 Arc 共享 Db，不跨线程。
+    #[allow(clippy::arc_with_non_send_sync)]
     fn create_book(&mut self, st: &mut AppState, recent: &mut Vec<PathBuf>) {
         self.err.clear();
         if self.new_path.trim().is_empty() {
@@ -572,7 +586,13 @@ impl LoginView {
         // 完整登录流程：失败计数 → 锁定 → 设备绑定 → 口令策略 → 强制改密
         let policy = findb::security::password_policy(&db);
         let device = crate::platform::device_identity();
-        match findb::security::login(&db, self.username.trim(), &self.password, &policy, Some(&device)) {
+        match findb::security::login(
+            &db,
+            self.username.trim(),
+            &self.password,
+            &policy,
+            Some(&device),
+        ) {
             Ok(findb::security::LoginResult::Ok(u))
             | Ok(findb::security::LoginResult::MustChangePassword(u)) => {
                 let name = u.username.clone();
@@ -584,7 +604,12 @@ impl LoginView {
                 self.err.clear();
                 self.password.clear();
                 let _ = findb::users::touch_login(&db, &name);
-                let _ = db.log(&name, "系统", "登录", &format!("登录成功（设备：{}）", device.name));
+                let _ = db.log(
+                    &name,
+                    "系统",
+                    "登录",
+                    &format!("登录成功（设备：{}）", device.name),
+                );
             }
             Ok(findb::security::LoginResult::BadPassword { remaining }) => {
                 self.err = format!("用户名或密码错误，还剩 {remaining} 次机会");

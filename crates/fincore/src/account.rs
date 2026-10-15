@@ -98,10 +98,13 @@ impl AcctCategory {
     /// 该类别的默认余额方向
     pub fn default_dir(self) -> Direction {
         match self {
-            AcctCategory::Asset | AcctCategory::Cost | AcctCategory::Expense | AcctCategory::Common => {
-                Direction::Debit
+            AcctCategory::Asset
+            | AcctCategory::Cost
+            | AcctCategory::Expense
+            | AcctCategory::Common => Direction::Debit,
+            AcctCategory::Liability | AcctCategory::Equity | AcctCategory::Income => {
+                Direction::Credit
             }
-            AcctCategory::Liability | AcctCategory::Equity | AcctCategory::Income => Direction::Credit,
         }
     }
 
@@ -114,7 +117,10 @@ impl AcctCategory {
     pub fn is_balance_sheet(self) -> bool {
         matches!(
             self,
-            AcctCategory::Asset | AcctCategory::Liability | AcctCategory::Common | AcctCategory::Equity
+            AcctCategory::Asset
+                | AcctCategory::Liability
+                | AcctCategory::Common
+                | AcctCategory::Equity
         )
     }
 
@@ -269,7 +275,11 @@ impl AuxMask {
         self.0 == 0
     }
     pub fn list(self) -> Vec<AuxKind> {
-        AuxKind::ALL.iter().copied().filter(|k| self.contains(*k)).collect()
+        AuxKind::ALL
+            .iter()
+            .copied()
+            .filter(|k| self.contains(*k))
+            .collect()
     }
     pub fn from_list(list: &[AuxKind]) -> Self {
         let mut m = AuxMask::NONE;
@@ -576,7 +586,10 @@ impl Chart {
                     .join("/")
             ),
         );
-        iss.check(!self.contains(&a.code), format!("科目编码 {} 已存在", a.code));
+        iss.check(
+            !self.contains(&a.code),
+            format!("科目编码 {} 已存在", a.code),
+        );
         if let Some(p) = self.parent_code(&a.code) {
             match self.get(&p) {
                 None => iss.push(format!("上级科目 {p} 不存在，请先建立上级科目")),
@@ -788,7 +801,10 @@ mod tests {
         assert_eq!(c.descendants("1002").len(), 2);
         assert_eq!(c.parent_code("100201"), Some("1002".into()));
         assert_eq!(c.full_name("100201"), "银行存款 / 工行基本户");
-        assert_eq!(c.self_and_descendant_codes("1002"), vec!["1002", "100201", "100202"]);
+        assert_eq!(
+            c.self_and_descendant_codes("1002"),
+            vec!["1002", "100201", "100202"]
+        );
     }
 
     #[test]
@@ -804,7 +820,10 @@ mod tests {
     #[test]
     fn category_from_code() {
         assert_eq!(AcctCategory::from_code("1001"), Some(AcctCategory::Asset));
-        assert_eq!(AcctCategory::from_code("2202"), Some(AcctCategory::Liability));
+        assert_eq!(
+            AcctCategory::from_code("2202"),
+            Some(AcctCategory::Liability)
+        );
         assert_eq!(AcctCategory::from_code("4001"), Some(AcctCategory::Equity));
         assert_eq!(AcctCategory::from_code("5001"), Some(AcctCategory::Cost));
         assert_eq!(AcctCategory::from_code("6001"), Some(AcctCategory::Income));

@@ -12,13 +12,13 @@
 //! 全部走真实 DAO，金额手工推导写死。
 
 use chrono::NaiveDate;
+use fincore::engine::costing::CostMethod;
+use fincore::voucher::{AuxRef, Entry, Voucher};
+use fincore::{BookOptions, Money, Period, VoucherSource};
 use findb::{
     assets, attach, automation, bank, business, mgmt, security, settle, summaries, template,
     vouchers, Db,
 };
-use fincore::engine::costing::CostMethod;
-use fincore::voucher::{AuxRef, Entry, Voucher};
-use fincore::{BookOptions, Money, Period, VoucherSource};
 
 fn m(s: &str) -> Money {
     Money::parse(s).unwrap()
@@ -209,7 +209,11 @@ fn t91_bank_reconcile_loop() {
     assert_eq!(rec.bank_balance, m("1000"));
     assert_eq!(rec.book_balance, m("600"));
     assert!(!rec.book_only_out.is_empty(), "付 400 应在企业侧未达");
-    assert!(rec.balanced(), "调节后应平衡，差额 {}", rec.diff().fmt_money());
+    assert!(
+        rec.balanced(),
+        "调节后应平衡，差额 {}",
+        rec.diff().fmt_money()
+    );
 }
 
 fn bank_aux() -> AuxRef {
@@ -291,7 +295,10 @@ fn t93_fx_transfer_checklist_loop() {
 
     // 汇率
     automation::fx_set(&db, p, "USD", m("7.2")).unwrap();
-    assert_eq!(automation::fx_get(&db, p, "USD").unwrap().unwrap().rate, m("7.2"));
+    assert_eq!(
+        automation::fx_get(&db, p, "USD").unwrap().unwrap().rate,
+        m("7.2")
+    );
     assert_eq!(automation::fx_missing(&db, p).unwrap().len(), 0);
 
     // 自动转账：按管理费用贷方发生额的 50% 结转到研发支出（演示规则）
@@ -425,7 +432,10 @@ fn t94_inventory_payroll_claim_loop() {
     // 首月累计应纳税额 = 12000 * 3% = 360
     assert_eq!(pr.tax_base, m("12000"));
     assert_eq!(pr.tax, m("360"));
-    assert_eq!(pr.net, m("20000") - m("2000") - m("1000") - m("1500") - m("360"));
+    assert_eq!(
+        pr.net,
+        m("20000") - m("2000") - m("1000") - m("1500") - m("360")
+    );
 
     // payroll_calc 只算不存，先落库
     business::payroll_upsert(&db, &pr).unwrap();
@@ -476,7 +486,9 @@ fn t94_inventory_payroll_claim_loop() {
     business::claim_transition(&db, cid, business::ClaimStatus::Approved, "王总").unwrap();
     business::claim_transition(&db, cid, business::ClaimStatus::Paid, "出纳").unwrap();
     // 跨状态跳转要被拦
-    assert!(business::claim_transition(&db, cid, business::ClaimStatus::Submitted, "李四").is_err());
+    assert!(
+        business::claim_transition(&db, cid, business::ClaimStatus::Submitted, "李四").is_err()
+    );
     let vid = business::claim_voucher(&db, cid, "100201", "测试员").unwrap();
     let v = vouchers::get(&db, vid).unwrap().unwrap();
     assert_eq!(v.diff(), Money::ZERO);
@@ -581,7 +593,13 @@ fn t95_mgmt_template_summary_attach_loop() {
     assert_eq!(template::due_list(&db, p).unwrap().len(), 1);
     let t2 = template::get(&db, tid).unwrap().unwrap();
     let v = t2
-        .to_voucher(p, p.last_day(), "记", vouchers::next_no(&db, p, "记").unwrap() as i64, "u")
+        .to_voucher(
+            p,
+            p.last_day(),
+            "记",
+            vouchers::next_no(&db, p, "记").unwrap() as i64,
+            "u",
+        )
         .unwrap();
     assert_eq!(v.source, VoucherSource::Template);
 
@@ -634,7 +652,10 @@ fn t96_security_loop() {
     for i in 1..=3 {
         let r = security::login(&db, "tester", "wrong", &policy, Some(&dev)).unwrap();
         if i < 3 {
-            assert!(matches!(r, LoginResult::BadPassword { .. }), "第 {i} 次应报错而非锁定");
+            assert!(
+                matches!(r, LoginResult::BadPassword { .. }),
+                "第 {i} 次应报错而非锁定"
+            );
         } else {
             assert!(matches!(r, LoginResult::Locked { .. }), "第 3 次应锁定");
         }
@@ -677,16 +698,22 @@ fn t96_security_loop() {
     ));
 
     // 口令策略校验：太短 / 无数字 / 与旧口令相同 都要拦
-    assert!(security::change_password_checked(&db, "tester", "Abcd1234", "short1x", &policy)
-        .unwrap()
-        .is_err()
-        || true); // 7 位太短
-    assert!(security::change_password_checked(&db, "tester", "Abcd1234", "Abcd1234", &policy)
-        .unwrap()
-        .is_err());
-    assert!(security::change_password_checked(&db, "tester", "Abcd1234", "Xyz98765", &policy)
-        .unwrap()
-        .is_ok());
+    assert!(
+        security::change_password_checked(&db, "tester", "Abcd1234", "short1x", &policy)
+            .unwrap()
+            .is_err()
+            || true
+    ); // 7 位太短
+    assert!(
+        security::change_password_checked(&db, "tester", "Abcd1234", "Abcd1234", &policy)
+            .unwrap()
+            .is_err()
+    );
+    assert!(
+        security::change_password_checked(&db, "tester", "Abcd1234", "Xyz98765", &policy)
+            .unwrap()
+            .is_ok()
+    );
 
     // 操作日志
     security::audit(&db, "tester", "测试", "动作", "详情").unwrap();

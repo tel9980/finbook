@@ -60,7 +60,11 @@ pub fn money_input_opt(ui: &mut Ui, buf: &mut Option<String>, width: f32) -> egu
         egui::TextEdit::singleline(&mut text).horizontal_align(Align::RIGHT),
     );
     if r.changed() {
-        *buf = if text.trim().is_empty() { None } else { Some(text) };
+        *buf = if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        };
     }
     r
 }
@@ -257,7 +261,11 @@ pub fn grid(
 
     for c in cols {
         let col = Column::initial(c.width).at_least(if c.right { 60.0 } else { 40.0 });
-        let col = if c.resizable { col.resizable(true) } else { col };
+        let col = if c.resizable {
+            col.resizable(true)
+        } else {
+            col
+        };
         b = b.column(col);
     }
 
@@ -278,9 +286,9 @@ pub fn grid(
     .body(|body| {
         body.rows(row_height, row_count, |mut row| {
             let i = row.index();
-            for ci in 0..cols.len() {
+            for (ci, col) in cols.iter().enumerate() {
                 row.col(|ui| {
-                    if cols[ci].right {
+                    if col.right {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             render_cell(i, ci, ui);
                         });
@@ -400,8 +408,7 @@ impl AccountPickerState {
                         if kw.is_empty() {
                             return true;
                         }
-                        a.code.to_lowercase().contains(&kw)
-                            || a.name.to_lowercase().contains(&kw)
+                        a.code.to_lowercase().contains(&kw) || a.name.to_lowercase().contains(&kw)
                     })
                     .collect();
 
@@ -424,10 +431,8 @@ impl AccountPickerState {
                                 {
                                     picked = Some(a.code.clone());
                                 }
-                            } else if c == 1 {
-                                if ui.selectable_label(false, &a.name).clicked() {
-                                    picked = Some(a.code.clone());
-                                }
+                            } else if c == 1 && ui.selectable_label(false, &a.name).clicked() {
+                                picked = Some(a.code.clone());
                             }
                         },
                     );
@@ -486,10 +491,7 @@ pub fn toasts(ctx: &Context, queue: &mut crate::state::ToastQueue, now: f64) {
 }
 
 /// 二次确认窗口
-pub fn confirm_window(
-    ctx: &Context,
-    c: &crate::state::Confirm,
-) -> Option<bool> {
+pub fn confirm_window(ctx: &Context, c: &crate::state::Confirm) -> Option<bool> {
     let mut result: Option<bool> = None;
     let mut open = true;
     let title = c.title.clone();
@@ -513,18 +515,12 @@ pub fn confirm_window(
                         if ui.button("取消").clicked() {
                             result = Some(false);
                         }
-                        let ok = egui::Button::new(
-                            RichText::new("确定").color(if c.dangerous {
-                                Color32::WHITE
+                        let ok = egui::Button::new(RichText::new("确定").color(Color32::WHITE))
+                            .fill(if c.dangerous {
+                                palette::CREDIT
                             } else {
-                                Color32::WHITE
-                            }),
-                        )
-                        .fill(if c.dangerous {
-                            palette::CREDIT
-                        } else {
-                            palette::PRIMARY
-                        });
+                                palette::PRIMARY
+                            });
                         if ui.add(ok).clicked() {
                             result = Some(true);
                         }

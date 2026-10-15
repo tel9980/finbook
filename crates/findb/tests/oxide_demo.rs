@@ -27,8 +27,8 @@ fn 演示账28张全已记账且试算平衡() {
     let db = findb::Db::open(&path).expect("打开演示账");
 
     // 1) 28 张，一个不能少、一张不能是草稿
-    let list = findb::vouchers::list(&db, &findb::vouchers::VoucherQuery::default())
-        .expect("查凭证");
+    let list =
+        findb::vouchers::list(&db, &findb::vouchers::VoucherQuery::default()).expect("查凭证");
     assert_eq!(list.len(), 28, "凭证数不对");
     assert!(
         list.iter()
@@ -39,11 +39,9 @@ fn 演示账28张全已记账且试算平衡() {
     // 2) 试算平衡（期初/本期/期末三组全平）
     let chart = findb::accounts::chart(&db).expect("读科目表");
     let p = fincore::Period::new(2026, 11).unwrap();
-    let snap = findb::balances::BalanceSnapshot::load(
-        &db,
-        &findb::balances::BalanceQuery::range(p, p),
-    )
-    .expect("取余额快照");
+    let snap =
+        findb::balances::BalanceSnapshot::load(&db, &findb::balances::BalanceQuery::range(p, p))
+            .expect("取余额快照");
     let tb = snap.trial_balance(&chart);
     assert!(tb.begin_balanced(), "期初不平");
     assert!(tb.period_balanced(), "本期发生不平");
@@ -72,8 +70,8 @@ fn 演示账28张全已记账且试算平衡() {
 
     // 5) 已结转归零的科目必须真是零
     for code in [
-        "112101", "221101", "600101", "6401", "6403", "660201", "660202", "660204",
-        "660303", "510101", "510103", "510105", "510106", "510107", "510108",
+        "112101", "221101", "600101", "6401", "6403", "660201", "660202", "660204", "660303",
+        "510101", "510103", "510105", "510106", "510107", "510108",
     ] {
         let e = snap.for_account(code, None).end();
         assert!(e.is_zero(), "{code} 应已结平，实际 {e:?}");
@@ -127,7 +125,11 @@ fn 演示账28张全已记账且试算平衡() {
             .map(|e| {
                 // open() 是绝对值；净额要按原方向还原符号（与配对顺序无关）
                 let o = e.open();
-                if e.debit > Money::ZERO { o } else { Money::ZERO - o }
+                if e.debit > Money::ZERO {
+                    o
+                } else {
+                    Money::ZERO - o
+                }
             })
             .fold(Money::ZERO, |a, b| a + b)
     };
@@ -149,9 +151,21 @@ fn 演示账28张全已记账且试算平衡() {
 
     // 9) 账龄按单位合计（期初明细 + 凭证未清合并看）
     let buckets = vec![
-        fincore::engine::aging::AgingBucket { label: "30天内", from: 0, to: Some(30) },
-        fincore::engine::aging::AgingBucket { label: "31-60天", from: 31, to: Some(60) },
-        fincore::engine::aging::AgingBucket { label: "60天以上", from: 61, to: None },
+        fincore::engine::aging::AgingBucket {
+            label: "30天内",
+            from: 0,
+            to: Some(30),
+        },
+        fincore::engine::aging::AgingBucket {
+            label: "31-60天",
+            from: 31,
+            to: Some(60),
+        },
+        fincore::engine::aging::AgingBucket {
+            label: "60天以上",
+            from: 61,
+            to: None,
+        },
     ];
     let as_of = chrono::NaiveDate::from_ymd_opt(2026, 11, 30).unwrap();
     let aging_ar = findb::settle::aging(&db, "112201", p, as_of, &buckets).expect("应收账龄");

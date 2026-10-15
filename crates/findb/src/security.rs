@@ -86,20 +86,34 @@ pub fn attempts(db: &Db, username: Option<&str>, limit: i64) -> DbResult<Vec<Att
     };
     let mut st = db.conn().prepare(sql)?;
     let rows = if has_user {
-        st.query_map(
-            rusqlite::params![username.unwrap_or(""), limit],
-            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)? != 0)),
-        )?
+        st.query_map(rusqlite::params![username.unwrap_or(""), limit], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)? != 0,
+            ))
+        })?
         .collect::<Result<Vec<_>, _>>()?
     } else {
         st.query_map(rusqlite::params![limit], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)? != 0))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)? != 0,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?
     };
     Ok(rows
         .into_iter()
-        .map(|(id, username, ts, ok)| Attempt { id, username, ts, ok })
+        .map(|(id, username, ts, ok)| Attempt {
+            id,
+            username,
+            ts,
+            ok,
+        })
         .collect())
 }
 
@@ -210,7 +224,12 @@ pub fn login(
             if u.device_id.is_empty() {
                 // 首次登录：自动绑定当前设备
                 crate::users::bind_device(db, username, &d.id, &d.name)?;
-                db.log(username, "安全", "绑定设备", &format!("自动绑定「{}」", d.name))?;
+                db.log(
+                    username,
+                    "安全",
+                    "绑定设备",
+                    &format!("自动绑定「{}」", d.name),
+                )?;
             } else if u.device_id != d.id {
                 return Ok(LoginResult::DeviceBound {
                     device_name: if u.device_name.is_empty() {
@@ -236,7 +255,12 @@ pub fn login(
             // 否则本次返回后用户关闭页面重登即可绕过改密。
             nu.must_change_pwd = true;
             crate::users::update(db, &nu)?;
-            db.log(username, "安全", "口令升级", "旧版口令哈希已升级为 argon2，并强制改密")?;
+            db.log(
+                username,
+                "安全",
+                "口令升级",
+                "旧版口令哈希已升级为 argon2，并强制改密",
+            )?;
         } else {
             db.log(username, "安全", "强制改密", "账号处于强制修改口令状态")?;
         }
@@ -378,9 +402,7 @@ pub fn audit(db: &Db, user: &str, module: &str, action: &str, detail: &str) -> D
 
 /// 查询操作日志
 pub fn audit_query(db: &Db, q: &LogQuery) -> DbResult<Vec<fincore::user::AuditLog>> {
-    let mut sql = String::from(
-        "SELECT id,ts,user,module,action,detail FROM audit_log WHERE 1=1",
-    );
+    let mut sql = String::from("SELECT id,ts,user,module,action,detail FROM audit_log WHERE 1=1");
     let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     if !q.user.is_empty() {
         sql.push_str(" AND user = ?");
@@ -404,7 +426,9 @@ pub fn audit_query(db: &Db, q: &LogQuery) -> DbResult<Vec<fincore::user::AuditLo
         sql.push_str(" AND ts <= ?");
         // 含当天：上界取次日零点
         args.push(Box::new(
-            (d + chrono::Duration::days(1)).format("%Y-%m-%d").to_string(),
+            (d + chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string(),
         ));
     }
     sql.push_str(" ORDER BY id DESC LIMIT ?");
@@ -432,7 +456,9 @@ pub fn audit_modules(db: &Db) -> DbResult<Vec<String>> {
     let mut st = db
         .conn()
         .prepare("SELECT DISTINCT module FROM audit_log WHERE module <> '' ORDER BY module")?;
-    let rows = st.query_map([], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+    let rows = st
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -449,7 +475,12 @@ pub fn audit_trim(db: &Db, keep: i64) -> DbResult<usize> {
         rusqlite::params![keep],
     )?;
     if n > 0 {
-        db.log("系统", "审计", "裁剪日志", &format!("保留最近 {keep} 条，删除 {n} 条"))?;
+        db.log(
+            "系统",
+            "审计",
+            "裁剪日志",
+            &format!("保留最近 {keep} 条，删除 {n} 条"),
+        )?;
     }
     Ok(n)
 }
@@ -483,7 +514,9 @@ impl Session {
     /// 已空闲分钟数
     pub fn idle_minutes(&self) -> i64 {
         match self.last_active {
-            Some(t) => (chrono::Local::now().naive_local() - t).num_minutes().max(0),
+            Some(t) => (chrono::Local::now().naive_local() - t)
+                .num_minutes()
+                .max(0),
             None => 0,
         }
     }
@@ -648,24 +681,32 @@ mod tests {
         assert!(change_password_checked(&db, "u2", "Passw0rd1", "123", &pol)
             .unwrap()
             .is_err()); // 太短
-        assert!(change_password_checked(&db, "u2", "Passw0rd1", "abcdefgh", &pol)
-            .unwrap()
-            .is_err()); // 无数字
-        assert!(change_password_checked(&db, "u2", "wrongold", "Passw0rd2", &pol)
-            .unwrap()
-            .is_err()); // 旧口令错
-        assert!(change_password_checked(&db, "u2", "Passw0rd1", "Passw0rd2", &pol)
-            .unwrap()
-            .is_ok());
+        assert!(
+            change_password_checked(&db, "u2", "Passw0rd1", "abcdefgh", &pol)
+                .unwrap()
+                .is_err()
+        ); // 无数字
+        assert!(
+            change_password_checked(&db, "u2", "wrongold", "Passw0rd2", &pol)
+                .unwrap()
+                .is_err()
+        ); // 旧口令错
+        assert!(
+            change_password_checked(&db, "u2", "Passw0rd1", "Passw0rd2", &pol)
+                .unwrap()
+                .is_ok()
+        );
     }
 
     #[test]
     fn admin_reset_forces_change() {
         let db = mem();
         mkuser(&db, "u3", "Passw0rd1");
-        assert!(admin_reset_password(&db, "u3", "Newpass123", &PasswordPolicy::default())
-            .unwrap()
-            .is_ok());
+        assert!(
+            admin_reset_password(&db, "u3", "Newpass123", &PasswordPolicy::default())
+                .unwrap()
+                .is_ok()
+        );
         let u = crate::users::get(&db, "u3").unwrap().unwrap();
         assert!(u.must_change_pwd);
         assert!(matches!(

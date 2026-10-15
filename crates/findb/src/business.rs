@@ -116,7 +116,8 @@ fn map_move(r: &rusqlite::Row) -> rusqlite::Result<StockMove> {
     })
 }
 
-const MV_COLS: &str = "id,period,biz_date,kind,item,warehouse,batch_no,qty,price,amount,voucher_id,memo";
+const MV_COLS: &str =
+    "id,period,biz_date,kind,item,warehouse,batch_no,qty,price,amount,voucher_id,memo";
 
 pub fn stock_list(db: &Db, period: Period) -> DbResult<Vec<StockMove>> {
     let mut st = db.conn().prepare(&format!(
@@ -199,7 +200,11 @@ pub fn stock_state(db: &Db, item: &str, upto: Period, method: CostMethod) -> DbR
         .filter(|r| r.kind != StockKind::Adjust)
         .map(|r| StockMoveIn {
             qty: r.qty,
-            price: if r.price.is_zero() { None } else { Some(r.price) },
+            price: if r.price.is_zero() {
+                None
+            } else {
+                Some(r.price)
+            },
         })
         .collect();
     for r in &rows {
@@ -373,7 +378,11 @@ pub fn stock_summary(db: &Db, period: Period, method: CostMethod) -> DbResult<Ve
                 .iter()
                 .map(|r| StockMoveIn {
                     qty: r.qty,
-                    price: if r.price.is_zero() { None } else { Some(r.price) },
+                    price: if r.price.is_zero() {
+                        None
+                    } else {
+                        Some(r.price)
+                    },
                 })
                 .collect();
             // 期初结存 = 重放期前全部流水
@@ -383,16 +392,30 @@ pub fn stock_summary(db: &Db, period: Period, method: CostMethod) -> DbResult<Ve
                 .iter()
                 .map(|r| StockMoveIn {
                     qty: r.qty,
-                    price: if r.price.is_zero() { None } else { Some(r.price) },
+                    price: if r.price.is_zero() {
+                        None
+                    } else {
+                        Some(r.price)
+                    },
                 })
                 .collect();
             let (_, end_st) =
                 fincore::engine::costing::run_month_average(&opening_state, &period_moves)?;
-            let in_qty: Money = this_period.iter().filter(|r| r.qty.is_positive()).map(|r| r.qty).sum();
+            let in_qty: Money = this_period
+                .iter()
+                .filter(|r| r.qty.is_positive())
+                .map(|r| r.qty)
+                .sum();
             let in_amount: Money = this_period
                 .iter()
                 .filter(|r| r.qty.is_positive())
-                .map(|r| if r.amount.is_zero() { (r.qty * r.price).round2() } else { r.amount })
+                .map(|r| {
+                    if r.amount.is_zero() {
+                        (r.qty * r.price).round2()
+                    } else {
+                        r.amount
+                    }
+                })
                 .sum();
             let out_qty: Money = this_period
                 .iter()
@@ -447,7 +470,11 @@ pub fn stock_summary(db: &Db, period: Period, method: CostMethod) -> DbResult<Ve
         for r in &rows {
             let mv = StockMoveIn {
                 qty: r.qty,
-                price: if r.price.is_zero() { None } else { Some(r.price) },
+                price: if r.price.is_zero() {
+                    None
+                } else {
+                    Some(r.price)
+                },
             };
             // 引擎跑全部行（含领料/转换/调拨），保证成本序列与单价正确
             let cost = st.apply(&mv, method)?;
@@ -478,9 +505,7 @@ pub fn stock_summary(db: &Db, period: Period, method: CostMethod) -> DbResult<Ve
                         Money::ZERO
                     } else {
                         // 数量为 0 时单位成本按 0（原"除零返 0"口径显式化，守卫与旧行为一致）
-                        c.checked_div(r.qty.abs())
-                            .unwrap_or(Money::ZERO)
-                            .round2()
+                        c.checked_div(r.qty.abs()).unwrap_or(Money::ZERO).round2()
                     },
                     c,
                 )?;
@@ -528,10 +553,10 @@ pub fn stock_cost_voucher(
         |r| r.get(0),
     )?;
     if dup > 0 {
-        return Err(
-            fincore::FinError::state("本期已生成销售成本结转凭证，请勿重复结转（如需重做请先作废原凭证）")
-                .into(),
-        );
+        return Err(fincore::FinError::state(
+            "本期已生成销售成本结转凭证，请勿重复结转（如需重做请先作废原凭证）",
+        )
+        .into());
     }
     let mut v = Voucher::new(period, date, "记", no);
     v.prepared_by = who.to_string();
@@ -681,8 +706,10 @@ pub fn stock_move_get(db: &Db, id: i64) -> DbResult<Option<StockMove>> {
 
 /// 删除某存货的计价配置（恢复默认）
 pub fn item_cost_method_clear(db: &Db, item: &str) -> DbResult<()> {
-    db.conn()
-        .execute("DELETE FROM item_cost_method WHERE item=?1", rusqlite::params![item])?;
+    db.conn().execute(
+        "DELETE FROM item_cost_method WHERE item=?1",
+        rusqlite::params![item],
+    )?;
     Ok(())
 }
 
@@ -752,7 +779,11 @@ pub fn period_end_cost(db: &Db, period: Period, apply: bool) -> DbResult<Vec<Per
             .filter(|r| r.kind != StockKind::Adjust)
             .map(|r| StockMoveIn {
                 qty: r.qty,
-                price: if r.price.is_zero() { None } else { Some(r.price) },
+                price: if r.price.is_zero() {
+                    None
+                } else {
+                    Some(r.price)
+                },
             })
             .collect();
         let (_, end_st) = if method == CostMethod::MonthAverage {
@@ -1053,7 +1084,17 @@ pub fn payroll_calc(
 pub fn payroll_generate(
     db: &Db,
     period: Period,
-    rows: &[(String, String, Money, Money, Money, Money, Money, Money, Money)],
+    rows: &[(
+        String,
+        String,
+        Money,
+        Money,
+        Money,
+        Money,
+        Money,
+        Money,
+        Money,
+    )],
     // (employee, dept, gross, social, housing, deduction, additional, social_co, housing_co)
 ) -> DbResult<usize> {
     // 整批同事务：中途失败整体回滚，避免"工资表生成了一半"
@@ -1086,10 +1127,9 @@ pub(crate) fn ensure_unique_biz_voucher(
         |r| r.get(0),
     )?;
     if n > 0 {
-        return Err(fincore::FinError::state(format!(
-            "「{memo}」的凭证已经生成过，请勿重复生成"
-        ))
-        .into());
+        return Err(
+            fincore::FinError::state(format!("「{memo}」的凭证已经生成过，请勿重复生成")).into(),
+        );
     }
     Ok(())
 }
@@ -1134,13 +1174,18 @@ pub fn payroll_accrue_voucher(
     // 三段若各自单独出借方行，社保/公积金两行没有部门会过不了引擎校验。
     let mut by_dept: std::collections::BTreeMap<String, Money> = std::collections::BTreeMap::new();
     for r in &rows {
-        *by_dept.entry(r.dept.clone()).or_insert(Money::ZERO) += r.gross + r.social_co + r.housing_co;
+        *by_dept.entry(r.dept.clone()).or_insert(Money::ZERO) +=
+            r.gross + r.social_co + r.housing_co;
     }
     for (dept, amt) in &by_dept {
         v.push_entry(Entry {
             debit: *amt,
             aux: AuxRef {
-                dept: if dept.is_empty() { None } else { Some(dept.clone()) },
+                dept: if dept.is_empty() {
+                    None
+                } else {
+                    Some(dept.clone())
+                },
                 ..Default::default()
             },
             ..Entry::new(i, expense_account, "计提工资及社保公积金（企业）")
@@ -1268,7 +1313,10 @@ pub fn payroll_pay_voucher(
     }
     let net: Money = rows.iter().map(|r| r.net).sum();
     let tax: Money = rows.iter().map(|r| r.tax).sum();
-    let social: Money = rows.iter().map(|r| r.social + r.housing + r.deduction).sum();
+    let social: Money = rows
+        .iter()
+        .map(|r| r.social + r.housing + r.deduction)
+        .sum();
     let tx = db.write_tx()?;
     let no = crate::vouchers::next_no_of(&tx, period, "记")?;
     let mut v = Voucher::new(period, date, "记", no);
@@ -1431,7 +1479,9 @@ const CL_COLS: &str = "id,period,no,biz_date,applicant,dept,reason,amount,status
 
 pub fn claim_list(db: &Db, period: Period, status: Option<ClaimStatus>) -> DbResult<Vec<Claim>> {
     let sql = match status {
-        Some(_) => format!("SELECT {CL_COLS} FROM expense_claim WHERE period=?1 AND status=?2 ORDER BY no"),
+        Some(_) => {
+            format!("SELECT {CL_COLS} FROM expense_claim WHERE period=?1 AND status=?2 ORDER BY no")
+        }
         None => format!("SELECT {CL_COLS} FROM expense_claim WHERE period=?1 ORDER BY no"),
     };
     let mut st = db.conn().prepare(&sql)?;
@@ -1539,8 +1589,10 @@ pub fn claim_delete(db: &Db, id: i64) -> DbResult<()> {
     if c.voucher_id.is_some() {
         return Err(fincore::FinError::msg("该报销单已生成凭证，请先删除凭证").into());
     }
-    db.conn()
-        .execute("DELETE FROM expense_claim WHERE id=?1", rusqlite::params![id])?;
+    db.conn().execute(
+        "DELETE FROM expense_claim WHERE id=?1",
+        rusqlite::params![id],
+    )?;
     Ok(())
 }
 
@@ -1549,12 +1601,7 @@ fn now_str() -> String {
 }
 
 /// 状态流转，带前置校验
-pub fn claim_transition(
-    db: &Db,
-    id: i64,
-    to: ClaimStatus,
-    who: &str,
-) -> DbResult<()> {
+pub fn claim_transition(db: &Db, id: i64, to: ClaimStatus, who: &str) -> DbResult<()> {
     let mut c = match claim_get(db, id)? {
         Some(c) => c,
         None => return Err(fincore::FinError::not_found("报销单").into()),
@@ -1599,10 +1646,7 @@ pub fn claim_transition(
     }
     c.status = to;
     if claim_update_cas(db, &c, Some(from))? == 0 {
-        return Err(fincore::FinError::state(
-            "该单据状态刚被他人变更，请刷新后重试",
-        )
-        .into());
+        return Err(fincore::FinError::state("该单据状态刚被他人变更，请刷新后重试").into());
     }
     // 支付即落账：付款凭证草稿随支付生成（默认支付科目=银行 100201；H-3 草稿不入余额）。
     // 生成失败不回滚支付（状态已生效），界面仍可经「生成凭证」幂等重试。
@@ -1613,12 +1657,7 @@ pub fn claim_transition(
 }
 
 /// 报销单生成凭证：借 各费用科目（按明细）/ 贷 支付科目
-pub fn claim_voucher(
-    db: &Db,
-    id: i64,
-    pay_account: &str,
-    who: &str,
-) -> DbResult<i64> {
+pub fn claim_voucher(db: &Db, id: i64, pay_account: &str, who: &str) -> DbResult<i64> {
     let c = match claim_get(db, id)? {
         Some(c) => c,
         None => return Err(fincore::FinError::not_found("报销单").into()),
@@ -1658,14 +1697,22 @@ pub fn claim_voucher(
         // 明细备注为空时用事由兜底：凭证引擎要求摘要必填，
         // 报销单的"备注"在界面上是可选项，直接用它会导致生成凭证被拒。
         let summary = if it.memo.trim().is_empty() {
-            if c.reason.trim().is_empty() { "报销" } else { c.reason.trim() }
+            if c.reason.trim().is_empty() {
+                "报销"
+            } else {
+                c.reason.trim()
+            }
         } else {
             it.memo.trim()
         };
         v.push_entry(Entry {
             debit: it.amount,
             aux: AuxRef {
-                dept: if c.dept.is_empty() { None } else { Some(c.dept.clone()) },
+                dept: if c.dept.is_empty() {
+                    None
+                } else {
+                    Some(c.dept.clone())
+                },
                 employee: Some(c.applicant.clone()),
                 ..Default::default()
             },
@@ -1775,7 +1822,10 @@ mod tests {
         );
         // 确认没有留下半成品
         let st2 = stock_state(&db, "M9", p, CostMethod::MovingAverage).unwrap();
-        assert!(st2.qty.is_zero() && st2.amount.is_zero(), "失败后不能留下金额");
+        assert!(
+            st2.qty.is_zero() && st2.amount.is_zero(),
+            "失败后不能留下金额"
+        );
     }
 
     /// 建账/盘盈必须同时给数量与金额，否则就是「数量 0、金额 > 0」的幽灵存货
@@ -1875,7 +1925,11 @@ mod tests {
         let p1 = Period::new(2026, 1).unwrap();
         let p2 = Period::new(2026, 2).unwrap();
         // 1 月：入 100@10，销售 40 → 1 月 COGS = 400
-        stock_insert(&db, &mv(p1, d(2026, 1, 5), StockKind::Purchase, "100", "10")).unwrap();
+        stock_insert(
+            &db,
+            &mv(p1, d(2026, 1, 5), StockKind::Purchase, "100", "10"),
+        )
+        .unwrap();
         stock_insert(&db, &mv(p1, d(2026, 1, 20), StockKind::Sale, "-40", "0")).unwrap();
         // 2 月：销售 30，单价仍是 10 → 2 月 COGS = 300
         stock_insert(&db, &mv(p2, d(2026, 2, 10), StockKind::Sale, "-30", "0")).unwrap();
@@ -1899,9 +1953,17 @@ mod tests {
         assert_eq!(s2[0].unit_cost, m("10"), "移动加权单价仍由全部历史决定");
 
         // 结转销售成本凭证也必须只带本期成本
-        let id = stock_cost_voucher(&db, p2, d(2026, 2, 28), CostMethod::MovingAverage, "6401", "140501", "u")
-            .unwrap()
-            .expect("2 月应生成结转凭证");
+        let id = stock_cost_voucher(
+            &db,
+            p2,
+            d(2026, 2, 28),
+            CostMethod::MovingAverage,
+            "6401",
+            "140501",
+            "u",
+        )
+        .unwrap()
+        .expect("2 月应生成结转凭证");
         let v = crate::vouchers::get(&db, id).unwrap().unwrap();
         assert_eq!(v.debit_total(), m("300"), "2 月结转成本凭证金额");
     }
@@ -1912,9 +1974,17 @@ mod tests {
         let p = Period::new(2026, 1).unwrap();
         stock_insert(&db, &mv(p, d(2026, 1, 5), StockKind::Purchase, "10", "5")).unwrap();
         stock_insert(&db, &mv(p, d(2026, 1, 20), StockKind::Sale, "-4", "0")).unwrap();
-        let id = stock_cost_voucher(&db, p, d(2026, 1, 31), CostMethod::MovingAverage, "6401", "140501", "u")
-            .unwrap()
-            .unwrap();
+        let id = stock_cost_voucher(
+            &db,
+            p,
+            d(2026, 1, 31),
+            CostMethod::MovingAverage,
+            "6401",
+            "140501",
+            "u",
+        )
+        .unwrap()
+        .unwrap();
         let v = crate::vouchers::get(&db, id).unwrap().unwrap();
         assert!(v.balanced());
         assert_eq!(v.debit_total(), m("20"));
@@ -1942,12 +2012,32 @@ mod tests {
     #[test]
     fn payroll_cumulative_tax() {
         let db = tmpdb("pay");
-        let rows: Vec<(String, String, Money, Money, Money, Money, Money, Money, Money)> = vec![
-            ("E01".into(), "D01".into(), m("15000"), m("2000"), m("0"), m("0"), m("0"), m("0"), m("0")),
-        ];
+        let rows: Vec<(
+            String,
+            String,
+            Money,
+            Money,
+            Money,
+            Money,
+            Money,
+            Money,
+            Money,
+        )> = vec![(
+            "E01".into(),
+            "D01".into(),
+            m("15000"),
+            m("2000"),
+            m("0"),
+            m("0"),
+            m("0"),
+            m("0"),
+            m("0"),
+        )];
         // 1 月
         payroll_generate(&db, Period::new(2026, 1).unwrap(), &rows).unwrap();
-        let p1 = payroll_get(&db, Period::new(2026, 1).unwrap(), "E01").unwrap().unwrap();
+        let p1 = payroll_get(&db, Period::new(2026, 1).unwrap(), "E01")
+            .unwrap()
+            .unwrap();
         // 累计：15000 - 5000 - 2000 = 8000 → 年税率 3% → 240
         assert_eq!(p1.tax_base, m("8000"));
         assert_eq!(p1.tax, m("240"));
@@ -1955,7 +2045,9 @@ mod tests {
 
         // 2 月同样，累计 30000-10000-4000=16000 → 480，本期补 240
         payroll_generate(&db, Period::new(2026, 2).unwrap(), &rows).unwrap();
-        let p2 = payroll_get(&db, Period::new(2026, 2).unwrap(), "E01").unwrap().unwrap();
+        let p2 = payroll_get(&db, Period::new(2026, 2).unwrap(), "E01")
+            .unwrap()
+            .unwrap();
         assert_eq!(p2.tax_base, m("16000"));
         assert_eq!(p2.tax, m("240"));
 
@@ -1963,7 +2055,9 @@ mod tests {
         for mo in 3..=5 {
             payroll_generate(&db, Period::new(2026, mo).unwrap(), &rows).unwrap();
         }
-        let p5 = payroll_get(&db, Period::new(2026, 5).unwrap(), "E01").unwrap().unwrap();
+        let p5 = payroll_get(&db, Period::new(2026, 5).unwrap(), "E01")
+            .unwrap()
+            .unwrap();
         assert_eq!(p5.tax, m("520"));
     }
 
@@ -1971,23 +2065,57 @@ mod tests {
     fn payroll_vouchers() {
         let db = tmpdb("payv");
         let p = Period::new(2026, 1).unwrap();
-        let rows: Vec<(String, String, Money, Money, Money, Money, Money, Money, Money)> = vec![
-            ("E01".into(), "D01".into(), m("10000"), m("1000"), m("500"), m("0"), m("0"), m("2000"), m("500")),
-        ];
+        let rows: Vec<(
+            String,
+            String,
+            Money,
+            Money,
+            Money,
+            Money,
+            Money,
+            Money,
+            Money,
+        )> = vec![(
+            "E01".into(),
+            "D01".into(),
+            m("10000"),
+            m("1000"),
+            m("500"),
+            m("0"),
+            m("0"),
+            m("2000"),
+            m("500"),
+        )];
         payroll_generate(&db, p, &rows).unwrap();
         let a = payroll_accrue_voucher(
-            &db, p, d(2026, 1, 31), "660201", "221101", "221103", "221104", "u",
+            &db,
+            p,
+            d(2026, 1, 31),
+            "660201",
+            "221101",
+            "221103",
+            "221104",
+            "u",
         )
-            .unwrap()
-            .unwrap();
+        .unwrap()
+        .unwrap();
         let va = crate::vouchers::get(&db, a).unwrap().unwrap();
         // 应发 10000 + 企业社保 2000 + 公积金 500 = 12500
         assert_eq!(va.debit_total(), m("12500"));
         assert!(va.balanced());
 
-        let b = payroll_pay_voucher(&db, p, d(2026, 1, 31), "221101", "100201", "222107", "2241", "u")
-            .unwrap()
-            .unwrap();
+        let b = payroll_pay_voucher(
+            &db,
+            p,
+            d(2026, 1, 31),
+            "221101",
+            "100201",
+            "222107",
+            "2241",
+            "u",
+        )
+        .unwrap()
+        .unwrap();
         let vb = crate::vouchers::get(&db, b).unwrap().unwrap();
         assert!(vb.balanced());
         assert_eq!(vb.debit_total(), m("10000")); // 净 + 税 + 社保个人 = 应发全额
@@ -2092,11 +2220,17 @@ mod tests {
 
         // 期望状态与库里一致 → 正常生效
         c.status = ClaimStatus::Submitted;
-        assert_eq!(claim_update_cas(&db, &c, Some(ClaimStatus::Draft)).unwrap(), 1);
+        assert_eq!(
+            claim_update_cas(&db, &c, Some(ClaimStatus::Draft)).unwrap(),
+            1
+        );
 
         // 库里已是 submitted，仍按 draft 去更新 → 抢输，0 行且任何列都不动
         c.reason = "并发覆盖进来的内容".into();
-        assert_eq!(claim_update_cas(&db, &c, Some(ClaimStatus::Draft)).unwrap(), 0);
+        assert_eq!(
+            claim_update_cas(&db, &c, Some(ClaimStatus::Draft)).unwrap(),
+            0
+        );
         let after = claim_get(&db, id).unwrap().unwrap();
         assert_eq!(after.status, ClaimStatus::Submitted);
         assert_eq!(after.reason, "差旅费", "CAS 抢输时不能改动任何列");
@@ -2113,17 +2247,26 @@ mod tests {
     fn cost_config_and_period_end_pricing() {
         let db = tmpdb("costcfg");
         // 未配置默认移动加权
-        assert_eq!(item_cost_method(&db, "P001").unwrap(), CostMethod::MovingAverage);
+        assert_eq!(
+            item_cost_method(&db, "P001").unwrap(),
+            CostMethod::MovingAverage
+        );
         // 配置为全月一次平均 + 标准成本
         item_cost_method_set(&db, "P001", Some("month_average"), m("10")).unwrap();
-        assert_eq!(item_cost_method(&db, "P001").unwrap(), CostMethod::MonthAverage);
+        assert_eq!(
+            item_cost_method(&db, "P001").unwrap(),
+            CostMethod::MonthAverage
+        );
         assert_eq!(item_standard_cost(&db, "P001").unwrap(), m("10"));
         let cfg = cost_configs(&db).unwrap();
         assert_eq!(cfg.len(), 1);
         assert_eq!(cfg[0].method_label, "全月一次加权平均");
         // 恢复默认
         item_cost_method_clear(&db, "P001").unwrap();
-        assert_eq!(item_cost_method(&db, "P001").unwrap(), CostMethod::MovingAverage);
+        assert_eq!(
+            item_cost_method(&db, "P001").unwrap(),
+            CostMethod::MovingAverage
+        );
     }
 
     #[test]
@@ -2150,4 +2293,3 @@ mod tests {
         assert_eq!(rows[0].adjust, m("0"));
     }
 }
-

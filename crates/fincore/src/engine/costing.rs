@@ -392,7 +392,13 @@ pub fn run_month_average(
     for mv in moves {
         if mv.qty.is_positive() {
             let price = mv.price.unwrap_or(unit);
-            st.apply(&Move { qty: mv.qty, price: Some(price) }, CostMethod::MovingAverage)?;
+            st.apply(
+                &Move {
+                    qty: mv.qty,
+                    price: Some(price),
+                },
+                CostMethod::MovingAverage,
+            )?;
             out.push(None);
         } else {
             let want = (-mv.qty).round_dp(QTY_DP);
@@ -421,9 +427,18 @@ mod tests {
     #[test]
     fn moving_average_reprices_on_each_purchase() {
         let moves = vec![
-            Move { qty: q("100"), price: Some(m("10")) },   // 入 100 @10 → 1000
-            Move { qty: q("50"), price: Some(m("12")) },    // 入 50 @12 → 累计 150 / 1600，均价 10.6667
-            Move { qty: q("-80"), price: None },            // 出 80 @10.6667 = 853.33
+            Move {
+                qty: q("100"),
+                price: Some(m("10")),
+            }, // 入 100 @10 → 1000
+            Move {
+                qty: q("50"),
+                price: Some(m("12")),
+            }, // 入 50 @12 → 累计 150 / 1600，均价 10.6667
+            Move {
+                qty: q("-80"),
+                price: None,
+            }, // 出 80 @10.6667 = 853.33
         ];
         let (costs, st) = run(&moves, CostMethod::MovingAverage).unwrap();
         assert_eq!(costs[0], None);
@@ -436,9 +451,18 @@ mod tests {
     #[test]
     fn fifo_consumes_oldest_first() {
         let moves = vec![
-            Move { qty: q("100"), price: Some(m("10")) },
-            Move { qty: q("50"), price: Some(m("12")) },
-            Move { qty: q("-80"), price: None }, // 先吃 100@10 的 80 → 800
+            Move {
+                qty: q("100"),
+                price: Some(m("10")),
+            },
+            Move {
+                qty: q("50"),
+                price: Some(m("12")),
+            },
+            Move {
+                qty: q("-80"),
+                price: None,
+            }, // 先吃 100@10 的 80 → 800
         ];
         let (costs, st) = run(&moves, CostMethod::Fifo).unwrap();
         assert_eq!(costs[2], Some(m("800")));
@@ -450,9 +474,18 @@ mod tests {
     #[test]
     fn fifo_crosses_lots() {
         let moves = vec![
-            Move { qty: q("10"), price: Some(m("5")) },
-            Move { qty: q("10"), price: Some(m("7")) },
-            Move { qty: q("-15"), price: None }, // 10@5 + 5@7 = 50 + 35 = 85
+            Move {
+                qty: q("10"),
+                price: Some(m("5")),
+            },
+            Move {
+                qty: q("10"),
+                price: Some(m("7")),
+            },
+            Move {
+                qty: q("-15"),
+                price: None,
+            }, // 10@5 + 5@7 = 50 + 35 = 85
         ];
         let (costs, _) = run(&moves, CostMethod::Fifo).unwrap();
         assert_eq!(costs[2], Some(m("85")));
@@ -461,8 +494,14 @@ mod tests {
     #[test]
     fn sell_out_clears_to_zero() {
         let moves = vec![
-            Move { qty: q("10"), price: Some(m("3.33")) },
-            Move { qty: q("-10"), price: None },
+            Move {
+                qty: q("10"),
+                price: Some(m("3.33")),
+            },
+            Move {
+                qty: q("-10"),
+                price: None,
+            },
         ];
         let (_, st) = run(&moves, CostMethod::MovingAverage).unwrap();
         assert_eq!(st.qty, Money::ZERO);
@@ -474,8 +513,14 @@ mod tests {
     fn negative_stock_recovers_on_purchase() {
         // 先卖后买：出库 10（此时无库存，按 0 计价），再入库 10 @8
         let moves = vec![
-            Move { qty: q("-10"), price: None },
-            Move { qty: q("10"), price: Some(m("8")) },
+            Move {
+                qty: q("-10"),
+                price: None,
+            },
+            Move {
+                qty: q("10"),
+                price: Some(m("8")),
+            },
         ];
         let (costs, st) = run(&moves, CostMethod::MovingAverage).unwrap();
         assert_eq!(costs[0], Some(Money::ZERO));
@@ -485,7 +530,10 @@ mod tests {
 
     #[test]
     fn first_in_must_have_price() {
-        let moves = vec![Move { qty: q("10"), price: None }];
+        let moves = vec![Move {
+            qty: q("10"),
+            price: None,
+        }];
         assert!(run(&moves, CostMethod::MovingAverage).is_err());
     }
 
@@ -499,13 +547,25 @@ mod tests {
     #[test]
     fn specific_requires_price() {
         let moves = vec![
-            Move { qty: q("10"), price: Some(m("8")) },
-            Move { qty: q("-4"), price: None }, // 个别计价缺单价 → 报错
+            Move {
+                qty: q("10"),
+                price: Some(m("8")),
+            },
+            Move {
+                qty: q("-4"),
+                price: None,
+            }, // 个别计价缺单价 → 报错
         ];
         assert!(run(&moves, CostMethod::Specific).is_err());
         let moves = vec![
-            Move { qty: q("10"), price: Some(m("8")) },
-            Move { qty: q("-4"), price: Some(m("9")) }, // 指定批次单价
+            Move {
+                qty: q("10"),
+                price: Some(m("8")),
+            },
+            Move {
+                qty: q("-4"),
+                price: Some(m("9")),
+            }, // 指定批次单价
         ];
         let (costs, _) = run(&moves, CostMethod::Specific).unwrap();
         assert_eq!(costs[1], Some(m("36"))); // 4 × 9
@@ -514,8 +574,23 @@ mod tests {
     #[test]
     fn standard_cost_fixed_unit() {
         let mut st = StockState::new().with_standard_cost(m("7"));
-        st.apply(&Move { qty: q("10"), price: Some(m("9")) }, CostMethod::Standard).unwrap();
-        let c = st.apply(&Move { qty: q("-5"), price: None }, CostMethod::Standard).unwrap();
+        st.apply(
+            &Move {
+                qty: q("10"),
+                price: Some(m("9")),
+            },
+            CostMethod::Standard,
+        )
+        .unwrap();
+        let c = st
+            .apply(
+                &Move {
+                    qty: q("-5"),
+                    price: None,
+                },
+                CostMethod::Standard,
+            )
+            .unwrap();
         assert_eq!(c, Some(m("35"))); // 5 × 标准成本 7，与入库单价无关
         assert_eq!(st.qty, q("5"));
     }
@@ -523,7 +598,14 @@ mod tests {
     #[test]
     fn adjust_amount_delta() {
         let mut st = StockState::new();
-        st.apply(&Move { qty: q("10"), price: Some(m("8")) }, CostMethod::MovingAverage).unwrap();
+        st.apply(
+            &Move {
+                qty: q("10"),
+                price: Some(m("8")),
+            },
+            CostMethod::MovingAverage,
+        )
+        .unwrap();
         let delta = st.adjust_amount(m("100")).unwrap(); // 结存 80 → 100
         assert_eq!(delta, m("20"));
         assert_eq!(st.qty, q("10"));
@@ -537,13 +619,22 @@ mod tests {
         let opening = StockState {
             qty: q("100"),
             amount: m("1000"),
-            lots: vec![Lot { qty: q("100"), unit_cost: m("10") }],
+            lots: vec![Lot {
+                qty: q("100"),
+                unit_cost: m("10"),
+            }],
             last_price: m("10"),
             standard_cost: Money::ZERO,
         };
         let moves = vec![
-            Move { qty: q("100"), price: Some(m("12")) }, // 入
-            Move { qty: q("-80"), price: None },          // 出 80@11 = 880
+            Move {
+                qty: q("100"),
+                price: Some(m("12")),
+            }, // 入
+            Move {
+                qty: q("-80"),
+                price: None,
+            }, // 出 80@11 = 880
         ];
         let (costs, st) = run_month_average(&opening, &moves).unwrap();
         assert_eq!(costs[0], None);

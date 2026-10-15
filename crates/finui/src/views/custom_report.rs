@@ -5,16 +5,15 @@
 
 use egui::{RichText, Ui};
 use egui_extras::{Column, TableBuilder};
-use findb::mgmt::{self, CustomLine, CustomReport};
 use fincore::{Money, Period, Perm};
+use findb::mgmt::{self, CustomLine, CustomReport};
 
 use crate::state::{AppCtx, ConfirmAction};
 use crate::theme;
 use crate::theme::palette;
 use crate::widgets;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[derive(Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CrTab {
     Preview,
     Design,
@@ -173,8 +172,10 @@ impl CustomReportView {
             ui.selectable_value(&mut self.tab, CrTab::Design, "设计器");
             ui.separator();
             ui.label("期间");
-            let r =
-                ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -192,10 +193,8 @@ impl CustomReportView {
                 self.dirty = true;
             }
         });
-        if want_new {
-            if ctx.can(Perm::Report) {
-                self.new_report(ctx);
-            }
+        if want_new && ctx.can(Perm::Report) {
+            self.new_report(ctx);
         }
 
         match self.tab {
@@ -239,10 +238,7 @@ impl CustomReportView {
             ui.separator();
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
                 if let Some(c) = &self.cur {
-                    let mut sh = crate::views::export::Sheet::new(
-                        &c.name,
-                        c.columns.iter().cloned().collect(),
-                    );
+                    let mut sh = crate::views::export::Sheet::new(&c.name, c.columns.to_vec());
                     for row in &self.values {
                         sh.push(row.iter().map(|v| v.fmt_plain()).collect());
                     }
@@ -356,7 +352,10 @@ impl CustomReportView {
     fn show_design(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         // 用 take / 回写的方式编辑，免得闭包里同时借用 self 的多个字段
         let Some(mut d) = self.draft.take() else {
-            widgets::empty_hint(ui, "点「新建」设计一张新报表，或到「报表预览」选一张后点「编辑」");
+            widgets::empty_hint(
+                ui,
+                "点「新建」设计一张新报表，或到「报表预览」选一张后点「编辑」",
+            );
             return;
         };
 
@@ -384,9 +383,15 @@ impl CustomReportView {
             for (f, desc) in [
                 ("QC(\"1001\")+QC(\"1002\")", "期初余额，支持 + - * / 与括号"),
                 ("QM(\"1122\")", "期末余额"),
-                ("FS(\"6001\",,\"贷\")", "本期发生额，方向可写 借 / 贷，留空取借贷差额"),
+                (
+                    "FS(\"6001\",,\"贷\")",
+                    "本期发生额，方向可写 借 / 贷，留空取借贷差额",
+                ),
                 ("LFS(\"6601\")", "本年累计发生额"),
-                ("QM(\"1122\")/QM(\"1122\",-1)", "第二个参数是期间偏移：0 本期、-1 上期、-12 上年同期"),
+                (
+                    "QM(\"1122\")/QM(\"1122\",-1)",
+                    "第二个参数是期间偏移：0 本期、-1 上期、-12 上年同期",
+                ),
                 ("JE(\"1001\")", "期末净额（恒为正）"),
             ] {
                 ui.horizontal(|ui| {
@@ -579,7 +584,10 @@ impl CustomReportView {
         }
         self.checks = mgmt::custom_check(d);
         if !self.checks.is_empty() {
-            ctx.error(format!("有 {} 处公式错误，请先修正再保存", self.checks.len()));
+            ctx.error(format!(
+                "有 {} 处公式错误，请先修正再保存",
+                self.checks.len()
+            ));
             return;
         }
         let r = mgmt::custom_save(ctx.db(), d);
@@ -587,7 +595,13 @@ impl CustomReportView {
             ctx.log(
                 "自定义报表",
                 "保存报表",
-                &format!("{} {}，{} 行 {} 列", d.key, d.name, d.lines.len(), d.columns.len()),
+                &format!(
+                    "{} {}，{} 行 {} 列",
+                    d.key,
+                    d.name,
+                    d.lines.len(),
+                    d.columns.len()
+                ),
             );
             ctx.info(format!("已保存报表 {}", d.key));
             self.cur_key = d.key.clone();
@@ -618,8 +632,11 @@ fn render_warnings(ui: &mut Ui, warnings: &[String]) {
     }
     ui.group(|ui| {
         ui.label(
-            RichText::new(format!("取数告警 {} 条（以下单元格按 0 显示）", warnings.len()))
-                .strong(),
+            RichText::new(format!(
+                "取数告警 {} 条（以下单元格按 0 显示）",
+                warnings.len()
+            ))
+            .strong(),
         );
         for w in warnings.iter().take(20) {
             ui.label(RichText::new(format!("· {w}")).color(ui.visuals().warn_fg_color));

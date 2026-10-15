@@ -603,8 +603,7 @@ pub fn apply_template(db: &Db, key: &str, biz_type: &str, who: &str) -> DbResult
         edges: tpl.edges,
     };
     let id = flow_save(db, &input, who)?;
-    flow_of(db.conn(), id)?
-        .ok_or_else(|| fincore::FinError::msg("流程模板应用失败").into())
+    flow_of(db.conn(), id)?.ok_or_else(|| fincore::FinError::msg("流程模板应用失败").into())
 }
 
 /// 保存流程（新建或更新）：整体替换节点与连线；校验 start 恰好一个、连线端点存在。
@@ -622,19 +621,26 @@ pub fn flow_save(db: &Db, f: &WfFlowInput, who: &str) -> DbResult<i64> {
     if starts != 1 {
         return Err(fincore::FinError::validate("开始节点必须恰好 1 个").into());
     }
-    let mut ids: std::collections::HashSet<&str> =
-        f.nodes.iter().map(|n| n.id.as_str()).collect();
+    let mut ids: std::collections::HashSet<&str> = f.nodes.iter().map(|n| n.id.as_str()).collect();
     if ids.len() != f.nodes.len() {
         return Err(fincore::FinError::validate("节点 id 重复").into());
     }
     for e in &f.edges {
         if !ids.contains(e.from_node.as_str()) || !ids.contains(e.to_node.as_str()) {
-            return Err(fincore::FinError::validate(format!("连线端点不存在：{} → {}", e.from_node, e.to_node)).into());
+            return Err(fincore::FinError::validate(format!(
+                "连线端点不存在：{} → {}",
+                e.from_node, e.to_node
+            ))
+            .into());
         }
     }
     for n in &f.nodes {
         if !n.reject_to.is_empty() && !ids.contains(n.reject_to.as_str()) {
-            return Err(fincore::FinError::validate(format!("驳回目标节点不存在：{}", n.reject_to)).into());
+            return Err(fincore::FinError::validate(format!(
+                "驳回目标节点不存在：{}",
+                n.reject_to
+            ))
+            .into());
         }
     }
     // 条件边引用的字段必须真的是该单据类型**会提供**的字段。
@@ -710,7 +716,15 @@ pub fn flow_save(db: &Db, f: &WfFlowInput, who: &str) -> DbResult<i64> {
         tx.execute(
             "INSERT INTO workflow_edge(id,flow_id,from_node,to_node,kind,condition,seq)
              VALUES(?1,?2,?3,?4,?5,?6,?7)",
-            rusqlite::params![e.id, flow_id, e.from_node, e.to_node, e.kind, e.condition, i as i64],
+            rusqlite::params![
+                e.id,
+                flow_id,
+                e.from_node,
+                e.to_node,
+                e.kind,
+                e.condition,
+                i as i64
+            ],
         )?;
     }
     tx.commit()?;
@@ -751,9 +765,7 @@ pub fn flow_delete(db: &Db, id: i64) -> DbResult<()> {
         |r| r.get(0),
     )?;
     if running > 0 {
-        return Err(
-            fincore::FinError::state("该流程有运行中的审批实例，不能删除").into(),
-        );
+        return Err(fincore::FinError::state("该流程有运行中的审批实例，不能删除").into());
     }
     tx.execute("DELETE FROM workflow_instance WHERE flow_id=?1", [id])?;
     tx.execute("DELETE FROM workflow_edge WHERE flow_id=?1", [id])?;
@@ -803,7 +815,8 @@ pub fn instances(db: &Db) -> DbResult<Vec<WfInstance>> {
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
-    let mut flows: std::collections::HashMap<i64, Option<WfFlow>> = std::collections::HashMap::new();
+    let mut flows: std::collections::HashMap<i64, Option<WfFlow>> =
+        std::collections::HashMap::new();
     let mut out = Vec::new();
     for (id, flow_id, biz_type, biz_id, current_node, status, log_json, created_at) in raw {
         let flow = match flows.entry(flow_id) {
@@ -821,7 +834,7 @@ pub fn instances(db: &Db) -> DbResult<Vec<WfInstance>> {
                 f.nodes
                     .iter()
                     .find(|n| n.id == current_node)
-                    .map(|n| node_label(n))
+                    .map(node_label)
                     .unwrap_or_else(|| current_node.clone()),
             ),
             None => ("(流程已删除)".to_string(), current_node.clone()),
@@ -871,8 +884,20 @@ pub fn cond_fields_of(biz_type: &str) -> Vec<&'static str> {
         BIZ_CLAIM => vec!["amount", "applicant", "dept"],
         BIZ_RECEIPT => vec!["amount", "kind", "party"],
         BIZ_PURCHASE_REQ => vec!["qty", "item_code", "requester"],
-        BIZ_PURCHASE_ORDER => vec!["amount", "net_amount", "tax", "supplier_code", "prepared_by"],
-        BIZ_SALES_ORDER => vec!["amount", "net_amount", "tax", "customer_code", "prepared_by"],
+        BIZ_PURCHASE_ORDER => vec![
+            "amount",
+            "net_amount",
+            "tax",
+            "supplier_code",
+            "prepared_by",
+        ],
+        BIZ_SALES_ORDER => vec![
+            "amount",
+            "net_amount",
+            "tax",
+            "customer_code",
+            "prepared_by",
+        ],
         BIZ_PRODUCTION_ORDER => vec![
             "planned_qty",
             "item_code",
@@ -909,7 +934,7 @@ fn missing_cond_fields(biz_type: &str, need: &[String]) -> Option<Vec<String>> {
     let have = cond_fields_of(biz_type);
     let missing: Vec<String> = need
         .iter()
-        .filter(|f| !have.iter().any(|h| *h == f.as_str()))
+        .filter(|f| !have.contains(&f.as_str()))
         .cloned()
         .collect();
     if missing.is_empty() {
@@ -1028,7 +1053,11 @@ fn eval_condition(
         let keys: Vec<&str> = ctx.keys().map(|s| s.as_str()).collect();
         format!(
             "未知字段 {field}（当前业务类型支持：{}）",
-            if keys.is_empty() { "无可用字段".to_string() } else { keys.join("/") }
+            if keys.is_empty() {
+                "无可用字段".to_string()
+            } else {
+                keys.join("/")
+            }
         )
     })?;
     let quoted = (raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2)
@@ -1102,10 +1131,7 @@ fn branch_next(
     if let Some(e) = edges.iter().find(|e| e.condition.trim().is_empty()) {
         return Ok(Some(e.to_node.clone()));
     }
-    Err(
-        fincore::FinError::state("该节点所有条件分支均不满足，且未配置兜底（空条件）出边")
-            .into(),
-    )
+    Err(fincore::FinError::state("该节点所有条件分支均不满足，且未配置兜底（空条件）出边").into())
 }
 
 fn reject_next(flow: &WfFlow, from: &str) -> Option<String> {
@@ -1123,7 +1149,11 @@ fn reject_next(flow: &WfFlow, from: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn instance_of(conn: &rusqlite::Connection, biz_type: &str, biz_id: i64) -> DbResult<Option<(i64, String, String, String)>> {
+fn instance_of(
+    conn: &rusqlite::Connection,
+    biz_type: &str,
+    biz_id: i64,
+) -> DbResult<Option<(i64, String, String, String)>> {
     let row = conn
         .query_row(
             "SELECT id,status,current_node,log_json FROM workflow_instance
@@ -1146,9 +1176,9 @@ fn instance_of(conn: &rusqlite::Connection, biz_type: &str, biz_id: i64) -> DbRe
 /// - 无已发布流程 → `NoFlow`（调用方执行原有直接审批 = 默认流，向后兼容）
 /// - 有流程且未到终态 → `Pending`（仅推进实例，调用方返回下一节点名，不执行业务动作）
 /// - 到终态 → `Final`（调用方执行其原有业务审批/驳回）
-/// 参与人规则：节点参与人为空 = 需要「审核权限」（VoucherAudit）；非空 = 命中参与人角色
-/// 或持有审核权限（审核人/主管/管理员可兜底）。会签策略字段存档，v1 单人通过即过；
-/// 条件连线字段存档，v1 按 normal 边顺序取第一条（分支选择后续迭代）。
+///   参与人规则：节点参与人为空 = 需要「审核权限」（VoucherAudit）；非空 = 命中参与人角色
+///   或持有审核权限（审核人/主管/管理员可兜底）。会签策略字段存档，v1 单人通过即过；
+///   条件连线字段存档，v1 按 normal 边顺序取第一条（分支选择后续迭代）。
 pub fn intercept(
     db: &Db,
     biz_type: &str,
@@ -1231,9 +1261,7 @@ pub fn intercept(
             .iter()
             .any(|e| e.node == node.id && e.action == "approve" && e.who == user.username)
         {
-            return Err(
-                fincore::FinError::state("您已在该节点会签通过，不可重复审批").into(),
-            );
+            return Err(fincore::FinError::state("您已在该节点会签通过，不可重复审批").into());
         }
         let mut covered: std::collections::HashSet<String> = std::collections::HashSet::new();
         for e in log
@@ -1308,10 +1336,7 @@ pub fn intercept(
         Some(mut nid) => {
             // 消息节点（对标金蝶：到达即发通知，不阻塞流程）——写审计（进通知中心动态）并自动继续
             let mut hops = 0;
-            loop {
-                let Some(nnode) = flow.nodes.iter().find(|n| n.id == nid) else {
-                    break;
-                };
+            while let Some(nnode) = flow.nodes.iter().find(|n| n.id == nid) {
                 if nnode.node_type != "message" {
                     break;
                 }
@@ -1487,18 +1512,36 @@ mod tests {
     fn flow_save_validation_and_publish() {
         let db = mem();
         // 无 start → 拒
-        assert!(flow_save(&db, &input(0, "f", vec![n("a1", "approve", "审批", vec![])], vec![]), "u").is_err());
+        assert!(flow_save(
+            &db,
+            &input(0, "f", vec![n("a1", "approve", "审批", vec![])], vec![]),
+            "u"
+        )
+        .is_err());
         // start 不唯一 → 拒
         assert!(flow_save(
             &db,
-            &input(0, "f", vec![n("s1", "start", "开始", vec![]), n("s2", "start", "开始", vec![])], vec![]),
+            &input(
+                0,
+                "f",
+                vec![
+                    n("s1", "start", "开始", vec![]),
+                    n("s2", "start", "开始", vec![])
+                ],
+                vec![]
+            ),
             "u",
         )
         .is_err());
         // 连线端点不存在 → 拒
         assert!(flow_save(
             &db,
-            &input(0, "f", vec![n("s1", "start", "开始", vec![])], vec![e("e1", "s1", "ghost", "normal")]),
+            &input(
+                0,
+                "f",
+                vec![n("s1", "start", "开始", vec![])],
+                vec![e("e1", "s1", "ghost", "normal")]
+            ),
             "u",
         )
         .is_err());
@@ -1506,7 +1549,10 @@ mod tests {
         let ok = input(
             0,
             "报价审批流",
-            vec![n("s1", "start", "开始", vec![]), n("a1", "approve", "主管审批", vec![])],
+            vec![
+                n("s1", "start", "开始", vec![]),
+                n("a1", "approve", "主管审批", vec![]),
+            ],
             vec![e("e1", "s1", "a1", "normal")],
         );
         let id = flow_save(&db, &ok, "u").unwrap();
@@ -1519,7 +1565,10 @@ mod tests {
         // 无审批节点发布 → 拒
         let no_approve = input(0, "g", vec![n("s1", "start", "开始", vec![])], vec![]);
         let id2 = flow_save(&db, &no_approve, "u").unwrap();
-        assert!(flow_set_status(&db, id2, true, "u").is_err(), "无审批节点不能发布");
+        assert!(
+            flow_set_status(&db, id2, true, "u").is_err(),
+            "无审批节点不能发布"
+        );
     }
 
     #[test]
@@ -1756,18 +1805,38 @@ mod tests {
         .unwrap();
 
         let cases: Vec<(&str, i64, Vec<&str>)> = vec![
-            (BIZ_QUOTATION, qid, vec!["qty", "amount", "customer_code", "item_code"]),
+            (
+                BIZ_QUOTATION,
+                qid,
+                vec!["qty", "amount", "customer_code", "item_code"],
+            ),
             (BIZ_CLAIM, cid, vec!["amount", "applicant", "dept"]),
-            (BIZ_PURCHASE_REQ, prid, vec!["qty", "item_code", "requester"]),
+            (
+                BIZ_PURCHASE_REQ,
+                prid,
+                vec!["qty", "item_code", "requester"],
+            ),
             (
                 BIZ_PURCHASE_ORDER,
                 poid,
-                vec!["amount", "net_amount", "tax", "supplier_code", "prepared_by"],
+                vec![
+                    "amount",
+                    "net_amount",
+                    "tax",
+                    "supplier_code",
+                    "prepared_by",
+                ],
             ),
             (
                 BIZ_SALES_ORDER,
                 soid,
-                vec!["amount", "net_amount", "tax", "customer_code", "prepared_by"],
+                vec![
+                    "amount",
+                    "net_amount",
+                    "tax",
+                    "customer_code",
+                    "prepared_by",
+                ],
             ),
             (
                 BIZ_PRODUCTION_ORDER,
@@ -1822,7 +1891,10 @@ mod tests {
         let admin = User::new("boss", "管理员", Role::Admin);
         assert!(admin.can(Perm::VoucherAudit), "管理员应持有审核权限");
         assert!(
-            !admin.all_roles().iter().any(|r| role_code(r) == "supervisor"),
+            !admin
+                .all_roles()
+                .iter()
+                .any(|r| role_code(r) == "supervisor"),
             "管理员的角色里本不该有 supervisor —— 正是这一点让本用例有意义"
         );
 
@@ -1853,8 +1925,7 @@ mod tests {
             "生产订单不该有 amount —— 塞一个数量冒充金额会让「金额分级」跑出「10 件 > 5000 元」"
         );
         assert_eq!(
-            missing_cond_fields(BIZ_PRODUCTION_ORDER, &["amount".to_string()])
-                .unwrap_or_default(),
+            missing_cond_fields(BIZ_PRODUCTION_ORDER, &["amount".to_string()]).unwrap_or_default(),
             vec!["amount".to_string()]
         );
         assert!(missing_cond_fields(BIZ_PRODUCTION_ORDER, &["planned_qty".into()]).is_none());
@@ -1896,10 +1967,7 @@ mod tests {
                     y: 0.0,
                 },
             ],
-            edges: vec![
-                tedge("start", "a"),
-                tedge_if("a", "b", "amount > 5000"),
-            ],
+            edges: vec![tedge("start", "a"), tedge_if("a", "b", "amount > 5000")],
         };
         let e = flow_save(&db, &bad, "u").unwrap_err().to_string();
         assert!(e.contains("amount"), "应点名缺失字段：{e}");
@@ -2023,8 +2091,7 @@ mod tests {
                 plan_start: String::new(),
                 plan_end: String::new(),
             };
-            crate::scm::prod_save(&db, &mut mo)
-                .unwrap_or_else(|e| panic!("{no} 保存失败：{e}"))
+            crate::scm::prod_save(&db, &mut mo).unwrap_or_else(|e| panic!("{no} 保存失败：{e}"))
         };
         let big = mk("MO-BIG", "5000"); // > 1000 → 加厂长
         let small = mk("MO-SMALL", "10");
@@ -2034,7 +2101,9 @@ mod tests {
             other => panic!("首批不应终态：{other:?}"),
         }
         match intercept(&db, BIZ_PRODUCTION_ORDER, big, &sup, true, "").unwrap() {
-            Gate::Pending { next } => assert!(next.contains("生产负责人"), "接着是生产负责人：{next}"),
+            Gate::Pending { next } => {
+                assert!(next.contains("生产负责人"), "接着是生产负责人：{next}")
+            }
             other => panic!("次批不应终态：{other:?}"),
         }
         assert!(matches!(
@@ -2060,7 +2129,10 @@ mod tests {
         let e = apply_template(&db, "simple", BIZ_CLAIM, "u").unwrap_err();
         let msg = e.to_string();
         assert!(msg.contains("不适用"), "错误信息应说明不适用：{msg}");
-        assert!(msg.contains("报销单"), "错误信息应列出可用的单据类型：{msg}");
+        assert!(
+            msg.contains("报销单"),
+            "错误信息应列出可用的单据类型：{msg}"
+        );
         // 非法 biz_type 也拒
         assert!(apply_template(&db, "simple", "not_a_biz", "u").is_err());
         // 不存在的模板 key 也拒
@@ -2233,7 +2305,7 @@ mod tests {
             Role::Viewer,
         ]
         .iter()
-        .map(|r| role_code(r))
+        .map(role_code)
         .collect();
         for t in templates() {
             for node in &t.nodes {
@@ -2431,4 +2503,3 @@ mod tests {
         }
     }
 }
-

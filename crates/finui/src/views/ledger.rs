@@ -1,11 +1,9 @@
 //! 账簿查询：明细账 / 总账 / 日记账
 
 use egui::{RichText, Ui};
+use fincore::{signed_to_dir_amount, GeneralLedgerRow, JournalRow, LedgerRow, Money, Period, Perm};
 use findb::balances::{BalanceQuery, LedgerQuery};
 use findb::reports::DailyRow;
-use fincore::{
-    signed_to_dir_amount, GeneralLedgerRow, JournalRow, LedgerRow, Money, Perm, Period,
-};
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -122,17 +120,26 @@ impl LedgerView {
         .with_user_scope(ctx.user());
         match self.tab {
             Tab::Detail => {
-                self.detail = findb::balances::ledger(ctx.db(), ctx.chart(), &q).unwrap_or_default();
+                self.detail =
+                    findb::balances::ledger(ctx.db(), ctx.chart(), &q).unwrap_or_default();
             }
             Tab::General => {
-                self.general =
-                    findb::balances::general_ledger(ctx.db(), &q).unwrap_or_default();
+                self.general = findb::balances::general_ledger(ctx.db(), &q).unwrap_or_default();
             }
             Tab::Journal => {
-                self.journal = findb::balances::journal(ctx.db(), ctx.chart(), &q).unwrap_or_default();
+                self.journal =
+                    findb::balances::journal(ctx.db(), ctx.chart(), &q).unwrap_or_default();
             }
             Tab::Daily => {
-                self.daily = findb::reports::account_daily_report(ctx.db(), &code, from, to, Some(ctx.user()), self.posted_only).unwrap_or_default();
+                self.daily = findb::reports::account_daily_report(
+                    ctx.db(),
+                    &code,
+                    from,
+                    to,
+                    Some(ctx.user()),
+                    self.posted_only,
+                )
+                .unwrap_or_default();
             }
         }
         // 期初余额
@@ -194,7 +201,9 @@ impl LedgerView {
             }
             if ui.button("本年").clicked() {
                 let p = ctx.period();
-                self.from = Period::new(p.year(), 1).map(|x| x.code()).unwrap_or(p.code());
+                self.from = Period::new(p.year(), 1)
+                    .map(|x| x.code())
+                    .unwrap_or(p.code());
                 self.to = p.code();
                 self.dirty = true;
             }
@@ -461,7 +470,11 @@ impl LedgerView {
         };
         // 期初余额方向
         let (bd, bamt) = signed_to_dir_amount(self.begin);
-        let begin_dir = if bamt.is_zero() { "平".to_string() } else { bd.label().to_string() };
+        let begin_dir = if bamt.is_zero() {
+            "平".to_string()
+        } else {
+            bd.label().to_string()
+        };
 
         let (title, rows): (String, Vec<LedgerPrintRow>) = match self.tab {
             Tab::Detail => (
@@ -639,7 +652,12 @@ impl LedgerView {
             Tab::Daily => {
                 let mut sh = crate::views::export::Sheet::new(
                     "科目日报表",
-                    vec!["日期".into(), "借方".into(), "贷方".into(), "日末余额".into()],
+                    vec![
+                        "日期".into(),
+                        "借方".into(),
+                        "贷方".into(),
+                        "日末余额".into(),
+                    ],
                 );
                 for r in &self.daily {
                     sh.push(vec![

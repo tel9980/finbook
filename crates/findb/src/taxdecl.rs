@@ -80,7 +80,9 @@ impl TaxOptions {
         let get = |k: &str| -> Option<String> {
             use rusqlite::OptionalExtension;
             db.conn()
-                .query_row("SELECT value FROM meta WHERE key=?1", [k], |r| r.get::<_, String>(0))
+                .query_row("SELECT value FROM meta WHERE key=?1", [k], |r| {
+                    r.get::<_, String>(0)
+                })
                 .optional()
                 .ok()
                 .flatten()
@@ -101,8 +103,10 @@ impl TaxOptions {
             ("tax_edu_rate", &self.edu_rate),
             ("tax_local_edu_rate", &self.local_edu_rate),
         ] {
-            db.conn()
-                .execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?1,?2)", [k, v])?;
+            db.conn().execute(
+                "INSERT OR REPLACE INTO meta(key,value) VALUES(?1,?2)",
+                [k, v],
+            )?;
         }
         Ok(())
     }
@@ -217,7 +221,10 @@ pub fn is_general_rate(rate: &str) -> bool {
 /// 没存税率），若按「非一般计税即简易计税」处理，一张真实的销项发票会落进
 /// 简易计税销售额 —— 主表第 1 行和第 3 行都填错，而申报表上看起来完全正常。
 pub fn is_known_rate(rate: &str) -> bool {
-    matches!(normalize_rate(rate).as_str(), "13" | "9" | "6" | "5" | "3" | "0")
+    matches!(
+        normalize_rate(rate).as_str(),
+        "13" | "9" | "6" | "5" | "3" | "0"
+    )
 }
 
 /// 一个税率档的汇总
@@ -326,22 +333,19 @@ fn invoices_in_period(db: &Db, kind: &str, period: fincore::Period) -> DbResult<
          ORDER BY date, number"
     );
     let mut st = db.conn().prepare(&sql)?;
-    let rows = st.query_map(
-        rusqlite::params![kind, period.ymm().to_string()],
-        |r| {
-            Ok(RawInv {
-                date: r.get(0)?,
-                number: r.get(1)?,
-                party: r.get(2)?,
-                rate: r.get(3)?,
-                net: Money::parse_or_zero(&r.get::<_, String>(4)?),
-                tax: Money::parse_or_zero(&r.get::<_, String>(5)?),
-                gross: Money::parse_or_zero(&r.get::<_, String>(6)?),
-                status: r.get(7)?,
-                memo: r.get(8)?,
-            })
-        },
-    )?;
+    let rows = st.query_map(rusqlite::params![kind, period.ymm().to_string()], |r| {
+        Ok(RawInv {
+            date: r.get(0)?,
+            number: r.get(1)?,
+            party: r.get(2)?,
+            rate: r.get(3)?,
+            net: Money::parse_or_zero(&r.get::<_, String>(4)?),
+            tax: Money::parse_or_zero(&r.get::<_, String>(5)?),
+            gross: Money::parse_or_zero(&r.get::<_, String>(6)?),
+            status: r.get(7)?,
+            memo: r.get(8)?,
+        })
+    })?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r?);
@@ -362,20 +366,18 @@ fn bucketize(list: &[RawInv], title: &str) -> DetailTable {
             continue;
         }
         let key = normalize_rate(&inv.rate);
-        let b = map
-            .entry(key.clone())
-            .or_insert_with(|| RateBucket {
-                rate: key.clone(),
-                general_method: is_general_rate(&key),
-                ..Default::default()
-            });
+        let b = map.entry(key.clone()).or_insert_with(|| RateBucket {
+            rate: key.clone(),
+            general_method: is_general_rate(&key),
+            ..Default::default()
+        });
         b.count += 1;
         b.net += inv.net;
         b.tax += inv.tax;
         b.gross += inv.gross;
     }
     let mut buckets: Vec<RateBucket> = map.into_values().collect();
-    buckets.sort_by(|a, b| rate_rank(&a.rate).cmp(&rate_rank(&b.rate)));
+    buckets.sort_by_key(|a| rate_rank(&a.rate));
     let mut t = DetailTable {
         title: title.into(),
         buckets,
@@ -413,7 +415,8 @@ pub fn vat_main_form(db: &Db, period: fincore::Period) -> DbResult<VatMainForm> 
     // 不可识别的税率（空串、`免税` 这类非数字）**既不算一般计税、也不算简易计税**，
     // 单列成「待归类」。默认归到简易计税会让主表第 3 行凭空多出一块，而表面上
     // 数字看着完全正常 —— 这种错要等到税局退表才发现。
-    let (mut sales_general, mut sales_simple, mut sales_exempt) = (Money::ZERO, Money::ZERO, Money::ZERO);
+    let (mut sales_general, mut sales_simple, mut sales_exempt) =
+        (Money::ZERO, Money::ZERO, Money::ZERO);
     let (mut sales_unknown, mut unknown_tax) = (Money::ZERO, Money::ZERO);
     for b in &details_out.buckets {
         if !is_known_rate(&b.rate) {
@@ -450,8 +453,7 @@ pub fn vat_main_form(db: &Db, period: fincore::Period) -> DbResult<VatMainForm> 
         local_edu_rate: Money::parse_or_zero(&opts.local_edu_rate).fmt_money(),
         ..Default::default()
     };
-    surcharge.total =
-        (surcharge.city_tax + surcharge.edu + surcharge.local_edu).round2();
+    surcharge.total = (surcharge.city_tax + surcharge.edu + surcharge.local_edu).round2();
 
     let mut warnings: Vec<String> = Vec::new();
     if in_pending > 0 {
@@ -481,7 +483,11 @@ pub fn vat_main_form(db: &Db, period: fincore::Period) -> DbResult<VatMainForm> 
         warnings.push(format!(
             "有税率未填/不可识别的销项发票（税率档：{}），销售额 {} / 税额 {} **未计入上面三行**。\
              订单下推的发票默认不带税率，请到发票管理补全后重算",
-            if rates.is_empty() { "（空）".to_string() } else { rates.join("、") },
+            if rates.is_empty() {
+                "（空）".to_string()
+            } else {
+                rates.join("、")
+            },
             sales_unknown.fmt_money(),
             unknown_tax.fmt_money()
         ));
@@ -600,8 +606,16 @@ mod tests {
                 code: "044001900111".into(),
                 number: format!("FP{seq:06}"),
                 date: date.into(),
-                buyer: if kind == "out" { "客户甲".into() } else { "本企业".into() },
-                seller: if kind == "out" { "本企业".into() } else { "供应商甲".into() },
+                buyer: if kind == "out" {
+                    "客户甲".into()
+                } else {
+                    "本企业".into()
+                },
+                seller: if kind == "out" {
+                    "本企业".into()
+                } else {
+                    "供应商甲".into()
+                },
                 amount_tax: net + tax,
                 amount: net,
                 tax,
@@ -659,7 +673,11 @@ mod tests {
         add_inv(&db, "out", "2026-01-07", "0.13", "2000", "260", "verified");
 
         let f = vat_main_form(&db, p).unwrap();
-        assert_eq!(f.sales_general.fmt_money(), "2,000.00", "13% 档该算一般计税");
+        assert_eq!(
+            f.sales_general.fmt_money(),
+            "2,000.00",
+            "13% 档该算一般计税"
+        );
         assert_eq!(
             f.sales_simple.fmt_money(),
             "0.00",
@@ -671,7 +689,9 @@ mod tests {
         // 销项税额总额仍要包含它们（只是不进三行分类）
         assert_eq!(f.output_tax.fmt_money(), "390.00");
         assert!(
-            f.warnings.iter().any(|w| w.contains("未填") || w.contains("不可识别")),
+            f.warnings
+                .iter()
+                .any(|w| w.contains("未填") || w.contains("不可识别")),
             "必须提示税率缺失，否则会计以为分类完了：{:?}",
             f.warnings
         );
@@ -758,7 +778,12 @@ mod tests {
         // 销项税额 = 130+65+12+4
         assert_eq!(f.output_tax.fmt_money(), "211.00");
         // 档位顺序必须是法定顺序
-        let rates: Vec<&str> = f.details_out.buckets.iter().map(|b| b.rate.as_str()).collect();
+        let rates: Vec<&str> = f
+            .details_out
+            .buckets
+            .iter()
+            .map(|b| b.rate.as_str())
+            .collect();
         assert_eq!(rates, vec!["13", "6", "5", "0"], "档位顺序 {rates:?}");
     }
 
@@ -792,9 +817,17 @@ mod tests {
             "6.50",
             "130 × 5% 应显示 6.50 而不是 6.5000"
         );
-        assert_eq!(f2.output_tax.fmt_money().split('.').nth(1).map(str::len), Some(2));
         assert_eq!(
-            f2.surcharge.city_tax.fmt_money().split('.').nth(1).map(str::len),
+            f2.output_tax.fmt_money().split('.').nth(1).map(str::len),
+            Some(2)
+        );
+        assert_eq!(
+            f2.surcharge
+                .city_tax
+                .fmt_money()
+                .split('.')
+                .nth(1)
+                .map(str::len),
             Some(2),
             "同一张表上金额小数位必须一致"
         );
@@ -834,8 +867,14 @@ mod tests {
         add_inv(&db, "out", "2026-01-10", "0.13", "1000", "130", "verified");
         add_inv(&db, "out", "2026-02-10", "0.13", "2000", "260", "verified");
 
-        assert_eq!(vat_main_form(&db, jan).unwrap().output_tax.fmt_money(), "130.00");
-        assert_eq!(vat_main_form(&db, feb).unwrap().output_tax.fmt_money(), "260.00");
+        assert_eq!(
+            vat_main_form(&db, jan).unwrap().output_tax.fmt_money(),
+            "130.00"
+        );
+        assert_eq!(
+            vat_main_form(&db, feb).unwrap().output_tax.fmt_money(),
+            "260.00"
+        );
     }
 
     /// 汇总数要能追到发票：档位明细之和必须等于档位汇总
@@ -910,9 +949,18 @@ mod tests {
     fn deadline_申报期边界() {
         assert!(tax_keys("2026-11-15", "general").contains(&"tax_vat"));
         assert!(!tax_keys("2026-11-16", "general").contains(&"tax_vat"));
-        assert!(!tax_keys("2026-11-10", "small").contains(&"tax_vat"), "小规模非季月不报增值税");
-        assert!(tax_keys("2026-11-10", "small").contains(&"tax_iit"), "个税按月人人都要报");
-        assert!(tax_keys("2026-10-10", "small").contains(&"tax_vat"), "季月小规模要报");
+        assert!(
+            !tax_keys("2026-11-10", "small").contains(&"tax_vat"),
+            "小规模非季月不报增值税"
+        );
+        assert!(
+            tax_keys("2026-11-10", "small").contains(&"tax_iit"),
+            "个税按月人人都要报"
+        );
+        assert!(
+            tax_keys("2026-10-10", "small").contains(&"tax_vat"),
+            "季月小规模要报"
+        );
     }
 
     /// 季度与年度事项只在窗口出现

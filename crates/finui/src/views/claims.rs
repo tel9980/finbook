@@ -6,8 +6,8 @@
 
 use chrono::NaiveDate;
 use egui::{Align2, Color32, RichText, Ui};
-use findb::business::{self, Claim, ClaimItem, ClaimStatus};
 use fincore::{Money, Period, Perm};
+use findb::business::{self, Claim, ClaimItem, ClaimStatus};
 
 use crate::state::{AppCtx, ConfirmAction};
 use crate::theme::palette;
@@ -17,7 +17,7 @@ use crate::widgets::{self, Paging};
 const STATUS_OPTS: [&str; 6] = ["全部", "草稿", "已提交", "已审批", "已驳回", "已支付"];
 
 /// 明细行编辑缓冲区
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct ItemDraft {
     account: String,
     amount: String,
@@ -143,7 +143,10 @@ impl ClaimsView {
 
         widgets::toolbar(ui, |ui| {
             ui.label("期间");
-            let rp = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let rp = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if rp.changed() {
                 self.dirty = true;
             }
@@ -263,10 +266,11 @@ impl ClaimsView {
                                 trans = Some((r.id, to));
                             }
                         }
-                        if r.status == ClaimStatus::Paid && r.voucher_id.is_none() {
-                            if ui.small_button("生成凭证").clicked() {
-                                voucher = Some(r.id);
-                            }
+                        if r.status == ClaimStatus::Paid
+                            && r.voucher_id.is_none()
+                            && ui.small_button("生成凭证").clicked()
+                        {
+                            voucher = Some(r.id);
                         }
                     });
                 }
@@ -293,10 +297,7 @@ impl ClaimsView {
         let total: Money = self.rows.iter().map(|r| r.amount).sum();
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!(
-                "本期报销金额合计 {}",
-                total.fmt_money()
-            )).strong());
+            ui.label(RichText::new(format!("本期报销金额合计 {}", total.fmt_money())).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.paging.bar(ui, self.rows.len());
             });
@@ -352,11 +353,13 @@ impl ClaimsView {
 
     // ------------------------- 编辑弹窗 -------------------------
     fn open_new(&mut self, ctx: &mut AppCtx<'_>, p: Period) {
-        let no = business::claim_next_no(ctx.db(), p).unwrap_or_else(|_| format!("BX{}-001", p.ymm()));
-        let date = p
-            .contains(chrono::Local::now().date_naive())
-            .then(|| chrono::Local::now().date_naive())
-            .unwrap_or_else(|| p.last_day());
+        let no =
+            business::claim_next_no(ctx.db(), p).unwrap_or_else(|_| format!("BX{}-001", p.ymm()));
+        let date = if p.contains(chrono::Local::now().date_naive()) {
+            chrono::Local::now().date_naive()
+        } else {
+            p.last_day()
+        };
         self.editing = Some(ClaimDraft {
             base: Claim {
                 id: 0,
@@ -422,95 +425,101 @@ impl ClaimsView {
         let is_new = d.is_new;
         let err = self.err.clone();
         // 明细合计实时算出来给用户看，单据金额由明细汇总，不让人手工填
-        let total: Money = d.items.iter().map(|i| Money::parse_or_zero(&i.amount)).sum();
+        let total: Money = d
+            .items
+            .iter()
+            .map(|i| Money::parse_or_zero(&i.amount))
+            .sum();
 
-        egui::Window::new(if is_new { "新增报销单" } else { "修改报销单" })
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([720.0, 460.0])
-            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                if !err.is_empty() {
-                    ui.colored_label(palette::CREDIT, &err);
-                }
-                egui::Grid::new("claim_edit")
-                    .num_columns(6)
-                    .spacing([8.0, 6.0])
-                    .show(ui, |ui| {
-                        ui.label("单号：");
-                        ui.label(RichText::new(&d.base.no).monospace());
-                        ui.label("日期：");
-                        ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut d.date));
-                        ui.label("申请人：");
-                        widgets::text_input(ui, &mut d.applicant, 120.0, "职员编码");
-                        ui.end_row();
-                        ui.label("部门：");
-                        widgets::text_input(ui, &mut d.dept, 120.0, "部门编码");
-                        ui.label("事由：");
-                        widgets::text_input(ui, &mut d.reason, 360.0, "如：差旅费");
-                        ui.end_row();
-                    });
-                ui.add_space(6.0);
-                ui.label(RichText::new("费用明细").strong());
-                let n = d.items.len();
-                widgets::grid(
-                    ui,
-                    "claim_items",
-                    &[
-                        widgets::TCol::new("费用科目", 280.0),
-                        widgets::TCol::new("金额", 110.0).right(),
-                        widgets::TCol::new("备注", 240.0),
-                        widgets::TCol::new("操作", 60.0).fixed(),
-                    ],
-                    n,
-                    26.0,
-                    |i, c, ui| {
-                        let it = &mut d.items[i];
-                        match c {
-                            0 => widgets::account_combo(
-                                ui,
-                                &format!("claim_item_acct_{i}"),
-                                &mut it.account,
-                                ctx.chart(),
-                                true,
-                                270.0,
-                            ),
-                            1 => {
-                                widgets::money_input(ui, &mut it.amount, 100.0);
-                            }
-                            2 => {
-                                widgets::text_input(ui, &mut it.memo, 230.0, "摘要");
-                            }
-                            3 => {
-                                if ui.small_button("删").clicked() {
-                                    remove = Some(i);
-                                }
-                            }
-                            _ => {}
-                        }
-                    },
-                );
-                ui.horizontal(|ui| {
-                    if ui.button("+ 添加明细行").clicked() {
-                        d.items.push(ItemDraft::default());
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(format!("合计 {}", total.fmt_money())).strong());
-                    });
+        egui::Window::new(if is_new {
+            "新增报销单"
+        } else {
+            "修改报销单"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(true)
+        .default_size([720.0, 460.0])
+        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ui.ctx(), |ui| {
+            if !err.is_empty() {
+                ui.colored_label(palette::CREDIT, &err);
+            }
+            egui::Grid::new("claim_edit")
+                .num_columns(6)
+                .spacing([8.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("单号：");
+                    ui.label(RichText::new(&d.base.no).monospace());
+                    ui.label("日期：");
+                    ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut d.date));
+                    ui.label("申请人：");
+                    widgets::text_input(ui, &mut d.applicant, 120.0, "职员编码");
+                    ui.end_row();
+                    ui.label("部门：");
+                    widgets::text_input(ui, &mut d.dept, 120.0, "部门编码");
+                    ui.label("事由：");
+                    widgets::text_input(ui, &mut d.reason, 360.0, "如：差旅费");
+                    ui.end_row();
                 });
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("取消").clicked() {
-                            close = true;
+            ui.add_space(6.0);
+            ui.label(RichText::new("费用明细").strong());
+            let n = d.items.len();
+            widgets::grid(
+                ui,
+                "claim_items",
+                &[
+                    widgets::TCol::new("费用科目", 280.0),
+                    widgets::TCol::new("金额", 110.0).right(),
+                    widgets::TCol::new("备注", 240.0),
+                    widgets::TCol::new("操作", 60.0).fixed(),
+                ],
+                n,
+                26.0,
+                |i, c, ui| {
+                    let it = &mut d.items[i];
+                    match c {
+                        0 => widgets::account_combo(
+                            ui,
+                            &format!("claim_item_acct_{i}"),
+                            &mut it.account,
+                            ctx.chart(),
+                            true,
+                            270.0,
+                        ),
+                        1 => {
+                            widgets::money_input(ui, &mut it.amount, 100.0);
                         }
-                        if ui.button("保存").clicked() {
-                            save = true;
+                        2 => {
+                            widgets::text_input(ui, &mut it.memo, 230.0, "摘要");
                         }
-                    });
+                        3 if ui.small_button("删").clicked() => {
+                            remove = Some(i);
+                        }
+                        _ => {}
+                    }
+                },
+            );
+            ui.horizontal(|ui| {
+                if ui.button("+ 添加明细行").clicked() {
+                    d.items.push(ItemDraft::default());
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(format!("合计 {}", total.fmt_money())).strong());
                 });
             });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                    if ui.button("保存").clicked() {
+                        save = true;
+                    }
+                });
+            });
+        });
 
         if let Some(i) = remove {
             if let Some(d) = self.editing.as_mut() {
@@ -528,7 +537,10 @@ impl ClaimsView {
             return;
         }
 
-        let (is_new, draft) = (self.editing.as_ref().unwrap().is_new, self.editing.clone().unwrap());
+        let (is_new, draft) = (
+            self.editing.as_ref().unwrap().is_new,
+            self.editing.clone().unwrap(),
+        );
         match self.build_claim(&draft) {
             Ok(mut c) => {
                 c.id = draft.base.id;
@@ -550,7 +562,11 @@ impl ClaimsView {
                     Ok(()) => {
                         ctx.log(
                             "报销",
-                            if is_new { "新增报销单" } else { "修改报销单" },
+                            if is_new {
+                                "新增报销单"
+                            } else {
+                                "修改报销单"
+                            },
                             &format!("{} {} {}", c.no, c.applicant, c.amount.fmt_money()),
                         );
                         ctx.info("已保存");
@@ -611,15 +627,5 @@ impl ClaimsView {
             voucher_id: d.base.voucher_id,
             created_at: d.base.created_at.clone(),
         })
-    }
-}
-
-impl Default for ItemDraft {
-    fn default() -> Self {
-        Self {
-            account: String::new(),
-            amount: String::new(),
-            memo: String::new(),
-        }
     }
 }

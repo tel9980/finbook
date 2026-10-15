@@ -85,7 +85,12 @@ pub fn open_lines(db: &Db, customer: &str, period: Period) -> DbResult<Vec<OpenE
 /// 汇总一个客户的余额。只读 [open_lines]，不自己算。
 pub fn summary_of(db: &Db, code: &str, period: Period) -> DbResult<CustomerSummary> {
     let lines = open_lines(db, code, period)?;
-    Ok(summarize(code, "", &lines, opening_balance(db, code, period)?))
+    Ok(summarize(
+        code,
+        "",
+        &lines,
+        opening_balance(db, code, period)?,
+    ))
 }
 
 /// 期初挂账（应收方向）余额。
@@ -113,12 +118,7 @@ fn opening_balance(db: &Db, code: &str, period: Period) -> DbResult<Money> {
     Ok(sum)
 }
 
-fn summarize(
-    code: &str,
-    name: &str,
-    lines: &[OpenEntry],
-    opening: Money,
-) -> CustomerSummary {
+fn summarize(code: &str, name: &str, lines: &[OpenEntry], opening: Money) -> CustomerSummary {
     let mut balance = Money::ZERO;
     let mut open_amount = Money::ZERO;
     let mut open_count = 0usize;
@@ -178,7 +178,12 @@ pub fn list(db: &Db, period: Period, q: &str, only_open: bool) -> DbResult<Vec<C
         }
         let empty = Vec::new();
         let lines = grouped.get(&ent.code).unwrap_or(&empty);
-        let mut s = summarize(&ent.code, &ent.name, lines, opening_balance(db, &ent.code, period)?);
+        let mut s = summarize(
+            &ent.code,
+            &ent.name,
+            lines,
+            opening_balance(db, &ent.code, period)?,
+        );
         s.parent_code = ent.parent_code.clone().unwrap_or_default();
         s.disabled = ent.disabled;
         // 「有没有人在追着要钱」不能只看凭证行：期初挂账也是钱。
@@ -275,10 +280,18 @@ pub fn detail(db: &Db, code: &str, period: Period) -> DbResult<Option<CustomerDe
         })
         .collect();
 
-    let mut s = summarize(&ent.code, &ent.name, &lines, opening_balance(db, code, period)?);
+    let mut s = summarize(
+        &ent.code,
+        &ent.name,
+        &lines,
+        opening_balance(db, code, period)?,
+    );
     s.parent_code = ent.parent_code.clone().unwrap_or_default();
     s.disabled = ent.disabled;
-    Ok(Some(CustomerDetail { summary: s, lines: out_lines }))
+    Ok(Some(CustomerDetail {
+        summary: s,
+        lines: out_lines,
+    }))
 }
 
 // ---------------- 账龄（复用 settle::aging，桶与算法都不在这里重算） ----------------
@@ -344,7 +357,6 @@ pub fn aging_of(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,7 +403,10 @@ mod tests {
         v.push_entry(Entry {
             debit: if debit { a } else { Money::ZERO },
             credit: if debit { Money::ZERO } else { a },
-            aux: AuxRef { customer: Some(cust.into()), ..Default::default() },
+            aux: AuxRef {
+                customer: Some(cust.into()),
+                ..Default::default()
+            },
             ..Entry::new(1, acct, "往来")
         });
         v.push_entry(Entry {
@@ -412,7 +427,10 @@ mod tests {
         v.push_entry(Entry {
             debit: a,
             credit: Money::ZERO,
-            aux: AuxRef { customer: Some(cust.into()), ..Default::default() },
+            aux: AuxRef {
+                customer: Some(cust.into()),
+                ..Default::default()
+            },
             ..Entry::new(1, "112201", "往来")
         });
         v.push_entry(Entry {
@@ -440,11 +458,7 @@ mod tests {
         ar_posted(&db, "2026-01-10", "C01", "500", false);
 
         let s = summary_of(&db, "C01", per).unwrap();
-        assert_eq!(
-            s.balance,
-            m("-500"),
-            "预收 500 → 应收为**负数**，不是 0"
-        );
+        assert_eq!(s.balance, m("-500"), "预收 500 → 应收为**负数**，不是 0");
     }
 
     /// ② 未记账不计入（H-3）。
@@ -517,7 +531,11 @@ mod tests {
         ar_posted(&db, "2026-01-06", "C02", "250", true);
 
         assert_eq!(summary_of(&db, "C01", per).unwrap().balance, m("1000"));
-        assert_eq!(summary_of(&db, "C02", per).unwrap().balance, m("250"), "乙不能带上甲的");
+        assert_eq!(
+            summary_of(&db, "C02", per).unwrap().balance,
+            m("250"),
+            "乙不能带上甲的"
+        );
 
         let all = list(&db, per, "", false).unwrap();
         assert_eq!(all.len(), 2);
@@ -578,7 +596,10 @@ mod tests {
         v.push_entry(Entry {
             debit: m("100"),
             credit: Money::ZERO,
-            aux: AuxRef { customer: Some("C01".into()), ..Default::default() },
+            aux: AuxRef {
+                customer: Some("C01".into()),
+                ..Default::default()
+            },
             ..Entry::new(1, AR_ACCOUNT, "往来")
         });
         v.push_entry(Entry {
@@ -653,7 +674,9 @@ mod tests {
     fn detail_missing_customer_is_none() {
         let db = mem();
         assert!(
-            detail(&db, "NOPE", Period::new(2026, 1).unwrap()).unwrap().is_none(),
+            detail(&db, "NOPE", Period::new(2026, 1).unwrap())
+                .unwrap()
+                .is_none(),
             "不存在的客户应返回 None，界面才能提示「未建档」而不是显示一片空白"
         );
     }
@@ -692,7 +715,10 @@ mod tests {
         assert_eq!(mine.max_days, row.max_days);
         assert_eq!(
             mine.buckets,
-            day_buckets().iter().map(|b| b.label.to_string()).collect::<Vec<_>>(),
+            day_buckets()
+                .iter()
+                .map(|b| b.label.to_string())
+                .collect::<Vec<_>>(),
             "桶标签必须原样透传（桶定义只有一处）"
         );
         // 两笔落在不同的桶里，否则「逐档相同」是个退化断言（全在一档也能通过）
@@ -765,5 +791,4 @@ mod tests {
             a
         );
     }
-
 }

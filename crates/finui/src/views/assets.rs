@@ -168,7 +168,9 @@ impl AssetsView {
             let booked = findb::assets::dep_of(ctx.db(), a.id, p).unwrap_or(None);
             let accum = match booked {
                 Some(r) => r.accum,
-                None => findb::assets::accum_before(ctx.db(), a.id, p).unwrap_or(Money::ZERO) + amount,
+                None => {
+                    findb::assets::accum_before(ctx.db(), a.id, p).unwrap_or(Money::ZERO) + amount
+                }
             };
             if amount.is_zero() && !a.should_depreciate(p) {
                 continue;
@@ -210,7 +212,10 @@ impl AssetsView {
             }
             ui.separator();
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -278,16 +283,33 @@ impl AssetsView {
         let mut del: Option<i64> = None;
         widgets::grid(ui, "asset_cards", &cols, rows.len(), 24.0, |i, c, ui| {
             let a = &rows[i];
-            let (accum, net, months) = acc.get(&a.id).copied().unwrap_or((Money::ZERO, a.original_value, 0));
+            let (accum, net, months) =
+                acc.get(&a.id)
+                    .copied()
+                    .unwrap_or((Money::ZERO, a.original_value, 0));
             match c {
-                0 => { ui.label(RichText::new(&a.code).monospace()); }
-                1 => { ui.label(&a.name); }
-                2 => { ui.label(&a.category); }
-                3 => { ui.label(&a.dept); }
+                0 => {
+                    ui.label(RichText::new(&a.code).monospace());
+                }
+                1 => {
+                    ui.label(&a.name);
+                }
+                2 => {
+                    ui.label(&a.category);
+                }
+                3 => {
+                    ui.label(&a.dept);
+                }
                 4 => widgets::amount_label(ui, a.original_value),
-                5 => { ui.label(format!("{}%", (a.residual_rate * 100).round2().fmt_money())); }
-                6 => { ui.label(a.life_months.to_string()); }
-                7 => { ui.label(months.to_string()); }
+                5 => {
+                    ui.label(format!("{}%", (a.residual_rate * 100).round2().fmt_money()));
+                }
+                6 => {
+                    ui.label(a.life_months.to_string());
+                }
+                7 => {
+                    ui.label(months.to_string());
+                }
                 8 => widgets::amount_label(ui, monthly.get(&a.id).copied().unwrap_or(Money::ZERO)),
                 9 => widgets::amount_label(ui, accum),
                 10 => widgets::amount_label(ui, net),
@@ -360,8 +382,12 @@ impl AssetsView {
         widgets::grid(ui, "asset_plan", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.0).monospace()); }
-                1 => { ui.label(&r.1); }
+                0 => {
+                    ui.label(RichText::new(&r.0).monospace());
+                }
+                1 => {
+                    ui.label(&r.1);
+                }
                 2 => widgets::amount_label(ui, r.2),
                 3 => widgets::amount_label(ui, r.3),
                 4 => widgets::amount_label(ui, r.4),
@@ -371,9 +397,7 @@ impl AssetsView {
 
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("本期折旧合计：{}", total.fmt_money())).strong(),
-            );
+            ui.label(RichText::new(format!("本期折旧合计：{}", total.fmt_money())).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("生成本期折旧凭证").clicked() && ctx.can(Perm::VoucherNew) {
                     self.do_accrue(ctx, p);
@@ -456,8 +480,12 @@ impl AssetsView {
             let r = &rows[i];
             let name = names.get(&r.asset_id);
             match c {
-                0 => { ui.label(RichText::new(name.map(|n| n.0.as_str()).unwrap_or("")).monospace()); }
-                1 => { ui.label(name.map(|n| n.1.as_str()).unwrap_or("（卡片已删除）")); }
+                0 => {
+                    ui.label(RichText::new(name.map(|n| n.0.as_str()).unwrap_or("")).monospace());
+                }
+                1 => {
+                    ui.label(name.map(|n| n.1.as_str()).unwrap_or("（卡片已删除）"));
+                }
                 2 => widgets::amount_label(ui, r.amount),
                 3 => widgets::amount_label(ui, r.accum),
                 4 => widgets::amount_label(ui, r.net_value),
@@ -477,16 +505,12 @@ impl AssetsView {
 
         let total: Money = rows.iter().map(|r| r.amount).sum();
         ui.separator();
-        ui.label(
-            RichText::new(format!("本期折旧合计：{}", total.fmt_money())).strong(),
-        );
+        ui.label(RichText::new(format!("本期折旧合计：{}", total.fmt_money())).strong());
     }
 
     // ------------------------- 资产台账 -------------------------
     fn show_ledger(&mut self, ui: &mut Ui, p: Period) {
-        ui.label(
-            RichText::new(format!("{} 资产台账（累计折旧优先取落库值）", p.label())).weak(),
-        );
+        ui.label(RichText::new(format!("{} 资产台账（累计折旧优先取落库值）", p.label())).weak());
         ui.add_space(4.0);
 
         if self.ledger.is_empty() {
@@ -518,12 +542,18 @@ impl AssetsView {
         widgets::grid(ui, "asset_ledger", &cols, rows.len(), 24.0, |i, c, ui| {
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.0).monospace()); }
-                1 => { ui.label(&r.1); }
+                0 => {
+                    ui.label(RichText::new(&r.0).monospace());
+                }
+                1 => {
+                    ui.label(&r.1);
+                }
                 2 => widgets::amount_label(ui, r.2),
                 3 => widgets::amount_label(ui, r.3),
                 4 => widgets::amount_label(ui, r.4),
-                5 => { ui.label(r.5.to_string()); }
+                5 => {
+                    ui.label(r.5.to_string());
+                }
                 _ => {}
             }
         });
@@ -591,107 +621,132 @@ impl AssetsView {
         let mut close = false;
         let is_new = self.editing_new;
 
-        egui::Window::new(if is_new { "新增资产卡片" } else { "修改资产卡片" })
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                if !self.err.is_empty() {
-                    ui.colored_label(palette::CREDIT, &self.err);
-                }
+        egui::Window::new(if is_new {
+            "新增资产卡片"
+        } else {
+            "修改资产卡片"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ui.ctx(), |ui| {
+            if !self.err.is_empty() {
+                ui.colored_label(palette::CREDIT, &self.err);
+            }
+            let e = self.editing.as_mut().unwrap();
+            egui::Grid::new("asset_edit")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("资产编码：");
+                    widgets::text_input(ui, &mut e.code, 220.0, "GD0001");
+                    ui.end_row();
+                    ui.label("资产名称：");
+                    widgets::text_input(ui, &mut e.name, 220.0, "如：联想台式机");
+                    ui.end_row();
+                    ui.label("类别：");
+                    widgets::text_input(ui, &mut e.category, 220.0, "如：电子设备");
+                    ui.end_row();
+                    ui.label("规格型号：");
+                    widgets::text_input(ui, &mut e.spec, 220.0, "");
+                    ui.end_row();
+                    ui.label("使用部门：");
+                    widgets::text_input(ui, &mut e.dept, 220.0, "部门编码（部门核算科目用）");
+                    ui.end_row();
+                });
+
+            ui.add_space(4.0);
+            ui.label(RichText::new("科目设置").strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
                 let e = self.editing.as_mut().unwrap();
-                egui::Grid::new("asset_edit")
-                    .num_columns(2)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("资产编码：");
-                        widgets::text_input(ui, &mut e.code, 220.0, "GD0001");
-                        ui.end_row();
-                        ui.label("资产名称：");
-                        widgets::text_input(ui, &mut e.name, 220.0, "如：联想台式机");
-                        ui.end_row();
-                        ui.label("类别：");
-                        widgets::text_input(ui, &mut e.category, 220.0, "如：电子设备");
-                        ui.end_row();
-                        ui.label("规格型号：");
-                        widgets::text_input(ui, &mut e.spec, 220.0, "");
-                        ui.end_row();
-                        ui.label("使用部门：");
-                        widgets::text_input(ui, &mut e.dept, 220.0, "部门编码（部门核算科目用）");
-                        ui.end_row();
-                    });
+                ui.label("资产科目");
+                widgets::account_combo(
+                    ui,
+                    "as_asset_acct",
+                    &mut e.asset_account,
+                    ctx.chart(),
+                    true,
+                    230.0,
+                );
+                ui.label("折旧科目");
+                widgets::account_combo(
+                    ui,
+                    "as_dep_acct",
+                    &mut e.dep_account,
+                    ctx.chart(),
+                    true,
+                    230.0,
+                );
+                ui.label("费用科目");
+                widgets::account_combo(
+                    ui,
+                    "as_exp_acct",
+                    &mut e.expense_account,
+                    ctx.chart(),
+                    true,
+                    230.0,
+                );
+            });
 
-                ui.add_space(4.0);
-                ui.label(RichText::new("科目设置").strong());
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let e = self.editing.as_mut().unwrap();
-                    ui.label("资产科目");
-                    widgets::account_combo(ui, "as_asset_acct", &mut e.asset_account, ctx.chart(), true, 230.0);
-                    ui.label("折旧科目");
-                    widgets::account_combo(ui, "as_dep_acct", &mut e.dep_account, ctx.chart(), true, 230.0);
-                    ui.label("费用科目");
-                    widgets::account_combo(ui, "as_exp_acct", &mut e.expense_account, ctx.chart(), true, 230.0);
-                });
-
-                ui.add_space(4.0);
-                ui.label(RichText::new("折旧参数").strong());
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label("原值");
-                    widgets::money_input(ui, &mut self.f_original, 130.0);
-                    ui.label("残值率(%)");
-                    widgets::money_input(ui, &mut self.f_residual, 80.0);
-                    ui.label("使用年限(月)");
-                    widgets::text_input(ui, &mut self.f_life, 80.0, "60");
-                    ui.label("开始期间");
-                    widgets::text_input(ui, &mut self.f_start, 100.0, "202601");
-                });
-                ui.horizontal(|ui| {
-                    ui.label("折旧方法");
-                    let e = self.editing.as_mut().unwrap();
-                    let mut m = e.method;
-                    egui::ComboBox::from_id_salt("as_method")
-                        .selected_text(m.label())
-                        .width(160.0)
-                        .show_ui(ui, |ui| {
-                            for d in DepMethod::ALL {
-                                ui.selectable_value(&mut m, *d, d.label());
-                            }
-                        });
-                    e.method = m;
-                    ui.add_space(10.0);
-                    let mut s = e.status;
-                    ui.label("状态");
-                    egui::ComboBox::from_id_salt("as_status")
-                        .selected_text(s.label())
-                        .width(100.0)
-                        .show_ui(ui, |ui| {
-                            for st in AssetStatus::ALL {
-                                ui.selectable_value(&mut s, *st, st.label());
-                            }
-                        });
-                    e.status = s;
-                });
-                ui.horizontal(|ui| {
-                    ui.label("备注");
-                    let e = self.editing.as_mut().unwrap();
-                    widgets::text_input(ui, &mut e.memo, 420.0, "");
-                });
-
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("取消").clicked() {
-                            close = true;
-                        }
-                        if ui.button("保存").clicked() {
-                            save = true;
+            ui.add_space(4.0);
+            ui.label(RichText::new("折旧参数").strong());
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label("原值");
+                widgets::money_input(ui, &mut self.f_original, 130.0);
+                ui.label("残值率(%)");
+                widgets::money_input(ui, &mut self.f_residual, 80.0);
+                ui.label("使用年限(月)");
+                widgets::text_input(ui, &mut self.f_life, 80.0, "60");
+                ui.label("开始期间");
+                widgets::text_input(ui, &mut self.f_start, 100.0, "202601");
+            });
+            ui.horizontal(|ui| {
+                ui.label("折旧方法");
+                let e = self.editing.as_mut().unwrap();
+                let mut m = e.method;
+                egui::ComboBox::from_id_salt("as_method")
+                    .selected_text(m.label())
+                    .width(160.0)
+                    .show_ui(ui, |ui| {
+                        for d in DepMethod::ALL {
+                            ui.selectable_value(&mut m, *d, d.label());
                         }
                     });
+                e.method = m;
+                ui.add_space(10.0);
+                let mut s = e.status;
+                ui.label("状态");
+                egui::ComboBox::from_id_salt("as_status")
+                    .selected_text(s.label())
+                    .width(100.0)
+                    .show_ui(ui, |ui| {
+                        for st in AssetStatus::ALL {
+                            ui.selectable_value(&mut s, *st, st.label());
+                        }
+                    });
+                e.status = s;
+            });
+            ui.horizontal(|ui| {
+                ui.label("备注");
+                let e = self.editing.as_mut().unwrap();
+                widgets::text_input(ui, &mut e.memo, 420.0, "");
+            });
+
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                    if ui.button("保存").clicked() {
+                        save = true;
+                    }
                 });
             });
+        });
 
         if close || !open {
             self.editing = None;
@@ -762,10 +817,18 @@ impl AssetsView {
             Ok(()) => {
                 ctx.log(
                     "固定资产",
-                    if is_new { "新增卡片" } else { "修改卡片" },
+                    if is_new {
+                        "新增卡片"
+                    } else {
+                        "修改卡片"
+                    },
                     &format!("{} {}", e.code, e.name),
                 );
-                ctx.info(if is_new { "已新增资产卡片" } else { "已保存资产卡片" });
+                ctx.info(if is_new {
+                    "已新增资产卡片"
+                } else {
+                    "已保存资产卡片"
+                });
                 self.editing = None;
                 self.err.clear();
                 self.dirty = true;
@@ -774,5 +837,3 @@ impl AssetsView {
         }
     }
 }
-
-

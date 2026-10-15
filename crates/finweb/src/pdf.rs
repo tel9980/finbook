@@ -37,10 +37,7 @@ fn load_cjk_font() -> Option<(String, Vec<u8>)> {
                 "文泉驿微米黑",
                 "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
             ),
-            (
-                "文泉驿正黑",
-                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-            ),
+            ("文泉驿正黑", "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"),
         ]
     };
     for (name, path) in candidates {
@@ -87,12 +84,28 @@ pub fn trial_balance_pdf(
     ];
 
     // 画一页表头，返回正文起始 y
-    let header = |doc: &PdfDocumentReference, page: PdfPageIndex, layer: PdfLayerIndex, first: bool| -> f32 {
+    let header = |doc: &PdfDocumentReference,
+                  page: PdfPageIndex,
+                  layer: PdfLayerIndex,
+                  first: bool|
+     -> f32 {
         let l = doc.get_page(page).get_layer(layer);
         let mut y = 14.0_f32;
         if first {
-            l.use_text(format!("{company} 科目余额表"), 16.0, Mm(12.0), Mm(16.0), &font);
-            l.use_text(format!("期间：{from} 至 {to}"), 9.0, Mm(12.0), Mm(24.0), &font);
+            l.use_text(
+                format!("{company} 科目余额表"),
+                16.0,
+                Mm(12.0),
+                Mm(16.0),
+                &font,
+            );
+            l.use_text(
+                format!("期间：{from} 至 {to}"),
+                9.0,
+                Mm(12.0),
+                Mm(24.0),
+                &font,
+            );
             y = 32.0;
         }
         for (x, h) in col_x.iter().zip(heads.iter()) {
@@ -119,11 +132,23 @@ pub fn trial_balance_pdf(
         l.use_text(r.account_code.clone(), 7.5, Mm(col_x[0]), Mm(y), &font);
         l.use_text(r.account_name.clone(), 7.5, Mm(col_x[1]), Mm(y), &font);
         let (bdir, bamt) = r.begin_dir_amount();
-        l.use_text(format!("{} {}", bdir.label(), bamt.fmt_money()), 7.5, Mm(col_x[2]), Mm(y), &font);
+        l.use_text(
+            format!("{} {}", bdir.label(), bamt.fmt_money()),
+            7.5,
+            Mm(col_x[2]),
+            Mm(y),
+            &font,
+        );
         l.use_text(r.debit.fmt_money(), 7.5, Mm(col_x[3]), Mm(y), &font);
         l.use_text(r.credit.fmt_money(), 7.5, Mm(col_x[4]), Mm(y), &font);
         let (edir, eamt) = r.end_dir_amount();
-        l.use_text(format!("{} {}", edir.label(), eamt.fmt_money()), 7.5, Mm(col_x[5]), Mm(y), &font);
+        l.use_text(
+            format!("{} {}", edir.label(), eamt.fmt_money()),
+            7.5,
+            Mm(col_x[5]),
+            Mm(y),
+            &font,
+        );
         l.use_text(r.ytd_debit.fmt_money(), 7.5, Mm(col_x[6]), Mm(y), &font);
         l.use_text(r.ytd_credit.fmt_money(), 7.5, Mm(col_x[7]), Mm(y), &font);
         y += 6.0;
@@ -134,16 +159,36 @@ pub fn trial_balance_pdf(
     let l = doc.get_page(page).get_layer(layer);
     l.use_text("合计", 8.5, Mm(col_x[1]), Mm(y), &font);
     l.use_text(
-        format!("借 {} / 贷 {}", totals.begin_debit.fmt_money(), totals.begin_credit.fmt_money()),
+        format!(
+            "借 {} / 贷 {}",
+            totals.begin_debit.fmt_money(),
+            totals.begin_credit.fmt_money()
+        ),
         7.5,
         Mm(col_x[2]),
         Mm(y),
         &font,
     );
-    l.use_text(totals.period_debit.fmt_money(), 7.5, Mm(col_x[3]), Mm(y), &font);
-    l.use_text(totals.period_credit.fmt_money(), 7.5, Mm(col_x[4]), Mm(y), &font);
     l.use_text(
-        format!("借 {} / 贷 {}", totals.end_debit.fmt_money(), totals.end_credit.fmt_money()),
+        totals.period_debit.fmt_money(),
+        7.5,
+        Mm(col_x[3]),
+        Mm(y),
+        &font,
+    );
+    l.use_text(
+        totals.period_credit.fmt_money(),
+        7.5,
+        Mm(col_x[4]),
+        Mm(y),
+        &font,
+    );
+    l.use_text(
+        format!(
+            "借 {} / 贷 {}",
+            totals.end_debit.fmt_money(),
+            totals.end_credit.fmt_money()
+        ),
         7.5,
         Mm(col_x[5]),
         Mm(y),
@@ -163,7 +208,8 @@ pub fn trial_balance_pdf(
     }
 
     let mut buf = BufWriter::new(Vec::new());
-    doc.save(&mut buf).map_err(|e| format!("PDF 生成失败：{e}"))?;
+    doc.save(&mut buf)
+        .map_err(|e| format!("PDF 生成失败：{e}"))?;
     let bytes = buf.into_inner().map_err(|e| format!("PDF 缓冲失败：{e}"))?;
     Ok(bytes)
 }

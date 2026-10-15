@@ -68,11 +68,9 @@ const R_COLS: &str =
     "id,no,period,date,kind,fund_account,party,amount,memo,voucher_id,created_by,created_at,status";
 
 pub fn receipt_list(db: &Db) -> DbResult<Vec<ReceiptDoc>> {
-    let mut st = db
-        .conn()
-        .prepare(&format!(
-            "SELECT {R_COLS} FROM receipt_doc ORDER BY date DESC, id DESC"
-        ))?;
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {R_COLS} FROM receipt_doc ORDER BY date DESC, id DESC"
+    ))?;
     let rows = st.query_map([], map_doc)?.collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -102,9 +100,7 @@ pub fn receipt_create(
     who: &str,
 ) -> DbResult<i64> {
     if kind != "receipt" && kind != "payment" {
-        return Err(
-            fincore::FinError::state("类型只能是收款(receipt)/付款(payment)").into(),
-        );
+        return Err(fincore::FinError::state("类型只能是收款(receipt)/付款(payment)").into());
     }
     if !amount.is_positive() {
         return Err(fincore::FinError::validate("金额必须大于 0").into());
@@ -160,8 +156,7 @@ pub fn receipt_create(
 ///
 /// 返回 `(凭证 id, 自动核销笔数)`。
 pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
-    let d = receipt_get(db, id)?
-        .ok_or_else(|| fincore::FinError::not_found("收付款单"))?;
+    let d = receipt_get(db, id)?.ok_or_else(|| fincore::FinError::not_found("收付款单"))?;
     if d.status != "draft" {
         return Err(fincore::FinError::state("仅待审核的单据可审核").into());
     }
@@ -214,7 +209,13 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
     // 收款全额退回预收、往来一直不核销（金额不会错，但核销与账龄静默失效）。
     open.retain(|e| AuxRef::key_contains(&e.aux_key, &aux_key));
     let want_debit_side = receipt; // 收款冲借方挂账；付款冲贷方挂账
-    open.retain(|e| if want_debit_side { e.debit > Money::ZERO } else { e.credit > Money::ZERO });
+    open.retain(|e| {
+        if want_debit_side {
+            e.debit > Money::ZERO
+        } else {
+            e.credit > Money::ZERO
+        }
+    });
 
     // FIFO 分摊：按日期顺序逐笔吃掉挂账，分组到各往来叶子科目。
     // 分组键必须是「科目 + 挂账分录的完整辅助核算」：多维往来科目（客户+部门等）
@@ -315,9 +316,8 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
     // 分摊结果逐笔核销（同事务；settle_in_tx 复校验未核销额，超出即整单回滚）
     let mut settled_n = 0usize;
     if !allocs.is_empty() {
-        let mut st = tx.prepare(
-            "SELECT id, account_code FROM voucher_entry WHERE voucher_id=?1",
-        )?;
+        let mut st =
+            tx.prepare("SELECT id, account_code FROM voucher_entry WHERE voucher_id=?1")?;
         let entries: Vec<(i64, String)> = st
             .query_map([vid], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -339,9 +339,7 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
         rusqlite::params![id, vid],
     )?;
     if n == 0 {
-        return Err(
-            fincore::FinError::state("单据状态已变化，请刷新后重试").into(),
-        );
+        return Err(fincore::FinError::state("单据状态已变化，请刷新后重试").into());
     }
     tx.commit()?;
     Ok((vid, settled_n))
@@ -350,8 +348,7 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
 /// 撤销审核：删除其**未记账**凭证（顺带清理核销配对）→ 单据回到草稿（可改可删）。
 /// 凭证已记账时拒绝（先反记账再撤审）。
 pub fn receipt_unaudit(db: &Db, id: i64) -> DbResult<()> {
-    let d = receipt_get(db, id)?
-        .ok_or_else(|| fincore::FinError::not_found("收付款单"))?;
+    let d = receipt_get(db, id)?.ok_or_else(|| fincore::FinError::not_found("收付款单"))?;
     if d.status != "audited" {
         return Err(fincore::FinError::state("仅已审核的单据可撤销审核").into());
     }
@@ -361,9 +358,7 @@ pub fn receipt_unaudit(db: &Db, id: i64) -> DbResult<()> {
     let v = crate::vouchers::get(db, vid)?
         .ok_or_else(|| fincore::FinError::not_found("关联凭证已不存在，请刷新"))?;
     if v.status == fincore::VoucherStatus::Posted {
-        return Err(
-            fincore::FinError::state("凭证已记账，请先反记账后再撤销审核").into(),
-        );
+        return Err(fincore::FinError::state("凭证已记账，请先反记账后再撤销审核").into());
     }
     let tx = db.write_tx()?;
     let n = tx.execute(
@@ -371,9 +366,7 @@ pub fn receipt_unaudit(db: &Db, id: i64) -> DbResult<()> {
         rusqlite::params![id],
     )?;
     if n == 0 {
-        return Err(
-            fincore::FinError::state("单据状态已变化，请刷新后重试").into(),
-        );
+        return Err(fincore::FinError::state("单据状态已变化，请刷新后重试").into());
     }
     // 同连接事务内删除凭证：含核销配对清理（vouchers::delete 内置），失败整体回滚
     crate::vouchers::delete(db, vid)?;
@@ -383,8 +376,7 @@ pub fn receipt_unaudit(db: &Db, id: i64) -> DbResult<()> {
 
 /// 删除收付款单：其凭证须先作废或删除（凭证删除会顺带清理核销配对），随后可删
 pub fn receipt_delete(db: &Db, id: i64) -> DbResult<()> {
-    let d = receipt_get(db, id)?
-        .ok_or_else(|| fincore::FinError::not_found("收付款单"))?;
+    let d = receipt_get(db, id)?.ok_or_else(|| fincore::FinError::not_found("收付款单"))?;
     if let Some(vid) = d.voucher_id {
         let status = crate::vouchers::get(db, vid)?
             .map(|v| v.status)
@@ -475,7 +467,12 @@ mod tests {
 
         // 挂账 1000：分录带 customer=C01 + dept=D01
         let date = d(2026, 1, 5);
-        let mut v = Voucher::new(p, date, "记", crate::vouchers::next_no(&db, p, "记").unwrap());
+        let mut v = Voucher::new(
+            p,
+            date,
+            "记",
+            crate::vouchers::next_no(&db, p, "记").unwrap(),
+        );
         v.push_entry(Entry {
             debit: m("1000"),
             aux: AuxRef {
@@ -493,8 +490,17 @@ mod tests {
         crate::vouchers::post(&db, id, "u").unwrap();
 
         // 收款单只填客户 C01（不填部门）
-        let doc_id = receipt_create(&db, "receipt", d(2026, 1, 10), "100201", "C01", m("600"), "", "u")
-            .unwrap();
+        let doc_id = receipt_create(
+            &db,
+            "receipt",
+            d(2026, 1, 10),
+            "100201",
+            "C01",
+            m("600"),
+            "",
+            "u",
+        )
+        .unwrap();
         receipt_audit(&db, doc_id, "u").unwrap();
 
         let settled = crate::settle::list(&db, "112299").unwrap();
@@ -540,10 +546,7 @@ mod tests {
         // 审核：借 100201 / 贷 112201，FIFO 核销 600，单据置已审核
         let (vid, n) = receipt_audit(&db, doc_id, "u").unwrap();
         assert_eq!(n, 1, "应自动核销一笔");
-        assert_eq!(
-            receipt_get(&db, doc_id).unwrap().unwrap().status,
-            "audited"
-        );
+        assert_eq!(receipt_get(&db, doc_id).unwrap().unwrap().status, "audited");
         // 重复审核拒绝（条件更新防并发）
         assert!(receipt_audit(&db, doc_id, "u").is_err(), "重复审核应拒绝");
         let v = crate::vouchers::get(&db, vid).unwrap().unwrap();
@@ -583,8 +586,17 @@ mod tests {
         assert_eq!(ap_sum, m("100"), "应付剩余 100");
 
         // 无挂账（纯预收）：不核销、全额落账套默认应收
-        let d3 = receipt_create(&db, "receipt", d(2026, 1, 15), "1001", "C77", m("88"), "", "u")
-            .unwrap();
+        let d3 = receipt_create(
+            &db,
+            "receipt",
+            d(2026, 1, 15),
+            "1001",
+            "C77",
+            m("88"),
+            "",
+            "u",
+        )
+        .unwrap();
         let (v3, n3) = receipt_audit(&db, d3, "u").unwrap();
         assert_eq!(n3, 0, "无挂账不核销");
         let v3 = crate::vouchers::get(&db, v3).unwrap().unwrap();
@@ -604,8 +616,20 @@ mod tests {
         );
 
         // 守卫：空往来单位 / 零金额（建单即拦）
-        assert!(receipt_create(&db, "receipt", d(2026, 1, 16), "1001", "", m("1"), "", "u").is_err());
-        assert!(receipt_create(&db, "receipt", d(2026, 1, 16), "1001", "C01", Money::ZERO, "", "u").is_err());
+        assert!(
+            receipt_create(&db, "receipt", d(2026, 1, 16), "1001", "", m("1"), "", "u").is_err()
+        );
+        assert!(receipt_create(
+            &db,
+            "receipt",
+            d(2026, 1, 16),
+            "1001",
+            "C01",
+            Money::ZERO,
+            "",
+            "u"
+        )
+        .is_err());
 
         // 删除链：已审核有凭证 → 拒；删凭证（清理核销）→ 挂账恢复、单据可删
         assert!(receipt_delete(&db, doc_id).is_err(), "凭证存在时不能删单");

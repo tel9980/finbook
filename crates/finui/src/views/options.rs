@@ -135,23 +135,39 @@ impl OptionsView {
         ui.label(RichText::new("业务凭证默认科目").strong());
         ui.horizontal_wrapped(|ui| {
             ui.label("应收");
-            ui.add_sized([86.0, 22.0], egui::TextEdit::singleline(&mut o.biz_accounts.ar));
+            ui.add_sized(
+                [86.0, 22.0],
+                egui::TextEdit::singleline(&mut o.biz_accounts.ar),
+            );
             ui.label("应付");
-            ui.add_sized([86.0, 22.0], egui::TextEdit::singleline(&mut o.biz_accounts.ap));
+            ui.add_sized(
+                [86.0, 22.0],
+                egui::TextEdit::singleline(&mut o.biz_accounts.ap),
+            );
             ui.label("收入");
-            ui.add_sized([86.0, 22.0], egui::TextEdit::singleline(&mut o.biz_accounts.income));
+            ui.add_sized(
+                [86.0, 22.0],
+                egui::TextEdit::singleline(&mut o.biz_accounts.income),
+            );
             ui.label("销项税");
-            ui.add_sized([86.0, 22.0], egui::TextEdit::singleline(&mut o.biz_accounts.tax_sales));
+            ui.add_sized(
+                [86.0, 22.0],
+                egui::TextEdit::singleline(&mut o.biz_accounts.tax_sales),
+            );
             ui.label("暂估材料");
             ui.add_sized(
                 [86.0, 22.0],
                 egui::TextEdit::singleline(&mut o.biz_accounts.material),
             );
             ui.label("资金");
-            ui.add_sized([86.0, 22.0], egui::TextEdit::singleline(&mut o.biz_accounts.fund));
+            ui.add_sized(
+                [86.0, 22.0],
+                egui::TextEdit::singleline(&mut o.biz_accounts.fund),
+            );
         });
         ui.label(
-            RichText::new("须为末级科目；收付款单 / 发货收入 / 暂估等自动生成凭证的默认取此").weak(),
+            RichText::new("须为末级科目；收付款单 / 发货收入 / 暂估等自动生成凭证的默认取此")
+                .weak(),
         );
 
         ui.add_space(14.0);
@@ -185,8 +201,10 @@ impl OptionsView {
                 }
             }
             ui.label(
-                RichText::new("旧账套一键补入新版默认科目表中缺少的科目（当前内置 199 个），不影响已有科目。")
-                    .weak(),
+                RichText::new(
+                    "旧账套一键补入新版默认科目表中缺少的科目（当前内置 199 个），不影响已有科目。",
+                )
+                .weak(),
             );
         });
     }

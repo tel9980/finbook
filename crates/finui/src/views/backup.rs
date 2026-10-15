@@ -29,10 +29,7 @@ impl Default for BackupView {
 impl BackupView {
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         widgets::page_header(ui, "备份与恢复", |ui| {
-            ui.label(
-                RichText::new("一个账套就是一个文件，备份即复制，恢复即覆盖")
-                    .weak(),
-            );
+            ui.label(RichText::new("一个账套就是一个文件，备份即复制，恢复即覆盖").weak());
         });
 
         // 备份/恢复是数据外带通道，仅系统管理员可用。
@@ -57,7 +54,8 @@ impl BackupView {
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.button("自动备份（保留 N 份）").clicked() && ctx.can(fincore::Perm::Backup) {
+                if ui.button("自动备份（保留 N 份）").clicked() && ctx.can(fincore::Perm::Backup)
+                {
                     self.auto_backup(ctx);
                 }
                 ui.label("保留份数");
@@ -65,7 +63,9 @@ impl BackupView {
                 if r.changed() {
                     // 就地生效，无需额外确认
                 }
-                ui.label(RichText::new("自动备份写入账套同目录 auto_*.fbk，超出份数自动删除最旧").weak());
+                ui.label(
+                    RichText::new("自动备份写入账套同目录 auto_*.fbk，超出份数自动删除最旧").weak(),
+                );
             });
         });
 
@@ -152,7 +152,7 @@ impl BackupView {
         let name = self.default_name(ctx);
         if let Some(p) = rfd::FileDialog::new()
             .add_filter("FinBook 账套", &[BOOK_EXT])
-            .set_file_name(&format!("{name}.{BOOK_EXT}"))
+            .set_file_name(format!("{name}.{BOOK_EXT}"))
             .save_file()
         {
             self.run_backup(ctx, p);

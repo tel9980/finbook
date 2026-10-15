@@ -22,8 +22,12 @@ impl AboutView {
             ui.label(RichText::new("FinBook 财务管理系统").size(26.0).strong());
             ui.label(RichText::new("账套 → 凭证 → 账簿 → 报表，一条链路").weak());
             ui.label(
-                RichText::new(format!("版本 {}（内核 {}）", env!("CARGO_PKG_VERSION"), fincore::CORE_VERSION))
-                    .weak(),
+                RichText::new(format!(
+                    "版本 {}（内核 {}）",
+                    env!("CARGO_PKG_VERSION"),
+                    fincore::CORE_VERSION
+                ))
+                .weak(),
             );
         });
         ui.add_space(20.0);
@@ -67,13 +71,25 @@ impl AboutView {
                             ui.label(&font);
                         }
                     });
-                    widgets::kv(ui, "账套文件", &ctx.st.book_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "—".to_string()));
+                    widgets::kv(
+                        ui,
+                        "账套文件",
+                        &ctx.st
+                            .book_path
+                            .as_ref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "—".to_string()),
+                    );
                     let o = ctx.db().options();
                     widgets::kv(ui, "企业名称", &o.company);
                     widgets::kv(ui, "启用期间", &o.start_period.label());
                     widgets::kv(ui, "本位币", &o.base_currency);
                     if let Some(u) = ctx.st.user.as_ref() {
-                        widgets::kv(ui, "当前用户", &format!("{}（{}）", u.display_name, u.role_labels()));
+                        widgets::kv(
+                            ui,
+                            "当前用户",
+                            &format!("{}（{}）", u.display_name, u.role_labels()),
+                        );
                     }
                 });
         });

@@ -7,7 +7,6 @@
 
 use std::path::{Path, PathBuf};
 
-
 use fincore::FinError;
 use rusqlite::OptionalExtension;
 
@@ -21,10 +20,8 @@ pub const MAX_FILE_SIZE: usize = 10 * 1024 * 1024;
 
 /// 允许的文件扩展名白名单
 pub const ALLOWED_EXTENSIONS: &[&str] = &[
-    "pdf", "jpg", "jpeg", "png", "gif", "bmp", "tiff",
-    "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-    "txt", "csv", "zip", "rar", "7z",
-    "xml", "json", "html", "htm",
+    "pdf", "jpg", "jpeg", "png", "gif", "bmp", "tiff", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+    "txt", "csv", "zip", "rar", "7z", "xml", "json", "html", "htm",
 ];
 
 /// 附件目录名（位于账套文件同级）
@@ -86,13 +83,12 @@ fn map(r: &rusqlite::Row) -> rusqlite::Result<Attachment> {
     })
 }
 
-const COLS: &str =
-    "id,voucher_id,name,kind,size,sha256,inline,data,path,added_by,added_at";
+const COLS: &str = "id,voucher_id,name,kind,size,sha256,inline,data,path,added_by,added_at";
 
 pub fn list(db: &Db, voucher_id: i64) -> DbResult<Vec<Attachment>> {
-    let mut st = db
-        .conn()
-        .prepare(&format!("SELECT {COLS} FROM attachment WHERE voucher_id=?1 ORDER BY id"))?;
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {COLS} FROM attachment WHERE voucher_id=?1 ORDER BY id"
+    ))?;
     let rows = st
         .query_map(rusqlite::params![voucher_id], map)?
         .collect::<Result<Vec<_>, _>>()?;
@@ -176,7 +172,8 @@ pub fn add(db: &Db, voucher_id: i64, name: &str, data: &[u8], who: &str) -> DbRe
         return Err(FinError::msg(format!(
             "附件「{name}」超过大小限制（最大 {}MB）",
             MAX_FILE_SIZE / 1024 / 1024
-        )).into());
+        ))
+        .into());
     }
     // 扩展名校验：白名单防止执行恶意文件上传
     let kind = Path::new(name)
@@ -187,7 +184,8 @@ pub fn add(db: &Db, voucher_id: i64, name: &str, data: &[u8], who: &str) -> DbRe
         return Err(FinError::msg(format!(
             "不允许的附件类型「.{kind}」，仅支持：{}",
             ALLOWED_EXTENSIONS.join(", ")
-        )).into());
+        ))
+        .into());
     }
     let sha = sha256(data);
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -256,7 +254,10 @@ pub fn delete_for_voucher(db: &Db, voucher_id: i64) -> DbResult<usize> {
         let _ = delete(db, a.id);
     }
     db.conn()
-        .execute("DELETE FROM attachment WHERE voucher_id=?1", rusqlite::params![voucher_id])
+        .execute(
+            "DELETE FROM attachment WHERE voucher_id=?1",
+            rusqlite::params![voucher_id],
+        )
         .map_err(Into::into)
 }
 
@@ -319,7 +320,7 @@ fn sha256(data: &[u8]) -> String {
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
         for i in 0..16 {
             w[i] = u32::from_be_bytes([
@@ -392,7 +393,13 @@ pub fn temp_export_path(name: &str) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("attachment")
         .chars()
-        .map(|c| if c == '/' || c == '\\' || c == ':' { '_' } else { c })
+        .map(|c| {
+            if c == '/' || c == '\\' || c == ':' {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     p.push(format!("{stamp}_{safe}"));
     p

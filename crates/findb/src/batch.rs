@@ -98,13 +98,11 @@ fn next_batch_no(db: &Db, date: NaiveDate) -> DbResult<String> {
 
 /// 批次余额（库存流水按 item+batch 汇总）
 pub fn batch_balance(db: &Db, item: &str, batch_no: &str) -> DbResult<Money> {
-    let mut st = db.conn().prepare(
-        "SELECT qty FROM stock_move WHERE item=?1 AND batch_no=?2",
-    )?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT qty FROM stock_move WHERE item=?1 AND batch_no=?2")?;
     let rows = st
-        .query_map(rusqlite::params![item, batch_no], |r| {
-            r.get::<_, String>(0)
-        })?
+        .query_map(rusqlite::params![item, batch_no], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows.iter().map(|s| Money::parse_or_zero(s)).sum())
 }
@@ -162,11 +160,17 @@ pub fn batch_register(
         .unwrap_or_else(|_| period.first_day());
     let days = shelf_life_days(db, item);
     let expiry = if days > 0 {
-        (pdate + chrono::Duration::days(days)).format("%Y-%m-%d").to_string()
+        (pdate + chrono::Duration::days(days))
+            .format("%Y-%m-%d")
+            .to_string()
     } else {
         String::new()
     };
-    let signed = if direction == "in" { qty } else { qty.negated() };
+    let signed = if direction == "in" {
+        qty
+    } else {
+        qty.negated()
+    };
     let kind = if direction == "in" {
         crate::business::StockKind::OtherIn
     } else {
@@ -207,7 +211,15 @@ pub fn batch_register(
             amount: Money::ZERO,
             voucher_id: None,
             memo: if memo.is_empty() {
-                format!("批次{} {}", if direction == "in" { "入库" } else { "出库" }, no)
+                format!(
+                    "批次{} {}",
+                    if direction == "in" {
+                        "入库"
+                    } else {
+                        "出库"
+                    },
+                    no
+                )
             } else {
                 memo.to_string()
             },
@@ -226,8 +238,9 @@ pub fn batch_register(
 /// 批次列表（含余额；item 可选过滤）
 pub fn batch_list(db: &Db, item: &str) -> DbResult<Vec<StockBatch>> {
     let mut st = if item.trim().is_empty() {
-        db.conn()
-            .prepare(&format!("SELECT {B_COLS} FROM stock_batch ORDER BY item, batch_no"))?
+        db.conn().prepare(&format!(
+            "SELECT {B_COLS} FROM stock_batch ORDER BY item, batch_no"
+        ))?
     } else {
         db.conn().prepare(&format!(
             "SELECT {B_COLS} FROM stock_batch WHERE item=?1 ORDER BY batch_no"
@@ -248,16 +261,12 @@ pub fn batch_list(db: &Db, item: &str) -> DbResult<Vec<StockBatch>> {
 
 /// FEFO 推荐：失效日期近者先出（无效期排最后），同效期按生产日期早者先；
 /// 返回被推荐的 (批号, 失效日期, 建议分配数量)，数量不足部分余额留在返回值之后。
-pub fn fefo_recommend(
-    db: &Db,
-    item: &str,
-    qty: Money,
-) -> DbResult<Vec<(String, String, Money)>> {
+pub fn fefo_recommend(db: &Db, item: &str, qty: Money) -> DbResult<Vec<(String, String, Money)>> {
     let mut batches = batch_list(db, item)?;
     batches.retain(|b| b.balance.is_positive());
     // FEFO：有失效期的在前；组内失效期/生产日期早者在前；无失效期按生产日期早者在前
-    batches.sort_by(|a, b| {
-        match (a.expiry_date.is_empty(), b.expiry_date.is_empty()) {
+    batches.sort_by(
+        |a, b| match (a.expiry_date.is_empty(), b.expiry_date.is_empty()) {
             (false, true) => std::cmp::Ordering::Less,
             (true, false) => std::cmp::Ordering::Greater,
             (false, false) => a
@@ -265,8 +274,8 @@ pub fn fefo_recommend(
                 .cmp(&b.expiry_date)
                 .then_with(|| a.production_date.cmp(&b.production_date)),
             (true, true) => a.production_date.cmp(&b.production_date),
-        }
-    });
+        },
+    );
     let mut rest = qty;
     let mut out = Vec::new();
     for b in batches {
@@ -284,7 +293,9 @@ pub fn fefo_recommend(
 pub fn expiring_batches(db: &Db, days: i64) -> DbResult<Vec<StockBatch>> {
     let days = if days > 0 { days } else { 30 };
     let today = chrono::Local::now().date_naive();
-    let limit = (today + chrono::Duration::days(days)).format("%Y-%m-%d").to_string();
+    let limit = (today + chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string();
     let mut st = db.conn().prepare(&format!(
         "SELECT {B_COLS} FROM stock_batch WHERE expiry_date <> '' AND expiry_date <= ?1
          ORDER BY expiry_date, item"
@@ -324,32 +335,24 @@ pub fn location_list(db: &Db) -> DbResult<Vec<StockLocation>> {
 }
 
 /// 新增/更新库位（按 code upsert）
-pub fn location_save(
-    db: &Db,
-    code: &str,
-    name: &str,
-    kind: &str,
-    memo: &str,
-) -> DbResult<i64> {
+pub fn location_save(db: &Db, code: &str, name: &str, kind: &str, memo: &str) -> DbResult<i64> {
     let code = code.trim();
     if code.is_empty() {
         return Err(fincore::FinError::validate("库位编码必填").into());
     }
     if !matches!(kind, "storage" | "pick" | "quarantine") {
-        return Err(
-            fincore::FinError::validate("库位类型只能是 storage/pick/quarantine").into(),
-        );
+        return Err(fincore::FinError::validate("库位类型只能是 storage/pick/quarantine").into());
     }
     db.conn().execute(
         "INSERT INTO stock_location(code,name,kind,memo) VALUES(?1,?2,?3,?4)
          ON CONFLICT(code) DO UPDATE SET name=excluded.name, kind=excluded.kind, memo=excluded.memo",
         rusqlite::params![code, name.trim(), kind, memo],
     )?;
-    Ok(db.conn().query_row(
-        "SELECT id FROM stock_location WHERE code=?1",
-        [code],
-        |r| r.get(0),
-    )?)
+    Ok(db
+        .conn()
+        .query_row("SELECT id FROM stock_location WHERE code=?1", [code], |r| {
+            r.get(0)
+        })?)
 }
 
 pub fn location_delete(db: &Db, id: i64) -> DbResult<()> {
@@ -382,7 +385,17 @@ mod tests {
 
         // 手工建档：RM02 无档案 → shelf_life=0 → 无失效日期
         let (_id, no1, bal) = batch_register(
-            &db, p, "RM02", "", "2026-01-10", "", "", m("50"), "in", "", "u",
+            &db,
+            p,
+            "RM02",
+            "",
+            "2026-01-10",
+            "",
+            "",
+            m("50"),
+            "in",
+            "",
+            "u",
         )
         .unwrap();
         assert!(no1.starts_with("BT26"), "自动批号 BT+日期+序号：{no1}");
@@ -390,13 +403,33 @@ mod tests {
 
         // 再入一个指定批号、带生产日期但无保质期
         let (_id2, no2, _b) = batch_register(
-            &db, p, "RM02", "B-2026-001", "2026-01-05", "WH1", "L01", m("30"), "in", "早批", "u",
+            &db,
+            p,
+            "RM02",
+            "B-2026-001",
+            "2026-01-05",
+            "WH1",
+            "L01",
+            m("30"),
+            "in",
+            "早批",
+            "u",
         )
         .unwrap();
         assert_eq!(no2, "B-2026-001");
         // 出库20 → 余额10
         let (_id3, _no3, bal3) = batch_register(
-            &db, p, "RM02", "B-2026-001", "", "", "", m("20"), "out", "", "u",
+            &db,
+            p,
+            "RM02",
+            "B-2026-001",
+            "",
+            "",
+            "",
+            m("20"),
+            "out",
+            "",
+            "u",
         )
         .unwrap();
         assert_eq!(bal3, m("10"), "出库后余额10");
@@ -408,7 +441,10 @@ mod tests {
         assert_eq!(b1.balance, m("50"));
 
         // 临期：无保质期批次不出现；配置了保质期的才进
-        assert!(expiring_batches(&db, 999).unwrap().is_empty(), "无失效日期不进临期");
+        assert!(
+            expiring_batches(&db, 999).unwrap().is_empty(),
+            "无失效日期不进临期"
+        );
 
         // FEFO：无失效日期按生产日期排序（01-05 早于01-10 → B-2026-001 先出）
         let rec = fefo_recommend(&db, "RM02", m("60")).unwrap();
@@ -433,11 +469,24 @@ mod tests {
             )
             .unwrap();
         let (_id4, no4, _b4) = batch_register(
-            &db, p, "RM03", "", "2026-01-10", "", "", m("10"), "in", "", "u",
+            &db,
+            p,
+            "RM03",
+            "",
+            "2026-01-10",
+            "",
+            "",
+            m("10"),
+            "in",
+            "",
+            "u",
         )
         .unwrap();
         let exp = expiring_batches(&db, 999).unwrap();
-        assert!(exp.iter().any(|b| b.batch_no == no4), "配置保质期的批次应进临期列表");
+        assert!(
+            exp.iter().any(|b| b.batch_no == no4),
+            "配置保质期的批次应进临期列表"
+        );
         let expiry = exp.iter().find(|b| b.batch_no == no4).unwrap();
         assert_eq!(expiry.expiry_date, "2026-01-20", "失效 = 生产日期+10天");
 
@@ -450,7 +499,10 @@ mod tests {
         // 重复 code = 更新
         location_save(&db, "L01", "A区货位2", "pick", "").unwrap();
         assert_eq!(location_list(&db).unwrap()[0].name, "A区货位2");
-        assert!(location_save(&db, "", "x", "storage", "").is_err(), "空编码拒绝");
+        assert!(
+            location_save(&db, "", "x", "storage", "").is_err(),
+            "空编码拒绝"
+        );
         assert!(
             location_save(&db, "L02", "x", "bad", "").is_err(),
             "非法类型拒绝"
@@ -471,9 +523,20 @@ mod tests {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
 
-        let (_id, _no, _bal) =
-            batch_register(&db, p, "RM02", "B-P", "2026-01-10", "", "", m("7"), "in", "", "u")
-                .unwrap();
+        let (_id, _no, _bal) = batch_register(
+            &db,
+            p,
+            "RM02",
+            "B-P",
+            "2026-01-10",
+            "",
+            "",
+            m("7"),
+            "in",
+            "",
+            "u",
+        )
+        .unwrap();
 
         // 直接查流水：period 与 biz_date 都必须是 202601
         let (per, biz): (i32, String) = db
@@ -497,8 +560,7 @@ mod tests {
         // 生产日期缺省时取**期间首日**，不是今天 —— 否则会出现
         // 「期间 202601 / 日期 2026-10-01」这种自相矛盾的记录。
         let (_id2, _no2, _b2) =
-            batch_register(&db, p, "RM02", "B-Q", "", "", "", m("3"), "in", "", "u")
-                .unwrap();
+            batch_register(&db, p, "RM02", "B-Q", "", "", "", m("3"), "in", "", "u").unwrap();
         let biz2: String = db
             .conn()
             .query_row(
@@ -522,7 +584,17 @@ mod tests {
         // 早于建账期（mem() 的建账期见测试工厂）
         let before = Period::new(2000, 1).unwrap();
         let e = batch_register(
-            &db, before, "RM02", "B-X", "", "", "", m("1"), "in", "", "u",
+            &db,
+            before,
+            "RM02",
+            "B-X",
+            "",
+            "",
+            "",
+            m("1"),
+            "in",
+            "",
+            "u",
         )
         .unwrap_err()
         .to_string();
@@ -542,15 +614,10 @@ mod tests {
                 rusqlite::params![p.ymm()],
             )
             .unwrap();
-        let e2 = batch_register(
-            &db, p, "RM02", "B-Y", "", "", "", m("1"), "in", "", "u",
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(
-            e2.contains("已结账"),
-            "已结账期间应被拒，实际：{e2}"
-        );
+        let e2 = batch_register(&db, p, "RM02", "B-Y", "", "", "", m("1"), "in", "", "u")
+            .unwrap_err()
+            .to_string();
+        assert!(e2.contains("已结账"), "已结账期间应被拒，实际：{e2}");
 
         // 对照组：确认上面的拒绝是守卫干的，不是别的原因（比如期初校验）
         let open = Period::new(2026, 2).unwrap();

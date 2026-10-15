@@ -207,7 +207,12 @@ impl MigrationStatus {
     /// 未开始时（启动到后台任务拉起之间）视为「迁移已开始但未完成」，
     /// 这样 readiness 在这个窗口内是 503，而不是假装就绪。
     fn pending(total: usize) -> Self {
-        Self { running: true, total, ok: 0, failed: Vec::new() }
+        Self {
+            running: true,
+            total,
+            ok: 0,
+            failed: Vec::new(),
+        }
     }
 
     pub fn done(&self) -> bool {
@@ -244,7 +249,10 @@ impl BookRegistry {
 
     /// 注销账套（删除账套时调用）：避免后续请求把已删除文件重新打开成空库
     pub fn unregister(&self, key: &str) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).retain(|(k, _)| k != key);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(k, _)| k != key);
         // 账套文件可能已被恢复成另一份（或已删除）：清掉初始化标记，
         // 下次打开重新走 schema 完整检查，而不是沿用旧文件的结论。
         lock(&self.migrated).remove(key);
@@ -328,7 +336,12 @@ impl BookRegistry {
             let mut st = lock(&self.migration);
             *st = MigrationStatus::pending(books.len());
         }
-        let mut st = MigrationStatus { running: true, total: books.len(), ok: 0, failed: Vec::new() };
+        let mut st = MigrationStatus {
+            running: true,
+            total: books.len(),
+            ok: 0,
+            failed: Vec::new(),
+        };
         for (key, _path) in &books {
             // 走 open 而不是直接 Db::open：已迁移过的账套会命中 migrated 标记跳过，
             // 避免重复的全表存在性检查。
@@ -340,6 +353,12 @@ impl BookRegistry {
         st.running = false;
         *lock(&self.migration) = st.clone();
         st
+    }
+}
+
+impl Default for BookRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -433,7 +452,16 @@ impl LoginLimiter {
 
     /// 登录成功后清零该账号的失败记录
     pub fn clear(&self, key: &str) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(key);
+    }
+}
+
+impl Default for LoginLimiter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -529,30 +557,52 @@ impl SessionStore {
     }
 
     pub fn touch(&self, token: &str) {
-        if let Some(i) = self.inner.lock().unwrap_or_else(|e| e.into_inner()).get_mut(token) {
+        if let Some(i) = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(token)
+        {
             i.last_active = now_secs();
         }
     }
 
     pub fn period(&self, token: &str) -> Option<i32> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).get(token).map(|i| i.period_ymm)
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(token)
+            .map(|i| i.period_ymm)
     }
 
     pub fn set_period(&self, token: &str, ymm: i32) {
-        if let Some(i) = self.inner.lock().unwrap_or_else(|e| e.into_inner()).get_mut(token) {
+        if let Some(i) = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(token)
+        {
             i.period_ymm = ymm;
         }
     }
 
     /// 切换当前账套（登录后选账套时调用）
     pub fn set_book_key(&self, token: &str, key: &str) {
-        if let Some(i) = self.inner.lock().unwrap_or_else(|e| e.into_inner()).get_mut(token) {
+        if let Some(i) = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(token)
+        {
             i.book_key = key.to_string();
         }
     }
 
     pub fn remove(&self, token: &str) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).remove(token);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(token);
     }
 
     /// 账套被删除后，把仍停留在该账套的会话退回"未选账套"状态，
@@ -569,7 +619,10 @@ impl SessionStore {
     /// 清掉某个用户的全部会话（重置设备绑定 / 删除 / 停用账号时调用），
     /// 否则旧设备上的会话还能继续用到自然过期，设备绑定会被绕过。
     pub fn remove_by_username(&self, username: &str) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, i| i.username != username);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|_, i| i.username != username);
     }
 
     /// 只清掉「某账号在**某台设备**上」的会话。
@@ -585,9 +638,10 @@ impl SessionStore {
     /// · 改密 → 别人的设备（remove_others）
     /// · 重置设备 / 停用 / 删号 → 全部（remove_by_username）
     pub fn remove_by_username_and_device(&self, username: &str, device_id: &str) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, i| {
-            !(i.username == username && i.device_id == device_id)
-        });
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|_, i| !(i.username == username && i.device_id == device_id));
     }
 
     /// 吊销某个用户名下除当前会话外的全部会话（改密后调用：当前设备是本人，
@@ -597,6 +651,12 @@ impl SessionStore {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .retain(|t, i| i.username != username || t == keep_token);
+    }
+}
+
+impl Default for SessionStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -659,7 +719,11 @@ impl FromRequestParts<Arc<WebState>> for RealmUser {
         // 判定读 `realm_user_device` 表，不读 `realm_user.device_id` 那一列 —— 那是
         // 「第一台」的快照（只为了账号列表显示同步），用它判就退回了一台机，而且这两处
         // 各写一份必然分叉。名单为空 = 还没绑过，放行（登录时会去登记）。
-        if !ru.is_admin && !state.realm.device_allowed(&info.username, &info.device_id)? {
+        if !ru.is_admin
+            && !state
+                .realm
+                .device_allowed(&info.username, &info.device_id)?
+        {
             state.sessions.remove(&token);
             return Err(AppError::unauthorized(
                 "该账号已在其他设备登录，本设备会话已被下线",
@@ -669,11 +733,12 @@ impl FromRequestParts<Arc<WebState>> for RealmUser {
         // （不删除会话——否则改密请求自身也会被挡在门外，用户被迫重新登录）
         if ru.must_change_pwd {
             let path = parts.uri.path();
-            let is_allowed = path == "/api/change-password"
-                || path == "/api/logout"
-                || path == "/api/login";
+            let is_allowed =
+                path == "/api/change-password" || path == "/api/logout" || path == "/api/login";
             if !is_allowed {
-                return Err(AppError::unauthorized("你的口令已过期或需首次设置，请先修改口令"));
+                return Err(AppError::unauthorized(
+                    "你的口令已过期或需首次设置，请先修改口令",
+                ));
             }
         }
         state.sessions.touch(&token);
@@ -789,7 +854,11 @@ impl FromRequestParts<Arc<WebState>> for CurrentUser {
         // 判定读 `realm_user_device` 表，不读 `realm_user.device_id` 那一列 —— 那是
         // 「第一台」的快照（只为了账号列表显示同步），用它判就退回了一台机，而且这两处
         // 各写一份必然分叉。名单为空 = 还没绑过，放行（登录时会去登记）。
-        if !ru.is_admin && !state.realm.device_allowed(&info.username, &info.device_id)? {
+        if !ru.is_admin
+            && !state
+                .realm
+                .device_allowed(&info.username, &info.device_id)?
+        {
             state.sessions.remove(&token);
             return Err(AppError::unauthorized(
                 "该账号已在其他设备登录，本设备会话已被下线",
@@ -798,11 +867,12 @@ impl FromRequestParts<Arc<WebState>> for CurrentUser {
         // 强制改密拦截（不删除会话，仅拒绝非改密/退出请求）
         if user.must_change_pwd {
             let path = parts.uri.path();
-            let is_allowed = path == "/api/change-password"
-                || path == "/api/logout"
-                || path == "/api/login";
+            let is_allowed =
+                path == "/api/change-password" || path == "/api/logout" || path == "/api/login";
             if !is_allowed {
-                return Err(AppError::unauthorized("你的口令已过期或需首次设置，请先修改口令"));
+                return Err(AppError::unauthorized(
+                    "你的口令已过期或需首次设置，请先修改口令",
+                ));
             }
         }
         let company = db.options().company;
@@ -830,7 +900,10 @@ pub enum AppError {
     /// 内部错误（阻塞任务失败等）：详情只进服务端日志，不返给客户端
     Internal(String),
     /// 请求过于频繁（如登录限流），附剩余等待秒数
-    RateLimited { msg: String, retry_secs: u64 },
+    RateLimited {
+        msg: String,
+        retry_secs: u64,
+    },
 }
 
 impl From<DbError> for AppError {
@@ -888,24 +961,34 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
-            AppError::Unauthorized(m) => {
-                (StatusCode::UNAUTHORIZED, axum::Json(serde_json::json!({ "error": m }))).into_response()
-            }
-            AppError::Forbidden(m) => {
-                (StatusCode::FORBIDDEN, axum::Json(serde_json::json!({ "error": m }))).into_response()
-            }
-            AppError::BadRequest(m) => {
-                (StatusCode::BAD_REQUEST, axum::Json(serde_json::json!({ "error": m }))).into_response()
-            }
-            AppError::NotFound(m) => {
-                (StatusCode::NOT_FOUND, axum::Json(serde_json::json!({ "error": m }))).into_response()
-            }
+            AppError::Unauthorized(m) => (
+                StatusCode::UNAUTHORIZED,
+                axum::Json(serde_json::json!({ "error": m })),
+            )
+                .into_response(),
+            AppError::Forbidden(m) => (
+                StatusCode::FORBIDDEN,
+                axum::Json(serde_json::json!({ "error": m })),
+            )
+                .into_response(),
+            AppError::BadRequest(m) => (
+                StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({ "error": m })),
+            )
+                .into_response(),
+            AppError::NotFound(m) => (
+                StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({ "error": m })),
+            )
+                .into_response(),
             AppError::Db(e) => {
                 // 内部错误详情只记服务端日志，不返给客户端（防表名/路径/SQL 泄露）。
                 error!(error = %e, "数据库错误");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(serde_json::json!({ "error": "数据库错误，请稍后重试或联系管理员" })),
+                    axum::Json(
+                        serde_json::json!({ "error": "数据库错误，请稍后重试或联系管理员" }),
+                    ),
                 )
                     .into_response()
             }
@@ -1039,9 +1122,8 @@ pub fn period_range_param(
 /// 解析用户提交的金额：非法输入返回 400，不再静默归零（错值=0 会把
 /// 工资、收付款、库存调整等写错且无任何提示）。支持千分位/全角等惯例写法。
 pub fn parse_money_checked(s: &str) -> Result<fincore::Money, AppError> {
-    fincore::Money::parse(s).map_err(|_| {
-        AppError::bad_request(format!("金额格式不正确：{}", s.trim()))
-    })
+    fincore::Money::parse(s)
+        .map_err(|_| AppError::bad_request(format!("金额格式不正确：{}", s.trim())))
 }
 
 #[cfg(test)]
@@ -1080,23 +1162,22 @@ mod tests {
 
         // 下面这些以前全都静默回退成 dflt，现在必须 400
         for bad in [
-            "2026-01-01",      // 日期格式：用户最容易敲的
-            "2026/01",         // 斜杠
-            "2026.01",         // 点号
-            "202613",          // 月份 13
-            "202600",          // 月份 00
-            "20261",           // 位数不对
-            "2026",            // 只有年
-            "garbage",         // 乱填
-            "-2026-01",        // 负号
-            "2026-13",         // 月份 13（月份式）
-            "2601",            // 两位年
+            "2026-01-01",       // 日期格式：用户最容易敲的
+            "2026/01",          // 斜杠
+            "2026.01",          // 点号
+            "202613",           // 月份 13
+            "202600",           // 月份 00
+            "20261",            // 位数不对
+            "2026",             // 只有年
+            "garbage",          // 乱填
+            "-2026-01",         // 负号
+            "2026-13",          // 月份 13（月份式）
+            "2601",             // 两位年
             "2026-01-01T00:00", // ISO 时间戳
-            "<script>",        // 顺带确认不会当 HTML/注入面
+            "<script>",         // 顺带确认不会当 HTML/注入面
         ] {
-            match got(Some(bad)) {
-                Ok(p) => panic!("{bad:?} 解析不了，必须报错，却回退成了 {p:?}"),
-                Err(_) => {}
+            if let Ok(p) = got(Some(bad)) {
+                panic!("{bad:?} 解析不了，必须报错，却回退成了 {p:?}")
             }
         }
     }
@@ -1117,10 +1198,16 @@ mod tests {
         };
 
         // 缺省 → 用默认区间
-        assert_eq!(period_range_param(&q(&[]), d1, d12).unwrap_or((d1, d12)), (d1, d12));
+        assert_eq!(
+            period_range_param(&q(&[]), d1, d12).unwrap_or((d1, d12)),
+            (d1, d12)
+        );
         // 只给 from → to 落到默认
         let got = period_range_param(&q(&[("from", "2026-05")]), d1, d12);
-        assert_eq!(got.unwrap_or((d1, d12)), (fincore::Period::new(2026, 5).unwrap(), d12));
+        assert_eq!(
+            got.unwrap_or((d1, d12)),
+            (fincore::Period::new(2026, 5).unwrap(), d12)
+        );
         // 单月（from == to）与跨年都要过
         assert!(period_range_param(&q(&[("from", "2026-03"), ("to", "2026-03")]), d1, d12).is_ok());
         assert!(period_range_param(&q(&[("from", "2025-11"), ("to", "2026-02")]), d1, d12).is_ok());
@@ -1135,7 +1222,9 @@ mod tests {
         // 两端任一非法 → 400
         assert!(period_range_param(&q(&[("from", "garbage")]), d1, d12).is_err());
         assert!(period_range_param(&q(&[("to", "2026-01-01")]), d1, d12).is_err());
-        assert!(period_range_param(&q(&[("from", "2026-01"), ("to", "2026-01-01")]), d1, d12).is_err());
+        assert!(
+            period_range_param(&q(&[("from", "2026-01"), ("to", "2026-01-01")]), d1, d12).is_err()
+        );
     }
 
     /// 探测式登录（用户名乱填、永远认证失败）不该在限流表里留下条目：
@@ -1147,7 +1236,10 @@ mod tests {
             let name = format!("ghost{i}");
             assert!(l.check(&name).is_ok());
         }
-        assert!(l.inner.lock().unwrap_or_else(|e| e.into_inner()).is_empty(), "check 不该建条目");
+        assert!(
+            l.inner.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+            "check 不该建条目"
+        );
     }
 
     #[test]

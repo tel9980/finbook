@@ -40,7 +40,9 @@ pub fn list(db: &Db) -> DbResult<Vec<User>> {
     let mut stmt = db
         .conn()
         .prepare(&format!("SELECT {COLS} FROM user ORDER BY username"))?;
-    let rows = stmt.query_map([], map_user)?.collect::<Result<Vec<_>, _>>()?;
+    let rows = stmt
+        .query_map([], map_user)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -138,7 +140,11 @@ pub fn delete(db: &Db, id: i64) -> DbResult<()> {
     // 先取用户名留审计：删用户不写日志的话，人员变动就无迹可查
     let name: Option<String> = db
         .conn()
-        .query_row("SELECT username FROM user WHERE id=?1", rusqlite::params![id], |r| r.get(0))
+        .query_row(
+            "SELECT username FROM user WHERE id=?1",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
         .optional()?;
     db.conn()
         .execute("DELETE FROM user WHERE id=?1", rusqlite::params![id])?;
@@ -188,14 +194,18 @@ pub fn reset_device(db: &Db, username: &str) -> DbResult<()> {
 }
 
 pub fn count(db: &Db) -> DbResult<i64> {
-    Ok(db.conn().query_row("SELECT COUNT(*) FROM user", [], |r| r.get(0))?)
+    Ok(db
+        .conn()
+        .query_row("SELECT COUNT(*) FROM user", [], |r| r.get(0))?)
 }
 
 /// 是否已有管理员账号（用于 Web「首次登录即管理员」的状态判断）
 pub fn admin_exists(db: &Db) -> DbResult<bool> {
     let n: i64 = db
         .conn()
-        .query_row("SELECT COUNT(*) FROM user WHERE role='admin'", [], |r| r.get(0))?;
+        .query_row("SELECT COUNT(*) FROM user WHERE role='admin'", [], |r| {
+            r.get(0)
+        })?;
     Ok(n > 0)
 }
 
@@ -214,12 +224,7 @@ pub fn first_admin_username(db: &Db) -> DbResult<Option<String>> {
 /// 创建首个管理员账号（Web「首次登录即管理员」流程调用）。
 ///
 /// 仅在账套尚无任何用户时由上层调用；这里不重复校验唯一性。
-pub fn create_admin(
-    db: &Db,
-    username: &str,
-    password: &str,
-    display_name: &str,
-) -> DbResult<User> {
+pub fn create_admin(db: &Db, username: &str, password: &str, display_name: &str) -> DbResult<User> {
     let mut u = User::new(username, display_name, Role::Admin);
     u.set_password(password);
     u.must_change_pwd = false; // 刚由用户自己设定口令，无需强制改密
@@ -256,7 +261,12 @@ pub fn authenticate(db: &Db, username: &str, password: &str) -> DbResult<Option<
 }
 
 /// 修改口令（需校验旧口令）
-pub fn change_password(db: &Db, username: &str, old: &str, new: &str) -> DbResult<Result<(), String>> {
+pub fn change_password(
+    db: &Db,
+    username: &str,
+    old: &str,
+    new: &str,
+) -> DbResult<Result<(), String>> {
     let mut u = match get(db, username)? {
         Some(u) => u,
         None => return Ok(Err("用户不存在".to_string())),
@@ -366,8 +376,10 @@ mod tests {
     fn duty_separation_blocks_cashier_holding_() {
         // 纯出纳：合法
         let ok = User::new("cash", "出纳", Role::Cashier);
-        assert!(User::validate_duty_separation(&ok).is_ok(),
-            "纯出纳不应被拦：{:?}",User::validate_duty_separation(&ok)
+        assert!(
+            User::validate_duty_separation(&ok).is_ok(),
+            "纯出纳不应被拦：{:?}",
+            User::validate_duty_separation(&ok)
         );
 
         // 出纳 + 结账：会计核心权限，不合法
@@ -383,7 +395,8 @@ mod tests {
         ] {
             let mut u = User::new("cash", "出纳", Role::Cashier);
             u.extra_perms = vec![p];
-            assert!(User::validate_duty_separation(&u).is_err(),
+            assert!(
+                User::validate_duty_separation(&u).is_err(),
                 "出纳额外获得「{}」应被职责互斥拦下",
                 p.label()
             );
@@ -392,7 +405,8 @@ mod tests {
         // 兼任两个岗位（会计 + 出纳）同样不行
         let mut both = User::new("both", "会计兼出纳", Role::Accountant);
         both.roles = vec![Role::Cashier];
-        assert!(User::validate_duty_separation(&both).is_err(),
+        assert!(
+            User::validate_duty_separation(&both).is_err(),
             "会计兼出纳（两个岗位并存）应被拦"
         );
 

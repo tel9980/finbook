@@ -98,7 +98,10 @@ impl ApiCaller {
     /// `async fn from_request_parts(&mut Parts, &S)` 的精确签名，一旦签名细节对不上
     /// 就是 E0195「lifetimes do not match」这种难懂的编译错。handler 本来就要拿
     /// `State<Arc<WebState>>`，多一个 HeaderMap 提取器没有任何额外成本。
-    pub fn from_headers(state: &WebState, headers: &axum::http::HeaderMap) -> Result<Self, AppError> {
+    pub fn from_headers(
+        state: &WebState,
+        headers: &axum::http::HeaderMap,
+    ) -> Result<Self, AppError> {
         let secret = bearer(headers)
             .ok_or_else(|| AppError::unauthorized("缺少 Authorization: Bearer <密钥>"))?;
         let auth = state
@@ -194,7 +197,9 @@ pub async fn create_api_key(
     }
     let name = inp.name.trim();
     if name.is_empty() {
-        return Err(AppError::bad_request("请填密钥名称（便于日后辨认是哪套系统在用）"));
+        return Err(AppError::bad_request(
+            "请填密钥名称（便于日后辨认是哪套系统在用）",
+        ));
     }
     if name.len() > 64 {
         return Err(AppError::bad_request("密钥名称过长（上限 64 字符）"));
@@ -244,7 +249,9 @@ pub async fn toggle_api_key(
         return Err(AppError::forbidden("仅平台管理员可管理开放 API 密钥"));
     }
     state.realm.api_key_set_disabled(id, inp.disabled)?;
-    Ok(Json(json!({ "ok": true, "id": id, "disabled": inp.disabled })))
+    Ok(Json(
+        json!({ "ok": true, "id": id, "disabled": inp.disabled }),
+    ))
 }
 
 pub async fn delete_api_key(
@@ -280,9 +287,9 @@ fn page_of(q: &HashMap<String, String>) -> Result<(i64, i64), AppError> {
     let num = |k: &str, def: i64| -> Result<i64, AppError> {
         match q.get(k).map(|s| s.trim()).filter(|s| !s.is_empty()) {
             None => Ok(def),
-            Some(t) => t.parse::<i64>().map_err(|_| {
-                AppError::bad_request(format!("参数 {k} 必须是整数，收到：{t}"))
-            }),
+            Some(t) => t
+                .parse::<i64>()
+                .map_err(|_| AppError::bad_request(format!("参数 {k} 必须是整数，收到：{t}"))),
         }
     };
     Ok((num("page", 1)?.max(1), num("page_size", 50)?.clamp(1, 500)))
@@ -406,7 +413,10 @@ async fn v1_vouchers(
     let offset = (page - 1) * size;
 
     let mut vq = findb::vouchers::VoucherQuery {
-        asc: q.get("asc").map(|s| s != "0" && s != "false").unwrap_or(false),
+        asc: q
+            .get("asc")
+            .map(|s| s != "0" && s != "false")
+            .unwrap_or(false),
         // 走 SQL 侧的 LIMIT/OFFSET + COUNT(*)，不在内存里裁。
         // 原来这里是「取到 offset+size+1 条再 skip(offset)」（注释说引擎层没有
         // offset，改签名要动几十个调用点）。现在引擎层新增了 `list_page`，
@@ -418,7 +428,10 @@ async fn v1_vouchers(
     };
     vq.from = parse_period_opt(q.get("from"))?;
     vq.to = parse_period_opt(q.get("to"))?;
-    vq.keyword = q.get("keyword").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    vq.keyword = q
+        .get("keyword")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     vq.account_code = q
         .get("account_code")
         .map(|s| s.trim().to_string())
@@ -474,8 +487,7 @@ async fn v1_trial_balance(
     let db = c.db(&state)?;
     let start = db.options().start_period;
     let from = parse_period_opt(q.get("from"))?.unwrap_or(start);
-    let to = parse_period_opt(q.get("to"))?
-        .unwrap_or(findb::periods::current_period(&db)?);
+    let to = parse_period_opt(q.get("to"))?.unwrap_or(findb::periods::current_period(&db)?);
     let bq = findb::balances::BalanceQuery::range(from, to);
     let snap = findb::balances::BalanceSnapshot::load(&db, &bq)?;
     let chart = findb::accounts::chart(&db)?;
@@ -511,8 +523,7 @@ async fn v1_ledger(
         .ok_or_else(|| AppError::bad_request("缺少参数 code（科目编码）"))?;
     let start = db.options().start_period;
     let from = parse_period_opt(q.get("from"))?.unwrap_or(start);
-    let to = parse_period_opt(q.get("to"))?
-        .unwrap_or(findb::periods::current_period(&db)?);
+    let to = parse_period_opt(q.get("to"))?.unwrap_or(findb::periods::current_period(&db)?);
     let chart = findb::accounts::chart(&db)?;
     let lq = findb::balances::LedgerQuery {
         code,

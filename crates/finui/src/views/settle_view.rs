@@ -162,16 +162,14 @@ impl SettleView {
 
         self.buckets = self.scheme.buckets();
         // include_all 与"只显示未核销完"正好相反
-        self.entries =
-            findb::settle::open_entries(ctx.db(), &self.account, upto, !self.only_open)
-                .unwrap_or_default();
+        self.entries = findb::settle::open_entries(ctx.db(), &self.account, upto, !self.only_open)
+            .unwrap_or_default();
         self.records = findb::settle::list(ctx.db(), &self.account).unwrap_or_default();
 
         if self.tab == SettleTab::Aging {
             let as_of = self.as_of_date(upto);
-            self.lines =
-                findb::settle::aging(ctx.db(), &self.account, upto, as_of, &self.buckets)
-                    .unwrap_or_default();
+            self.lines = findb::settle::aging(ctx.db(), &self.account, upto, as_of, &self.buckets)
+                .unwrap_or_default();
         }
     }
 
@@ -186,9 +184,7 @@ impl SettleView {
             .unwrap_or_default();
 
         widgets::page_header(ui, "往来核销", |ui| {
-            ui.label(
-                RichText::new(format!("{acct} {acct_name} · 截至 {}", upto.label())).weak(),
-            );
+            ui.label(RichText::new(format!("{acct} {acct_name} · 截至 {}", upto.label())).weak());
         });
 
         widgets::toolbar(ui, |ui| {
@@ -198,7 +194,14 @@ impl SettleView {
             ui.separator();
             ui.label("科目");
             let before = self.account.clone();
-            widgets::account_combo(ui, "settle_account", &mut self.account, ctx.chart(), false, 240.0);
+            widgets::account_combo(
+                ui,
+                "settle_account",
+                &mut self.account,
+                ctx.chart(),
+                false,
+                240.0,
+            );
             if self.account != before {
                 self.clear_sel();
                 self.dirty = true;
@@ -212,7 +215,10 @@ impl SettleView {
             }
             ui.separator();
             ui.label("截止期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.upto_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.upto_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -332,7 +338,10 @@ impl SettleView {
                     } else {
                         self.sel_to == Some(e.entry_id)
                     };
-                    if ui.selectable_label(sel, if sel { "✔" } else { "选" }).clicked() {
+                    if ui
+                        .selectable_label(sel, if sel { "✔" } else { "选" })
+                        .clicked()
+                    {
                         let next = if sel { None } else { Some(e.entry_id) };
                         if debit_side {
                             self.sel_from = next;
@@ -488,10 +497,8 @@ impl SettleView {
                 6 => {
                     ui.label(RichText::new(&r.settled_at).weak());
                 }
-                7 => {
-                    if ui.small_button("取消").clicked() {
-                        drop = Some(r.id);
-                    }
+                7 if ui.small_button("取消").clicked() => {
+                    drop = Some(r.id);
                 }
                 _ => {}
             }
@@ -689,11 +696,7 @@ impl SettleView {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("各区间合计：").strong());
             for (i, t) in totals.iter().enumerate() {
-                ui.label(format!(
-                    "{} {}",
-                    buckets[i].label,
-                    t.fmt_money()
-                ));
+                ui.label(format!("{} {}", buckets[i].label, t.fmt_money()));
                 ui.add_space(10.0);
             }
             let grand: Money = totals.iter().copied().fold(Money::ZERO, |a, b| a + b);
@@ -705,14 +708,17 @@ impl SettleView {
     }
 
     /// 坏账准备测算：比例可改，结果只用于参考
-    fn show_bad_debt(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui, lines: &[AgingLine], buckets: &[AgingBucket]) {
+    fn show_bad_debt(
+        &mut self,
+        ctx: &mut AppCtx<'_>,
+        ui: &mut Ui,
+        lines: &[AgingLine],
+        buckets: &[AgingBucket],
+    ) {
         widgets::card(ui, "坏账准备测算", |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (i, r) in self.rates.iter_mut().enumerate() {
-                    let label = buckets
-                        .get(i)
-                        .map(|b| b.label)
-                        .unwrap_or("—");
+                    let label = buckets.get(i).map(|b| b.label).unwrap_or("—");
                     ui.label(label);
                     ui.add_sized([70.0, 22.0], egui::TextEdit::singleline(r));
                     ui.add_space(8.0);
@@ -729,7 +735,12 @@ impl SettleView {
             if ui.button("正式计提坏账准备").clicked() && ctx.can(Perm::VoucherNew) {
                 let period = self.upto(ctx);
                 let date = chrono::Local::now().date_naive();
-                match findb::settle::bad_debt_provision_voucher(ctx.db(), period, date, &ctx.user().username) {
+                match findb::settle::bad_debt_provision_voucher(
+                    ctx.db(),
+                    period,
+                    date,
+                    &ctx.user().username,
+                ) {
                     Ok(Some(id)) => {
                         ctx.info(format!("已生成坏账准备凭证 #{id}"));
                         ctx.log("往来", "计提坏账准备", &format!("凭证 #{id}"));

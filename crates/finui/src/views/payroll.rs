@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use egui::{Align2, RichText, Ui};
-use findb::business::{self, Payroll, YtdPayroll};
 use fincore::engine::tax::{self, Cumulative};
 use fincore::{AuxKind, Money, Period, Perm};
+use findb::business::{self, Payroll, YtdPayroll};
 
 use crate::state::{AppCtx, ConfirmAction};
 use crate::theme::palette;
@@ -163,15 +163,17 @@ impl PayrollView {
             &fincore::AuxQuery::kind(AuxKind::Employee).with_disabled(true),
         )
         .unwrap_or_default();
-        self.emp_names = emps.iter().map(|e| (e.code.clone(), e.name.clone())).collect();
+        self.emp_names = emps
+            .iter()
+            .map(|e| (e.code.clone(), e.name.clone()))
+            .collect();
         self.emp_opts = emps.iter().map(|e| e.code.clone()).collect();
         self.paging.reset();
 
         self.ytd = None;
         self.current = None;
         if self.tab == Tab::Tax && !self.employee.is_empty() {
-            self.ytd = ctx
-                .handle(business::payroll_ytd(ctx.db(), p, &self.employee));
+            self.ytd = ctx.handle(business::payroll_ytd(ctx.db(), p, &self.employee));
             self.current = ctx
                 .handle(business::payroll_get(ctx.db(), p, &self.employee))
                 .flatten();
@@ -192,7 +194,10 @@ impl PayrollView {
             }
             ui.separator();
             ui.label("期间");
-            let r = ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -312,19 +317,26 @@ impl PayrollView {
         let tsc: Money = self.rows.iter().map(|r| r.social_co + r.housing_co).sum();
         ui.separator();
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!(
-                "应发合计 {} ／ 个税合计 {} ／ 实发合计 {} ／ 单位承担社保公积金 {}",
-                tg.fmt_money(),
-                tt.fmt_money(),
-                tn.fmt_money(),
-                tsc.fmt_money()
-            )).strong());
+            ui.label(
+                RichText::new(format!(
+                    "应发合计 {} ／ 个税合计 {} ／ 实发合计 {} ／ 单位承担社保公积金 {}",
+                    tg.fmt_money(),
+                    tt.fmt_money(),
+                    tn.fmt_money(),
+                    tsc.fmt_money()
+                ))
+                .strong(),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 self.paging.bar(ui, self.rows.len());
             });
         });
         ui.label(
-            RichText::new(format!("计提与发放的凭证在「{}」页签生成", Tab::Voucher.name())).weak(),
+            RichText::new(format!(
+                "计提与发放的凭证在「{}」页签生成",
+                Tab::Voucher.name()
+            ))
+            .weak(),
         );
     }
 
@@ -332,7 +344,8 @@ impl PayrollView {
     fn show_tax(&mut self, ui: &mut Ui) {
         widgets::toolbar(ui, |ui| {
             ui.label("员工");
-            if widgets::combo(ui, "pay_tax_emp", &mut self.employee, &self.emp_opts, 160.0).changed()
+            if widgets::combo(ui, "pay_tax_emp", &mut self.employee, &self.emp_opts, 160.0)
+                .changed()
             {
                 self.dirty = true;
             }
@@ -353,15 +366,17 @@ impl PayrollView {
         widgets::card(ui, "本年累计（截至本月前）", |ui| {
             widgets::kv(ui, "累计申报月份：", &format!("{} 个月", y.months));
             widgets::kv(ui, "累计收入：", &y.income.fmt_money());
-            widgets::kv(ui, "累计专项扣除（社保+公积金个人）：", &y.special.fmt_money());
+            widgets::kv(
+                ui,
+                "累计专项扣除（社保+公积金个人）：",
+                &y.special.fmt_money(),
+            );
             widgets::kv(ui, "累计专项附加扣除：", &y.additional.fmt_money());
             widgets::kv(ui, "累计已预扣税额：", &y.withheld.fmt_money());
         });
 
         widgets::card(ui, "本期计税过程", |ui| {
-            ui.label(
-                RichText::new("累计预扣预缴法：本期个税 = 累计应纳税额 − 已预扣税额").weak(),
-            );
+            ui.label(RichText::new("累计预扣预缴法：本期个税 = 累计应纳税额 − 已预扣税额").weak());
             let (gross, social, housing, additional) = match &self.current {
                 Some(c) => (c.gross, c.social, c.housing, c.additional),
                 None => (Money::ZERO, Money::ZERO, Money::ZERO, Money::ZERO),
@@ -440,7 +455,10 @@ impl PayrollView {
                 .spacing([10.0, 8.0])
                 .show(ui, |ui| {
                     ui.label("凭证日期：");
-                    ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut self.cfg.date));
+                    ui.add_sized(
+                        [120.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.cfg.date),
+                    );
                     ui.end_row();
                     ui.label("费用科目：");
                     widgets::account_combo(
@@ -594,8 +612,7 @@ impl PayrollView {
     }
 
     fn cfg_date(&self, p: Period) -> NaiveDate {
-        NaiveDate::parse_from_str(self.cfg.date.trim(), "%Y-%m-%d")
-            .unwrap_or_else(|_| p.last_day())
+        NaiveDate::parse_from_str(self.cfg.date.trim(), "%Y-%m-%d").unwrap_or_else(|_| p.last_day())
     }
 
     fn gen_accrue(&mut self, ctx: &mut AppCtx<'_>, p: Period) {
@@ -676,69 +693,73 @@ impl PayrollView {
         let err = self.err.clone();
         let emp_opts = self.emp_opts.clone();
 
-        egui::Window::new(if is_new { "新增工资行" } else { "修改工资行" })
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
-                if !err.is_empty() {
-                    ui.colored_label(palette::CREDIT, &err);
-                }
-                ui.label(
-                    RichText::new("个税由系统按累计预扣预缴法自动计算，保存后可在「个税明细」查看")
-                        .weak(),
-                );
-                egui::Grid::new("pay_edit")
-                    .num_columns(2)
-                    .spacing([10.0, 8.0])
-                    .show(ui, |ui| {
-                        ui.label("员工：");
-                        ui.horizontal(|ui| {
-                            widgets::text_input(ui, &mut d.employee, 140.0, "职员编码");
-                            widgets::combo(ui, "pay_emp_pick", &mut d.employee, &emp_opts, 90.0);
-                        });
-                        ui.end_row();
-                        ui.label("部门：");
-                        widgets::text_input(ui, &mut d.dept, 140.0, "部门编码");
-                        ui.end_row();
-                        ui.label("应发工资：");
-                        widgets::money_input(ui, &mut d.gross, 140.0);
-                        ui.end_row();
-                        ui.label("社保（个人）：");
-                        widgets::money_input(ui, &mut d.social, 140.0);
-                        ui.end_row();
-                        ui.label("公积金（个人）：");
-                        widgets::money_input(ui, &mut d.housing, 140.0);
-                        ui.end_row();
-                        ui.label("专项附加扣除：");
-                        widgets::money_input(ui, &mut d.additional, 140.0);
-                        ui.end_row();
-                        ui.label("其他扣除：");
-                        widgets::money_input(ui, &mut d.deduction, 140.0);
-                        ui.end_row();
-                        ui.label("社保（企业）：");
-                        widgets::money_input(ui, &mut d.social_co, 140.0);
-                        ui.end_row();
-                        ui.label("公积金（企业）：");
-                        widgets::money_input(ui, &mut d.housing_co, 140.0);
-                        ui.end_row();
-                        ui.label("备注：");
-                        widgets::text_input(ui, &mut d.memo, 240.0, "可留空");
-                        ui.end_row();
+        egui::Window::new(if is_new {
+            "新增工资行"
+        } else {
+            "修改工资行"
+        })
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ui.ctx(), |ui| {
+            if !err.is_empty() {
+                ui.colored_label(palette::CREDIT, &err);
+            }
+            ui.label(
+                RichText::new("个税由系统按累计预扣预缴法自动计算，保存后可在「个税明细」查看")
+                    .weak(),
+            );
+            egui::Grid::new("pay_edit")
+                .num_columns(2)
+                .spacing([10.0, 8.0])
+                .show(ui, |ui| {
+                    ui.label("员工：");
+                    ui.horizontal(|ui| {
+                        widgets::text_input(ui, &mut d.employee, 140.0, "职员编码");
+                        widgets::combo(ui, "pay_emp_pick", &mut d.employee, &emp_opts, 90.0);
                     });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("取消").clicked() {
-                            close = true;
-                        }
-                        if ui.button("保存").clicked() {
-                            save = true;
-                        }
-                    });
+                    ui.end_row();
+                    ui.label("部门：");
+                    widgets::text_input(ui, &mut d.dept, 140.0, "部门编码");
+                    ui.end_row();
+                    ui.label("应发工资：");
+                    widgets::money_input(ui, &mut d.gross, 140.0);
+                    ui.end_row();
+                    ui.label("社保（个人）：");
+                    widgets::money_input(ui, &mut d.social, 140.0);
+                    ui.end_row();
+                    ui.label("公积金（个人）：");
+                    widgets::money_input(ui, &mut d.housing, 140.0);
+                    ui.end_row();
+                    ui.label("专项附加扣除：");
+                    widgets::money_input(ui, &mut d.additional, 140.0);
+                    ui.end_row();
+                    ui.label("其他扣除：");
+                    widgets::money_input(ui, &mut d.deduction, 140.0);
+                    ui.end_row();
+                    ui.label("社保（企业）：");
+                    widgets::money_input(ui, &mut d.social_co, 140.0);
+                    ui.end_row();
+                    ui.label("公积金（企业）：");
+                    widgets::money_input(ui, &mut d.housing_co, 140.0);
+                    ui.end_row();
+                    ui.label("备注：");
+                    widgets::text_input(ui, &mut d.memo, 240.0, "可留空");
+                    ui.end_row();
+                });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("取消").clicked() {
+                        close = true;
+                    }
+                    if ui.button("保存").clicked() {
+                        save = true;
+                    }
                 });
             });
+        });
 
         if close || !open {
             self.editing = None;
@@ -766,7 +787,12 @@ impl PayrollView {
                 .map_err(|_| format!("金额格式不正确：{t}"))
         };
         let parsed: Result<Vec<Money>, String> = [
-            &d.gross, &d.social, &d.housing, &d.deduction, &d.additional, &d.social_co,
+            &d.gross,
+            &d.social,
+            &d.housing,
+            &d.deduction,
+            &d.additional,
+            &d.social_co,
             &d.housing_co,
         ]
         .iter()
@@ -798,7 +824,11 @@ impl PayrollView {
             Ok(rec) => {
                 ctx.log(
                     "工资",
-                    if self.editing_new { "新增工资行" } else { "修改工资行" },
+                    if self.editing_new {
+                        "新增工资行"
+                    } else {
+                        "修改工资行"
+                    },
                     &format!(
                         "{} {} 应发{} 个税{} 实发{}",
                         p.label(),

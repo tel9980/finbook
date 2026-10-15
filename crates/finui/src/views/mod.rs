@@ -4,15 +4,15 @@ pub mod about;
 pub mod account;
 pub mod advanced;
 pub mod assets;
+pub mod automation;
 pub mod aux_batch;
 pub mod aux_view;
-pub mod begin_batch;
-pub mod begin_diag;
-pub mod automation;
 pub mod backup;
 pub mod balance_table;
 pub mod bank_rec;
 pub mod begin;
+pub mod begin_batch;
+pub mod begin_diag;
 pub mod budget;
 pub mod budget_alerts;
 pub mod claims;
@@ -32,9 +32,9 @@ pub mod overview;
 pub mod payroll;
 pub mod period_end;
 pub mod reports;
+pub mod scm_deep;
 pub mod security;
 pub mod settle_view;
-pub mod scm_deep;
 pub mod template;
 pub mod users;
 pub mod voucher_edit;
@@ -185,8 +185,7 @@ impl Views {
                 self.custom_report.invalidate();
                 self.reports.invalidate();
             }
-            DataKind::Asset => {
-            }
+            DataKind::Asset => {}
             DataKind::Template => {
                 self.voucher_edit.invalidate();
             }

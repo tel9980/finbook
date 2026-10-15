@@ -37,24 +37,72 @@ impl AgingBucket {
 /// 按天分档（适合账期短、周转快的行业）
 pub fn buckets_by_days() -> Vec<AgingBucket> {
     vec![
-        AgingBucket { label: "0-30天", from: 0, to: Some(30) },
-        AgingBucket { label: "31-60天", from: 31, to: Some(60) },
-        AgingBucket { label: "61-90天", from: 61, to: Some(90) },
-        AgingBucket { label: "91-180天", from: 91, to: Some(180) },
-        AgingBucket { label: "181-365天", from: 181, to: Some(365) },
-        AgingBucket { label: "365天以上", from: 366, to: None },
+        AgingBucket {
+            label: "0-30天",
+            from: 0,
+            to: Some(30),
+        },
+        AgingBucket {
+            label: "31-60天",
+            from: 31,
+            to: Some(60),
+        },
+        AgingBucket {
+            label: "61-90天",
+            from: 61,
+            to: Some(90),
+        },
+        AgingBucket {
+            label: "91-180天",
+            from: 91,
+            to: Some(180),
+        },
+        AgingBucket {
+            label: "181-365天",
+            from: 181,
+            to: Some(365),
+        },
+        AgingBucket {
+            label: "365天以上",
+            from: 366,
+            to: None,
+        },
     ]
 }
 
 /// 按年分档（坏账准备计提用的口径）
 pub fn buckets_by_year() -> Vec<AgingBucket> {
     vec![
-        AgingBucket { label: "1年以内", from: 0, to: Some(365) },
-        AgingBucket { label: "1-2年", from: 366, to: Some(730) },
-        AgingBucket { label: "2-3年", from: 731, to: Some(1095) },
-        AgingBucket { label: "3-4年", from: 1096, to: Some(1460) },
-        AgingBucket { label: "4-5年", from: 1461, to: Some(1825) },
-        AgingBucket { label: "5年以上", from: 1826, to: None },
+        AgingBucket {
+            label: "1年以内",
+            from: 0,
+            to: Some(365),
+        },
+        AgingBucket {
+            label: "1-2年",
+            from: 366,
+            to: Some(730),
+        },
+        AgingBucket {
+            label: "2-3年",
+            from: 731,
+            to: Some(1095),
+        },
+        AgingBucket {
+            label: "3-4年",
+            from: 1096,
+            to: Some(1460),
+        },
+        AgingBucket {
+            label: "4-5年",
+            from: 1461,
+            to: Some(1825),
+        },
+        AgingBucket {
+            label: "5年以上",
+            from: 1826,
+            to: None,
+        },
     ]
 }
 
@@ -153,15 +201,13 @@ pub fn analyze(
         if open.is_zero() {
             continue;
         }
-        let line = map
-            .entry(it.key.clone())
-            .or_insert_with(|| AgingLine {
-                key: it.key.clone(),
-                amounts: vec![Money::ZERO; buckets.len()],
-                total: Money::ZERO,
-                credit_total: Money::ZERO,
-                max_days: 0,
-            });
+        let line = map.entry(it.key.clone()).or_insert_with(|| AgingLine {
+            key: it.key.clone(),
+            amounts: vec![Money::ZERO; buckets.len()],
+            total: Money::ZERO,
+            credit_total: Money::ZERO,
+            max_days: 0,
+        });
         // 未来日期的单据（days 为负）按 0 天处理，不能落进"最旧"档虚增长账龄
         let days = (as_of - it.date).num_days().max(0);
         if open.is_negative() {
@@ -339,7 +385,7 @@ mod tests {
         ];
         let by = buckets_by_year();
         let lines = analyze(&items, as_of, &by).unwrap();
-        // 1000 → 1年以内 5%；2000 → 1-2年? 2024-01-01 到 2026-03-31 = 820 天 → 2-3年? 
+        // 1000 → 1年以内 5%；2000 → 1-2年? 2024-01-01 到 2026-03-31 = 820 天 → 2-3年?
         // 820 天落在 731~1095 → 索引 2（2-3年），比例 20%
         assert_eq!(lines[0].amounts[0], m("1000"));
         assert_eq!(lines[0].amounts[2], m("2000"));

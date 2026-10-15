@@ -90,16 +90,14 @@ pub fn has_link(db: &Db, src_type: &str, src_id: i64, dst_type: &str) -> DbResul
 /// - 仅 已审批(approved) / 已下推(ordered) 可推（草稿/已取消拒绝）；
 /// - 生成采购订单草稿：单行 = 请购品名与数量，**单价留空待补**（请购无价），供应商留空；
 /// - 记录 doc_link；请购首次下推置 ordered。
-/// 返回 (采购订单 id, 单号)。
-/// 注：po_save 自带写事务，本函数不再嵌套外层事务（后续步骤为单行幂等写，失败可直接重推）。
+///   返回 (采购订单 id, 单号)。
+///   注：po_save 自带写事务，本函数不再嵌套外层事务（后续步骤为单行幂等写，失败可直接重推）。
 pub fn req_push_po(db: &Db, req_id: i64, period: Period, who: &str) -> DbResult<(i64, String)> {
     let r = crate::procurement::pr_get(db, req_id)?
         .ok_or_else(|| fincore::FinError::not_found("请购单不存在"))?;
     match r.status.as_str() {
         "draft" => {
-            return Err(
-                fincore::FinError::state("请购单未审批，审批后才能下推采购订单").into(),
-            )
+            return Err(fincore::FinError::state("请购单未审批，审批后才能下推采购订单").into())
         }
         "cancelled" => return Err(fincore::FinError::state("请购单已取消，不能下推").into()),
         _ => {}
@@ -121,7 +119,14 @@ pub fn req_push_po(db: &Db, req_id: i64, period: Period, who: &str) -> DbResult<
     po.no = crate::scm::po_next_no(db, period)?;
     po.memo = format!("源：请购 #{}", r.no);
     let po_id = crate::scm::po_save(db, &mut po)?;
-    link_add(db, "req", req_id, "po", po_id, &format!("请购 #{} 下推采购订单", r.no))?;
+    link_add(
+        db,
+        "req",
+        req_id,
+        "po",
+        po_id,
+        &format!("请购 #{} 下推采购订单", r.no),
+    )?;
     if r.status == "approved" {
         db.conn().execute(
             "UPDATE purchase_req SET status='ordered' WHERE id=?1 AND status='approved'",
@@ -457,13 +462,30 @@ mod tests {
         assert!(po.lines[0].unit_price.is_zero(), "单价留空待补");
         // 追溯：po 上游 = 该请购；req 下游 = 该订单
         let chain = doc_chain(&db, "po", po_id).unwrap();
-        assert!(chain.iter().any(|n| n.kind == "req" && n.id == rid && n.dir == "up"), "PO 应见上游请购");
+        assert!(
+            chain
+                .iter()
+                .any(|n| n.kind == "req" && n.id == rid && n.dir == "up"),
+            "PO 应见上游请购"
+        );
         let chain2 = doc_chain(&db, "req", rid).unwrap();
-        assert!(chain2.iter().any(|n| n.kind == "po" && n.id == po_id && n.dir == "down"), "请购应见下游订单");
+        assert!(
+            chain2
+                .iter()
+                .any(|n| n.kind == "po" && n.id == po_id && n.dir == "down"),
+            "请购应见下游订单"
+        );
         // 拆单：再次下推生成第二张订单与第二条链
         let (po2, _) = req_push_po(&db, rid, p, "u").unwrap();
         assert_ne!(po2, po_id, "重复下推应生成新订单（拆单）");
-        assert_eq!(doc_chain(&db, "req", rid).unwrap().iter().filter(|n| n.kind == "po").count(), 2);
+        assert_eq!(
+            doc_chain(&db, "req", rid)
+                .unwrap()
+                .iter()
+                .filter(|n| n.kind == "po")
+                .count(),
+            2
+        );
     }
 
     fn m10() -> Money {

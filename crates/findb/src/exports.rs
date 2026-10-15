@@ -54,8 +54,16 @@ pub fn build_csv(db: &Db, kind: &str, period: Period) -> DbResult<(String, Vec<V
         }
         "payroll" => {
             let mut rows = vec![header(&[
-                "员工", "部门", "应发", "社保", "公积金", "其他扣除", "专项附加", "计税基数",
-                "个税", "实发",
+                "员工",
+                "部门",
+                "应发",
+                "社保",
+                "公积金",
+                "其他扣除",
+                "专项附加",
+                "计税基数",
+                "个税",
+                "实发",
             ])];
             for p in crate::business::payroll_list(db, period)? {
                 rows.push(vec![
@@ -155,7 +163,9 @@ pub fn sched_list(db: &Db) -> DbResult<Vec<ExportSchedule>> {
     let mut st = db
         .conn()
         .prepare(&format!("SELECT {S_COLS} FROM export_schedule ORDER BY id"))?;
-    let rows = st.query_map([], map_sched)?.collect::<Result<Vec<_>, _>>()?;
+    let rows = st
+        .query_map([], map_sched)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -175,7 +185,11 @@ pub fn sched_save(db: &Db, s: &ExportSchedule, who: &str) -> DbResult<i64> {
     if !matches!(s.kind.as_str(), "vouchers" | "trial" | "payroll" | "claims") {
         return Err(fincore::FinError::msg("未知导出类型（vouchers/trial/payroll/claims）").into());
     }
-    let mode = if s.period_mode == "last" { "last" } else { "current" };
+    let mode = if s.period_mode == "last" {
+        "last"
+    } else {
+        "current"
+    };
     let at = s.at_time.trim();
     let valid = at.len() == 5
         && at.as_bytes()[2] == b':'

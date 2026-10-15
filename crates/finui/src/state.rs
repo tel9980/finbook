@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use fincore::{AuxKind, Chart, Period, Perm, User};
 use findb::Db;
-use fincore::{AuxKind, Chart, Perm, Period, User};
 
 /// 左侧导航项
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -179,24 +179,35 @@ impl NavItem {
             NavItem::Ledger | NavItem::BalanceTable | NavItem::Reports | NavItem::CustomReport => {
                 "账簿报表"
             }
-            NavItem::MultiColumn | NavItem::SummaryTable | NavItem::Ratios | NavItem::ReportNotes => {
-                "账簿报表"
-            }
+            NavItem::MultiColumn
+            | NavItem::SummaryTable
+            | NavItem::Ratios
+            | NavItem::ReportNotes => "账簿报表",
             NavItem::PeriodEnd
             | NavItem::Assets
             | NavItem::BankRec
             | NavItem::Settle
             | NavItem::Automation => "期末",
-            NavItem::Inventory | NavItem::InventoryDeep | NavItem::ScmDeep | NavItem::Payroll
-            | NavItem::Claims | NavItem::Manufacturing => "业务",
+            NavItem::Inventory
+            | NavItem::InventoryDeep
+            | NavItem::ScmDeep
+            | NavItem::Payroll
+            | NavItem::Claims
+            | NavItem::Manufacturing => "业务",
             NavItem::Approval | NavItem::Archive => "系统",
-            NavItem::Budget | NavItem::BudgetAlerts | NavItem::DimProfit | NavItem::BudgetAnalysis => {
-                "管理会计"
-            }
+            NavItem::Budget
+            | NavItem::BudgetAlerts
+            | NavItem::DimProfit
+            | NavItem::BudgetAnalysis => "管理会计",
             NavItem::Funds => "业务",
             NavItem::Cost => "业务",
-            NavItem::Users | NavItem::Security | NavItem::Options | NavItem::Backup
-            | NavItem::Logs | NavItem::Help | NavItem::About => "系统",
+            NavItem::Users
+            | NavItem::Security
+            | NavItem::Options
+            | NavItem::Backup
+            | NavItem::Logs
+            | NavItem::Help
+            | NavItem::About => "系统",
         }
     }
 
@@ -214,10 +225,16 @@ impl NavItem {
             NavItem::BankRec | NavItem::Settle | NavItem::Payroll | NavItem::Claims => {
                 Some(Perm::VoucherNew)
             }
-            NavItem::Budget | NavItem::BudgetAlerts | NavItem::DimProfit | NavItem::CustomReport
+            NavItem::Budget
+            | NavItem::BudgetAlerts
+            | NavItem::DimProfit
+            | NavItem::CustomReport
             | NavItem::BudgetAnalysis => Some(Perm::Report),
             NavItem::Funds | NavItem::Cost => Some(Perm::Report),
-            NavItem::MultiColumn | NavItem::SummaryTable | NavItem::Ratios | NavItem::ReportNotes
+            NavItem::MultiColumn
+            | NavItem::SummaryTable
+            | NavItem::Ratios
+            | NavItem::ReportNotes
             | NavItem::Archive => Some(Perm::Report),
             NavItem::Manufacturing => Some(Perm::AccountEdit),
             NavItem::Approval => Some(Perm::VoucherNew),
@@ -456,7 +473,8 @@ impl AppState {
     pub fn attach(&mut self, db: Arc<Db>, path: Option<PathBuf>) -> Result<(), String> {
         let chart = findb::accounts::chart(&db).map_err(|e| e.to_string())?;
         self.aux_names = findb::auxs::full_name_map(&db).unwrap_or_default();
-        self.period = findb::periods::current_period(&db).unwrap_or_else(|_| db.options().start_period);
+        self.period =
+            findb::periods::current_period(&db).unwrap_or_else(|_| db.options().start_period);
         self.chart = Some(Arc::new(chart));
         self.db = Some(db);
         self.book_path = path;
@@ -580,7 +598,10 @@ impl<'a> AppCtx<'a> {
 
     /// 记录操作日志
     pub fn log(&self, module: &str, action: &str, detail: &str) {
-        if let Err(e) = self.db().log(self.user().username.as_str(), module, action, detail) {
+        if let Err(e) = self
+            .db()
+            .log(self.user().username.as_str(), module, action, detail)
+        {
             log::warn!("写操作日志失败：{e}");
         }
     }
@@ -606,7 +627,6 @@ impl<'a> AppCtx<'a> {
     }
 }
 
-
 #[cfg(test)]
 mod simple_nav_tests {
     use super::*;
@@ -615,11 +635,11 @@ mod simple_nav_tests {
     /// 所以把个数钉死，改列表时必须同步改这里（并想清楚为什么）。
     #[test]
     fn simple_nav_has_exactly_12_items() {
-        let n = NavItem::menu()
-            .iter()
-            .filter(|i| i.daily_core())
-            .count();
-        assert_eq!(n, 12, "精简模式菜单项数变了，先确认这个改动是否还符合「日常财务够用」");
+        let n = NavItem::menu().iter().filter(|i| i.daily_core()).count();
+        assert_eq!(
+            n, 12,
+            "精简模式菜单项数变了，先确认这个改动是否还符合「日常财务够用」"
+        );
     }
 
     /// 日常链路不能断：建账 → 录凭证 → 查账 → 出表 → 月末 → 备份，一个都不能少。

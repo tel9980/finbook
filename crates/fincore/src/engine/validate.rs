@@ -5,8 +5,8 @@
 
 use rust_decimal::Decimal;
 
-use crate::account::{Account, AuxKind, Chart};
 use crate::account::BookOptions;
+use crate::account::{Account, AuxKind, Chart};
 use crate::error::Issues;
 use crate::money::Money;
 use crate::period::Period;
@@ -45,9 +45,14 @@ pub fn validate_voucher(v: &Voucher, ctx: &ValidateCtx) -> Issues {
     let blanks = v.blank_lines();
     if !blanks.is_empty() && v.entries.len() > 2 {
         // 允许末尾留一个空行方便继续录入，其他空行提示
-        let real = blanks.iter().filter(|&&l| l as usize != v.entries.len()).count();
+        let real = blanks
+            .iter()
+            .filter(|&&l| l as usize != v.entries.len())
+            .count();
         if real > 0 {
-            iss.push(format!("存在 {real} 条借贷均为空的分录行，保存时会自动忽略"));
+            iss.push(format!(
+                "存在 {real} 条借贷均为空的分录行，保存时会自动忽略"
+            ));
         }
     }
     iss
@@ -137,12 +142,7 @@ pub fn validate_for_save(v: &Voucher, ctx: &ValidateCtx) -> Issues {
 }
 
 /// 校验单行分录
-pub fn validate_entry(
-    code: &str,
-    e: &crate::voucher::Entry,
-    ctx: &ValidateCtx,
-    iss: &mut Issues,
-) {
+pub fn validate_entry(code: &str, e: &crate::voucher::Entry, ctx: &ValidateCtx, iss: &mut Issues) {
     let line = e.line;
 
     // 借贷不能同时有值
@@ -167,7 +167,10 @@ pub fn validate_entry(
     };
 
     if acct.disabled {
-        iss.push(format!("第 {line} 行科目 {} {} 已停用", acct.code, acct.name));
+        iss.push(format!(
+            "第 {line} 行科目 {} {} 已停用",
+            acct.code, acct.name
+        ));
     }
 
     // 必须末级
@@ -198,7 +201,10 @@ pub fn validate_entry(
     // 数量核算
     if acct.has_qty {
         if e.qty.is_none() || e.qty.map(|q| q.is_zero()).unwrap_or(true) {
-            iss.push(format!("第 {line} 行科目 {} 核算数量，必须填写数量", acct.code));
+            iss.push(format!(
+                "第 {line} 行科目 {} 核算数量，必须填写数量",
+                acct.code
+            ));
         }
         // 数量 × 单价 ≈ 金额（容差 0.01）
         if let (Some(q), Some(p)) = (e.qty, e.price) {
@@ -265,7 +271,10 @@ pub fn validate_post(v: &Voucher, _opts: &BookOptions) -> Issues {
 pub fn validate_unpost(v: &Voucher, closed_upto: Option<Period>) -> Issues {
     let mut iss = Issues::new();
     if !v.status.can_unpost() {
-        iss.push(format!("凭证当前状态为「{}」，不能反记账", v.status.label()));
+        iss.push(format!(
+            "凭证当前状态为「{}」，不能反记账",
+            v.status.label()
+        ));
     }
     if let Some(upto) = closed_upto {
         if v.period <= upto {
@@ -283,7 +292,7 @@ pub fn validate_delete(v: &Voucher, closed_upto: Option<Period>) -> Issues {
     }
     if let Some(upto) = closed_upto {
         if v.period <= upto {
-            iss.push(format!("{} 及以前期间已结账，不能删除凭证", upto.label() ));
+            iss.push(format!("{} 及以前期间已结账，不能删除凭证", upto.label()));
         }
     }
     iss

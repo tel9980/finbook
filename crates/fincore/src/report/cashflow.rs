@@ -112,17 +112,17 @@ pub fn default_cash_flow_items() -> Vec<CashFlowItem> {
             Out,
         ),
         CashFlowItem::new("0205", "投资支付的现金", Investing, Out),
-        CashFlowItem::new("0206", "取得子公司及其他营业单位支付的现金净额", Investing, Out),
+        CashFlowItem::new(
+            "0206",
+            "取得子公司及其他营业单位支付的现金净额",
+            Investing,
+            Out,
+        ),
         // ---- 筹资活动 ----
         CashFlowItem::new("0301", "吸收投资收到的现金", Financing, In),
         CashFlowItem::new("0302", "取得借款收到的现金", Financing, In),
         CashFlowItem::new("0303", "偿还债务支付的现金", Financing, Out),
-        CashFlowItem::new(
-            "0304",
-            "分配股利、利润或偿付利息支付的现金",
-            Financing,
-            Out,
-        ),
+        CashFlowItem::new("0304", "分配股利、利润或偿付利息支付的现金", Financing, Out),
         CashFlowItem::new("0305", "支付其他与筹资活动有关的现金", Financing, Out),
     ]
 }
@@ -188,7 +188,10 @@ pub fn build_cash_flow(
     let mut disabled_net = Money::ZERO;
 
     for it in items {
-        let (dr, cr) = amounts.get(&it.code).copied().unwrap_or((Money::ZERO, Money::ZERO));
+        let (dr, cr) = amounts
+            .get(&it.code)
+            .copied()
+            .unwrap_or((Money::ZERO, Money::ZERO));
         if it.disabled {
             disabled_net += dr - cr;
             continue;
@@ -243,10 +246,22 @@ mod tests {
     fn build_and_tie() {
         let items = default_cash_flow_items();
         let mut amt = ItemAmounts::new();
-        amt.insert("0101".to_string(), (Money::parse("100000").unwrap(), Money::ZERO));
-        amt.insert("0104".to_string(), (Money::ZERO, Money::parse("40000").unwrap()));
-        amt.insert("0204".to_string(), (Money::ZERO, Money::parse("20000").unwrap()));
-        amt.insert("0302".to_string(), (Money::parse("50000").unwrap(), Money::ZERO));
+        amt.insert(
+            "0101".to_string(),
+            (Money::parse("100000").unwrap(), Money::ZERO),
+        );
+        amt.insert(
+            "0104".to_string(),
+            (Money::ZERO, Money::parse("40000").unwrap()),
+        );
+        amt.insert(
+            "0204".to_string(),
+            (Money::ZERO, Money::parse("20000").unwrap()),
+        );
+        amt.insert(
+            "0302".to_string(),
+            (Money::parse("50000").unwrap(), Money::ZERO),
+        );
 
         let stmt = build_cash_flow(
             &items,
@@ -284,10 +299,20 @@ mod tests {
     fn disabled_item_still_ties_to_cash() {
         let mut items = default_cash_flow_items();
         // 停用 0101（销售商品收到的现金），它账上有 100000
-        items.iter_mut().find(|i| i.code == "0101").unwrap().disabled = true;
+        items
+            .iter_mut()
+            .find(|i| i.code == "0101")
+            .unwrap()
+            .disabled = true;
         let mut amt = ItemAmounts::new();
-        amt.insert("0101".to_string(), (Money::parse("100000").unwrap(), Money::ZERO));
-        amt.insert("0104".to_string(), (Money::ZERO, Money::parse("40000").unwrap()));
+        amt.insert(
+            "0101".to_string(),
+            (Money::parse("100000").unwrap(), Money::ZERO),
+        );
+        amt.insert(
+            "0104".to_string(),
+            (Money::ZERO, Money::parse("40000").unwrap()),
+        );
 
         // 货币资金实际增加了 60000
         let stmt = build_cash_flow(
@@ -301,10 +326,6 @@ mod tests {
         assert_eq!(stmt.operating_net, Money::parse("-40000").unwrap());
         assert_eq!(stmt.unassigned, Money::parse("100000").unwrap());
         assert_eq!(stmt.net_increase, Money::parse("60000").unwrap());
-        assert!(
-            stmt.ties(),
-            "停用项目后仍须与货币资金变动勾稽：{:?}",
-            stmt
-        );
+        assert!(stmt.ties(), "停用项目后仍须与货币资金变动勾稽：{:?}", stmt);
     }
 }

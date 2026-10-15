@@ -5,9 +5,7 @@
 
 use chrono::NaiveDate;
 use fincore::user::User;
-use fincore::{
-    AuxRef, Entry, FinError, Money, Period, Voucher, VoucherSource, VoucherStatus,
-};
+use fincore::{AuxRef, Entry, FinError, Money, Period, Voucher, VoucherSource, VoucherStatus};
 use rusqlite::OptionalExtension;
 
 use crate::{
@@ -126,9 +124,8 @@ fn map_voucher(r: &rusqlite::Row) -> rusqlite::Result<Voucher> {
         period: Period::from_ymm(r.get(1)?),
         date: {
             let s: String = r.get(2)?;
-            NaiveDate::parse_from_str(&s, "%Y-%m-%d").unwrap_or_else(|_| {
-                NaiveDate::from_ymd_opt(1970, 1, 1).expect("基准日期必然合法")
-            })
+            NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).expect("基准日期必然合法"))
         },
         word: r.get(3)?,
         no: r.get(4)?,
@@ -201,8 +198,10 @@ pub fn fill_entries(db: &Db, vouchers: &mut [Voucher]) -> DbResult<()> {
             placeholders.join(",")
         );
         let mut stmt = db.conn().prepare(&sql)?;
-        let refs: Vec<&dyn rusqlite::types::ToSql> =
-            ids.iter().map(|i| i as &dyn rusqlite::types::ToSql).collect();
+        let refs: Vec<&dyn rusqlite::types::ToSql> = ids
+            .iter()
+            .map(|i| i as &dyn rusqlite::types::ToSql)
+            .collect();
         let rows = stmt
             .query_map(refs.as_slice(), |r| {
                 let vid: i64 = r.get(1)?;
@@ -303,7 +302,12 @@ fn build_where(q: &VoucherQuery) -> DbResult<(String, Vec<Box<dyn rusqlite::type
     }
     if let Some(s) = q.status {
         sql.push_str(" AND v.status = ?");
-        params.push(Box::new(serde_json::to_value(s)?.as_str().unwrap_or("draft").to_string()));
+        params.push(Box::new(
+            serde_json::to_value(s)?
+                .as_str()
+                .unwrap_or("draft")
+                .to_string(),
+        ));
     }
     if let Some(ref w) = q.word {
         sql.push_str(" AND v.word = ?");
@@ -328,7 +332,10 @@ fn build_where(q: &VoucherQuery) -> DbResult<(String, Vec<Box<dyn rusqlite::type
     if let Some(src) = q.source {
         sql.push_str(" AND v.source = ?");
         params.push(Box::new(
-            serde_json::to_value(src)?.as_str().unwrap_or("manual").to_string(),
+            serde_json::to_value(src)?
+                .as_str()
+                .unwrap_or("manual")
+                .to_string(),
         ));
     }
     if let Some(ref who) = q.prepared_by {
@@ -444,8 +451,8 @@ fn save_on(tx: &rusqlite::Connection, v: &mut Voucher) -> DbResult<i64> {
                 |r| r.get(0),
             )
             .optional()?;
-        let old_status = old_status
-            .ok_or_else(|| FinError::not_found(format!("凭证 #{}", v.id)))?;
+        let old_status =
+            old_status.ok_or_else(|| FinError::not_found(format!("凭证 #{}", v.id)))?;
         let old_status = serde_json::from_str::<VoucherStatus>(&format!("\"{old_status}\""))
             .unwrap_or(VoucherStatus::Draft);
         if !old_status.can_edit() {
@@ -468,16 +475,15 @@ fn save_on(tx: &rusqlite::Connection, v: &mut Voucher) -> DbResult<i64> {
         |r| r.get(0),
     )?;
     if taken > 0 {
-        return Err(FinError::msg(format!(
-            "{}-{:04} 已存在，请更换凭证号",
-            v.word, v.no
-        ))
-        .into());
+        return Err(FinError::msg(format!("{}-{:04} 已存在，请更换凭证号", v.word, v.no)).into());
     }
     let chart = crate::accounts::chart_of(tx)?;
     let opts = crate::options_of(tx);
-    fincore::engine::validate_for_save(v, &fincore::engine::ValidateCtx::new(&chart, &opts, closed))
-        .into_result()?;
+    fincore::engine::validate_for_save(
+        v,
+        &fincore::engine::ValidateCtx::new(&chart, &opts, closed),
+    )
+    .into_result()?;
 
     // ---- 1. 落库 ----
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -505,7 +511,10 @@ fn save_on(tx: &rusqlite::Connection, v: &mut Voucher) -> DbResult<i64> {
                 now,
             ],
         )?;
-        tx.execute("DELETE FROM voucher_entry WHERE voucher_id=?1", rusqlite::params![v.id])?;
+        tx.execute(
+            "DELETE FROM voucher_entry WHERE voucher_id=?1",
+            rusqlite::params![v.id],
+        )?;
         v.id
     } else {
         tx.execute(
@@ -725,11 +734,13 @@ pub fn amend_link(db: &Db, id: i64) -> DbResult<Option<AmendLink>> {
     // 光给个数字 id 在对账时没用
     let label = |vid: i64| -> String {
         db.conn()
-            .query_row(
-                "SELECT word, no FROM voucher WHERE id=?1",
-                [vid],
-                |r| Ok(format!("{}-{:06}", r.get::<_, String>(0)?, r.get::<_, i32>(1)?)),
-            )
+            .query_row("SELECT word, no FROM voucher WHERE id=?1", [vid], |r| {
+                Ok(format!(
+                    "{}-{:06}",
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i32>(1)?
+                ))
+            })
             .unwrap_or_default()
     };
     // 同批产生的两张后续凭证：红冲那张记在 amended_by，更正那张要单独找出来。
@@ -745,14 +756,30 @@ pub fn amend_link(db: &Db, id: i64) -> DbResult<Option<AmendLink>> {
             )
             .unwrap_or(0)
     };
-    let sibling_id = if amended_by > 0 { sibling(id, amended_by) } else { 0 };
+    let sibling_id = if amended_by > 0 {
+        sibling(id, amended_by)
+    } else {
+        0
+    };
     Ok(Some(AmendLink {
         amends_id,
-        amends_no: if amends_id > 0 { label(amends_id) } else { String::new() },
+        amends_no: if amends_id > 0 {
+            label(amends_id)
+        } else {
+            String::new()
+        },
         amended_by,
-        amended_by_no: if amended_by > 0 { label(amended_by) } else { String::new() },
+        amended_by_no: if amended_by > 0 {
+            label(amended_by)
+        } else {
+            String::new()
+        },
         amended_by_new: sibling_id,
-        amended_by_new_no: if sibling_id > 0 { label(sibling_id) } else { String::new() },
+        amended_by_new_no: if sibling_id > 0 {
+            label(sibling_id)
+        } else {
+            String::new()
+        },
         reason,
     }))
 }
@@ -817,11 +844,9 @@ pub fn amend(db: &Db, id: i64, reason: &str, who: &str) -> DbResult<i64> {
     // 「已被更正过」要**先于**状态检查说：更正过的凭证一定是「已作废」，
     // 反过来判就会得到笼统的「只有已记账的凭证才需要更正」，
     // 而真正的理由（别再改这张，去改新那张）被吞掉了。
-    let already: i64 = tx.query_row(
-        "SELECT amended_by FROM voucher WHERE id=?1",
-        [id],
-        |r| r.get(0),
-    )?;
+    let already: i64 = tx.query_row("SELECT amended_by FROM voucher WHERE id=?1", [id], |r| {
+        r.get(0)
+    })?;
     if already > 0 {
         return Err(FinError::state(format!(
             "本凭证已被 #{already} 更正过，不能重复更正 —— 更正链分叉后审计就看不出哪条是最终版本了"
@@ -836,8 +861,11 @@ pub fn amend(db: &Db, id: i64, reason: &str, who: &str) -> DbResult<i64> {
         .into());
     }
     // 期间已结账的凭证不能更正（与 set_void 同口径）
-    let closed: Option<i32> =
-        tx.query_row("SELECT MAX(period) FROM period_state WHERE closed=1", [], |r| r.get(0))?;
+    let closed: Option<i32> = tx.query_row(
+        "SELECT MAX(period) FROM period_state WHERE closed=1",
+        [],
+        |r| r.get(0),
+    )?;
     if let Some(upto) = closed {
         if old.period.ymm() <= upto {
             return Err(FinError::state(format!(
@@ -994,7 +1022,11 @@ pub fn unpost(db: &Db, id: i64) -> DbResult<()> {
     fincore::engine::validate_unpost(&v, closed.map(Period::from_ymm)).into_result()?;
     guard_amend_set(&tx, id, v.status, "反记账")?;
     // 反记账回到审核前的状态：有审核记录的回「已审核」，否则回「未记账」
-    let back = if v.audited_by.is_some() { "audited" } else { "draft" };
+    let back = if v.audited_by.is_some() {
+        "audited"
+    } else {
+        "draft"
+    };
     tx.execute(
         "UPDATE voucher SET status=?3, posted_by=NULL, updated_at=?2 WHERE id=?1",
         rusqlite::params![
@@ -1170,11 +1202,9 @@ pub fn set_void(db: &Db, id: i64, void: bool, who: &str) -> DbResult<()> {
         // 恢复作废后原凭证回到未记账，看着「只是回到未记账」没什么，但**它可以
         // 被重新记账** —— 那时它与红冲、更正凭证同时进总账，一笔钱记两遍，
         // 而链上还挂着更正关系。审计看到「已被更正」，账上却是两笔。
-        let by: i64 = tx.query_row(
-            "SELECT amended_by FROM voucher WHERE id=?1",
-            [id],
-            |r| r.get(0),
-        )?;
+        let by: i64 = tx.query_row("SELECT amended_by FROM voucher WHERE id=?1", [id], |r| {
+            r.get(0)
+        })?;
         if by > 0 {
             return Err(FinError::state(format!(
                 "本凭证已被 #{by} 更正过，不能恢复作废 —— 恢复后它与那张更正凭证会同时进总账。要改请改那张更正凭证"
@@ -1299,9 +1329,9 @@ pub fn status_summary(db: &Db, period: Period) -> DbResult<(i64, i64, i64, i64)>
 
 /// 检查期间内凭证号是否连续（断号检查）
 pub fn find_gaps(db: &Db, period: Period, word: &str) -> DbResult<Vec<i32>> {
-    let mut stmt = db.conn().prepare(
-        "SELECT no FROM voucher WHERE period=?1 AND word=?2 ORDER BY no",
-    )?;
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT no FROM voucher WHERE period=?1 AND word=?2 ORDER BY no")?;
     let nos: Vec<i32> = stmt
         .query_map(rusqlite::params![period.ymm(), word], |r| r.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1321,13 +1351,7 @@ pub fn find_gaps(db: &Db, period: Period, word: &str) -> DbResult<Vec<i32>> {
 ///
 /// 原凭证保留不动（符合审计要求），冲销凭证落在 `period`（通常为当前期），
 /// 状态为「未记账」，由用户核对后手动记账。
-pub fn reverse(
-    db: &Db,
-    id: i64,
-    who: &str,
-    period: Period,
-    date: NaiveDate,
-) -> DbResult<i64> {
+pub fn reverse(db: &Db, id: i64, who: &str, period: Period, date: NaiveDate) -> DbResult<i64> {
     let v = get(db, id)?.ok_or_else(|| FinError::not_found(format!("凭证 #{id}")))?;
     if v.status == VoucherStatus::Void {
         return Err(FinError::state("已作废凭证无需冲销").into());
@@ -1345,7 +1369,12 @@ pub fn reverse(
     r.audited_by = None;
     r.cashier = None;
     r.source = VoucherSource::Manual;
-    r.memo = format!("红字冲销 {}-{:04}（{}）", v.word, v.no, v.date.format("%Y-%m-%d"));
+    r.memo = format!(
+        "红字冲销 {}-{:04}（{}）",
+        v.word,
+        v.no,
+        v.date.format("%Y-%m-%d")
+    );
     let nid = save(db, &mut r)?;
     db.log(
         who,
@@ -1361,18 +1390,23 @@ pub fn reverse(
 /// 用于删除后消除断号。返回重排的凭证张数。
 pub fn renumber(db: &Db, period: Period, word: &str) -> DbResult<usize> {
     let rows: Vec<(i64, NaiveDate, i32)> = {
-        let mut stmt = db
-            .conn()
-            .prepare("SELECT id,date,no FROM voucher WHERE period=?1 AND word=?2 ORDER BY date,no")?;
+        let mut stmt = db.conn().prepare(
+            "SELECT id,date,no FROM voucher WHERE period=?1 AND word=?2 ORDER BY date,no",
+        )?;
         let rows = stmt
             .query_map(rusqlite::params![period.ymm(), word], |r| {
-                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i32>(2)?))
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i32>(2)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
             .map(|(id, ds, no)| {
-                let d = NaiveDate::parse_from_str(&ds, "%Y-%m-%d")
-                    .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).expect("基准日期必然合法"));
+                let d = NaiveDate::parse_from_str(&ds, "%Y-%m-%d").unwrap_or_else(|_| {
+                    NaiveDate::from_ymd_opt(1970, 1, 1).expect("基准日期必然合法")
+                });
                 (id, d, no)
             })
             .collect()
@@ -1407,7 +1441,12 @@ pub fn renumber(db: &Db, period: Period, word: &str) -> DbResult<usize> {
     }
     drop(stmt);
     tx.commit()?;
-    db.log("系统", "凭证", "重排凭证号", &format!("{}-{} 共 {} 张", period.label(), word, rows.len()))?;
+    db.log(
+        "系统",
+        "凭证",
+        "重排凭证号",
+        &format!("{}-{} 共 {} 张", period.label(), word, rows.len()),
+    )?;
     Ok(rows.len())
 }
 
@@ -1446,7 +1485,9 @@ pub fn sum_by_account(
         let aux: AuxRef = serde_json::from_str(&aux_json).unwrap_or_default();
         let d = read_money(r, 2)?;
         let c = read_money(r, 3)?;
-        let e = acc.entry((code, aux.key())).or_insert((Money::ZERO, Money::ZERO, aux));
+        let e = acc
+            .entry((code, aux.key()))
+            .or_insert((Money::ZERO, Money::ZERO, aux));
         e.0 += d;
         e.1 += c;
     }
@@ -1515,7 +1556,12 @@ mod tests {
     /// 否则 `save` 的守卫会以「必须填写银行/客户辅助」拒掉，测的就不是范围而是守卫了。
     fn scope_voucher(db: &Db, day: u32, codes: &[&str]) -> i64 {
         let p = Period::new(2026, 1).unwrap();
-        let mut v = Voucher::new(p, chrono::NaiveDate::from_ymd_opt(2026, 1, day).unwrap(), "记", 0);
+        let mut v = Voucher::new(
+            p,
+            chrono::NaiveDate::from_ymd_opt(2026, 1, day).unwrap(),
+            "记",
+            0,
+        );
         v.no = next_no(db, p, "记").unwrap();
         v.memo = format!("范围测试 {}", day);
         for (i, code) in codes.iter().enumerate() {
@@ -1561,11 +1607,7 @@ mod tests {
             let u = scoped_user(from, to);
             let mut q = VoucherQuery::period(Period::new(2026, 1).unwrap()).with_data_scope(&u);
             q.limit = None;
-            let sql_ids: Vec<i64> = list(&db, &q)
-                .unwrap()
-                .iter()
-                .map(|v| v.id)
-                .collect();
+            let sql_ids: Vec<i64> = list(&db, &q).unwrap().iter().map(|v| v.id).collect();
             // Rust 侧：全量取回后逐张过滤（这是改造前 handler 的做法）。
             // **必须先 fill_entries**：`list` 只读 voucher 表头，`v.entries` 是空的，
             // 而 `can_see_voucher` 是「全部科目都在范围内才可见」——对空分录
@@ -1610,8 +1652,8 @@ mod tests {
 
         let mut seen: Vec<i64> = Vec::new();
         for (page, page_size) in [5usize, 5, 5, 5, 5].iter().enumerate() {
-            let (rows, cnt) = list_page(&db, &q, (page * page_size) as i64, *page_size as i64)
-                .unwrap();
+            let (rows, cnt) =
+                list_page(&db, &q, (page * page_size) as i64, *page_size as i64).unwrap();
             assert_eq!(cnt as usize, total, "每一页的 COUNT 都得是总张数");
             seen.extend(rows.iter().map(|v| v.id));
         }
@@ -1656,7 +1698,11 @@ mod tests {
         // 条件收窄后合计要跟着变（证明合计与列表同源，不是写死的）
         q.status = Some(VoucherStatus::Void);
         let (dv, cv) = totals(&db, &q).unwrap();
-        assert_eq!((dv, cv), (Money::ZERO, Money::ZERO), "没有作废凭证时合计应为 0");
+        assert_eq!(
+            (dv, cv),
+            (Money::ZERO, Money::ZERO),
+            "没有作废凭证时合计应为 0"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1665,7 +1711,12 @@ mod tests {
 
     fn am_voucher(db: &Db, amt: &str) -> i64 {
         let p = Period::new(2026, 1).unwrap();
-        let mut v = Voucher::new(p, chrono::NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(), "记", 0);
+        let mut v = Voucher::new(
+            p,
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            "记",
+            0,
+        );
         v.no = next_no(db, p, "记").unwrap();
         v.memo = "测试凭证".to_string();
         // 科目选型照同文件既有用例（`voucher_roundtrip` 用的是 1001 / 100201）：
@@ -1701,7 +1752,10 @@ mod tests {
         let db = mem();
         let old = am_voucher(&db, "1000");
         post(&db, old, "boss").unwrap();
-        assert_eq!(get(&db, old).unwrap().unwrap().status, VoucherStatus::Posted);
+        assert_eq!(
+            get(&db, old).unwrap().unwrap().status,
+            VoucherStatus::Posted
+        );
 
         let new_id = amend(&db, old, "金额录错，应为 1200", "boss").unwrap();
         assert!(new_id > 0);
@@ -1819,12 +1873,21 @@ mod tests {
         }
         // ② 红冲凭证：作废 → 只剩 原+更正，一笔钱记两遍
         let e = set_void(&db, red_id, true, "boss").unwrap_err();
-        assert!(format!("{e:?}").contains("成套存在"), "红冲凭证不能单独作废：{e:?}");
+        assert!(
+            format!("{e:?}").contains("成套存在"),
+            "红冲凭证不能单独作废：{e:?}"
+        );
         let e = unpost(&db, red_id).unwrap_err();
-        assert!(format!("{e:?}").contains("成套存在"), "红冲凭证不能单独反记账：{e:?}");
+        assert!(
+            format!("{e:?}").contains("成套存在"),
+            "红冲凭证不能单独反记账：{e:?}"
+        );
         // ③ 更正凭证同样
         let e = set_void(&db, new_id, true, "boss").unwrap_err();
-        assert!(format!("{e:?}").contains("成套存在"), "更正凭证不能单独作废：{e:?}");
+        assert!(
+            format!("{e:?}").contains("成套存在"),
+            "更正凭证不能单独作废：{e:?}"
+        );
 
         // 守卫失败不该动任何状态
         for id in [old, red_id, new_id] {
@@ -1859,9 +1922,15 @@ mod tests {
         post(&db, old, "boss").unwrap();
         let new_id = amend(&db, old, "第一次更正", "boss").unwrap();
         // 草稿状态（未记账）→ 不在总账里，作废它不改变净额
-        assert_eq!(get(&db, new_id).unwrap().unwrap().status, VoucherStatus::Draft);
+        assert_eq!(
+            get(&db, new_id).unwrap().unwrap().status,
+            VoucherStatus::Draft
+        );
         set_void(&db, new_id, true, "boss").expect("未记账的更正凭证应可作废重来");
-        assert_eq!(get(&db, new_id).unwrap().unwrap().status, VoucherStatus::Void);
+        assert_eq!(
+            get(&db, new_id).unwrap().unwrap().status,
+            VoucherStatus::Void
+        );
     }
 
     /// 操作日志必须与更正**同在一条记录里**：日志写在事务外的话，
@@ -2158,7 +2227,10 @@ mod tests {
         for (i, amt) in ["600", "700"].iter().enumerate() {
             v.push_entry(Entry {
                 debit: Money::parse(amt).unwrap(),
-                aux: AuxRef { customer: Some("C01".into()), ..Default::default() },
+                aux: AuxRef {
+                    customer: Some("C01".into()),
+                    ..Default::default()
+                },
                 ..Entry::new(i as i32 * 2 + 1, "112201", "应收")
             });
             v.push_entry(Entry {
@@ -2178,13 +2250,19 @@ mod tests {
         pay.prepared_by = "张三".to_string();
         pay.push_entry(Entry {
             debit: Money::parse("1300").unwrap(),
-            aux: AuxRef { bank: Some("B01".into()), ..Default::default() },
+            aux: AuxRef {
+                bank: Some("B01".into()),
+                ..Default::default()
+            },
             ..Entry::new(1, "100201", "收款")
         });
         for (i, amt) in ["600", "700"].iter().enumerate() {
             pay.push_entry(Entry {
                 credit: Money::parse(amt).unwrap(),
-                aux: AuxRef { customer: Some("C01".into()), ..Default::default() },
+                aux: AuxRef {
+                    customer: Some("C01".into()),
+                    ..Default::default()
+                },
                 ..Entry::new(i as i32 + 2, "112201", "冲应收")
             });
         }
@@ -2194,16 +2272,20 @@ mod tests {
         crate::settle::settle(&db, e[0].id, f[1].id, Money::parse("600").unwrap(), "u").unwrap();
         crate::settle::settle(&db, e[2].id, f[2].id, Money::parse("700").unwrap(), "u").unwrap();
         let cnt = |db: &Db| -> i64 {
-            db.conn().query_row("SELECT COUNT(*) FROM settle_record", [], |r| r.get(0)).unwrap()
+            db.conn()
+                .query_row("SELECT COUNT(*) FROM settle_record", [], |r| r.get(0))
+                .unwrap()
         };
         assert_eq!(cnt(&db), 2);
 
         // 让第 2 条核销记录删不掉：删凭证必须整体失败，且第 1 条核销记录必须还在
         let second: i64 = db
             .conn()
-            .query_row("SELECT id FROM settle_record ORDER BY id LIMIT 1 OFFSET 1", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT id FROM settle_record ORDER BY id LIMIT 1 OFFSET 1",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         db.conn()
             .execute_batch(&format!(
@@ -2284,7 +2366,14 @@ mod tests {
         v.posted_by = Some("张三".into());
         let id = save(&db, &mut v).unwrap();
 
-        let rid = reverse(&db, id, "李四", p, NaiveDate::from_ymd_opt(2026, 1, 6).unwrap()).unwrap();
+        let rid = reverse(
+            &db,
+            id,
+            "李四",
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 6).unwrap(),
+        )
+        .unwrap();
         let r = get(&db, rid).unwrap().unwrap();
         // 原凭证不动
         let orig = get(&db, id).unwrap().unwrap();
@@ -2363,29 +2452,43 @@ mod tests {
         assert_eq!(list(&db, &VoucherQuery::period(p)).unwrap().len(), 1);
         assert_eq!(list(&db, &VoucherQuery::default()).unwrap().len(), 2);
         assert_eq!(
-            list(&db, &VoucherQuery::default().with_status(Some(VoucherStatus::Draft)))
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(
-            list(&db, &VoucherQuery::default().with_keyword("提取")).unwrap().len(),
-            2
-        );
-        assert_eq!(
-            list(&db, &VoucherQuery {
-                account_code: Some("1001".into()),
-                ..Default::default()
-            })
+            list(
+                &db,
+                &VoucherQuery::default().with_status(Some(VoucherStatus::Draft))
+            )
             .unwrap()
             .len(),
             2
         );
         assert_eq!(
-            list(&db, &VoucherQuery {
-                aux: Some(AuxRef { bank: Some("B01".into()), ..Default::default() }),
-                ..Default::default()
-            })
+            list(&db, &VoucherQuery::default().with_keyword("提取"))
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            list(
+                &db,
+                &VoucherQuery {
+                    account_code: Some("1001".into()),
+                    ..Default::default()
+                }
+            )
+            .unwrap()
+            .len(),
+            2
+        );
+        assert_eq!(
+            list(
+                &db,
+                &VoucherQuery {
+                    aux: Some(AuxRef {
+                        bank: Some("B01".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }
+            )
             .unwrap()
             .len(),
             2

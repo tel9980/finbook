@@ -2,10 +2,10 @@
 
 use egui::{Color32, RichText, Ui};
 use egui_extras::{Column, TableBuilder};
-use findb::balances::{BalanceQuery, BalanceSnapshot};
 use fincore::report::cashflow::CashFlowStatement;
 use fincore::report::{AmountKind, LineStyle, ReportTable};
 use fincore::{Money, Period};
+use findb::balances::{BalanceQuery, BalanceSnapshot};
 
 use crate::state::AppCtx;
 use crate::theme;
@@ -104,7 +104,15 @@ impl ReportsView {
                 self.cf = None;
                 self.equity = None;
                 let prev = from.prev();
-                match findb::reports::report_compare(ctx.db(), "balance_sheet", Period::new(from.year(), 1).unwrap_or(from), from, Period::new(prev.year(), 1).unwrap_or(prev), prev, Some(ctx.user())) {
+                match findb::reports::report_compare(
+                    ctx.db(),
+                    "balance_sheet",
+                    Period::new(from.year(), 1).unwrap_or(from),
+                    from,
+                    Period::new(prev.year(), 1).unwrap_or(prev),
+                    prev,
+                    Some(ctx.user()),
+                ) {
                     Ok(rows) => self.compare = rows,
                     Err(e) => self.err = Some(e.to_string()),
                 }
@@ -166,10 +174,7 @@ impl ReportsView {
                         &snap,
                         &company,
                         &subtitle,
-                        vec![
-                            Box::new(fincore::report::identity),
-                            Box::new(to_ytd),
-                        ],
+                        vec![Box::new(fincore::report::identity), Box::new(to_ytd)],
                     )
                 };
                 self.table = Some(table);
@@ -206,7 +211,9 @@ impl ReportsView {
             }
             if ui.button("本年").clicked() {
                 let p = ctx.period();
-                self.from = Period::new(p.year(), 1).map(|x| x.code()).unwrap_or(p.code());
+                self.from = Period::new(p.year(), 1)
+                    .map(|x| x.code())
+                    .unwrap_or(p.code());
                 self.to = p.code();
                 self.dirty = true;
             }
@@ -214,7 +221,11 @@ impl ReportsView {
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
                 self.export(ctx, mode);
             }
-            if self.tab != Tab::CashFlow && self.tab != Tab::Equity && self.tab != Tab::Compare && ui.button("恢复内置模板").clicked() {
+            if self.tab != Tab::CashFlow
+                && self.tab != Tab::Equity
+                && self.tab != Tab::Compare
+                && ui.button("恢复内置模板").clicked()
+            {
                 let key = if self.tab == Tab::Balance {
                     "balance_sheet"
                 } else {
@@ -233,25 +244,28 @@ impl ReportsView {
             return;
         }
 
-        egui::ScrollArea::both().show(ui, |ui| {
-            match self.tab {
-                Tab::CashFlow => {
-                    if let Some(cf) = &self.cf {
-                        cash_flow_table(ui, cf, &ctx.db().options().company, &self.subtitle());
-                    }
+        egui::ScrollArea::both().show(ui, |ui| match self.tab {
+            Tab::CashFlow => {
+                if let Some(cf) = &self.cf {
+                    cash_flow_table(ui, cf, &ctx.db().options().company, &self.subtitle());
                 }
-                Tab::Equity => {
-                    if let Some(e) = &self.equity {
-                        equity_table(ui, e, &ctx.db().options().company, &self.subtitle());
-                    }
+            }
+            Tab::Equity => {
+                if let Some(e) = &self.equity {
+                    equity_table(ui, e, &ctx.db().options().company, &self.subtitle());
                 }
-                Tab::Compare => {
-                    compare_table(ui, &self.compare, &ctx.db().options().company, &self.subtitle());
-                }
-                _ => {
-                    if let Some(t) = &self.table {
-                        report_table(ui, t);
-                    }
+            }
+            Tab::Compare => {
+                compare_table(
+                    ui,
+                    &self.compare,
+                    &ctx.db().options().company,
+                    &self.subtitle(),
+                );
+            }
+            _ => {
+                if let Some(t) = &self.table {
+                    report_table(ui, t);
                 }
             }
         });
@@ -277,18 +291,40 @@ impl ReportsView {
                 };
                 let mut sh = crate::views::export::Sheet::new(
                     "所有者权益变动表",
-                    vec!["项目".into(), "年初余额".into(), "本年增减".into(), "年末余额".into()],
+                    vec![
+                        "项目".into(),
+                        "年初余额".into(),
+                        "本年增减".into(),
+                        "年末余额".into(),
+                    ],
                 );
                 for l in &e.lines {
-                    sh.push(vec![l.name.clone(), l.begin.fmt_plain(), l.change.fmt_plain(), l.end.fmt_plain()]);
+                    sh.push(vec![
+                        l.name.clone(),
+                        l.begin.fmt_plain(),
+                        l.change.fmt_plain(),
+                        l.end.fmt_plain(),
+                    ]);
                 }
-                sh.push(vec!["合计".into(), e.total.begin.fmt_plain(), e.total.change.fmt_plain(), e.total.end.fmt_plain()]);
+                sh.push(vec![
+                    "合计".into(),
+                    e.total.begin.fmt_plain(),
+                    e.total.change.fmt_plain(),
+                    e.total.end.fmt_plain(),
+                ]);
                 sh
             }
             Tab::Compare => {
                 let mut sh = crate::views::export::Sheet::new(
                     "报表对比分析",
-                    vec!["行次".into(), "项目".into(), "当前期".into(), "对比期".into(), "差额".into(), "变动率".into()],
+                    vec![
+                        "行次".into(),
+                        "项目".into(),
+                        "当前期".into(),
+                        "对比期".into(),
+                        "差额".into(),
+                        "变动率".into(),
+                    ],
                 );
                 for r in &self.compare {
                     sh.push(vec![
@@ -396,7 +432,11 @@ pub fn report_table(ui: &mut Ui, t: &ReportTable) {
 
             row.col(|ui| {
                 let indent = "　".repeat(r.indent as usize);
-                let txt = if strong { RichText::new(format!("{indent}{}", r.name)).strong() } else { RichText::new(format!("{indent}{}", r.name)) };
+                let txt = if strong {
+                    RichText::new(format!("{indent}{}", r.name)).strong()
+                } else {
+                    RichText::new(format!("{indent}{}", r.name))
+                };
                 if matches!(r.style, LineStyle::Header) {
                     ui.label(txt.color(palette::PRIMARY));
                 } else {
@@ -437,7 +477,12 @@ pub fn report_table(ui: &mut Ui, t: &ReportTable) {
 }
 
 /// 所有者权益变动表渲染
-pub fn equity_table(ui: &mut Ui, e: &fincore::report::equity::EquityStatement, company: &str, subtitle: &str) {
+pub fn equity_table(
+    ui: &mut Ui,
+    e: &fincore::report::equity::EquityStatement,
+    company: &str,
+    subtitle: &str,
+) {
     ui.vertical_centered(|ui| {
         ui.label(RichText::new("所有者权益变动表").size(19.0).strong());
     });
@@ -458,19 +503,33 @@ pub fn equity_table(ui: &mut Ui, e: &fincore::report::equity::EquityStatement, c
     ];
     let n = e.lines.len() + 1;
     crate::widgets::grid(ui, "equity_stmt", &cols, n, 24.0, |i, c, ui| {
-        let l = if i == e.lines.len() { &e.total } else { &e.lines[i] };
+        let l = if i == e.lines.len() {
+            &e.total
+        } else {
+            &e.lines[i]
+        };
         let strong = i == e.lines.len();
         match c {
             0 => {
-                let txt = if strong { RichText::new(&l.name).strong() } else { RichText::new(&l.name) };
+                let txt = if strong {
+                    RichText::new(&l.name).strong()
+                } else {
+                    RichText::new(&l.name)
+                };
                 ui.label(txt);
             }
-            1 => { crate::widgets::amount_label(ui, l.begin); }
-            2 => { crate::widgets::amount_label(ui, l.change); }
+            1 => {
+                crate::widgets::amount_label(ui, l.begin);
+            }
+            2 => {
+                crate::widgets::amount_label(ui, l.change);
+            }
             3 => {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let mut txt = RichText::new(l.end.fmt_money());
-                    if strong { txt = txt.strong(); }
+                    if strong {
+                        txt = txt.strong();
+                    }
                     ui.label(txt);
                 });
             }
@@ -486,7 +545,12 @@ pub fn equity_table(ui: &mut Ui, e: &fincore::report::equity::EquityStatement, c
 }
 
 /// 报表对比分析渲染
-pub fn compare_table(ui: &mut Ui, rows: &[findb::reports::CompareRow], company: &str, subtitle: &str) {
+pub fn compare_table(
+    ui: &mut Ui,
+    rows: &[findb::reports::CompareRow],
+    company: &str,
+    subtitle: &str,
+) {
     ui.vertical_centered(|ui| {
         ui.label(RichText::new("报表对比分析").size(19.0).strong());
     });
@@ -508,16 +572,29 @@ pub fn compare_table(ui: &mut Ui, rows: &[findb::reports::CompareRow], company: 
     ];
     crate::widgets::grid(ui, "compare_table", &cols, rows.len(), 24.0, |i, c, ui| {
         let r = &rows[i];
-        let strong = matches!(r.style, fincore::report::LineStyle::Total | fincore::report::LineStyle::Subtotal);
+        let strong = matches!(
+            r.style,
+            fincore::report::LineStyle::Total | fincore::report::LineStyle::Subtotal
+        );
         match c {
             0 => {
                 let indent = "　".repeat(r.indent as usize);
-                let txt = if strong { RichText::new(format!("{indent}{}", r.name)).strong() } else { RichText::new(format!("{indent}{}", r.name)) };
+                let txt = if strong {
+                    RichText::new(format!("{indent}{}", r.name)).strong()
+                } else {
+                    RichText::new(format!("{indent}{}", r.name))
+                };
                 ui.label(txt);
             }
-            1 => { crate::widgets::amount_label(ui, r.current); }
-            2 => { crate::widgets::amount_label(ui, r.previous); }
-            3 => { crate::widgets::amount_label(ui, r.diff); }
+            1 => {
+                crate::widgets::amount_label(ui, r.current);
+            }
+            2 => {
+                crate::widgets::amount_label(ui, r.previous);
+            }
+            3 => {
+                crate::widgets::amount_label(ui, r.diff);
+            }
             4 => {
                 let v = r.rate;
                 if v.is_zero() {
@@ -532,7 +609,8 @@ pub fn compare_table(ui: &mut Ui, rows: &[findb::reports::CompareRow], company: 
 }
 
 /// 现金流量表渲染
-pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subtitle: &str) {    ui.vertical_centered(|ui| {
+pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subtitle: &str) {
+    ui.vertical_centered(|ui| {
         ui.label(RichText::new("现金流量表").size(19.0).strong());
     });
     ui.horizontal(|ui| {
@@ -579,7 +657,15 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
         });
     };
 
-    push(&mut lines, "一、经营活动产生的现金流量", 0, Money::ZERO, Money::ZERO, Money::ZERO, true);
+    push(
+        &mut lines,
+        "一、经营活动产生的现金流量",
+        0,
+        Money::ZERO,
+        Money::ZERO,
+        Money::ZERO,
+        true,
+    );
     for l in &cf.operating {
         push(&mut lines, &l.name, 1, l.inflow, l.outflow, l.net, false);
     }
@@ -592,7 +678,15 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
         cf.operating_net,
         true,
     );
-    push(&mut lines, "二、投资活动产生的现金流量", 0, Money::ZERO, Money::ZERO, Money::ZERO, true);
+    push(
+        &mut lines,
+        "二、投资活动产生的现金流量",
+        0,
+        Money::ZERO,
+        Money::ZERO,
+        Money::ZERO,
+        true,
+    );
     for l in &cf.investing {
         push(&mut lines, &l.name, 1, l.inflow, l.outflow, l.net, false);
     }
@@ -605,7 +699,15 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
         cf.investing_net,
         true,
     );
-    push(&mut lines, "三、筹资活动产生的现金流量", 0, Money::ZERO, Money::ZERO, Money::ZERO, true);
+    push(
+        &mut lines,
+        "三、筹资活动产生的现金流量",
+        0,
+        Money::ZERO,
+        Money::ZERO,
+        Money::ZERO,
+        true,
+    );
     for l in &cf.financing {
         push(&mut lines, &l.name, 1, l.inflow, l.outflow, l.net, false);
     }
@@ -627,8 +729,24 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
         cf.net_increase,
         true,
     );
-    push(&mut lines, "　　加：期初现金及现金等价物余额", 0, Money::ZERO, Money::ZERO, cf.begin_cash, false);
-    push(&mut lines, "五、期末现金及现金等价物余额", 0, Money::ZERO, Money::ZERO, cf.end_cash, true);
+    push(
+        &mut lines,
+        "　　加：期初现金及现金等价物余额",
+        0,
+        Money::ZERO,
+        Money::ZERO,
+        cf.begin_cash,
+        false,
+    );
+    push(
+        &mut lines,
+        "五、期末现金及现金等价物余额",
+        0,
+        Money::ZERO,
+        Money::ZERO,
+        cf.end_cash,
+        true,
+    );
 
     let n = lines.len();
     crate::widgets::grid(ui, "cash_flow", &cols, n, 24.0, |i, c, ui| {
@@ -636,13 +754,21 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
         match c {
             0 => {
                 let indent = "　".repeat(l.indent as usize);
-                ui.label(if l.strong { RichText::new(format!("{indent}{}", l.name)).strong() } else { RichText::new(format!("{indent}{}", l.name)) });
+                ui.label(if l.strong {
+                    RichText::new(format!("{indent}{}", l.name)).strong()
+                } else {
+                    RichText::new(format!("{indent}{}", l.name))
+                });
             }
             1 => {
                 ui.label(RichText::new(format!("{}", i + 1)).weak());
             }
-            2 => { crate::widgets::amount_label(ui, l.inflow); }
-            3 => { crate::widgets::amount_label(ui, l.outflow); }
+            2 => {
+                crate::widgets::amount_label(ui, l.inflow);
+            }
+            3 => {
+                crate::widgets::amount_label(ui, l.outflow);
+            }
             4 => {
                 let v = l.net;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -674,10 +800,7 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
         );
     }
     if cf.ties() {
-        ui.label(
-            RichText::new("✔ 净增加额与货币资金期末减期初一致，勾稽通过")
-                .color(palette::OK),
-        );
+        ui.label(RichText::new("✔ 净增加额与货币资金期末减期初一致，勾稽通过").color(palette::OK));
     } else {
         ui.colored_label(
             palette::CREDIT,
@@ -692,7 +815,8 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
     }
 }
 
-pub fn cash_flow_sheet(cf: &CashFlowStatement) -> crate::views::export::Sheet {    let mut sh = crate::views::export::Sheet::new(
+pub fn cash_flow_sheet(cf: &CashFlowStatement) -> crate::views::export::Sheet {
+    let mut sh = crate::views::export::Sheet::new(
         "现金流量表",
         vec![
             "项目".into(),
@@ -701,14 +825,21 @@ pub fn cash_flow_sheet(cf: &CashFlowStatement) -> crate::views::export::Sheet { 
             "净额".into(),
         ],
     );
-    let add = |sh: &mut crate::views::export::Sheet,
-                   name: &str,
-                   i: Money,
-                   o: Money,
-                   n: Money| {
-        sh.push(vec![name.to_string(), i.fmt_plain(), o.fmt_plain(), n.fmt_plain()]);
+    let add = |sh: &mut crate::views::export::Sheet, name: &str, i: Money, o: Money, n: Money| {
+        sh.push(vec![
+            name.to_string(),
+            i.fmt_plain(),
+            o.fmt_plain(),
+            n.fmt_plain(),
+        ]);
     };
-    add(&mut sh, "一、经营活动产生的现金流量", Money::ZERO, Money::ZERO, Money::ZERO);
+    add(
+        &mut sh,
+        "一、经营活动产生的现金流量",
+        Money::ZERO,
+        Money::ZERO,
+        Money::ZERO,
+    );
     for l in &cf.operating {
         add(&mut sh, &l.name, l.inflow, l.outflow, l.net);
     }
@@ -719,7 +850,13 @@ pub fn cash_flow_sheet(cf: &CashFlowStatement) -> crate::views::export::Sheet { 
         Money::ZERO,
         cf.operating_net,
     );
-    add(&mut sh, "二、投资活动产生的现金流量", Money::ZERO, Money::ZERO, Money::ZERO);
+    add(
+        &mut sh,
+        "二、投资活动产生的现金流量",
+        Money::ZERO,
+        Money::ZERO,
+        Money::ZERO,
+    );
     for l in &cf.investing {
         add(&mut sh, &l.name, l.inflow, l.outflow, l.net);
     }
@@ -730,7 +867,13 @@ pub fn cash_flow_sheet(cf: &CashFlowStatement) -> crate::views::export::Sheet { 
         Money::ZERO,
         cf.investing_net,
     );
-    add(&mut sh, "三、筹资活动产生的现金流量", Money::ZERO, Money::ZERO, Money::ZERO);
+    add(
+        &mut sh,
+        "三、筹资活动产生的现金流量",
+        Money::ZERO,
+        Money::ZERO,
+        Money::ZERO,
+    );
     for l in &cf.financing {
         add(&mut sh, &l.name, l.inflow, l.outflow, l.net);
     }
@@ -748,7 +891,19 @@ pub fn cash_flow_sheet(cf: &CashFlowStatement) -> crate::views::export::Sheet { 
         Money::ZERO,
         cf.net_increase,
     );
-    add(&mut sh, "加：期初现金及现金等价物余额", Money::ZERO, Money::ZERO, cf.begin_cash);
-    add(&mut sh, "五、期末现金及现金等价物余额", Money::ZERO, Money::ZERO, cf.end_cash);
+    add(
+        &mut sh,
+        "加：期初现金及现金等价物余额",
+        Money::ZERO,
+        Money::ZERO,
+        cf.begin_cash,
+    );
+    add(
+        &mut sh,
+        "五、期末现金及现金等价物余额",
+        Money::ZERO,
+        Money::ZERO,
+        cf.end_cash,
+    );
     sh
 }

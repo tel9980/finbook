@@ -10,8 +10,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use findb::{users, Db, DbError, DbResult};
 use fincore::user::{burn_argon2, hash_password, verify_password, PasswordPolicy, Role, User};
+use findb::{users, Db, DbError, DbResult};
 use rusqlite::{Connection, OptionalExtension};
 use tracing::error;
 
@@ -250,7 +250,10 @@ impl RealmDb {
         )?;
         if moved > 0 {
             // 旧库一个账号最多一个值，去重天然成立；bound_at/last_seen 用 created_at 顶替
-            tracing::info!(count = moved, "已把单列 device_id 的绑定迁移到 realm_user_device");
+            tracing::info!(
+                count = moved,
+                "已把单列 device_id 的绑定迁移到 realm_user_device"
+            );
         }
         Ok(())
     }
@@ -267,7 +270,7 @@ impl RealmDb {
     /// 首次启动引导：若没有任何账号，则创建管理员。
     /// - `admin_pass` 非空：用给定口令创建（运维通过环境变量注入，推荐）。
     /// - 否则：自动生成强口令，调用方负责打印一次性凭据。
-    /// 返回 `(username, password)`：若管理员已存在则返回 `None`。
+    ///   返回 `(username, password)`：若管理员已存在则返回 `None`。
     pub fn ensure_bootstrap(
         &self,
         admin_user: &str,
@@ -377,7 +380,9 @@ impl RealmDb {
             "SELECT id,username,display_name,password_hash,is_admin,disabled,must_change_pwd,device_id,created_at,locked_until
              FROM realm_user ORDER BY id",
         )?;
-        let rows = stmt.query_map([], map_user)?.collect::<Result<Vec<_>, _>>()?;
+        let rows = stmt
+            .query_map([], map_user)?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
@@ -541,7 +546,11 @@ impl RealmDb {
             return Ok(0);
         }
         let remain = chrono::NaiveDateTime::parse_from_str(raw.trim(), "%Y-%m-%d %H:%M:%S")
-            .map(|t| (t - chrono::Local::now().naive_local()).num_minutes().max(0))
+            .map(|t| {
+                (t - chrono::Local::now().naive_local())
+                    .num_minutes()
+                    .max(0)
+            })
             .unwrap_or(0);
         if remain == 0 {
             conn.execute(
@@ -588,7 +597,12 @@ impl RealmDb {
         let conn = self.inner.lock().unwrap();
         conn.execute(
             "UPDATE realm_user SET display_name=?2,disabled=?3,is_admin=?4 WHERE username=?1",
-            rusqlite::params![username, u.display_name, u.disabled as i64, u.is_admin as i64],
+            rusqlite::params![
+                username,
+                u.display_name,
+                u.disabled as i64,
+                u.is_admin as i64
+            ],
         )?;
         Ok(())
     }
@@ -599,7 +613,11 @@ impl RealmDb {
             .get_user(username)?
             .ok_or_else(|| fincore::FinError::not_found("账号不存在"))?;
         if target.is_admin {
-            let admins = self.list_users()?.into_iter().filter(|u| u.is_admin).count();
+            let admins = self
+                .list_users()?
+                .into_iter()
+                .filter(|u| u.is_admin)
+                .count();
             if admins <= 1 {
                 return Err(DbError::Fin(fincore::FinError::msg(
                     "至少保留一个管理员账号",
@@ -614,7 +632,12 @@ impl RealmDb {
         Ok(())
     }
 
-    pub fn reset_password(&self, username: &str, new: &str, policy: &PasswordPolicy) -> DbResult<()> {
+    pub fn reset_password(
+        &self,
+        username: &str,
+        new: &str,
+        policy: &PasswordPolicy,
+    ) -> DbResult<()> {
         policy
             .check(new)
             .map_err(fincore::FinError::msg)
@@ -874,7 +897,10 @@ impl RealmDb {
 
     pub fn delete_book(&self, key: &str) -> DbResult<()> {
         let conn = self.inner.lock().unwrap();
-        conn.execute("DELETE FROM realm_book WHERE key=?1", rusqlite::params![key])?;
+        conn.execute(
+            "DELETE FROM realm_book WHERE key=?1",
+            rusqlite::params![key],
+        )?;
         Ok(())
     }
 
@@ -983,11 +1009,7 @@ impl RealmDb {
         let mut st = conn
             .prepare("SELECT * FROM realm_api_key")
             .expect("准备 dump 失败");
-        let cols: Vec<String> = st
-            .column_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let cols: Vec<String> = st.column_names().iter().map(|s| s.to_string()).collect();
         let mut out = cols.join("|");
         out.push('\n');
         let mut rows = st.query([]).expect("查询密钥表失败");
@@ -996,7 +1018,10 @@ impl RealmDb {
                 if i > 0 {
                     out.push('|');
                 }
-                out.push_str(&format!("{c}={:?}", row.get::<_, rusqlite::types::Value>(i)));
+                out.push_str(&format!(
+                    "{c}={:?}",
+                    row.get::<_, rusqlite::types::Value>(i)
+                ));
             }
             out.push('\n');
         }
@@ -1056,7 +1081,9 @@ impl RealmDb {
         }
         // 过期判断：expires_at 非空且已过 → 失效。空 = 永不过期。
         if !expires.trim().is_empty() {
-            if let Ok(exp) = chrono::NaiveDateTime::parse_from_str(expires.trim(), "%Y-%m-%d %H:%M:%S") {
+            if let Ok(exp) =
+                chrono::NaiveDateTime::parse_from_str(expires.trim(), "%Y-%m-%d %H:%M:%S")
+            {
                 if exp < chrono::Local::now().naive_local() {
                     return Ok(None);
                 }
@@ -1109,7 +1136,9 @@ impl RealmDb {
     pub fn load_all_book_paths(&self) -> DbResult<Vec<PathBuf>> {
         let conn = self.inner.lock().unwrap();
         let mut stmt = conn.prepare("SELECT path FROM realm_book ORDER BY id")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(rows.into_iter().map(PathBuf::from).collect())
     }
 
@@ -1132,8 +1161,8 @@ impl RealmDb {
                 continue;
             }
             // 仅当账套目录在指定目录下（防越权改到其他位置的库）
-            if let Some(dir) = books_dir.canonicalize().ok() {
-                if let Some(pc) = p.canonicalize().ok() {
+            if let Ok(dir) = books_dir.canonicalize() {
+                if let Ok(pc) = p.canonicalize() {
                     if !pc.starts_with(&dir) {
                         continue;
                     }
@@ -1209,7 +1238,7 @@ fn generate_password() -> String {
 ///
 /// - 普通用户自建账套时已被 [`crate::handlers::create_book`] 种子为 Admin；
 /// - 管理员查看他人账套时，首次进入自动以其全局口令哈希种子一行 Admin。
-/// 之后账套引擎的权限/数据范围/设备绑定逻辑对这行用户照常生效。
+///   之后账套引擎的权限/数据范围/设备绑定逻辑对这行用户照常生效。
 pub fn ensure_book_admin(db: &Db, ru: &RealmUser) -> DbResult<()> {
     if users::get(db, &ru.username)?.is_none() {
         let mut u = User::new(&ru.username, &ru.display_name, Role::Admin);

@@ -5,18 +5,17 @@
 //! 编什么、怎么比交给用户在界面上定，不替他做假设。
 
 use egui::{Align2, RichText, Ui};
-use findb::advanced::{self, BudgetVersion};
-use findb::mgmt::{self, Budget, BudgetRow};
 use fincore::account::AuxKind;
 use fincore::{Money, Period, Perm};
+use findb::advanced::{self, BudgetVersion};
+use findb::mgmt::{self, Budget, BudgetRow};
 
 use crate::state::{AppCtx, ConfirmAction};
 use crate::theme::palette;
 use crate::widgets;
 
 /// 预算管理的两个页签
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[derive(Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BudgetTab {
     /// 预算编制
     Edit,
@@ -131,7 +130,13 @@ impl BudgetView {
 
     fn reload(&mut self, ctx: &mut AppCtx<'_>) {
         let p = self.period(ctx);
-        let key = format!("{}|{:?}|{}|{}", p.ymm(), self.tab, self.yearly, self.version);
+        let key = format!(
+            "{}|{:?}|{}|{}",
+            p.ymm(),
+            self.tab,
+            self.yearly,
+            self.version
+        );
         if !self.dirty && self.key == key {
             return;
         }
@@ -235,8 +240,10 @@ impl BudgetView {
                 self.dirty = true;
             }
             ui.label("期间");
-            let r =
-                ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.period_text));
+            let r = ui.add_sized(
+                [84.0, 22.0],
+                egui::TextEdit::singleline(&mut self.period_text),
+            );
             if r.changed() {
                 self.dirty = true;
             }
@@ -324,7 +331,14 @@ impl BudgetView {
         let depts = self.dept_options.clone();
         widgets::toolbar(ui, |ui| {
             ui.label("科目");
-            widgets::account_combo(ui, "bg_new_acct", &mut self.new_account, ctx.chart(), true, 200.0);
+            widgets::account_combo(
+                ui,
+                "bg_new_acct",
+                &mut self.new_account,
+                ctx.chart(),
+                true,
+                200.0,
+            );
             ui.label("部门");
             let mut dept = self.new_dept.clone();
             egui::ComboBox::from_id_salt("bg_new_dept")
@@ -378,11 +392,20 @@ impl BudgetView {
             let mut memo_buf = std::mem::take(&mut self.memo_buf);
             let mut sel = self.sel;
             let mut save: Vec<usize> = Vec::new();
-            let codes: Vec<String> = self.budgets.iter().map(|b| b.account_code.clone()).collect();
+            let codes: Vec<String> = self
+                .budgets
+                .iter()
+                .map(|b| b.account_code.clone())
+                .collect();
             let names = self.names.clone();
             let depts: Vec<String> = self.budgets.iter().map(|b| b.dept.clone()).collect();
-            widgets::grid(ui, "budget_rows", &cols, self.budgets.len(), 26.0, |i, c, ui| {
-                match c {
+            widgets::grid(
+                ui,
+                "budget_rows",
+                &cols,
+                self.budgets.len(),
+                26.0,
+                |i, c, ui| match c {
                     0 => {
                         if ui
                             .selectable_label(sel == Some(i), RichText::new(&codes[i]).monospace())
@@ -393,13 +416,11 @@ impl BudgetView {
                     }
                     1 => {
                         let n = &names[i];
-                        ui.label(
-                            RichText::new(n).color(if n.starts_with('⟨') {
-                                palette::CREDIT
-                            } else {
-                                ui.visuals().text_color()
-                            }),
-                        );
+                        ui.label(RichText::new(n).color(if n.starts_with('⟨') {
+                            palette::CREDIT
+                        } else {
+                            ui.visuals().text_color()
+                        }));
                     }
                     2 => {
                         let d = &depts[i];
@@ -410,26 +431,21 @@ impl BudgetView {
                         }
                     }
                     3 => {
-                        let r =
-                            widgets::money_input(ui, &mut amount_buf[i], ui.available_width());
+                        let r = widgets::money_input(ui, &mut amount_buf[i], ui.available_width());
                         if r.lost_focus() {
                             save.push(i);
                         }
                     }
                     4 => {
-                        let r = widgets::text_input(
-                            ui,
-                            &mut memo_buf[i],
-                            ui.available_width(),
-                            "备注",
-                        );
+                        let r =
+                            widgets::text_input(ui, &mut memo_buf[i], ui.available_width(), "备注");
                         if r.lost_focus() {
                             save.push(i);
                         }
                     }
                     _ => {}
-                }
-            });
+                },
+            );
             self.amount_buf = amount_buf;
             self.memo_buf = memo_buf;
             self.sel = sel;
@@ -461,7 +477,10 @@ impl BudgetView {
         if want_clear {
             ctx.confirm_dangerous(
                 "清空全部预算",
-                &format!("将删除 {} 的全部预算数据，且不可撤销。确定继续吗？", p.label()),
+                &format!(
+                    "将删除 {} 的全部预算数据，且不可撤销。确定继续吗？",
+                    p.label()
+                ),
                 ConfirmAction::ClearBudget,
                 true,
             );
@@ -487,7 +506,12 @@ impl BudgetView {
             .resizable(false)
             .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ui.ctx(), |ui| {
-                ui.label(RichText::new("每个版本独立存一套预算；「当前版本」用于执行分析，同时只能有一个生效。").weak());
+                ui.label(
+                    RichText::new(
+                        "每个版本独立存一套预算；「当前版本」用于执行分析，同时只能有一个生效。",
+                    )
+                    .weak(),
+                );
                 ui.add_space(6.0);
                 let versions = self.versions.clone();
                 for v in &versions {
@@ -526,7 +550,11 @@ impl BudgetView {
                     ui.label("复制自");
                     let mut src = self.ver_copy_from.clone();
                     egui::ComboBox::from_id_salt("bg_ver_copy_from")
-                        .selected_text(if src.is_empty() { "默认".to_string() } else { src.clone() })
+                        .selected_text(if src.is_empty() {
+                            "默认".to_string()
+                        } else {
+                            src.clone()
+                        })
                         .width(130.0)
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut src, String::new(), "默认");
@@ -586,7 +614,10 @@ impl BudgetView {
             .find(|v| v.key == key)
             .map(|v| v.name.clone())
             .unwrap_or_else(|| key.to_string());
-        if ctx.handle(advanced::bversion_delete(ctx.db(), key)).is_some() {
+        if ctx
+            .handle(advanced::bversion_delete(ctx.db(), key))
+            .is_some()
+        {
             ctx.info(format!("已删除版本「{name}」及其预算数据"));
             if self.version == key {
                 self.version.clear();
@@ -655,7 +686,12 @@ impl BudgetView {
             ctx.log(
                 "预算",
                 "新增预算",
-                &format!("{} {} {}", p.label(), rec.account_code, rec.amount.fmt_plain()),
+                &format!(
+                    "{} {} {}",
+                    p.label(),
+                    rec.account_code,
+                    rec.amount.fmt_plain()
+                ),
             );
             ctx.info("已新增预算行");
             self.new_amount.clear();
@@ -695,7 +731,8 @@ impl BudgetView {
             period: b.period,
             account_code: b.account_code.clone(),
             dept: b.dept.clone(),
-            amount: Money::parse_or_zero(self.amount_buf.get(i).map_or("", |s| s.as_str())).round2(),
+            amount: Money::parse_or_zero(self.amount_buf.get(i).map_or("", |s| s.as_str()))
+                .round2(),
             memo: self.memo_buf.get(i).cloned().unwrap_or_default(),
             version: b.version.clone(),
         };
@@ -823,19 +860,33 @@ impl BudgetView {
         widgets::grid(ui, "budget_vs", &cols, rows.len() + 1, 24.0, |i, c, ui| {
             if i == rows.len() {
                 match c {
-                    0 => { ui.label(RichText::new("合计").strong()); }
-                    3 => { ui.label(RichText::new(self.sum_budget.fmt_money()).strong()); }
-                    4 => { ui.label(RichText::new(self.sum_actual.fmt_money()).strong()); }
-                    5 => { ui.label(RichText::new(self.sum_diff.fmt_money()).strong()); }
-                    6 => { ui.label(RichText::new(format!("{}%", self.sum_rate.fmt_money())).strong()); }
+                    0 => {
+                        ui.label(RichText::new("合计").strong());
+                    }
+                    3 => {
+                        ui.label(RichText::new(self.sum_budget.fmt_money()).strong());
+                    }
+                    4 => {
+                        ui.label(RichText::new(self.sum_actual.fmt_money()).strong());
+                    }
+                    5 => {
+                        ui.label(RichText::new(self.sum_diff.fmt_money()).strong());
+                    }
+                    6 => {
+                        ui.label(RichText::new(format!("{}%", self.sum_rate.fmt_money())).strong());
+                    }
                     _ => {}
                 }
                 return;
             }
             let r = &rows[i];
             match c {
-                0 => { ui.label(RichText::new(&r.account_code).monospace()); }
-                1 => { ui.label(&r.account_name); }
+                0 => {
+                    ui.label(RichText::new(&r.account_code).monospace());
+                }
+                1 => {
+                    ui.label(&r.account_name);
+                }
                 2 => {
                     if r.dept.is_empty() {
                         ui.label(RichText::new("—").weak());
@@ -846,7 +897,9 @@ impl BudgetView {
                 3 => widgets::amount_label(ui, r.budget),
                 4 => widgets::amount_label(ui, r.actual),
                 5 => widgets::amount_label(ui, r.diff),
-                6 => { ui.label(r.rate_pct()); }
+                6 => {
+                    ui.label(r.rate_pct());
+                }
                 7 => {
                     if r.over {
                         ui.label(RichText::new("超支").color(palette::CREDIT).strong());
@@ -877,8 +930,12 @@ impl BudgetView {
                 widgets::grid(ui, "budget_over", &ocols, over.len(), 22.0, |i, c, ui| {
                     let r = &over[i];
                     match c {
-                        0 => { ui.label(format!("{} {}", r.account_code, r.account_name)); }
-                        1 => { ui.label(&r.dept); }
+                        0 => {
+                            ui.label(format!("{} {}", r.account_code, r.account_name));
+                        }
+                        1 => {
+                            ui.label(&r.dept);
+                        }
                         2 => widgets::amount_label(ui, r.budget),
                         3 => widgets::amount_label(ui, r.actual),
                         4 => widgets::amount_label(ui, r.diff),

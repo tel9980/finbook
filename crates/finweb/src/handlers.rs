@@ -6,29 +6,32 @@ use std::sync::Arc;
 use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::{Json, Router};
 use axum::routing::{delete, get, post, put};
+use axum::{Json, Router};
 use chrono::{Datelike, NaiveDate};
-use serde::Deserialize;
-use fincore::{Account, AuxEntity, AuxKind, AuxMask, AuxQuery, AuxRef, BookOptions, Direction, Entry, Money, Period, Role, User, Voucher, VoucherSource, VoucherStatus};
 use fincore::user::Perm;
-use tracing::error;
+use fincore::{
+    Account, AuxEntity, AuxKind, AuxMask, AuxQuery, AuxRef, BookOptions, Direction, Entry, Money,
+    Period, Role, User, Voucher, VoucherSource, VoucherStatus,
+};
 use findb::accounts;
 use findb::advanced;
-use findb::{auxs, business, template};
-use findb::balances::{self, BalanceSnapshot, BalanceQuery, BeginRow, LedgerQuery};
-use findb::Db;
+use findb::balances::{self, BalanceQuery, BalanceSnapshot, BeginRow, LedgerQuery};
 use findb::periods;
 use findb::security;
 use findb::users;
 use findb::vouchers::{self, VoucherQuery};
+use findb::Db;
+use findb::{auxs, business, template};
+use serde::Deserialize;
 use serde_json::json;
+use tracing::error;
 
 use crate::dto::*;
 use crate::realm::{RealmBook, RealmDb};
 use crate::state::{
-    period_param, period_range_param, period_to_str, parse_money_checked, parse_period, clear_cookie_header,
-    AppError, CurrentUser, RealmUser, WebState,
+    clear_cookie_header, parse_money_checked, parse_period, period_param, period_range_param,
+    period_to_str, AppError, CurrentUser, RealmUser, WebState,
 };
 
 const SESSION_SECS: i64 = 60 * 60 * 24 * 7;
@@ -71,10 +74,7 @@ async fn api_auth_gate(
 /// 静态服务从 main::build_app 移入此处，正是为了让 /api/* 不再落到
 /// 静态 404——门禁与本 fallback 双重覆盖，对 axum 的 layer/fallback
 /// 包裹顺序不敏感。
-async fn spa_fallback(
-    State(state): State<Arc<WebState>>,
-    req: axum::extract::Request,
-) -> Response {
+async fn spa_fallback(State(state): State<Arc<WebState>>, req: axum::extract::Request) -> Response {
     if req.uri().path().starts_with("/api/") {
         let (mut parts, _body) = req.into_parts();
         return match CurrentUser::from_request_parts(&mut parts, &state).await {
@@ -131,7 +131,10 @@ async fn health_ready(
         }
         Err(e) => {
             ok = false;
-            checks.insert("realm".into(), json!({ "ok": false, "error": e.to_string() }));
+            checks.insert(
+                "realm".into(),
+                json!({ "ok": false, "error": e.to_string() }),
+            );
         }
     }
 
@@ -223,7 +226,11 @@ async fn health_ready(
     // 但**不**触发重启（那是 liveness 的职责）。返回 200 会让负载均衡
     // 继续往一个明确不能用的实例上打流量。
     Ok((
-        if ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE },
+        if ok {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        },
         Json(body),
     ))
 }
@@ -262,7 +269,10 @@ pub fn router(state: Arc<WebState>) -> Router {
             get(get_security_policy).post(set_security_policy),
         )
         .route("/api/security/login-attempts", get(list_security_attempts))
-        .route("/api/security/locked-users", get(list_locked_security_users))
+        .route(
+            "/api/security/locked-users",
+            get(list_locked_security_users),
+        )
         .route("/api/security/unlock", post(unlock_security_user))
         .route("/api/me", get(get_me))
         .route("/api/change-password", post(post_change_password))
@@ -285,22 +295,13 @@ pub fn router(state: Arc<WebState>) -> Router {
         )
         // 用户管理
         .route("/api/users", get(list_users).post(create_user))
-        .route(
-            "/api/users/:username",
-            put(update_user).delete(delete_user),
-        )
+        .route("/api/users/:username", put(update_user).delete(delete_user))
         .route(
             "/api/users/:username/reset-password",
             post(reset_user_password),
         )
-        .route(
-            "/api/users/:username/reset-device",
-            post(reset_user_device),
-        )
-        .route(
-            "/api/users/:username/unlock",
-            post(unlock_user),
-        )
+        .route("/api/users/:username/reset-device", post(reset_user_device))
+        .route("/api/users/:username/unlock", post(unlock_user))
         .route("/api/roles", get(list_roles))
         // 账套参数 / 仪表盘 / 期间
         .route("/api/options", get(get_options).put(put_options))
@@ -314,7 +315,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/period", post(post_period))
         // 期末处理（与桌面端对齐）：预检 / 结转损益 / 年末结转 / 结账 / 反结账
         .route("/api/periods/:ymm/precheck", get(period_precheck))
-        .route("/api/periods/:ymm/carry-forward", post(period_carry_forward))
+        .route(
+            "/api/periods/:ymm/carry-forward",
+            post(period_carry_forward),
+        )
         .route("/api/periods/:ymm/year-end", post(period_year_end))
         .route("/api/periods/:ymm/close", post(period_close))
         .route("/api/periods/:ymm/unclose", post(period_unclose))
@@ -356,7 +360,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/tax/vat", get(get_tax_vat))
         .route("/api/tax/vat/export", get(export_tax_vat))
         .route("/api/tax/vat/detail", get(get_tax_vat_detail))
-        .route("/api/tax/options", get(get_tax_options).post(save_tax_options))
+        .route(
+            "/api/tax/options",
+            get(get_tax_options).post(save_tax_options),
+        )
         // 存货级成本差异（采购价格差异 / 出库超支差异）。
         // 路径与订单级的 /api/cost/variance 刻意分开：两者口径不同（一个按存货
         // 收发存、一个按生产订单实际成本 vs BOM），同名会让界面上出现两个
@@ -390,10 +397,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/vouchers/print-form", get(print_voucher_form))
         .route("/api/reports/trial-balance", get(get_trial_balance))
         .route("/api/reports/account-detail", get(account_detail_ep))
-        .route(
-            "/api/reports/trial-balance/print",
-            get(print_trial_balance),
-        )
+        .route("/api/reports/trial-balance/print", get(print_trial_balance))
         .route(
             "/api/reports/trial-balance/export",
             get(export_trial_balance),
@@ -411,7 +415,10 @@ pub fn router(state: Arc<WebState>) -> Router {
             "/api/export/schedules",
             get(list_export_schedules).post(save_export_schedule),
         )
-        .route("/api/export/schedules/:id/delete", post(delete_export_schedule))
+        .route(
+            "/api/export/schedules/:id/delete",
+            post(delete_export_schedule),
+        )
         .route("/api/export/schedules/:id/run", post(run_export_schedule))
         // 高级功能：多栏账 / 摘要汇总表 / 财务指标
         .route("/api/reports/multi-column", get(get_multi_column))
@@ -421,7 +428,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/reports/balance-sheet", get(get_balance_sheet))
         .route("/api/reports/balance-sheet/print", get(print_balance_sheet))
         .route("/api/reports/income-statement", get(get_income_statement))
-        .route("/api/reports/income-statement/print", get(print_income_statement))
+        .route(
+            "/api/reports/income-statement/print",
+            get(print_income_statement),
+        )
         .route("/api/reports/cash-flow", get(get_cash_flow))
         .route("/api/reports/cash-flow/print", get(print_cash_flow))
         // 财务核心：所有者权益变动表 / 报表对比 / 科目日报表 / 期末对账
@@ -439,11 +449,17 @@ pub fn router(state: Arc<WebState>) -> Router {
             get(list_custom_reports).post(save_custom_report),
         )
         .route("/api/custom-reports/:key", get(get_custom_report))
-        .route("/api/custom-reports/:key/delete", post(delete_custom_report))
+        .route(
+            "/api/custom-reports/:key/delete",
+            post(delete_custom_report),
+        )
         // 存货核算：成本调整
         .route("/api/inventory/adjust", post(stock_adjust_endpoint))
         // 库存深度：序列号 / 多单位 / 账龄 / ABC / 组装拆卸 / 分仓库
-        .route("/api/inventory/serial", get(list_serial).post(serial_in_endpoint))
+        .route(
+            "/api/inventory/serial",
+            get(list_serial).post(serial_in_endpoint),
+        )
         .route("/api/inventory/serial/out", post(serial_out_endpoint))
         .route("/api/inventory/unit", get(get_unit).post(set_unit))
         .route("/api/inventory/aging", get(get_inv_aging))
@@ -454,10 +470,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         // 单条出入库流水（成本差异的「构成流水」点开明细用）
         .route("/api/inventory/move/:id", get(get_stock_move))
         // 仓库主数据（v30）
-        .route(
-            "/api/warehouses",
-            get(list_warehouses).post(save_warehouse),
-        )
+        .route("/api/warehouses", get(list_warehouses).post(save_warehouse))
         .route("/api/warehouses/:code", delete(delete_warehouse))
         .route(
             "/api/inventory/transfer",
@@ -465,7 +478,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         )
         .route("/api/inventory/batch-cost", get(batch_cost))
         // 采购/销售深度：暂估 / 对账 / 配额 / 订单变更
-        .route("/api/procure/estimate", get(list_estimates).post(add_estimate))
+        .route(
+            "/api/procure/estimate",
+            get(list_estimates).post(add_estimate),
+        )
         .route("/api/procure/estimate/status", get(estimate_status))
         .route("/api/procure/estimate/:id/settle", post(settle_estimate))
         .route("/api/procure/reconcile", get(get_po_reconcile))
@@ -473,7 +489,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/sales/reconcile", get(get_so_reconcile))
         .route("/api/order/change-log", get(get_change_log))
         // 采购/销售全生命周期：请购 / 报价 / 到货 / 发货 / 付款 / 收款 / 退货 / 信用
-        .route("/api/procure/req", get(list_purchase_req).post(save_purchase_req))
+        .route(
+            "/api/procure/req",
+            get(list_purchase_req).post(save_purchase_req),
+        )
         .route("/api/procure/req/:id/approve", post(approve_purchase_req))
         .route("/api/procure/req/:id/push-po", post(push_req_po))
         .route("/api/procure/price-history", get(price_history_ep))
@@ -505,7 +524,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         // 预算预警
         .route("/api/budget/alerts", get(get_budget_alerts))
         // 坏账准备计提
-        .route("/api/settle/bad-debt/provision", post(bad_debt_provision_endpoint))
+        .route(
+            "/api/settle/bad-debt/provision",
+            post(bad_debt_provision_endpoint),
+        )
         // 工艺路线 / 报工 / MRP
         .route("/api/routing/:item", get(get_routing).post(post_routing))
         .route("/api/routing/:item/delete", post(delete_routing))
@@ -537,11 +559,23 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/mps/rough", post(rough_mps))
         .route("/api/prod/schedule", post(schedule_prod))
         // 预算版本
-        .route("/api/budget/versions", get(list_budget_versions).post(save_budget_version))
-        .route("/api/budget/versions/:key/delete", post(delete_budget_version))
-        .route("/api/budget/versions/:key/activate", post(activate_budget_version))
+        .route(
+            "/api/budget/versions",
+            get(list_budget_versions).post(save_budget_version),
+        )
+        .route(
+            "/api/budget/versions/:key/delete",
+            post(delete_budget_version),
+        )
+        .route(
+            "/api/budget/versions/:key/activate",
+            post(activate_budget_version),
+        )
         .route("/api/budget/versions/copy", post(copy_budget_version))
-        .route("/api/budget/rows", get(list_budget_rows).post(save_budget_row))
+        .route(
+            "/api/budget/rows",
+            get(list_budget_rows).post(save_budget_row),
+        )
         .route("/api/budget/rows/:id/delete", post(delete_budget_row))
         // 审批流
         .route("/api/approvals", get(list_approvals).post(start_approval))
@@ -580,8 +614,14 @@ pub fn router(state: Arc<WebState>) -> Router {
             get(list_cash_counts).post(save_cash_count),
         )
         .route("/api/funds/cash-counts/:id/delete", post(delete_cash_count))
-        .route("/api/funds/cash-counts/:id/voucher", post(cash_count_voucher))
-        .route("/api/funds/day-clear", get(list_day_clear).post(set_day_clear))
+        .route(
+            "/api/funds/cash-counts/:id/voucher",
+            post(cash_count_voucher),
+        )
+        .route(
+            "/api/funds/day-clear",
+            get(list_day_clear).post(set_day_clear),
+        )
         .route("/api/funds/checks", get(list_checks).post(save_check))
         .route("/api/funds/checks/:id/status", post(check_status))
         .route("/api/funds/checks/:id/delete", post(delete_check))
@@ -596,7 +636,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         )
         .route("/api/funds/shifts/:id/confirm", post(confirm_cash_shift))
         .route("/api/funds/shifts/:id/cancel", post(cancel_cash_shift))
-        .route("/api/funds/receipts", get(list_receipts).post(create_receipt))
+        .route(
+            "/api/funds/receipts",
+            get(list_receipts).post(create_receipt),
+        )
         .route("/api/funds/receipts/:id/delete", post(delete_receipt))
         .route("/api/funds/receipts/print-form", get(print_receipt_form))
         .route("/api/funds/receipts/:id/audit", post(audit_receipt))
@@ -609,17 +652,26 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/inventory/batches", get(list_batches))
         .route("/api/inventory/batches/fefo", post(fefo_batches))
         .route("/api/inventory/batches/expiring", get(expiring_batches_ep))
-        .route("/api/inventory/locations", get(list_locations).post(save_location))
+        .route(
+            "/api/inventory/locations",
+            get(list_locations).post(save_location),
+        )
         .route("/api/inventory/locations/:id/delete", post(delete_location))
         .route("/api/inventory/form-convert", post(form_convert_ep))
         .route("/api/inventory/qc", post(qc_order_ep))
         .route("/api/inventory/below-safety", get(below_safety_ep))
         .route("/api/funds/forecast", get(get_funds_forecast))
-        .route("/api/funds/forecast-rolling", get(funds_forecast_rolling_ep))
+        .route(
+            "/api/funds/forecast-rolling",
+            get(funds_forecast_rolling_ep),
+        )
         // 预算分析
         .route("/api/budget/analysis", get(get_budget_analysis))
         // 成本：计价配置 + 期末结价
-        .route("/api/cost/configs", get(list_cost_configs).post(save_cost_method))
+        .route(
+            "/api/cost/configs",
+            get(list_cost_configs).post(save_cost_method),
+        )
         // 到岸成本：把运费/关税摊进存货成本
         .route(
             "/api/landed-cost",
@@ -630,7 +682,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/cost/configs/:item/delete", post(clear_cost_method))
         .route("/api/cost/gl-reconcile", get(gl_reconcile_ep))
         .route("/api/cost/sales-cost", post(sales_cost_ep))
-        .route("/api/cost/period-end", get(run_period_end_cost).post(run_period_end_cost))
+        .route(
+            "/api/cost/period-end",
+            get(run_period_end_cost).post(run_period_end_cost),
+        )
         .route("/api/cost/wip", get(cost_wip_ep))
         .route("/api/cost/variance", get(cost_variance_ep))
         .route("/api/cost/forecast", get(cost_forecast_ep))
@@ -649,12 +704,15 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/assets/counts/:id/post", post(post_asset_count))
         .route("/api/assets/:id/dispose", post(dispose_asset))
         .route("/api/assets/depreciate", post(depreciate_assets))
-        .route("/api/assets/depreciations/delete-period", post(delete_asset_deps_period))
+        .route(
+            "/api/assets/depreciations/delete-period",
+            post(delete_asset_deps_period),
+        )
         // 银行对账（与桌面端对齐）
         .route("/api/bank", get(get_bank))
         .route("/api/bank/import", post(import_bank))
         .route("/api/bank/auto-match", post(auto_match_bank))
-  .route("/api/bank/gen-vouchers", post(gen_bank_vouchers))
+        .route("/api/bank/gen-vouchers", post(gen_bank_vouchers))
         .route("/api/bank/link", post(link_bank))
         .route("/api/bank/unlink", post(unlink_bank))
         .route("/api/bank/clear", post(clear_bank))
@@ -675,21 +733,33 @@ pub fn router(state: Arc<WebState>) -> Router {
             "/api/settle/statements",
             get(list_statements).post(create_statement),
         )
-        .route("/api/settle/statements/:id/status", post(statement_status_ep))
+        .route(
+            "/api/settle/statements/:id/status",
+            post(statement_status_ep),
+        )
         // ---- 账套内基础资料与系统功能（对齐桌面端 finui 补齐）----
         .route("/api/accounts", post(create_account).put(update_account))
         .route("/api/accounts/:code", delete(delete_account))
         .route("/api/begin", get(list_begin).post(save_begin))
-        .route("/api/begin-batch", post(parse_begin_batch).put(import_begin_batch))
+        .route(
+            "/api/begin-batch",
+            post(parse_begin_batch).put(import_begin_batch),
+        )
         .route("/api/logs", get(list_logs))
         .route("/api/backups", get(list_backups).post(create_backup))
         .route("/api/restore", post(restore_backup))
         .route("/api/templates", get(list_templates).post(create_template))
         .route("/api/templates/due", get(due_templates))
-        .route("/api/templates/:id", put(update_template).delete(delete_template))
+        .route(
+            "/api/templates/:id",
+            put(update_template).delete(delete_template),
+        )
         .route("/api/templates/:id/generate", post(generate_template))
         .route("/api/aux", get(list_aux).post(create_aux))
-        .route("/api/aux-batch", post(parse_aux_batch).put(import_aux_batch))
+        .route(
+            "/api/aux-batch",
+            post(parse_aux_batch).put(import_aux_batch),
+        )
         // 路径刻意用 `aux-presets` 而不是 `aux/presets`：上面那条
         // `/api/aux/:id` 会把 `presets` 当成 id 吃掉。
         .route("/api/aux-presets", get(get_aux_presets).post(preset_aux))
@@ -742,7 +812,10 @@ pub fn router(state: Arc<WebState>) -> Router {
 async fn csrf_guard(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
     use axum::http::Method;
     let method = req.method().clone();
-    if matches!(method, Method::POST | Method::PUT | Method::DELETE | Method::PATCH) {
+    if matches!(
+        method,
+        Method::POST | Method::PUT | Method::DELETE | Method::PATCH
+    ) {
         let reject = || {
             (
                 StatusCode::FORBIDDEN,
@@ -821,7 +894,9 @@ async fn serve_index(State(state): State<Arc<WebState>>) -> Response {
 // 认证 / 初始化状态
 // ---------------------------------------------------------------------------
 
-async fn get_setup_status(State(state): State<Arc<WebState>>) -> Result<Json<SetupStatus>, AppError> {
+async fn get_setup_status(
+    State(state): State<Arc<WebState>>,
+) -> Result<Json<SetupStatus>, AppError> {
     // 管理员是否已初始化（首次启动已引导）
     let admin_set = state.realm.count_users()? > 0;
     Ok(Json(SetupStatus {
@@ -855,9 +930,9 @@ fn visible_books(
         if books.iter().any(|x| x.key == b.key) {
             continue;
         }
-        let is_member = match state.db_for(&b.key) {
-            Ok(db) => users::get(&db, username).ok().flatten().is_some(),
-            Err(e) => return Err(e.into()),
+        let is_member = {
+            let db = state.db_for(&b.key)?;
+            users::get(&db, username).ok().flatten().is_some()
         };
         if is_member {
             books.push(b);
@@ -918,7 +993,9 @@ async fn post_login(
     // 设备指纹必须非空：空串会被写进绑定名单，等于给这个账号留了一条万能通道
     let device_id = req.device_id.trim().to_string();
     if device_id.is_empty() || device_id.len() > 128 {
-        return Err(AppError::bad_request("缺少有效的设备标识，请刷新页面后重试"));
+        return Err(AppError::bad_request(
+            "缺少有效的设备标识，请刷新页面后重试",
+        ));
     }
     let ip = client_ip(&headers);
     // 平台持久锁（realm 层，跨重启生效）：策略 max_fail 次连续失败后由本接口写入
@@ -980,9 +1057,9 @@ async fn post_login(
     // 设备绑定（平台层）：普通账号最多绑 RealmDb::MAX_DEVICES_PER_USER 台，超出需管理员
     if !ru.is_admin {
         match state
-        .realm
-        .bind_device(&username, &device_id, &req.device_name)?
-    {
+            .realm
+            .bind_device(&username, &device_id, &req.device_name)?
+        {
             Ok(()) => {}
             Err(msg) => return Err(AppError::forbidden(msg)),
         }
@@ -1024,8 +1101,10 @@ async fn post_login(
         books: book_list,
     };
     let mut r = Json(resp).into_response();
-    r.headers_mut()
-        .insert(header::SET_COOKIE, crate::state::cookie_header(&token, SESSION_SECS));
+    r.headers_mut().insert(
+        header::SET_COOKIE,
+        crate::state::cookie_header(&token, SESSION_SECS),
+    );
     Ok(r)
 }
 
@@ -1063,10 +1142,14 @@ async fn set_security_policy(
         return Err(AppError::bad_request("锁定时长需在 1-1440 分钟之间"));
     }
     if !(0..=1440).contains(&p.idle_minutes) {
-        return Err(AppError::bad_request("空闲超时需在 0-1440 分钟之间（0=不自动登出）"));
+        return Err(AppError::bad_request(
+            "空闲超时需在 0-1440 分钟之间（0=不自动登出）",
+        ));
     }
     if !(0..=3650).contains(&p.max_age_days) {
-        return Err(AppError::bad_request("口令有效期需在 0-3650 天之间（0=永不过期）"));
+        return Err(AppError::bad_request(
+            "口令有效期需在 0-3650 天之间（0=永不过期）",
+        ));
     }
     state.realm.set_policy(&p)?;
     Ok(Json(json!({ "ok": true })))
@@ -1172,12 +1255,19 @@ async fn platform_overview(
         return Err(AppError::forbidden("该入口仅限系统管理员使用"));
     }
     const MAX_BOOKS: usize = 50;
-    let want_period: Option<i32> = q.get("period").and_then(|s| parse_period(s)).map(|p| p.ymm());
+    let want_period: Option<i32> = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .map(|p| p.ymm());
 
     let mut books = visible_books(&state, &user.username, true)?;
     // 可选：只统计指定账套
     if let Some(list) = q.get("books") {
-        let want: Vec<&str> = list.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let want: Vec<&str> = list
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
         if !want.is_empty() {
             books.retain(|b| want.contains(&b.key.as_str()));
         }
@@ -1190,7 +1280,8 @@ async fn platform_overview(
     let mut per_book: Vec<serde_json::Value> = Vec::with_capacity(books.len());
     // 聚合键：(域, 指标, 单位) —— 单位进键，避免把「元」和「张」加到一起
     let mut agg: std::collections::BTreeMap<(String, String, String), f64> = Default::default();
-    let mut labels: std::collections::BTreeMap<(String, String, String), String> = Default::default();
+    let mut labels: std::collections::BTreeMap<(String, String, String), String> =
+        Default::default();
     let mut domains: std::collections::BTreeMap<String, usize> = Default::default();
     let mut failed = 0usize;
 
@@ -1280,8 +1371,12 @@ async fn platform_overview(
     totals.sort_by(|a, b| {
         let da = a["domain"].as_str().unwrap_or("");
         let db2 = b["domain"].as_str().unwrap_or("");
-        da.cmp(db2)
-            .then(a["key"].as_str().unwrap_or("").cmp(b["key"].as_str().unwrap_or("")))
+        da.cmp(db2).then(
+            a["key"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["key"].as_str().unwrap_or("")),
+        )
     });
 
     // 汇总待办（跨账套累计待处理条数）
@@ -1317,9 +1412,7 @@ async fn consolidate_preview(
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
-        .unwrap_or_else(|| {
-            Period::from_ymm(state.default_period)
-        });
+        .unwrap_or_else(|| Period::from_ymm(state.default_period));
     let keys: Vec<String> = q
         .get("books")
         .map(|s| {
@@ -1333,8 +1426,11 @@ async fn consolidate_preview(
         return Err(AppError::bad_request("请选择要合并的账套（books=b1,b2）"));
     }
     // 逐套取数：科目 → (名称, 期末余额)
-    let mut per_book: Vec<(String, String, std::collections::BTreeMap<String, (String, Money)>)> =
-        Vec::new();
+    let mut per_book: Vec<(
+        String,
+        String,
+        std::collections::BTreeMap<String, (String, Money)>,
+    )> = Vec::new();
     let mut book_meta = Vec::new();
     for key in &keys {
         let db = state
@@ -1381,7 +1477,7 @@ async fn consolidate_preview(
                 })
                 .unwrap_or(Money::ZERO);
             values.insert(key.clone(), json!(v.fmt_money()));
-            total = total + v;
+            total += v;
         }
         rows.push(json!({
             "account_code": code,
@@ -1496,8 +1592,7 @@ async fn prod_from_so_ep(
         Some(q)
     };
     let id = findb::scm::prod_from_so(&db, req.so_id, period, date, want, user.username())?;
-    let o = findb::scm::prod_get(&db, id)?
-        .ok_or_else(|| AppError::not_found("生产订单不存在"))?;
+    let o = findb::scm::prod_get(&db, id)?.ok_or_else(|| AppError::not_found("生产订单不存在"))?;
     let atp = findb::scm::atp(&db, &o.item_code)?;
     Ok(Json(json!({
         "ok": true,
@@ -1718,9 +1813,11 @@ async fn save_landed_cost(
         lines: Vec::new(),
     };
     let id = findb::landedcost::save(&db, &mut lc, &lines, user.username())?;
-    let after = findb::landedcost::get(&db, id)?
-        .ok_or_else(|| AppError::not_found("到岸成本单不存在"))?;
-    Ok(Json(json!({ "ok": true, "id": id, "row": lc_json(&after) })))
+    let after =
+        findb::landedcost::get(&db, id)?.ok_or_else(|| AppError::not_found("到岸成本单不存在"))?;
+    Ok(Json(
+        json!({ "ok": true, "id": id, "row": lc_json(&after) }),
+    ))
 }
 
 async fn post_landed_cost(
@@ -1731,8 +1828,8 @@ async fn post_landed_cost(
     user.require(Perm::OrderOps)?;
     let db = state.db_for(&user.book_key)?;
     let vid = findb::landedcost::post(&db, id, user.username())?;
-    let after = findb::landedcost::get(&db, id)?
-        .ok_or_else(|| AppError::not_found("到岸成本单不存在"))?;
+    let after =
+        findb::landedcost::get(&db, id)?.ok_or_else(|| AppError::not_found("到岸成本单不存在"))?;
     Ok(Json(json!({
         "ok": true,
         "voucher_id": vid,
@@ -1835,14 +1932,18 @@ async fn cost_overhead_ep(
         return Err(AppError::bad_request("分摊金额必须大于 0"));
     }
     let base = findb::manufacturing::OverheadBase::parse(&req.base);
-    let rows =
-        findb::manufacturing::overhead_allocate_with(&db, period, amount, base, req.apply)?;
+    let rows = findb::manufacturing::overhead_allocate_with(&db, period, amount, base, req.apply)?;
     if req.apply {
         db.log(
             user.username(),
             "成本",
             "制造费用分摊",
-            &format!("{} {} {} 笔", period_to_str(period), amount.fmt_money(), rows.len()),
+            &format!(
+                "{} {} {} 笔",
+                period_to_str(period),
+                amount.fmt_money(),
+                rows.len()
+            ),
         )?;
     }
     let items: Vec<serde_json::Value> = rows
@@ -1941,7 +2042,11 @@ async fn save_budget_row(
             "{} {} {} {}",
             period_to_str(period),
             b.account_code,
-            if b.dept.is_empty() { "" } else { b.dept.as_str() },
+            if b.dept.is_empty() {
+                ""
+            } else {
+                b.dept.as_str()
+            },
             b.amount.fmt_money()
         ),
     )?;
@@ -2012,7 +2117,12 @@ async fn save_export_schedule(
         created_at: String::new(),
     };
     let id = findb::exports::sched_save(&db, &s, user.username())?;
-    db.log(user.username(), "导出", "计划任务", &format!("#{id} {} {}", s.kind, s.at_time))?;
+    db.log(
+        user.username(),
+        "导出",
+        "计划任务",
+        &format!("#{id} {} {}", s.kind, s.at_time),
+    )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }
 
@@ -2139,8 +2249,7 @@ async fn select_book(
         Ok(db) => users::get(&db, &user.username).ok().flatten().is_some(),
         Err(e) => return Err(e.into()),
     };
-    let allowed =
-        user.is_admin || book.owner_username == user.username || is_member;
+    let allowed = user.is_admin || book.owner_username == user.username || is_member;
     if !allowed {
         return Err(AppError::forbidden("无权访问该账套"));
     }
@@ -2183,18 +2292,20 @@ async fn delete_book(
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn post_logout(State(state): State<Arc<WebState>>, jar: axum_extra::extract::cookie::CookieJar) -> Response {
+async fn post_logout(
+    State(state): State<Arc<WebState>>,
+    jar: axum_extra::extract::cookie::CookieJar,
+) -> Response {
     if let Some(c) = jar.get("finbook_sid") {
         state.sessions.remove(c.value());
     }
     let mut r = Json(json!({"ok": true})).into_response();
-    r.headers_mut().insert(header::SET_COOKIE, clear_cookie_header());
+    r.headers_mut()
+        .insert(header::SET_COOKIE, clear_cookie_header());
     r
 }
 
-async fn get_me(
-    user: CurrentUser,
-) -> Result<Json<PublicUser>, AppError> {
+async fn get_me(user: CurrentUser) -> Result<Json<PublicUser>, AppError> {
     // 直接使用身份对账后的用户：管理员查看他人账套时是临时身份
     // （不写入账套 user 表），回查数据库会 404
     Ok(Json(PublicUser::from_user(&user.user)))
@@ -2215,7 +2326,9 @@ async fn post_change_password(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // 改的是平台口令（与登录身份一致）
     check_password(&state, &req.new)?;
-    let r = state.realm.change_password(&user.username, &req.old, &req.new, &state.policy())?;
+    let r = state
+        .realm
+        .change_password(&user.username, &req.old, &req.new, &state.policy())?;
     match r {
         Ok(()) => {
             // 同步到该用户出现过的所有账套内的同名用户行，保持单密码一致
@@ -2268,9 +2381,14 @@ async fn create_platform_user(
     }
     check_password(&state, &req.password)?;
     // 管理员开的号，口令是管理员定的——首次登录必须自己改一次
-    let id = state
-        .realm
-        .create_user(&req.username, &req.display_name, &req.password, req.is_admin, true, &state.policy())?;
+    let id = state.realm.create_user(
+        &req.username,
+        &req.display_name,
+        &req.password,
+        req.is_admin,
+        true,
+        &state.policy(),
+    )?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -2284,11 +2402,16 @@ async fn update_platform_user(
         return Err(AppError::forbidden("该操作仅限管理员"));
     }
     if username == user.username {
-        return Err(AppError::bad_request("不能修改当前登录的账号，请使用改密功能"));
+        return Err(AppError::bad_request(
+            "不能修改当前登录的账号，请使用改密功能",
+        ));
     }
-    state
-        .realm
-        .update_user(&username, req.display_name.as_deref(), req.disabled, req.is_admin)?;
+    state.realm.update_user(
+        &username,
+        req.display_name.as_deref(),
+        req.disabled,
+        req.is_admin,
+    )?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -2304,7 +2427,9 @@ async fn delete_platform_user(
         return Err(AppError::bad_request("不能删除当前登录的账号"));
     }
     if state.realm.count_books_of(&username)? > 0 {
-        return Err(AppError::bad_request("该用户仍拥有账套，请先删除其账套后再删除账号"));
+        return Err(AppError::bad_request(
+            "该用户仍拥有账套，请先删除其账套后再删除账号",
+        ));
     }
     state.realm.delete_user(&username)?;
     state.sessions.remove_by_username(&username);
@@ -2321,7 +2446,9 @@ async fn reset_platform_password(
         return Err(AppError::forbidden("该操作仅限管理员"));
     }
     check_password(&state, &req.new)?;
-    state.realm.reset_password(&username, &req.new, &state.policy())?;
+    state
+        .realm
+        .reset_password(&username, &req.new, &state.policy())?;
     // 口令已变，立即吊销该账号的全部旧会话（被盗会话不能继续用满 7 天）
     state.sessions.remove_by_username(&username);
     if let Ok(Some(ru)) = state.realm.get_user(&username) {
@@ -2389,9 +2516,7 @@ async fn create_user(
     // 否则开出来的账号无法登录（死账号）。单密码统一后账套内不再独立设口令，
     // 直接沿用平台口令哈希，前端若传了 password 则忽略（兼容旧前端）。
     let ru = state.realm.get_user(&username)?.ok_or_else(|| {
-        AppError::bad_request(
-            "该账号尚未开通，请先让管理员在「账号管理」中开通同名账号",
-        )
+        AppError::bad_request("该账号尚未开通，请先让管理员在「账号管理」中开通同名账号")
     })?;
     // 账套管理员不能把管理员拉进自己的账套：账套内重置口令会重置平台口令，
     // 否则任何能建账的用户都能借此接管管理员账号。
@@ -2403,7 +2528,12 @@ async fn create_user(
         return Err(AppError::bad_request("该用户名已存在"));
     }
     let mut u = User::new(&username, &req.display_name, req.role);
-    u.roles = req.roles.iter().copied().filter(|r| *r != req.role).collect();
+    u.roles = req
+        .roles
+        .iter()
+        .copied()
+        .filter(|r| *r != req.role)
+        .collect();
     u.password_hash = ru.password_hash.clone();
     // 管理员开的号，口令是管理员定的——首次登录必须自己改一次
     u.must_change_pwd = req.must_change_pwd;
@@ -2447,8 +2577,8 @@ async fn update_user(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::UserManage)?;
     let db = state.db_for(&user.book_key)?;
-    let mut u = users::get(&db, &username)?
-        .ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
+    let mut u =
+        users::get(&db, &username)?.ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
     // 账套归属者不可被停用 / 降权 / 改名，否则账套会失去主人
     if let Some(owner) = state.realm.book_owner(&user.book_key)? {
         if username == owner {
@@ -2490,7 +2620,10 @@ async fn update_user(
     if let Some(r) = req.role {
         // 不允许把最后一个管理员改成其他角色
         if u.is_admin() && r != Role::Admin {
-            let admins = users::list(&db)?.into_iter().filter(|x| x.is_admin()).count();
+            let admins = users::list(&db)?
+                .into_iter()
+                .filter(|x| x.is_admin())
+                .count();
             if admins <= 1 {
                 return Err(AppError::bad_request("至少保留一个系统管理员账号"));
             }
@@ -2523,7 +2656,12 @@ async fn update_user(
         u.deny_perms = p;
     }
     users::update(&db, &u)?;
-    db.log(user.username(), "安全", "修改用户", &format!("更新「{username}」的信息"))?;
+    db.log(
+        user.username(),
+        "安全",
+        "修改用户",
+        &format!("更新「{username}」的信息"),
+    )?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -2545,9 +2683,10 @@ async fn reset_user_password(
     if users::get(&db, &username)?.is_none() {
         return Err(AppError::not_found("该用户不在当前账套"));
     }
-    let ru = state.realm.get_user(&username)?.ok_or_else(|| {
-        AppError::bad_request("该账号不存在")
-    })?;
+    let ru = state
+        .realm
+        .get_user(&username)?
+        .ok_or_else(|| AppError::bad_request("该账号不存在"))?;
     // 管理员的口令只能由管理员在「账号」中重置。账套管理员若能把
     // 管理员邀请进本套再调本接口，就能重置其平台口令并同步到全部账套。
     if ru.is_admin {
@@ -2569,14 +2708,20 @@ async fn reset_user_password(
                 "该账号拥有自己的账套，账套管理员不能重置其口令，请由管理员处理",
             ));
         }
-        if state.realm.count_books_containing(&state.books_dir, &username)? > 1 {
+        if state
+            .realm
+            .count_books_containing(&state.books_dir, &username)?
+            > 1
+        {
             return Err(AppError::forbidden(
                 "该账号还属于其他账套，账套管理员不能重置其口令，请由管理员处理",
             ));
         }
     }
     check_password(&state, &req.new)?;
-    state.realm.reset_password(&username, &req.new, &state.policy())?;
+    state
+        .realm
+        .reset_password(&username, &req.new, &state.policy())?;
     // 口令已变，立即吊销该账号的全部旧会话（被盗会话不能继续用满 7 天）
     state.sessions.remove_by_username(&username);
     if let Ok(Some(ru)) = state.realm.get_user(&username) {
@@ -2587,7 +2732,12 @@ async fn reset_user_password(
             ru.must_change_pwd,
         );
     }
-    db.log(user.username(), "安全", "重置口令", &format!("重置「{username}」的口令（平台口令）"))?;
+    db.log(
+        user.username(),
+        "安全",
+        "重置口令",
+        &format!("重置「{username}」的口令（平台口令）"),
+    )?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -2609,7 +2759,12 @@ async fn reset_user_device(
     users::reset_device(&db, &username)?;
     // 立刻下线该用户**全部**会话（含其它已绑定设备）：旧设备不能靠存量会话继续用
     state.sessions.remove_by_username(&username);
-    db.log(user.username(), "安全", "重置设备绑定", &format!("重置「{username}」的设备绑定"))?;
+    db.log(
+        user.username(),
+        "安全",
+        "重置设备绑定",
+        &format!("重置「{username}」的设备绑定"),
+    )?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -2625,7 +2780,12 @@ async fn unlock_user(
     }
     let db = state.db_for(&user.book_key)?;
     security::unlock_user(&db, &username)?;
-    db.log(user.username(), "安全", "解锁用户", &format!("解锁「{username}」"))?;
+    db.log(
+        user.username(),
+        "安全",
+        "解锁用户",
+        &format!("解锁「{username}」"),
+    )?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -2666,8 +2826,8 @@ async fn delete_user(
         return Err(AppError::forbidden("只有管理员可以删除账号"));
     }
     let db = state.db_for(&user.book_key)?;
-    let u = users::get(&db, &username)?
-        .ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
+    let u =
+        users::get(&db, &username)?.ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
     // 账套归属者不可删除（删了账套就没有主人了）
     if let Some(owner) = state.realm.book_owner(&user.book_key)? {
         if username == owner {
@@ -2675,14 +2835,22 @@ async fn delete_user(
         }
     }
     if u.is_admin() {
-        let admins = users::list(&db)?.into_iter().filter(|x| x.is_admin()).count();
+        let admins = users::list(&db)?
+            .into_iter()
+            .filter(|x| x.is_admin())
+            .count();
         if admins <= 1 {
             return Err(AppError::bad_request("至少保留一个系统管理员账号"));
         }
     }
     users::delete(&db, u.id)?;
     state.sessions.remove_by_username(&username);
-    db.log(user.username(), "安全", "删除用户", &format!("删除账号「{username}」"))?;
+    db.log(
+        user.username(),
+        "安全",
+        "删除用户",
+        &format!("删除账号「{username}」"),
+    )?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -2702,8 +2870,7 @@ async fn get_options(
     // `state.bookOptions = null`、界面按「未开审核」处理 —— 用户完全看不到
     // 「本账套开了审核环节」这个事实，只在点记账被拒时才第一次知道。
     // 让人能读自己每天都要面对的那个开关，成本几乎为零。
-    if !user.can(Perm::SysOption)
-        && !(user.can(Perm::VoucherPost) || user.can(Perm::VoucherAudit))
+    if !user.can(Perm::SysOption) && !(user.can(Perm::VoucherPost) || user.can(Perm::VoucherAudit))
     {
         return Err(AppError::forbidden("没有「账套参数」权限"));
     }
@@ -2723,7 +2890,9 @@ async fn put_options(
         || opts.code_scheme.len() > 8
         || opts.code_scheme.iter().any(|s| !(1..=12u8).contains(s))
     {
-        return Err(AppError::bad_request("科目编码级长非法（每级 1-12 位，最多 8 级）"));
+        return Err(AppError::bad_request(
+            "科目编码级长非法（每级 1-12 位，最多 8 级）",
+        ));
     }
     if opts.voucher_words.is_empty() || opts.voucher_words.iter().any(|w| w.trim().is_empty()) {
         return Err(AppError::bad_request("凭证字号不能为空"));
@@ -2736,7 +2905,7 @@ fn current_period(state: &WebState, user: &CurrentUser) -> Period {
     let ymm = user
         .token
         .is_empty()
-        .then(|| state.default_period)
+        .then_some(state.default_period)
         .or_else(|| state.sessions.period(&user.token))
         .unwrap_or(state.default_period);
     // 会话/配置中的期间也做校验：脏数据不能让后续 first_day/last_day panic
@@ -2801,7 +2970,7 @@ fn stmt_val(t: &fincore::report::ReportTable, names: &[&str]) -> Option<Money> {
     t.rows
         .iter()
         .find(|r| names.iter().any(|n| r.name.contains(n)))
-        .and_then(|r| r.values.get(0))
+        .and_then(|r| r.values.first())
         .copied()
 }
 
@@ -2957,7 +3126,12 @@ async fn quick_search(
     }
 
     if user.can(Perm::OrderOps) {
-        let pack = |kind: &str, view: &str, sql: &str, db: &findb::Db, like: &str| -> Vec<serde_json::Value> {
+        let pack = |kind: &str,
+                    view: &str,
+                    sql: &str,
+                    db: &findb::Db,
+                    like: &str|
+         -> Vec<serde_json::Value> {
             let mut out = Vec::new();
             if let Ok(mut st) = db.conn().prepare(sql) {
                 if let Ok(iter) = st.query_map(rusqlite::params![like, like], |r| {
@@ -3107,7 +3281,7 @@ async fn get_periods(
     let db = state.db_for(&user.book_key)?;
     let start = db.options().start_period;
     let this_year = Period::default().year();
-    let end = Period::new(this_year + 1, 12).unwrap_or(Period::default());
+    let end = Period::new(this_year + 1, 12).unwrap_or_default();
     let list: Vec<String> = if end >= start {
         Period::range(start, end)
             .into_iter()
@@ -3139,7 +3313,9 @@ async fn post_period(
         )));
     }
     state.sessions.set_period(&user.token, req.ymm);
-    Ok(Json(json!({"ok": true, "period": period_to_str(period_checked(req.ymm)?)})))
+    Ok(Json(
+        json!({"ok": true, "period": period_to_str(period_checked(req.ymm)?)}),
+    ))
 }
 
 /// 期末结账请求
@@ -3162,8 +3338,7 @@ async fn period_precheck(
     let issues = periods::precheck(&db, period, true)?;
     let chart = accounts::chart(&db)?;
     // 预检展示与【结转】按钮同口径：结转按含草稿取数（见 period_carry_forward）
-    let snap =
-        BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
+    let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
     let pl_rows = snap.profit_loss_rows(&chart);
     let profit = snap
         .for_account(fincore::engine::period_end::PROFIT_ACCOUNT, None)
@@ -3191,8 +3366,7 @@ async fn period_carry_forward(
     // 若按已记账口径取数，草稿看不见 → 第二次调用时损益仍未清零 → 重复结转。
     // 结账前 checklist 要求全部记账，届时两种口径结果相同（H-3 定案的已记账口径
     // 用于余额表/报表/账簿，不用于本操作的幂等判定）。
-    let snap =
-        BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
+    let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
     let rows = snap.profit_loss_rows(&chart);
     if rows.is_empty() {
         return Err(AppError::bad_request("本期损益类科目没有发生额，无需结转"));
@@ -3256,8 +3430,7 @@ async fn period_year_end(
     let chart = accounts::chart(&db)?;
     // 同 period_carry_forward：含草稿取数，保证第一次生成的结转草稿能清零 4103，
     // 第二次调用（余额 0）才会被拒，否则同一笔利润会被结转两次。
-    let snap =
-        BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
+    let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
     let profit = snap
         .for_account(fincore::engine::period_end::PROFIT_ACCOUNT, None)
         .end();
@@ -3315,7 +3488,9 @@ async fn period_unclose(
     let period = period_checked(ymm)?;
     let db = state.db_for(&user.book_key)?;
     periods::unclose(&db, period, user.username())?;
-    Ok(Json(json!({ "ok": true, "unclosed": period_to_str(period) })))
+    Ok(Json(
+        json!({ "ok": true, "unclosed": period_to_str(period) }),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -3347,7 +3522,10 @@ async fn fill_default_accounts(
             user.username(),
             "科目",
             "补齐科目表",
-            &format!("补入 {inserted} 个内置科目（{before} → {}）", before + inserted),
+            &format!(
+                "补入 {inserted} 个内置科目（{before} → {}）",
+                before + inserted
+            ),
         )?;
     }
     Ok(Json(json!({
@@ -3413,10 +3591,7 @@ fn to_item(v: &Voucher) -> VoucherListItem {
 /// 从查询参数构造凭证列表条件。`list_vouchers` 与 `list_vouchers_page` **共用**
 /// 这一份：分页要显示「共 N 张」和合计，两者必须和列表看到的是同一批数据，
 /// 条件一旦各写一份就会漂移（页码算错 / 合计对不上）。
-fn voucher_query_from(
-    q: &HashMap<String, String>,
-    user: &CurrentUser,
-) -> VoucherQuery {
+fn voucher_query_from(q: &HashMap<String, String>, user: &CurrentUser) -> VoucherQuery {
     // 落地数据范围：仅本人凭证或按科目区间过滤
     let mut query = VoucherQuery::default().with_data_scope(&user.user);
     query.asc = true;
@@ -3482,9 +3657,9 @@ async fn list_vouchers_page(
     let num = |k: &str, def: i64| -> Result<i64, AppError> {
         match q.get(k).map(|s| s.trim()).filter(|s| !s.is_empty()) {
             None => Ok(def),
-            Some(t) => t.parse::<i64>().map_err(|_| {
-                AppError::bad_request(format!("参数 {k} 必须是整数，收到：{t}"))
-            }),
+            Some(t) => t
+                .parse::<i64>()
+                .map_err(|_| AppError::bad_request(format!("参数 {k} 必须是整数，收到：{t}"))),
         }
     };
     let page = num("page", 1)?.max(1);
@@ -3503,7 +3678,11 @@ async fn list_vouchers_page(
     // 类错误暴露出来。所以这里显式断言一致。
     let before = rows.len();
     rows.retain(|v| user.user.can_see_voucher(v));
-    debug_assert_eq!(before, rows.len(), "SQL 下推的数据范围与 can_see_voucher 不一致，total 会算错页码");
+    debug_assert_eq!(
+        before,
+        rows.len(),
+        "SQL 下推的数据范围与 can_see_voucher 不一致，total 会算错页码"
+    );
 
     // 合计走全量（不分页）：财务界面要核对的是本期间总账数字
     let (debit_total, credit_total) = vouchers::totals(&db, &query)?;
@@ -3526,8 +3705,7 @@ async fn get_voucher(
         return Err(AppError::forbidden("没有查看凭证的权限"));
     }
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     // 数据权限：非全量权限用户不得查看自己不可见的凭证
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权查看该凭证"));
@@ -3745,7 +3923,11 @@ async fn save_voucher(
                     format!(
                         "{} {} 预算 {} 已执行 {} 本次 {} 超 {}",
                         o.account_code,
-                        if o.dept.is_empty() { "" } else { o.dept.as_str() },
+                        if o.dept.is_empty() {
+                            ""
+                        } else {
+                            o.dept.as_str()
+                        },
                         o.budget.fmt_money(),
                         o.actual.fmt_money(),
                         o.add.fmt_money(),
@@ -3801,8 +3983,7 @@ async fn voucher_void(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权操作该凭证"));
     }
@@ -3830,8 +4011,7 @@ async fn voucher_amend(
     user.require(Perm::VoucherDelete)?;
     let db = state.db_for(&user.book_key)?;
     // 权限校验必须在 amend 之前：数据权限不只管「看」，也管「改」
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权更正该凭证"));
     }
@@ -3849,8 +4029,7 @@ async fn voucher_post(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherPost)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权记账该凭证"));
     }
@@ -3862,7 +4041,9 @@ async fn voucher_post(
     }
     // 启用审核环节的账套：先审核再记账（预检给 400，避免落到引擎错误的 500）
     if db.options().enable_audit && v.status != VoucherStatus::Audited {
-        return Err(AppError::bad_request("该账套启用了审核环节，请先审核凭证再记账"));
+        return Err(AppError::bad_request(
+            "该账套启用了审核环节，请先审核凭证再记账",
+        ));
     }
     vouchers::post(&db, id, user.username())?;
     Ok(Json(json!({"ok": true})))
@@ -3876,8 +4057,7 @@ async fn voucher_audit(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherAudit)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权审核该凭证"));
     }
@@ -3899,8 +4079,7 @@ async fn voucher_unaudit(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherUnaudit)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权反审核该凭证"));
     }
@@ -3919,8 +4098,7 @@ async fn voucher_sign(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权对该凭证签字"));
     }
@@ -3942,8 +4120,7 @@ async fn voucher_unsign(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权对该凭证取消签字"));
     }
@@ -3974,7 +4151,12 @@ async fn voucher_batch_post(
         }
     }
     let (n, errs) = vouchers::post_many(&db, &allowed, user.username())?;
-    db.log(user.username(), "凭证", "批量记账", &format!("{n} 张（拒绝 {denied} 张越权）"))?;
+    db.log(
+        user.username(),
+        "凭证",
+        "批量记账",
+        &format!("{n} 张（拒绝 {denied} 张越权）"),
+    )?;
     Ok(Json(json!({ "ok": n, "errors": errs, "denied": denied })))
 }
 
@@ -3986,8 +4168,7 @@ async fn voucher_unpost(
     // 反记账（已记账 → 未记账），修改前需先反记账
     user.require(Perm::VoucherUnpost)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权反记账该凭证"));
     }
@@ -4012,8 +4193,7 @@ async fn voucher_reverse(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权冲销该凭证"));
     }
@@ -4080,8 +4260,7 @@ async fn voucher_delete(
     user.require(Perm::VoucherDelete)?;
     let db = state.db_for(&user.book_key)?;
     // 加载后做守卫校验：状态、结账期间、数据权限
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权删除该凭证"));
     }
@@ -4091,9 +4270,7 @@ async fn voucher_delete(
     }
     // 已记账凭证需先反记账才能删除（未记账凭证可直接删除）
     if v.status == VoucherStatus::Posted {
-        return Err(AppError::bad_request(
-            "已记账凭证不能直接删除，请先反记账",
-        ));
+        return Err(AppError::bad_request("已记账凭证不能直接删除，请先反记账"));
     }
     // 期间是否已结账
     if let Some(closed) = findb::periods::closed_upto(&db)? {
@@ -4134,8 +4311,7 @@ async fn list_voucher_attachments(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     user.require(Perm::Report)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权查看该凭证的附件"));
     }
@@ -4154,8 +4330,7 @@ async fn upload_voucher_attachment(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherEdit)?;
     let db = state.db_for(&user.book_key)?;
-    let v = vouchers::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权为该凭证上传附件"));
     }
@@ -4200,8 +4375,8 @@ async fn download_attachment(
 ) -> Result<Response, AppError> {
     user.require(Perm::Report)?;
     let db = state.db_for(&user.book_key)?;
-    let a = findb::attach::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
+    let a =
+        findb::attach::get(&db, id)?.ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
     let v = vouchers::get(&db, a.voucher_id)?
         .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
@@ -4240,8 +4415,8 @@ async fn delete_attachment(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherEdit)?;
     let db = state.db_for(&user.book_key)?;
-    let a = findb::attach::get(&db, id)?
-        .ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
+    let a =
+        findb::attach::get(&db, id)?.ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
     let v = vouchers::get(&db, a.voucher_id)?
         .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
@@ -4286,7 +4461,11 @@ fn invoice_json(inv: &findb::invoices::Invoice) -> serde_json::Value {
 fn invoice_from_req(r: &InvoiceReq) -> Result<findb::invoices::Invoice, AppError> {
     Ok(findb::invoices::Invoice {
         id: r.id,
-        kind: if r.kind.is_empty() { "in".to_string() } else { r.kind.clone() },
+        kind: if r.kind.is_empty() {
+            "in".to_string()
+        } else {
+            r.kind.clone()
+        },
         code: r.code.clone(),
         number: r.number.clone(),
         date: r.date.clone(),
@@ -4296,7 +4475,11 @@ fn invoice_from_req(r: &InvoiceReq) -> Result<findb::invoices::Invoice, AppError
         amount: parse_money_checked(&r.amount)?,
         tax: parse_money_checked(&r.tax)?,
         tax_rate: r.tax_rate.clone(),
-        status: if r.status.is_empty() { "pending".to_string() } else { r.status.clone() },
+        status: if r.status.is_empty() {
+            "pending".to_string()
+        } else {
+            r.status.clone()
+        },
         memo: r.memo.clone(),
         attach_id: 0,
         created_by: String::new(),
@@ -4319,9 +4502,21 @@ async fn list_invoices(
     let rows = findb::invoices::list(
         &db,
         &findb::invoices::InvoiceQuery {
-            kind: if q.kind.is_empty() { None } else { Some(q.kind) },
-            status: if q.status.is_empty() { None } else { Some(q.status) },
-            keyword: if q.keyword.is_empty() { None } else { Some(q.keyword) },
+            kind: if q.kind.is_empty() {
+                None
+            } else {
+                Some(q.kind)
+            },
+            status: if q.status.is_empty() {
+                None
+            } else {
+                Some(q.status)
+            },
+            keyword: if q.keyword.is_empty() {
+                None
+            } else {
+                Some(q.keyword)
+            },
             limit: Some(INVOICE_LIST_MAX),
         },
     )?;
@@ -4372,7 +4567,12 @@ async fn invoice_from_po(
     user.require(Perm::VoucherNew)?;
     let db = state.db_for(&user.book_key)?;
     let id = findb::invoices::push_from_po(&db, req.po_id, user.username())?;
-    db.log(user.username(), "发票", "下推采购发票", &format!("PO#{} → 发票#{id}", req.po_id))?;
+    db.log(
+        user.username(),
+        "发票",
+        "下推采购发票",
+        &format!("PO#{} → 发票#{id}", req.po_id),
+    )?;
     Ok(Json(json!({ "ok": true, "invoice_id": id })))
 }
 
@@ -4385,7 +4585,12 @@ async fn invoice_from_so(
     user.require(Perm::VoucherNew)?;
     let db = state.db_for(&user.book_key)?;
     let id = findb::invoices::push_from_so(&db, req.so_id, user.username())?;
-    db.log(user.username(), "发票", "下推销售发票", &format!("SO#{} → 发票#{id}", req.so_id))?;
+    db.log(
+        user.username(),
+        "发票",
+        "下推销售发票",
+        &format!("SO#{} → 发票#{id}", req.so_id),
+    )?;
     Ok(Json(json!({ "ok": true, "invoice_id": id })))
 }
 
@@ -4411,8 +4616,8 @@ async fn update_invoice(
     let db = state.db_for(&user.book_key)?;
     // 归属校验 + 保留服务端字段：普通用户不能改他人发票，
     // 且表单未提交的 attach_id/created_by/status 不能被覆盖清零
-    let existing = findb::invoices::get(&db, id)?
-        .ok_or_else(|| AppError::not_found("发票不存在"))?;
+    let existing =
+        findb::invoices::get(&db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
     if existing.created_by != user.username() && !user.user.is_admin() {
         return Err(AppError::forbidden("无权修改他人录入的发票"));
     }
@@ -4437,8 +4642,8 @@ async fn delete_invoice(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
     let db = state.db_for(&user.book_key)?;
-    let existing = findb::invoices::get(&db, id)?
-        .ok_or_else(|| AppError::not_found("发票不存在"))?;
+    let existing =
+        findb::invoices::get(&db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
     if existing.created_by != user.username() && !user.user.is_admin() {
         return Err(AppError::forbidden("无权删除他人录入的发票"));
     }
@@ -4456,8 +4661,8 @@ async fn invoice_set_status(
     user.require(Perm::VoucherEdit)?;
     let db = state.db_for(&user.book_key)?;
     // 归属校验：状态机接口同样不得改他人录入的发票（否则绕过 update_invoice 的守卫）
-    let existing = findb::invoices::get(&db, id)?
-        .ok_or_else(|| AppError::not_found("发票不存在"))?;
+    let existing =
+        findb::invoices::get(&db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
     if existing.created_by != user.username() && !user.user.is_admin() {
         return Err(AppError::forbidden("无权修改他人录入的发票状态"));
     }
@@ -4484,7 +4689,7 @@ pub struct InvoiceListQuery {
 fn b64_decode(s: &str) -> Result<Vec<u8>, AppError> {
     let s = s.trim();
     // 兼容 data URL 前缀（data:application/...;base64,xxx）
-    let s = s.split(',').last().unwrap_or(s);
+    let s = s.split(',').next_back().unwrap_or(s);
     let mut out = Vec::with_capacity(s.len() / 4 * 3);
     let mut buf: u32 = 0;
     let mut bits = 0u32;
@@ -4527,10 +4732,7 @@ async fn list_arap_opening(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = state.db_for(&user.book_key)?;
-    let kind = q
-        .get("kind")
-        .map(String::as_str)
-        .filter(|k| !k.is_empty());
+    let kind = q.get("kind").map(String::as_str).filter(|k| !k.is_empty());
     let rows = findb::settle::arap_opening_list(&db, kind)?;
     // 合计按 kind 显式分列：原来的 `if ar {…} else {ap += …}` 会把空串、大小写笔误
     // （"AR"）等一切非 "ar" 的行默默并进应付合计，让用户看到一个凭空变大的数。
@@ -4690,11 +4892,7 @@ async fn get_customer_aging(
 ///
 /// 不传就默认当前期间，是有意的：客户视图是「现在谁欠我钱」，
 /// 而不是一个历史查询工具。要看历史用 ?period= 显式指定。
-fn period_from_query(
-    state: &WebState,
-    user: &CurrentUser,
-    raw: Option<&String>,
-) -> Period {
+fn period_from_query(state: &WebState, user: &CurrentUser, raw: Option<&String>) -> Period {
     let cur = current_period(state, user);
     match raw.map(|s| s.trim()).filter(|s| !s.is_empty()) {
         None => cur,
@@ -4715,7 +4913,9 @@ async fn items_master(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::inventory2::item_master(&db)? })))
+    Ok(Json(
+        json!({ "rows": findb::inventory2::item_master(&db)? }),
+    ))
 }
 
 /// 下载导入模板（列头 + 示例行；主数据三平台列头一致，CSV 带 BOM 供 Excel 直接打开）
@@ -4747,17 +4947,64 @@ async fn import_template(
             vec!["2202", "应付账款", "负债", "贷", ""],
         ],
         "opening_stock" => vec![
-            vec!["存货编码", "仓库", "数量", "单价", "批次号", "生产日期", "备注"],
-            vec!["I01", "W01", "100", "12.5", "BT0001", "2026-01-01", "盘点转入"],
+            vec![
+                "存货编码",
+                "仓库",
+                "数量",
+                "单价",
+                "批次号",
+                "生产日期",
+                "备注",
+            ],
+            vec![
+                "I01",
+                "W01",
+                "100",
+                "12.5",
+                "BT0001",
+                "2026-01-01",
+                "盘点转入",
+            ],
         ],
         "begin" => vec![
-            vec!["科目编码", "科目名称", "方向", "期初余额", "累计借方", "累计贷方"],
+            vec![
+                "科目编码",
+                "科目名称",
+                "方向",
+                "期初余额",
+                "累计借方",
+                "累计贷方",
+            ],
             vec!["1001", "库存现金", "借", "1000", "0", "0"],
         ],
         "arap_opening" => vec![
-            vec!["类型", "客商编码", "单据号", "单据日期", "金额", "客商名称", "备注"],
-            vec!["应收", "C01", "XSQ-0001", "2025-12-31", "5000", "客户甲", "期初欠款"],
-            vec!["应付", "S01", "CGQ-0001", "2025-12-31", "3000", "供应商甲", ""],
+            vec![
+                "类型",
+                "客商编码",
+                "单据号",
+                "单据日期",
+                "金额",
+                "客商名称",
+                "备注",
+            ],
+            vec![
+                "应收",
+                "C01",
+                "XSQ-0001",
+                "2025-12-31",
+                "5000",
+                "客户甲",
+                "期初欠款",
+            ],
+            vec![
+                "应付",
+                "S01",
+                "CGQ-0001",
+                "2025-12-31",
+                "3000",
+                "供应商甲",
+                "",
+            ],
         ],
         "voucher" => vec![
             vec!["日期", "凭证字", "摘要", "科目编码", "借方", "贷方"],
@@ -4801,7 +5048,11 @@ async fn import_analyze(
     Json(req): Json<ImportAnalyzeReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(import_perm(&req.kind)?)?;
-    let has_file = req.file.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let has_file = req
+        .file
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
     if !has_file && req.text.trim().is_empty() {
         return Err(AppError::bad_request("请选择 Excel 文件或粘贴 CSV 内容"));
     }
@@ -4877,7 +5128,11 @@ async fn import_run(
     Json(req): Json<ImportRunReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(import_perm(&req.kind)?)?;
-    let has_file = req.file.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false);
+    let has_file = req
+        .file
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
     if !has_file && req.text.trim().is_empty() {
         return Err(AppError::bad_request("请粘贴 CSV 内容或选择 Excel 文件"));
     }
@@ -4890,7 +5145,11 @@ async fn import_run(
     let key = user.book_key.clone();
     let who = user.username().to_string();
     let fallback_ymm = current_period(&state, &user).ymm();
-    let explicit_ymm = if req.period > 0 { Some(period_checked(req.period)?.ymm()) } else { None };
+    let explicit_ymm = if req.period > 0 {
+        Some(period_checked(req.period)?.ymm())
+    } else {
+        None
+    };
     let state2 = state.clone();
     let kind = req.kind.clone();
     let out = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, AppError> {
@@ -4900,9 +5159,23 @@ async fn import_run(
             "voucher" => {
                 let period = fincore::Period::from_ymm(explicit_ymm.unwrap_or(fallback_ymm));
                 if let Some(bytes) = &file_bytes {
-                    findb::imports::import_vouchers_bytes(&db, period, bytes, &who, &req.mapping, tmpl)?
+                    findb::imports::import_vouchers_bytes(
+                        &db,
+                        period,
+                        bytes,
+                        &who,
+                        &req.mapping,
+                        tmpl,
+                    )?
                 } else {
-                    findb::imports::import_vouchers(&db, period, &req.text, &who, &req.mapping, tmpl)?
+                    findb::imports::import_vouchers(
+                        &db,
+                        period,
+                        &req.text,
+                        &who,
+                        &req.mapping,
+                        tmpl,
+                    )?
                 }
             }
             "aux" => {
@@ -4975,9 +5248,14 @@ async fn import_run(
                 v
             }
             "begin" | "opening_stock" | "arap_opening" => {
-                vec!["期初数据已写入。请确认「期初余额」页的合计与对方账套一致后再启用记账".to_string()]
+                vec![
+                    "期初数据已写入。请确认「期初余额」页的合计与对方账套一致后再启用记账"
+                        .to_string(),
+                ]
             }
-            _ => vec!["档案类导入为逐条幂等写入：中断后重跑会跳过已存在的编码，可安全重导".to_string()],
+            _ => vec![
+                "档案类导入为逐条幂等写入：中断后重跑会跳过已存在的编码，可安全重导".to_string(),
+            ],
         };
         Ok(json!({
             "ok": res.ok,
@@ -5126,11 +5404,7 @@ async fn print_voucher_form(
                     .get(&format!("{}:{}", k.code(), v))
                     .cloned()
                     .unwrap_or_default();
-                parts.push(if name.is_empty() {
-                    v.to_string()
-                } else {
-                    name
-                });
+                parts.push(if name.is_empty() { v.to_string() } else { name });
             }
         }
         parts.join("/")
@@ -5198,7 +5472,10 @@ async fn print_ledger_form(
         .unwrap_or(code.clone());
 
     // 期初余额
-    let snap = BalanceSnapshot::load(&db, &BalanceQuery::range(from, from).with_user_scope(&user.user))?;
+    let snap = BalanceSnapshot::load(
+        &db,
+        &BalanceQuery::range(from, from).with_user_scope(&user.user),
+    )?;
     let (bd, bamt) = fincore::signed_to_dir_amount(snap.for_account(&code, None).begin);
     let begin_dir = if bamt.is_zero() {
         "平".to_string()
@@ -5287,7 +5564,13 @@ fn trial_balance_data(
     state: &WebState,
     user: &CurrentUser,
     q: &HashMap<String, String>,
-) -> Result<(Vec<fincore::balance::BalanceRow>, fincore::balance::TrialBalance), AppError> {
+) -> Result<
+    (
+        Vec<fincore::balance::BalanceRow>,
+        fincore::balance::TrialBalance,
+    ),
+    AppError,
+> {
     let db = state.db_for(&user.book_key)?;
     let start = db.options().start_period;
     // 与其它报表同一套校验：区间敲错 / 倒置都返回 400，不静默换一个区间
@@ -5366,11 +5649,7 @@ async fn print_trial_balance(
     user.require(Perm::Report)?;
     let (rows, totals) = trial_balance_data(&state, &user, &q)?;
     let html = trial_balance_html(&user.company, &q, &rows, &totals);
-    Ok((
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        html,
-    )
-        .into_response())
+    Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
 async fn export_trial_balance(
@@ -5444,9 +5723,9 @@ fn csv_response(filename: &str, rows: Vec<Vec<String>>) -> Response {
         header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("text/csv; charset=utf-8"),
     );
-    if let Ok(v) = axum::http::HeaderValue::from_str(&format!(
-        "attachment; filename=\"{filename}\""
-    )) {
+    if let Ok(v) =
+        axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+    {
         resp.headers_mut().insert(header::CONTENT_DISPOSITION, v);
     }
     resp
@@ -5485,7 +5764,15 @@ async fn export_vouchers(
     vouchers::fill_entries(&db, &mut list)?;
     let chart = accounts::chart(&db)?;
     let mut rows: Vec<Vec<String>> = vec![[
-        "日期", "凭证号", "状态", "摘要", "科目编码", "科目名称", "借方", "贷方", "制单人",
+        "日期",
+        "凭证号",
+        "状态",
+        "摘要",
+        "科目编码",
+        "科目名称",
+        "借方",
+        "贷方",
+        "制单人",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -5577,8 +5864,16 @@ async fn export_payroll(
     let list = business::payroll_list(&db, period)?;
     let list = scope_payroll(&user, &list);
     let mut rows = vec![[
-        "员工", "部门", "应发", "社保(个人)", "公积金(个人)", "专项附加", "个税", "实发",
-        "社保(单位)", "公积金(单位)",
+        "员工",
+        "部门",
+        "应发",
+        "社保(个人)",
+        "公积金(个人)",
+        "专项附加",
+        "个税",
+        "实发",
+        "社保(单位)",
+        "公积金(单位)",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -5626,7 +5921,15 @@ async fn export_claims(
         .filter(|c| doc_in_scope(&user, &c.applicant))
         .collect();
     let mut rows = vec![[
-        "单号", "业务日期", "申请人", "部门", "事由", "金额", "状态", "审批人", "付款人",
+        "单号",
+        "业务日期",
+        "申请人",
+        "部门",
+        "事由",
+        "金额",
+        "状态",
+        "审批人",
+        "付款人",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -5755,11 +6058,12 @@ fn html_escape(s: &str) -> String {
 
 fn csv_escape(s: &str) -> String {
     // 防公式注入：以 = + - @ 开头的单元格在 Excel 里会被当公式执行
-    let guarded = if s.starts_with('=') || s.starts_with('+') || s.starts_with('-') || s.starts_with('@') {
-        format!("'{s}")
-    } else {
-        s.to_string()
-    };
+    let guarded =
+        if s.starts_with('=') || s.starts_with('+') || s.starts_with('-') || s.starts_with('@') {
+            format!("'{s}")
+        } else {
+            s.to_string()
+        };
     if guarded.contains(',') || guarded.contains('"') || guarded.contains('\n') {
         format!("\"{}\"", guarded.replace('"', "\"\""))
     } else {
@@ -5815,7 +6119,9 @@ async fn get_tax_vat_detail(
     let period = query_period(&state, &user, &q);
     let kind = q.get("kind").map(|s| s.trim()).unwrap_or("out");
     if kind != "out" && kind != "in" {
-        return Err(AppError::bad_request("kind 只能是 out（销项）或 in（进项）"));
+        return Err(AppError::bad_request(
+            "kind 只能是 out（销项）或 in（进项）",
+        ));
     }
     let rate = q
         .get("rate")
@@ -5823,7 +6129,9 @@ async fn get_tax_vat_detail(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::bad_request("缺少参数 rate（税率档，如 13）"))?;
     let rows = findb::taxdecl::bucket_detail(&db, kind, period, rate)?;
-    Ok(Json(json!({ "kind": kind, "rate": rate, "rows": rows, "count": rows.len() })))
+    Ok(Json(
+        json!({ "kind": kind, "rate": rate, "rows": rows, "count": rows.len() }),
+    ))
 }
 
 async fn get_tax_options(
@@ -5941,7 +6249,14 @@ async fn export_tax_vat(
 
     for t in [&f.details_out, &f.details_in] {
         row(&[]);
-        row(&[t.title.clone(), "税率".into(), "张数".into(), "销售额".into(), "税额".into(), "价税合计".into()]);
+        row(&[
+            t.title.clone(),
+            "税率".into(),
+            "张数".into(),
+            "销售额".into(),
+            "税额".into(),
+            "价税合计".into(),
+        ]);
         for b in &t.buckets {
             row(&[
                 String::new(),
@@ -6064,19 +6379,30 @@ async fn get_multi_column(
     }
     let cols: Vec<String> = q
         .get("cols")
-        .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
+        .map(|s| {
+            s.split(',')
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
     if cols.is_empty() {
         return Err(AppError::bad_request("缺少栏目科目 cols（逗号分隔）"));
     }
-    let (from, to) = period_range_param(&q, current_period(&state, &user), current_period(&state, &user))?;
+    let (from, to) = period_range_param(
+        &q,
+        current_period(&state, &user),
+        current_period(&state, &user),
+    )?;
     let db = state.db_for(&user.book_key)?;
     // 数据范围：主科目与各栏目科目均须在可见范围内
     if !user.user.can_see_account(&main) || cols.iter().any(|c| !user.user.can_see_account(c)) {
         return Err(AppError::forbidden("无权查看该科目"));
     }
     let rows = advanced::multi_column_table(&db, &main, &cols, from, to, Some(&user.user))?;
-    Ok(Json(serde_json::json!({ "main": main, "cols": cols, "rows": rows })))
+    Ok(Json(
+        serde_json::json!({ "main": main, "cols": cols, "rows": rows }),
+    ))
 }
 
 async fn get_summary_table(
@@ -6085,10 +6411,16 @@ async fn get_summary_table(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let (from, to) = period_range_param(&q, current_period(&state, &user), current_period(&state, &user))?;
+    let (from, to) = period_range_param(
+        &q,
+        current_period(&state, &user),
+        current_period(&state, &user),
+    )?;
     let db = state.db_for(&user.book_key)?;
     let rows = advanced::summary_table(&db, from, to, Some(&user.user))?;
-    Ok(Json(serde_json::json!({ "from": period_to_str(from), "to": period_to_str(to), "rows": rows })))
+    Ok(Json(
+        serde_json::json!({ "from": period_to_str(from), "to": period_to_str(to), "rows": rows }),
+    ))
 }
 
 async fn get_fin_ratios(
@@ -6097,14 +6429,22 @@ async fn get_fin_ratios(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let period = q.get("period").and_then(|s| parse_period(s)).unwrap_or_else(|| current_period(&state, &user));
-    let from = q.get("from").and_then(|s| parse_period(s)).unwrap_or_else(|| {
-        // 默认年初（同一会计年度 1 月）
-        fincore::Period::new(period.year(), 1).unwrap_or(period)
-    });
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
+    let from = q
+        .get("from")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| {
+            // 默认年初（同一会计年度 1 月）
+            fincore::Period::new(period.year(), 1).unwrap_or(period)
+        });
     let db = state.db_for(&user.book_key)?;
     let rows = advanced::fin_ratios(&db, period, from, Some(&user.user))?;
-    Ok(Json(serde_json::json!({ "period": period_to_str(period), "ratios": rows })))
+    Ok(Json(
+        serde_json::json!({ "period": period_to_str(period), "ratios": rows }),
+    ))
 }
 
 // ---- 所有者权益变动表 / 报表对比 / 科目日报表 / 期末对账 ----
@@ -6141,18 +6481,35 @@ async fn get_report_compare(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let key = q.get("key").cloned().unwrap_or_else(|| "balance_sheet".to_string());
+    let key = q
+        .get("key")
+        .cloned()
+        .unwrap_or_else(|| "balance_sheet".to_string());
     let cur = period_param(q.get("period"), current_period(&state, &user))?;
     let prev = period_param(q.get("prev"), cur.prev())?;
-    let yearly = q.get("yearly").map(|s| s == "1" || s == "true").unwrap_or(true);
+    let yearly = q
+        .get("yearly")
+        .map(|s| s == "1" || s == "true")
+        .unwrap_or(true);
     // 默认按年累计：当前期 1 月→当前期；上期 1 月→上期
     let (cur_from, prev_from) = if yearly {
-        (fincore::Period::new(cur.year(), 1).unwrap_or(cur), fincore::Period::new(prev.year(), 1).unwrap_or(prev))
+        (
+            fincore::Period::new(cur.year(), 1).unwrap_or(cur),
+            fincore::Period::new(prev.year(), 1).unwrap_or(prev),
+        )
     } else {
         (cur, prev)
     };
     let db = state.db_for(&user.book_key)?;
-    let rows = findb::reports::report_compare(&db, &key, cur_from, cur, prev_from, prev, Some(&user.user))?;
+    let rows = findb::reports::report_compare(
+        &db,
+        &key,
+        cur_from,
+        cur,
+        prev_from,
+        prev,
+        Some(&user.user),
+    )?;
     Ok(Json(serde_json::json!({
         "key": key,
         "current": period_to_str(cur),
@@ -6171,7 +6528,10 @@ async fn get_account_daily(
     if code.is_empty() {
         return Err(AppError::bad_request("缺少科目编码 code"));
     }
-    let from = q.get("from").and_then(|s| parse_period(s)).unwrap_or_else(|| current_period(&state, &user));
+    let from = q
+        .get("from")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
     let to = q.get("to").and_then(|s| parse_period(s)).unwrap_or(from);
     let db = state.db_for(&user.book_key)?;
     // 数据范围：仅可见科目
@@ -6194,10 +6554,15 @@ async fn get_period_reconcile(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let period = q.get("period").and_then(|s| parse_period(s)).unwrap_or_else(|| current_period(&state, &user));
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
     let db = state.db_for(&user.book_key)?;
     let items = findb::reports::period_reconcile(&db, period)?;
-    Ok(Json(serde_json::json!({ "period": period_to_str(period), "items": items })))
+    Ok(Json(
+        serde_json::json!({ "period": period_to_str(period), "items": items }),
+    ))
 }
 
 /// 辅助账：按辅助核算维度汇总各单位的期初/发生/期末
@@ -6430,7 +6795,9 @@ async fn stock_adjust_endpoint(
         delta,
         &req.memo,
     )?;
-    Ok(Json(serde_json::json!({ "ok": true, "id": id, "qty": qty, "delta": delta })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "id": id, "qty": qty, "delta": delta }),
+    ))
 }
 
 // ---- 库存深度：序列号 / 多单位 / 账龄 / ABC / 组装拆卸 / 分仓库 ----
@@ -6531,12 +6898,15 @@ async fn set_unit(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = state.db_for(&user.book_key)?;
-    findb::inventory2::unit_set(&db, &findb::inventory2::ItemUnit {
-        item: req.item,
-        base_unit: req.base_unit,
-        alt_unit: req.alt_unit,
-        factor: parse_money_checked(&req.factor)?,
-    })?;
+    findb::inventory2::unit_set(
+        &db,
+        &findb::inventory2::ItemUnit {
+            item: req.item,
+            base_unit: req.base_unit,
+            alt_unit: req.alt_unit,
+            factor: parse_money_checked(&req.factor)?,
+        },
+    )?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -6712,16 +7082,32 @@ async fn add_estimate(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = state.db_for(&user.book_key)?;
-    let period = if req.period > 0 { period_checked(req.period)? } else { current_period(&state, &user) };
+    let period = if req.period > 0 {
+        period_checked(req.period)?
+    } else {
+        current_period(&state, &user)
+    };
     // 登记暂估即同事务生成暂估凭证（借 存货 / 贷 应付-订单供应商）
-    let (est_id, vid) = findb::scm2::po_estimate_add(&db, req.po_id, period, &req.item, parse_money_checked(&req.est_amount)?, user.username())?;
+    let (est_id, vid) = findb::scm2::po_estimate_add(
+        &db,
+        req.po_id,
+        period,
+        &req.item,
+        parse_money_checked(&req.est_amount)?,
+        user.username(),
+    )?;
     db.log(
         user.username(),
         "采购",
         "登记暂估",
-        &format!("PO#{} {} {} 凭证 #{vid}", req.po_id, req.item, req.est_amount),
+        &format!(
+            "PO#{} {} {} 凭证 #{vid}",
+            req.po_id, req.item, req.est_amount
+        ),
     )?;
-    Ok(Json(serde_json::json!({ "ok": true, "id": est_id, "voucher_id": vid })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "id": est_id, "voucher_id": vid }),
+    ))
 }
 
 /// 逐行列出暂估状态：可暂估额度 / 已暂估 / 还能登多少。
@@ -6735,7 +7121,10 @@ async fn estimate_status(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let po_id = q.get("po_id").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    let po_id = q
+        .get("po_id")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0);
     if po_id == 0 {
         return Err(AppError::bad_request("缺少 po_id"));
     }
@@ -6846,8 +7235,18 @@ async fn set_quota(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = state.db_for(&user.book_key)?;
-    let period = if req.period > 0 { period_checked(req.period)? } else { current_period(&state, &user) };
-    findb::scm2::quota_set(&db, period, &req.supplier, &req.item, parse_money_checked(&req.quota_qty)?)?;
+    let period = if req.period > 0 {
+        period_checked(req.period)?
+    } else {
+        current_period(&state, &user)
+    };
+    findb::scm2::quota_set(
+        &db,
+        period,
+        &req.supplier,
+        &req.item,
+        parse_money_checked(&req.quota_qty)?,
+    )?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -6873,7 +7272,10 @@ async fn list_purchase_req(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = state.db_for(&user.book_key)?;
-    let period = q.get("period").and_then(|s| parse_period(s)).unwrap_or_else(|| current_period(&state, &user));
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
     let rows = findb::procurement::pr_list(&db, period)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -6912,7 +7314,12 @@ async fn approve_purchase_req(
         "",
     )? {
         findb::workflow::Gate::Pending { next } => {
-            db.log(user.username(), "审批", "工作流节点", &format!("请购#{id} → {next}"))?;
+            db.log(
+                user.username(),
+                "审批",
+                "工作流节点",
+                &format!("请购#{id} → {next}"),
+            )?;
             return Ok(Json(json!({ "ok": true, "pending": next })));
         }
         findb::workflow::Gate::Final { approved: false } => {
@@ -6953,16 +7360,30 @@ async fn add_po_receipt(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = state.db_for(&user.book_key)?;
-    let period = if req.period > 0 { period_checked(req.period)? } else { current_period(&state, &user) };
+    let period = if req.period > 0 {
+        period_checked(req.period)?
+    } else {
+        current_period(&state, &user)
+    };
     let date = if req.date.is_empty() {
         period.first_day()
     } else {
         NaiveDate::parse_from_str(&req.date, "%Y-%m-%d").unwrap_or_else(|_| period.first_day())
     };
-    let id = findb::procurement::po_receipt_with_stock(&db, &findb::procurement::PoReceipt {
-        id: 0, po_id: req.po_id, period, date, qty: parse_money_checked(&req.qty)?, memo: req.memo,
-        item_code: req.item_code, warehouse: req.warehouse.clone(),
-    }, &req.warehouse)?;
+    let id = findb::procurement::po_receipt_with_stock(
+        &db,
+        &findb::procurement::PoReceipt {
+            id: 0,
+            po_id: req.po_id,
+            period,
+            date,
+            qty: parse_money_checked(&req.qty)?,
+            memo: req.memo,
+            item_code: req.item_code,
+            warehouse: req.warehouse.clone(),
+        },
+        &req.warehouse,
+    )?;
     // 待检提示：首行存货勾选了来料检验 → 入库为待检状态（质检转正后方可领用）
     let qc_pending = findb::scm::po_get(&db, req.po_id)?
         .and_then(|p| {
@@ -6971,7 +7392,9 @@ async fn add_po_receipt(
                 .map(|l| findb::business::item_qc_required(&db, &l.item_code))
         })
         .unwrap_or(false);
-    Ok(Json(serde_json::json!({ "ok": true, "id": id, "qc_pending": qc_pending })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "id": id, "qc_pending": qc_pending }),
+    ))
 }
 
 async fn add_po_return(
@@ -6981,7 +7404,11 @@ async fn add_po_return(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = state.db_for(&user.book_key)?;
-    let period = if req.period > 0 { period_checked(req.period)? } else { current_period(&state, &user) };
+    let period = if req.period > 0 {
+        period_checked(req.period)?
+    } else {
+        current_period(&state, &user)
+    };
     let date = if req.date.is_empty() {
         period.first_day()
     } else {
@@ -7019,7 +7446,11 @@ async fn add_po_payment(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = state.db_for(&user.book_key)?;
-    let period = if req.period > 0 { period_checked(req.period)? } else { current_period(&state, &user) };
+    let period = if req.period > 0 {
+        period_checked(req.period)?
+    } else {
+        current_period(&state, &user)
+    };
     let date = if req.date.is_empty() {
         period.first_day()
     } else {
@@ -7027,8 +7458,8 @@ async fn add_po_payment(
     };
     let amount = parse_money_checked(&req.amount)?;
     // 对标金蝶：付款动作即出台账凭证并按供应商自动核销（默认资金账户取账套配置）
-    let po = findb::scm::po_get(&db, req.po_id)?
-        .ok_or_else(|| AppError::not_found("采购订单不存在"))?;
+    let po =
+        findb::scm::po_get(&db, req.po_id)?.ok_or_else(|| AppError::not_found("采购订单不存在"))?;
     // 审核流：先落草稿收付款单（凭证由审核人审核时同事务生成并自动核销）
     //
     // 写入顺序刻意是「依赖数据先、单据最后」：findb 目前没有 receipt_create /
@@ -7074,7 +7505,9 @@ async fn add_po_payment(
     ) {
         error!(doc_id, error = %e, "写操作日志失败（采购付款登记）");
     }
-    Ok(Json(json!({ "ok": true, "id": id, "doc_id": doc_id, "status": "draft" })))
+    Ok(Json(
+        json!({ "ok": true, "id": id, "doc_id": doc_id, "status": "draft" }),
+    ))
 }
 
 async fn get_price_history(
@@ -7120,7 +7553,10 @@ async fn list_quotation(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = state.db_for(&user.book_key)?;
-    let period = q.get("period").and_then(|s| parse_period(s)).unwrap_or_else(|| current_period(&state, &user));
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
     let rows = findb::sales::quo_list(&db, period)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7159,7 +7595,12 @@ async fn approve_quotation(
         "",
     )? {
         findb::workflow::Gate::Pending { next } => {
-            db.log(user.username(), "审批", "工作流节点", &format!("报价#{id} → {next}"))?;
+            db.log(
+                user.username(),
+                "审批",
+                "工作流节点",
+                &format!("报价#{id} → {next}"),
+            )?;
             return Ok(Json(json!({ "ok": true, "pending": next })));
         }
         findb::workflow::Gate::Final { approved: false } => {
@@ -7193,7 +7634,11 @@ async fn add_so_shipment(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = state.db_for(&user.book_key)?;
-    let period = if req.period > 0 { period_checked(req.period)? } else { current_period(&state, &user) };
+    let period = if req.period > 0 {
+        period_checked(req.period)?
+    } else {
+        current_period(&state, &user)
+    };
     let date = if req.date.is_empty() {
         period.first_day()
     } else {
@@ -7204,13 +7649,15 @@ async fn add_so_shipment(
         return Err(AppError::bad_request("发货数量必须为正数"));
     }
     // 对标金蝶：未确认订单不能出库（草稿/作废订单先确认）
-    let so = findb::scm::so_get(&db, req.so_id)?
-        .ok_or_else(|| AppError::not_found("销售订单不存在"))?;
+    let so =
+        findb::scm::so_get(&db, req.so_id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
     if matches!(
         so.status,
         findb::scm::SoStatus::Draft | findb::scm::SoStatus::Cancelled
     ) {
-        return Err(AppError::bad_request("订单未确认，不能发货（请先「确认」订单）"));
+        return Err(AppError::bad_request(
+            "订单未确认，不能发货（请先「确认」订单）",
+        ));
     }
     // 收入确认凭证 + 发货执行行 + 销售出库流水**同一事务**：
     // 早先拆成 so_income_voucher（自行提交）+ so_shipment_with_stock（另一个事务），
@@ -7229,7 +7676,9 @@ async fn add_so_shipment(
     findb::scm::so_progress_update(&db, req.so_id)?;
     // 出库成功 → 完成该订单最早一条待发通知（备货指令闭环）
     let _ = findb::sales::notice_fulfill_on_shipment(&db, req.so_id)?;
-    Ok(Json(serde_json::json!({ "ok": true, "id": id, "voucher_id": ivid })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "id": id, "voucher_id": ivid }),
+    ))
 }
 
 async fn add_so_return(
@@ -7239,7 +7688,11 @@ async fn add_so_return(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = state.db_for(&user.book_key)?;
-    let period = if req.period > 0 { period_checked(req.period)? } else { current_period(&state, &user) };
+    let period = if req.period > 0 {
+        period_checked(req.period)?
+    } else {
+        current_period(&state, &user)
+    };
     let date = if req.date.is_empty() {
         period.first_day()
     } else {
@@ -7250,13 +7703,15 @@ async fn add_so_return(
         return Err(AppError::bad_request("退货数量必须为正数"));
     }
     // 对标金蝶：未确认订单不能退货
-    let so = findb::scm::so_get(&db, req.so_id)?
-        .ok_or_else(|| AppError::not_found("销售订单不存在"))?;
+    let so =
+        findb::scm::so_get(&db, req.so_id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
     if matches!(
         so.status,
         findb::scm::SoStatus::Draft | findb::scm::SoStatus::Cancelled
     ) {
-        return Err(AppError::bad_request("订单未确认，不能退货（请先「确认」订单）"));
+        return Err(AppError::bad_request(
+            "订单未确认，不能退货（请先「确认」订单）",
+        ));
     }
     // 收入冲回凭证 + 退货执行行 + 回库流水**同一事务**。
     // 关键收益：超退校验现在在任何写入之前。旧写法先提交收入冲回凭证，
@@ -7273,7 +7728,9 @@ async fn add_so_return(
         user.username(),
     )?;
     findb::scm::so_progress_update(&db, req.so_id)?;
-    Ok(Json(serde_json::json!({ "ok": true, "id": id, "voucher_id": ivid })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "id": id, "voucher_id": ivid }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -7295,7 +7752,11 @@ async fn add_so_payment(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = state.db_for(&user.book_key)?;
-    let period = if req.period > 0 { period_checked(req.period)? } else { current_period(&state, &user) };
+    let period = if req.period > 0 {
+        period_checked(req.period)?
+    } else {
+        current_period(&state, &user)
+    };
     let date = if req.date.is_empty() {
         period.first_day()
     } else {
@@ -7303,16 +7764,15 @@ async fn add_so_payment(
     };
     let amount = parse_money_checked(&req.amount)?;
     // 对标金蝶：收款动作即出台账凭证并按客户自动核销（默认资金账户取账套配置）
-    let so = findb::scm::so_get(&db, req.so_id)?
-        .ok_or_else(|| AppError::not_found("销售订单不存在"))?;
+    let so =
+        findb::scm::so_get(&db, req.so_id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
     // 审核流：先落草稿收付款单（凭证由审核人审核时同事务生成并自动核销）
     //
     // 写入顺序与 add_po_payment 刻意一致：依赖数据（收款流水）先落，草稿收付款单最后建。
     // findb 没有 so_payment_add / receipt_create 的 `_in(tx,…)` 变体，三步无法共事务，
     // 只能靠顺序收敛失败面——建单在前时，建流水失败会留下可被审核并生成付款凭证的孤立草稿单。
     // 残留的非原子性：建单成功后勾稽建边失败，仅缺一条勾稽边，业务数据仍自洽。
-    let id =
-        findb::sales::so_payment_add(&db, req.so_id, period, date, amount, &req.memo)?;
+    let id = findb::sales::so_payment_add(&db, req.so_id, period, date, amount, &req.memo)?;
     let doc_id = findb::receipt::receipt_create(
         &db,
         "receipt",
@@ -7338,7 +7798,9 @@ async fn add_so_payment(
     ) {
         error!(doc_id, error = %e, "写操作日志失败（销售收款登记）");
     }
-    Ok(Json(json!({ "ok": true, "id": id, "doc_id": doc_id, "status": "draft" })))
+    Ok(Json(
+        json!({ "ok": true, "id": id, "doc_id": doc_id, "status": "draft" }),
+    ))
 }
 
 // ---------------- 可视化工作流（对标金蝶审批流设计器） ----------------
@@ -7430,7 +7892,12 @@ async fn save_workflow(
         user.username(),
         "工作流",
         "保存流程",
-        &format!("{}（{}，节点 {}）", f.name, findb::workflow::biz_label(&f.biz_type), f.nodes.len()),
+        &format!(
+            "{}（{}，节点 {}）",
+            f.name,
+            findb::workflow::biz_label(&f.biz_type),
+            f.nodes.len()
+        ),
     )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }
@@ -7485,9 +7952,8 @@ async fn list_wf_instances(
 
 /// 从查询串取打印字段：`fields=no,date,...` 白名单（空=全显）；`pack=0` 一单一页
 fn doc_fields_from_q(q: &HashMap<String, String>) -> findb::printform::DocPrintFields {
-    let mut f = findb::printform::fields_from_tokens(
-        q.get("fields").map(|s| s.as_str()).unwrap_or(""),
-    );
+    let mut f =
+        findb::printform::fields_from_tokens(q.get("fields").map(|s| s.as_str()).unwrap_or(""));
     if q.get("pack").map(|s| s.as_str()) == Some("0") {
         f.pack = false;
     }
@@ -7518,7 +7984,11 @@ fn doc_size_from_q(q: &HashMap<String, String>) -> String {
 fn print_ids(q: &HashMap<String, String>) -> Vec<i64> {
     let mut ids: Vec<i64> = q
         .get("ids")
-        .map(|s| s.split(',').filter_map(|x| x.trim().parse::<i64>().ok()).collect())
+        .map(|s| {
+            s.split(',')
+                .filter_map(|x| x.trim().parse::<i64>().ok())
+                .collect()
+        })
         .unwrap_or_default();
     ids.sort_unstable();
     ids.dedup();
@@ -7587,12 +8057,20 @@ fn receipt_to_print(d: findb::receipt::ReceiptDoc) -> findb::printform::ReceiptP
     findb::printform::ReceiptPrint {
         no: d.no,
         date: d.date.format("%Y-%m-%d").to_string(),
-        kind_label: if d.kind == "receipt" { "收款" } else { "付款" }.to_string(),
+        kind_label: if d.kind == "receipt" {
+            "收款"
+        } else {
+            "付款"
+        }
+        .to_string(),
         fund: d.fund_account,
         party: d.party,
         amount: d.amount,
         memo: d.memo,
-        voucher_no: d.voucher_id.map(|v| format!("记-{v:04}")).unwrap_or_default(),
+        voucher_no: d
+            .voucher_id
+            .map(|v| format!("记-{v:04}"))
+            .unwrap_or_default(),
     }
 }
 
@@ -7634,7 +8112,13 @@ async fn print_so_form(
         f.col_tax = false;
         f.totals = false;
     }
-    let html = findb::printform::order_forms_sized_html(&company, &orders, &f, &doc_size_from_q(&q), q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false));
+    let html = findb::printform::order_forms_sized_html(
+        &company,
+        &orders,
+        &f,
+        &doc_size_from_q(&q),
+        q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false),
+    );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -7676,7 +8160,13 @@ async fn print_po_form(
         f.col_tax = false;
         f.totals = false;
     }
-    let html = findb::printform::order_forms_sized_html(&company, &orders, &f, &doc_size_from_q(&q), q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false));
+    let html = findb::printform::order_forms_sized_html(
+        &company,
+        &orders,
+        &f,
+        &doc_size_from_q(&q),
+        q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false),
+    );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -7706,7 +8196,13 @@ async fn print_receipt_form(
         return Err(AppError::bad_request("没有可打印的收付款单"));
     }
     let f = doc_fields_from_q(&q);
-    let html = findb::printform::receipt_forms_sized_html(&company, &prints, &f, &doc_size_from_q(&q), q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false));
+    let html = findb::printform::receipt_forms_sized_html(
+        &company,
+        &prints,
+        &f,
+        &doc_size_from_q(&q),
+        q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false),
+    );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -7988,7 +8484,8 @@ async fn save_so(
     } else {
         req.customer_name.trim().to_string()
     };
-    let mut so = findb::scm::SalesOrder::new(period, order_date(&req.date), code, &name, user.username());
+    let mut so =
+        findb::scm::SalesOrder::new(period, order_date(&req.date), code, &name, user.username());
     so.id = req.id;
     so.memo = req.memo;
     so.status = so_status_parse(&req.status)?;
@@ -7997,8 +8494,8 @@ async fn save_so(
     let mut old_price: std::collections::HashMap<String, (Money, Money)> =
         std::collections::HashMap::new();
     if so.id > 0 {
-        let old = findb::scm::so_get(&db, so.id)?
-            .ok_or_else(|| AppError::not_found("销售订单不存在"))?;
+        let old =
+            findb::scm::so_get(&db, so.id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
         so.no = old.no;
         so.shipped_amount = old.shipped_amount;
         for l in &old.lines {
@@ -8062,7 +8559,13 @@ async fn save_so(
         user.username(),
         "销售",
         "保存销售订单",
-        &format!("#{} {} {} 不含税 {}", id, so.no, code, so.total_amount.fmt_money()),
+        &format!(
+            "#{} {} {} 不含税 {}",
+            id,
+            so.no,
+            code,
+            so.total_amount.fmt_money()
+        ),
     )?;
     Ok(Json(json!({
         "ok": true,
@@ -8085,13 +8588,7 @@ async fn transition_so(
     // 「确认」是订单的审批动作（签出即对外承诺）；partialShip / completed /
     // cancelled 是确认之后的执行动作，再走一遍审批链等于让仓库收货要财务再批一次。
     if to == findb::scm::SoStatus::Confirmed {
-        match workflow_gate(
-            &db,
-            &user,
-            findb::workflow::BIZ_SALES_ORDER,
-            id,
-            "销售订单",
-        )? {
+        match workflow_gate(&db, &user, findb::workflow::BIZ_SALES_ORDER, id, "销售订单")? {
             WfGate::Pending(next) => return Ok(Json(json!({ "ok": true, "pending": next }))),
             WfGate::Rejected => return Ok(Json(json!({ "ok": true, "rejected": true }))),
             WfGate::Continue => {}
@@ -8100,9 +8597,12 @@ async fn transition_so(
     // 状态机由 findb 的 so_set_status 把关（非法跳变 → 400）
     findb::scm::so_set_status(&db, id, to)?;
     // 状态已提交：日志失败不得把请求打成 500，否则客户端重试会重复流转
-    if let Err(e) =
-        db.log(user.username(), "销售", "销售订单状态", &format!("#{} → {}", id, to.label()))
-    {
+    if let Err(e) = db.log(
+        user.username(),
+        "销售",
+        "销售订单状态",
+        &format!("#{} → {}", id, to.label()),
+    ) {
         error!(id, error = %e, "写操作日志失败（销售订单状态）");
     }
     Ok(Json(json!({ "ok": true, "status": to.label() })))
@@ -8170,7 +8670,8 @@ async fn save_po(
     } else {
         req.supplier_name.trim().to_string()
     };
-    let mut po = findb::scm::PurchaseOrder::new(period, order_date(&req.date), code, &name, user.username());
+    let mut po =
+        findb::scm::PurchaseOrder::new(period, order_date(&req.date), code, &name, user.username());
     po.id = req.id;
     po.memo = req.memo;
     po.status = po_status_parse(&req.status)?;
@@ -8179,8 +8680,8 @@ async fn save_po(
     let mut old_price: std::collections::HashMap<String, (Money, Money)> =
         std::collections::HashMap::new();
     if po.id > 0 {
-        let old = findb::scm::po_get(&db, po.id)?
-            .ok_or_else(|| AppError::not_found("采购订单不存在"))?;
+        let old =
+            findb::scm::po_get(&db, po.id)?.ok_or_else(|| AppError::not_found("采购订单不存在"))?;
         po.no = old.no;
         po.received_amount = old.received_amount;
         for l in &old.lines {
@@ -8257,7 +8758,13 @@ async fn save_po(
         user.username(),
         "采购",
         "保存采购订单",
-        &format!("#{} {} {} 不含税 {}", id, po.no, code, po.total_amount.fmt_money()),
+        &format!(
+            "#{} {} {} 不含税 {}",
+            id,
+            po.no,
+            code,
+            po.total_amount.fmt_money()
+        ),
     ) {
         error!(id, error = %e, "写操作日志失败（保存采购订单）");
     }
@@ -8295,9 +8802,12 @@ async fn transition_po(
     // 同 transition_so：状态机由 findb 的 po_set_status 把关（非法跳变 → 400）
     findb::scm::po_set_status(&db, id, to)?;
     // 状态已提交：日志失败不得把请求打成 500，否则客户端重试会重复流转
-    if let Err(e) =
-        db.log(user.username(), "采购", "采购订单状态", &format!("#{} → {}", id, to.label()))
-    {
+    if let Err(e) = db.log(
+        user.username(),
+        "采购",
+        "采购订单状态",
+        &format!("#{} → {}", id, to.label()),
+    ) {
         error!(id, error = %e, "写操作日志失败（采购订单状态）");
     }
     Ok(Json(json!({ "ok": true, "status": to.label() })))
@@ -8323,7 +8833,8 @@ async fn get_credit_check(
     user.require(Perm::Report)?;
     let db = state.db_for(&user.book_key)?;
     let customer = q.get("customer").cloned().unwrap_or_default();
-    let (receivable, limit, over) = findb::sales::credit_check(&db, &customer, current_period(&state, &user))?;
+    let (receivable, limit, over) =
+        findb::sales::credit_check(&db, &customer, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({
         "receivable": receivable.fmt_money(),
         "limit": limit.fmt_money(),
@@ -8360,9 +8871,18 @@ async fn get_budget_alerts(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = state.db_for(&user.book_key)?;
-    let period = q.get("period").and_then(|s| parse_period(s)).unwrap_or_else(|| current_period(&state, &user));
-    let from = q.get("from").and_then(|s| parse_period(s)).unwrap_or_else(|| fincore::Period::new(period.year(), 1).unwrap_or(period));
-    let threshold = q.get("threshold").and_then(|s| s.parse::<i64>().ok()).unwrap_or(90);
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
+    let from = q
+        .get("from")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| fincore::Period::new(period.year(), 1).unwrap_or(period));
+    let threshold = q
+        .get("threshold")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(90);
     let rows = findb::mgmt::budget_alerts(&db, period, from, threshold)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -8378,10 +8898,17 @@ async fn bad_debt_provision_endpoint(
     let date = chrono::Local::now().date_naive();
     match findb::settle::bad_debt_provision_voucher(&db, period, date, user.username())? {
         Some(id) => {
-            db.log(user.username(), "往来", "计提坏账准备", &format!("凭证 #{id}"))?;
+            db.log(
+                user.username(),
+                "往来",
+                "计提坏账准备",
+                &format!("凭证 #{id}"),
+            )?;
             Ok(Json(json!({"ok": true, "voucher_id": id})))
         }
-        None => Ok(Json(json!({"ok": true, "voucher_id": 0, "message": "无可计提的坏账准备"}))),
+        None => Ok(Json(
+            json!({"ok": true, "voucher_id": 0, "message": "无可计提的坏账准备"}),
+        )),
     }
 }
 
@@ -8489,7 +9016,9 @@ async fn list_prod_orders(
             })
         })
         .collect();
-    Ok(Json(serde_json::json!({ "period": period_to_str(period), "orders": items })))
+    Ok(Json(
+        serde_json::json!({ "period": period_to_str(period), "orders": items }),
+    ))
 }
 
 async fn get_prod_ops(
@@ -8519,7 +9048,12 @@ async fn report_prod_op(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = state.db_for(&user.book_key)?;
-    advanced::prod_op_report(&db, req.op_id, parse_money_checked(&req.qty)?, parse_money_checked(&req.hours)?)?;
+    advanced::prod_op_report(
+        &db,
+        req.op_id,
+        parse_money_checked(&req.qty)?,
+        parse_money_checked(&req.hours)?,
+    )?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -8584,7 +9118,9 @@ async fn run_mrp(
         demands = advanced::mrp_demands_from_sales(&db, current_period(&state, &user))?;
     }
     if demands.is_empty() {
-        return Err(AppError::bad_request("请提供需求清单，或勾选「从销售订单收集」"));
+        return Err(AppError::bad_request(
+            "请提供需求清单，或勾选「从销售订单收集」",
+        ));
     }
     let run_at = advanced::mrp_run(&db, &demands)?;
     let rows = advanced::mrp_by_run(&db, &run_at)?;
@@ -8775,7 +9311,9 @@ async fn get_doc_links(
     let db = state.db_for(&user.book_key)?;
     let kind = q.get("kind").cloned().unwrap_or_default();
     if !matches!(kind.as_str(), "req" | "po" | "so" | "invoice" | "receipt") {
-        return Err(AppError::bad_request("kind 只能是 req / po / so / invoice / receipt"));
+        return Err(AppError::bad_request(
+            "kind 只能是 req / po / so / invoice / receipt",
+        ));
     }
     let id: i64 = q
         .get("id")
@@ -8897,7 +9435,9 @@ async fn run_mps(
         )?);
     }
     if extra.is_empty() {
-        return Err(AppError::bad_request("请提供手工需求，或勾选「从销售订单收集」"));
+        return Err(AppError::bad_request(
+            "请提供手工需求，或勾选「从销售订单收集」",
+        ));
     }
     let due = if req.due_date.trim().is_empty() {
         (chrono::Local::now().date_naive() + chrono::Duration::days(7))
@@ -8915,7 +9455,9 @@ async fn run_mps(
         "MPS 运算",
         &format!("{} 行，建议交期 {due}", rows.len()),
     )?;
-    Ok(Json(json!({ "run_at": run_at, "due_date": due, "rows": rows })))
+    Ok(Json(
+        json!({ "run_at": run_at, "due_date": due, "rows": rows }),
+    ))
 }
 
 /// MPS 最近一次结果
@@ -8949,13 +9491,8 @@ async fn convert_mps(
     } else {
         Some(parse_money_checked(&req.qty)?)
     };
-    let (oid, no) = advanced::mps_convert_to_order(
-        &db,
-        id,
-        q,
-        current_period(&state, &user),
-        user.username(),
-    )?;
+    let (oid, no) =
+        advanced::mps_convert_to_order(&db, id, q, current_period(&state, &user), user.username())?;
     db.log(
         user.username(),
         "生产",
@@ -8993,7 +9530,9 @@ async fn rough_mps(
         req.daily_qty.trim()
     })?;
     let (orders, load) = advanced::rough_schedule(&db, period, daily)?;
-    Ok(Json(json!({ "orders": orders, "load": load, "daily_qty": daily })))
+    Ok(Json(
+        json!({ "orders": orders, "load": load, "daily_qty": daily }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -9027,7 +9566,12 @@ async fn schedule_prod(
         .map(|i| (i.id, i.start.trim().to_string(), i.end.trim().to_string()))
         .collect();
     let n = findb::scm::prod_schedule(&db, &items)?;
-    db.log(user.username(), "生产", "生产排产", &format!("写回 {n} 单计划日期"))?;
+    db.log(
+        user.username(),
+        "生产",
+        "生产排产",
+        &format!("写回 {n} 单计划日期"),
+    )?;
     Ok(Json(json!({ "ok": true, "updated": n })))
 }
 
@@ -9260,7 +9804,9 @@ async fn prod_qc_ep(
         "工序检验",
         &format!("{no} PO#{id} 结论 {result}"),
     )?;
-    Ok(Json(json!({ "ok": true, "id": qid, "no": no, "result": result })))
+    Ok(Json(
+        json!({ "ok": true, "id": qid, "no": no, "result": result }),
+    ))
 }
 
 /// 工序检验记录
@@ -9271,7 +9817,9 @@ async fn list_prod_qc(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::manufacturing::prod_qc_list(&db, id)? })))
+    Ok(Json(
+        json!({ "rows": findb::manufacturing::prod_qc_list(&db, id)? }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -9305,7 +9853,7 @@ async fn prod_issue_ep(
     // 带数量的部分领/超额补料留待领料单流程迭代）
     let issued = findb::manufacturing::prod_issue_count(&db, &order.no)?;
     if issued > 0 {
-        return Err(AppError::bad_request(&format!(
+        return Err(AppError::bad_request(format!(
             "该订单已领过料（累计 {issued} 笔流水）：按单限额只允许领料一次，补料走退料/人工调整"
         )));
     }
@@ -9362,7 +9910,9 @@ async fn prod_complete_ep(
         q
     };
     if !qty.is_positive() {
-        return Err(AppError::bad_request("完工数量必须大于 0（或订单已全部完工）"));
+        return Err(AppError::bad_request(
+            "完工数量必须大于 0（或订单已全部完工）",
+        ));
     }
     let date = prod_act_date(&req.date);
     let move_id =
@@ -9373,7 +9923,9 @@ async fn prod_complete_ep(
         "完工入库",
         &format!("{} ×{}", order.no, qty.fmt_qty()),
     )?;
-    Ok(Json(json!({ "ok": true, "move_id": move_id, "qty": qty.fmt_qty() })))
+    Ok(Json(
+        json!({ "ok": true, "move_id": move_id, "qty": qty.fmt_qty() }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -9437,7 +9989,7 @@ async fn save_bom_ep(
         }
         let qty = parse_money_checked(&c.qty)?;
         if !qty.is_positive() {
-            return Err(AppError::bad_request(&format!("子件 {code} 用量必须大于 0")));
+            return Err(AppError::bad_request(format!("子件 {code} 用量必须大于 0")));
         }
         let loss = if c.loss.trim().is_empty() {
             Money::ZERO
@@ -9469,7 +10021,9 @@ async fn list_budget_versions(
     let db = state.db_for(&user.book_key)?;
     let versions = advanced::bversion_list(&db)?;
     let current = advanced::bversion_current(&db)?;
-    Ok(Json(serde_json::json!({ "versions": versions, "current": current })))
+    Ok(Json(
+        serde_json::json!({ "versions": versions, "current": current }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -9649,8 +10203,14 @@ async fn list_notes(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let report_key = q.get("report_key").cloned().unwrap_or_else(|| "balance_sheet".to_string());
-    let period = q.get("period").and_then(|s| parse_period(s)).unwrap_or_else(|| current_period(&state, &user));
+    let report_key = q
+        .get("report_key")
+        .cloned()
+        .unwrap_or_else(|| "balance_sheet".to_string());
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
     let db = state.db_for(&user.book_key)?;
     let rows = advanced::note_list(&db, &report_key, period)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
@@ -9710,7 +10270,10 @@ async fn list_archives(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let period = q.get("period").and_then(|s| parse_period(s)).unwrap_or_else(|| current_period(&state, &user));
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
     // 空串表示"全部"：UI 下拉默认值为空，不能当成具体类型去过滤
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
     let db = state.db_for(&user.book_key)?;
@@ -9742,8 +10305,18 @@ async fn create_archive(
     } else {
         req.file_no
     };
-    let id = advanced::archive_create(&db, period, &req.kind, &req.title, &file_no, &req.payload, user.username())?;
-    Ok(Json(serde_json::json!({ "ok": true, "id": id, "file_no": file_no })))
+    let id = advanced::archive_create(
+        &db,
+        period,
+        &req.kind,
+        &req.title,
+        &file_no,
+        &req.payload,
+        user.username(),
+    )?;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "id": id, "file_no": file_no }),
+    ))
 }
 
 async fn get_archive(
@@ -9768,7 +10341,9 @@ async fn verify_archive(
     let a = advanced::archive_get(&db, id)?
         .ok_or_else(|| AppError::NotFound("档案不存在".to_string()))?;
     let ok = advanced::archive_verify(&a);
-    Ok(Json(serde_json::json!({ "ok": ok, "content_hash": a.content_hash })))
+    Ok(Json(
+        serde_json::json!({ "ok": ok, "content_hash": a.content_hash }),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -9848,7 +10423,12 @@ async fn save_bill(
         voucher_id: None,
     };
     let id = findb::funds::bill_save(&db, &mut b)?;
-    db.log(user.username(), "资金", "保存票据", &format!("#{id} {}", b.no))?;
+    db.log(
+        user.username(),
+        "资金",
+        "保存票据",
+        &format!("#{id} {}", b.no),
+    )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }
 
@@ -9957,7 +10537,12 @@ async fn save_loan(
         settle_date: None,
     };
     let id = findb::funds::loan_save(&db, &mut l)?;
-    db.log(user.username(), "资金", "保存融资", &format!("#{id} {}", l.no))?;
+    db.log(
+        user.username(),
+        "资金",
+        "保存融资",
+        &format!("#{id} {}", l.no),
+    )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }
 
@@ -10057,7 +10642,9 @@ async fn list_cash_counts(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = state.db_for(&user.book_key)?;
-    Ok(Json(serde_json::json!({ "rows": findb::funds::cash_count_list(&db)? })))
+    Ok(Json(
+        serde_json::json!({ "rows": findb::funds::cash_count_list(&db)? }),
+    ))
 }
 
 /// 新增/修改现金盘点：账面余额与差异由服务端按资金日报（按日）口径重算
@@ -10176,7 +10763,9 @@ async fn list_cash_shifts(
         .get("limit")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(100);
-    Ok(Json(json!({ "rows": findb::funds::cash_shift_list(&db, limit)? })))
+    Ok(Json(
+        json!({ "rows": findb::funds::cash_shift_list(&db, limit)? }),
+    ))
 }
 
 /// 新建交班单：快照当日现金/银行结存、在库票据、未日清账户（服务端计算）
@@ -10293,7 +10882,11 @@ async fn set_day_clear(
     db.log(
         user.username(),
         "资金",
-        if req.clear { "日记账日清" } else { "取消日清" },
+        if req.clear {
+            "日记账日清"
+        } else {
+            "取消日清"
+        },
         &format!("{} {}", account, date.format("%Y-%m-%d")),
     )?;
     Ok(Json(json!({ "ok": true })))
@@ -10345,7 +10938,11 @@ async fn save_check(
         chrono::NaiveDate::parse_from_str(&req.issued_date, "%Y-%m-%d")
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
     };
-    let kind = if req.kind == "cash" { "cash" } else { "transfer" };
+    let kind = if req.kind == "cash" {
+        "cash"
+    } else {
+        "transfer"
+    };
     let mut c = findb::funds::CheckRow {
         id: req.id,
         no: req.no.trim().to_string(),
@@ -10360,7 +10957,12 @@ async fn save_check(
         created_at: String::new(),
     };
     let id = findb::funds::check_save(&db, &mut c)?;
-    db.log(user.username(), "资金", "保存支票", &format!("#{id} {}", c.no))?;
+    db.log(
+        user.username(),
+        "资金",
+        "保存支票",
+        &format!("#{id} {}", c.no),
+    )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }
 
@@ -10562,14 +11164,8 @@ async fn settle_advance(
         req.expense_account.trim().to_string()
     };
     let expense = parse_money_checked(&req.expense_amount)?;
-    let vid = findb::funds::advance_settle(
-        &db,
-        id,
-        &expense_account,
-        expense,
-        date,
-        user.username(),
-    )?;
+    let vid =
+        findb::funds::advance_settle(&db, id, &expense_account, expense, date, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -10633,7 +11229,11 @@ async fn create_receipt(
         chrono::NaiveDate::parse_from_str(&req.date, "%Y-%m-%d")
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
     };
-    let kind = if req.kind == "payment" { "payment" } else { "receipt" };
+    let kind = if req.kind == "payment" {
+        "payment"
+    } else {
+        "receipt"
+    };
     let amount = parse_money_checked(&req.amount)?;
     // 审核流：只落草稿单据；凭证与自动核销在「审核」（VoucherAudit）时生成
     let id = findb::receipt::receipt_create(
@@ -10652,7 +11252,11 @@ async fn create_receipt(
         "新增收付款单（待审核）",
         &format!(
             "#{id} {} {}",
-            if kind == "receipt" { "收款" } else { "付款" },
+            if kind == "receipt" {
+                "收款"
+            } else {
+                "付款"
+            },
             amount.fmt_money()
         ),
     )?;
@@ -10712,16 +11316,14 @@ async fn audit_receipt(
     let db = state.db_for(&user.book_key)?;
     // 工作流优先：有流程 → 参与人/审核权由拦截器判定，终态才出凭证；
     // 无流程（默认流）→ 维持原审核权 VoucherAudit（出纳录单、审核人把关）
-    match findb::workflow::intercept(
-        &db,
-        findb::workflow::BIZ_RECEIPT,
-        id,
-        &user.user,
-        true,
-        "",
-    )? {
+    match findb::workflow::intercept(&db, findb::workflow::BIZ_RECEIPT, id, &user.user, true, "")? {
         findb::workflow::Gate::Pending { next } => {
-            db.log(user.username(), "审批", "工作流节点", &format!("收付款#{id} → {next}"))?;
+            db.log(
+                user.username(),
+                "审批",
+                "工作流节点",
+                &format!("收付款#{id} → {next}"),
+            )?;
             return Ok(Json(json!({ "ok": true, "pending": next })));
         }
         findb::workflow::Gate::Final { approved: false } => {
@@ -10739,7 +11341,9 @@ async fn audit_receipt(
         "审核收付款单",
         &format!("#{id} 凭证 #{vid}（自动核销 {settled} 笔）"),
     )?;
-    Ok(Json(json!({ "ok": true, "voucher_id": vid, "settled": settled })))
+    Ok(Json(
+        json!({ "ok": true, "voucher_id": vid, "settled": settled }),
+    ))
 }
 
 /// 撤销审核：删除未记账凭证（含核销配对清理）→ 单据回草稿
@@ -10751,7 +11355,12 @@ async fn unaudit_receipt(
     require_receipt_gate(&user)?;
     let db = state.db_for(&user.book_key)?;
     findb::receipt::receipt_unaudit(&db, id)?;
-    db.log(user.username(), "资金", "撤销审核收付款单", &format!("#{id}"))?;
+    db.log(
+        user.username(),
+        "资金",
+        "撤销审核收付款单",
+        &format!("#{id}"),
+    )?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -10856,7 +11465,8 @@ async fn apply_count(
         &format!(
             "#{rid} 价值 {} {}",
             value.fmt_money(),
-            vid.map(|v| format!("凭证 #{v}")).unwrap_or_else(|| "未出凭证".into())
+            vid.map(|v| format!("凭证 #{v}"))
+                .unwrap_or_else(|| "未出凭证".into())
         ),
     )?;
     Ok(Json(json!({
@@ -10932,10 +11542,16 @@ async fn register_batch(
     db.log(
         user.username(),
         "库存",
-        if direction == "in" { "批次入库" } else { "批次出库" },
+        if direction == "in" {
+            "批次入库"
+        } else {
+            "批次出库"
+        },
         &format!("{} {} ×{} 余额 {}", req.item, no, req.qty, bal.fmt_qty()),
     )?;
-    Ok(Json(json!({ "ok": true, "id": id, "batch_no": no, "balance": bal.fmt_qty() })))
+    Ok(Json(
+        json!({ "ok": true, "id": id, "batch_no": no, "balance": bal.fmt_qty() }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -11049,7 +11665,9 @@ async fn list_batches(
     user.require(Perm::Warehouse)?;
     let db = state.db_for(&user.book_key)?;
     let item = q.get("item").cloned().unwrap_or_default();
-    Ok(Json(json!({ "rows": findb::batch::batch_list(&db, &item)? })))
+    Ok(Json(
+        json!({ "rows": findb::batch::batch_list(&db, &item)? }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -11089,8 +11707,13 @@ async fn expiring_batches_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = state.db_for(&user.book_key)?;
-    let days = q.get("days").and_then(|s| s.parse::<i64>().ok()).unwrap_or(30);
-    Ok(Json(json!({ "rows": findb::batch::expiring_batches(&db, days)? })))
+    let days = q
+        .get("days")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(30);
+    Ok(Json(
+        json!({ "rows": findb::batch::expiring_batches(&db, days)? }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -11121,9 +11744,18 @@ async fn save_location(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = state.db_for(&user.book_key)?;
-    let kind = if req.kind.is_empty() { "storage" } else { &req.kind };
+    let kind = if req.kind.is_empty() {
+        "storage"
+    } else {
+        &req.kind
+    };
     let id = findb::batch::location_save(&db, &req.code, &req.name, kind, &req.memo)?;
-    db.log(user.username(), "库存", "保存库位", &format!("{} {}", req.code, req.name))?;
+    db.log(
+        user.username(),
+        "库存",
+        "保存库位",
+        &format!("{} {}", req.code, req.name),
+    )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }
 
@@ -11199,7 +11831,9 @@ async fn get_funds_daily(
     let db = state.db_for(&user.book_key)?;
     let period = current_period(&state, &user);
     let rows = findb::funds::funds_daily(&db, period)?;
-    Ok(Json(serde_json::json!({ "period": period.label(), "rows": rows })))
+    Ok(Json(
+        serde_json::json!({ "period": period.label(), "rows": rows }),
+    ))
 }
 
 async fn get_funds_forecast(
@@ -11210,7 +11844,9 @@ async fn get_funds_forecast(
     let db = state.db_for(&user.book_key)?;
     let period = current_period(&state, &user);
     let fc = findb::funds::funds_forecast(&db, period)?;
-    Ok(Json(serde_json::json!({ "period": period.label(), "forecast": fc })))
+    Ok(Json(
+        serde_json::json!({ "period": period.label(), "forecast": fc }),
+    ))
 }
 
 /// 滚动资金预测（票据到期 + 融资起止按期间展开）
@@ -11246,12 +11882,17 @@ async fn get_budget_analysis(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = state.db_for(&user.book_key)?;
-    let year = q.get("year").and_then(|s| s.parse::<i32>().ok()).unwrap_or_else(|| current_period(&state, &user).year());
+    let year = q
+        .get("year")
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or_else(|| current_period(&state, &user).year());
     let version = q.get("version").cloned().unwrap_or_default();
     let upto = q.get("upto").and_then(|s| parse_period(s));
     let rows = findb::mgmt::budget_analysis(&db, year, &version, upto)?;
     let summary = findb::mgmt::budget_analysis_summary(&db, year, &version)?;
-    Ok(Json(serde_json::json!({ "year": year, "rows": rows, "summary": summary })))
+    Ok(Json(
+        serde_json::json!({ "year": year, "rows": rows, "summary": summary }),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -11286,7 +11927,12 @@ async fn save_cost_method(
     let db = state.db_for(&user.book_key)?;
     let sc = parse_money_checked(&req.standard_cost)?;
     findb::business::item_cost_method_set(&db, &req.item, Some(&req.method), sc)?;
-    db.log(user.username(), "成本", "设置计价方式", &format!("{} → {}", req.item, req.method))?;
+    db.log(
+        user.username(),
+        "成本",
+        "设置计价方式",
+        &format!("{} → {}", req.item, req.method),
+    )?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -11365,10 +12011,7 @@ async fn get_wf_instance_for(
     user.require(Perm::Report)?;
     let db = state.db_for(&user.book_key)?;
     let biz_type = q.get("biz_type").map(String::as_str).unwrap_or("");
-    if !matches!(
-        biz_type,
-        "quotation" | "purchase_req" | "claim" | "receipt"
-    ) {
+    if !matches!(biz_type, "quotation" | "purchase_req" | "claim" | "receipt") {
         return Err(AppError::bad_request(
             "biz_type 只能是 quotation / purchase_req / claim / receipt",
         ));
@@ -11488,8 +12131,14 @@ async fn run_period_end_cost(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
     let db = state.db_for(&user.book_key)?;
-    let period = q.get("period").and_then(|s| parse_period(s)).unwrap_or_else(|| current_period(&state, &user));
-    let apply = q.get("apply").map(|s| s == "1" || s == "true").unwrap_or(false);
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
+    let apply = q
+        .get("apply")
+        .map(|s| s == "1" || s == "true")
+        .unwrap_or(false);
     // 落库动作不能藏在 GET 里：顶层导航/预取都可能带 Cookie 触发写操作
     if apply && method != axum::http::Method::POST {
         return Err(AppError::bad_request(
@@ -11497,7 +12146,9 @@ async fn run_period_end_cost(
         ));
     }
     let rows = findb::business::period_end_cost(&db, period, apply)?;
-    Ok(Json(serde_json::json!({ "period": period.label(), "rows": rows, "apply": apply })))
+    Ok(Json(
+        serde_json::json!({ "period": period.label(), "rows": rows, "apply": apply }),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -11694,8 +12345,8 @@ async fn update_asset(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = state.db_for(&user.book_key)?;
-    let existing = findb::assets::get(&db, id)?
-        .ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
+    let existing =
+        findb::assets::get(&db, id)?.ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
     if existing.status == findb::assets::AssetStatus::Disposed {
         return Err(AppError::bad_request("已清理的卡片不能修改"));
     }
@@ -11735,8 +12386,7 @@ async fn delete_asset(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = state.db_for(&user.book_key)?;
-    let a = findb::assets::get(&db, id)?
-        .ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
+    let a = findb::assets::get(&db, id)?.ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
     findb::assets::delete(&db, id)?;
     db.log(
         user.username(),
@@ -11888,7 +12538,10 @@ async fn save_asset_count(
     let mut lines = Vec::with_capacity(req.lines.len());
     for l in &req.lines {
         if findb::assets::get(&db, l.asset_id)?.is_none() {
-            return Err(AppError::bad_request(format!("资产 #{} 不存在", l.asset_id)));
+            return Err(AppError::bad_request(format!(
+                "资产 #{} 不存在",
+                l.asset_id
+            )));
         }
         lines.push((l.asset_id, l.found.unwrap_or(true), l.memo.clone()));
     }
@@ -11921,7 +12574,12 @@ async fn post_asset_count(
     user.require(Perm::AccountEdit)?;
     let db = state.db_for(&user.book_key)?;
     let n = findb::assets::ac_post(&db, id)?;
-    db.log(user.username(), "固定资产", "资产盘点过账", &format!("#{id} 盘亏 {n}"))?;
+    db.log(
+        user.username(),
+        "固定资产",
+        "资产盘点过账",
+        &format!("#{id} 盘亏 {n}"),
+    )?;
     Ok(Json(json!({ "ok": true, "lost": n })))
 }
 
@@ -12101,11 +12759,7 @@ async fn gen_bank_vouchers(
         user.username(),
         "银行对账",
         "流水生成凭证",
-        &format!(
-            "生成 {} 张 / 跳过 {} 条",
-            r.generated,
-            r.skipped.len()
-        ),
+        &format!("生成 {} 张 / 跳过 {} 条", r.generated, r.skipped.len()),
     )?;
     Ok(Json(json!({
         "generated": r.generated,
@@ -12321,7 +12975,10 @@ async fn get_settle_open(
         .get("upto")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let include_all = q.get("all").map(|s| s == "1" || s == "true").unwrap_or(false);
+    let include_all = q
+        .get("all")
+        .map(|s| s == "1" || s == "true")
+        .unwrap_or(false);
     // 「含未记账」只读开关（对标金蝶单据驱动模型：未审核单据在列表里看得见，
     // 但不参与核销）。默认关闭——核销/账龄/催款一律只认已记账（H-3）。
     // 注意：即使打开，这里返回的未记账行也只是**展示**，核销入口走
@@ -12395,7 +13052,12 @@ async fn manual_settle_endpoint(
         user.username(),
         "往来",
         "手工核销",
-        &format!("分录#{} ↔ 分录#{} {}", req.from_entry, req.to_entry, amount.fmt_money()),
+        &format!(
+            "分录#{} ↔ 分录#{} {}",
+            req.from_entry,
+            req.to_entry,
+            amount.fmt_money()
+        ),
     )?;
     Ok(Json(json!({ "id": id })))
 }
@@ -12432,7 +13094,12 @@ async fn unsettle_endpoint(
     user.require(Perm::VoucherNew)?;
     let db = state.db_for(&user.book_key)?;
     findb::settle::unsettle(&db, req.id)?;
-    db.log(user.username(), "往来", "取消核销", &format!("记录#{}", req.id))?;
+    db.log(
+        user.username(),
+        "往来",
+        "取消核销",
+        &format!("记录#{}", req.id),
+    )?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -12595,7 +13262,13 @@ async fn create_statement(
         user.username(),
         "往来",
         "生成对账单",
-        &format!("{} {} {}~{}", s.no, s.kind_label(), s.party_code, period_to_str(to)),
+        &format!(
+            "{} {} {}~{}",
+            s.no,
+            s.kind_label(),
+            s.party_code,
+            period_to_str(to)
+        ),
     )?;
     Ok(Json(statement_json(&s)))
 }
@@ -12631,8 +13304,7 @@ async fn statement_status_ep(
             who
         ),
     )?;
-    let s = findb::statement::get(&db, id)?
-        .ok_or_else(|| AppError::not_found("对账单"))?;
+    let s = findb::statement::get(&db, id)?.ok_or_else(|| AppError::not_found("对账单"))?;
     Ok(Json(statement_json(&s)))
 }
 
@@ -12704,7 +13376,11 @@ async fn create_dunning(
             d.party_code,
             d.amount.fmt_money(),
             d.item_count,
-            if d.kind == "ar" { "催款" } else { "对账函" }
+            if d.kind == "ar" {
+                "催款"
+            } else {
+                "对账函"
+            }
         ),
     )?;
     Ok(Json(json!({ "ok": true, "dunning": d })))
@@ -12753,7 +13429,11 @@ fn report_range(
 }
 
 /// 加载报表定义（优先账套内自定义，否则内置模板）
-fn report_def(db: &findb::Db, key: &str, fallback: fincore::report::ReportDef) -> fincore::report::ReportDef {
+fn report_def(
+    db: &findb::Db,
+    key: &str,
+    fallback: fincore::report::ReportDef,
+) -> fincore::report::ReportDef {
     findb::reports::get_def(db, key)
         .ok()
         .flatten()
@@ -12776,7 +13456,10 @@ fn statement_table(
     // 资产负债表第二列是"年初余额"：取数基准必须从会计年度 1 月起，
     // 不能用请求里的 from（否则 5 月查表会把 5 月初当成"年初"）。
     let (bq_from, subtitle) = if key == "balance_sheet" {
-        (Period::new(to.year(), 1).unwrap_or(from), format!("{} 期末", to.label()))
+        (
+            Period::new(to.year(), 1).unwrap_or(from),
+            format!("{} 期末", to.label()),
+        )
     } else {
         (from, format!("{} 至 {}", from.label(), to.label()))
     };
@@ -12784,7 +13467,9 @@ fn statement_table(
     bq = bq.with_user_scope(&user.user);
     let snap = BalanceSnapshot::load(db, &bq)?;
     let company = db.options().company;
-    Ok(fincore::report::render(&def, &snap, &company, &subtitle, kind_maps))
+    Ok(fincore::report::render(
+        &def, &snap, &company, &subtitle, kind_maps,
+    ))
 }
 
 /// ReportTable → JSON（行/值/样式）
@@ -12831,7 +13516,9 @@ async fn get_balance_sheet(
             Box::new(fincore::report::to_begin),
         ],
     )?;
-    Ok(Json(json!({ "from": period_to_str(from), "to": period_to_str(to), "table": table_json(&t) })))
+    Ok(Json(
+        json!({ "from": period_to_str(from), "to": period_to_str(to), "table": table_json(&t) }),
+    ))
 }
 
 async fn print_balance_sheet(
@@ -12881,7 +13568,9 @@ async fn get_income_statement(
         to,
         vec![Box::new(fincore::report::identity), Box::new(to_ytd)],
     )?;
-    Ok(Json(json!({ "from": period_to_str(from), "to": period_to_str(to), "table": table_json(&t) })))
+    Ok(Json(
+        json!({ "from": period_to_str(from), "to": period_to_str(to), "table": table_json(&t) }),
+    ))
 }
 
 async fn print_income_statement(
@@ -12913,9 +13602,7 @@ async fn get_cash_flow(
     let db = state.db_for(&user.book_key)?;
     let (from, to) = report_range(&state, &user, &q)?;
     let cf = findb::reports::cash_flow_statement(&db, from, to, Some(&user.user))?;
-    let line = |l: &fincore::report::cashflow::CashFlowLine| {
-        json!({ "code": l.code, "name": l.name, "inflow": l.inflow.fmt_money(), "outflow": l.outflow.fmt_money(), "net": l.net.fmt_money() })
-    };
+    let line = |l: &fincore::report::cashflow::CashFlowLine| json!({ "code": l.code, "name": l.name, "inflow": l.inflow.fmt_money(), "outflow": l.outflow.fmt_money(), "net": l.net.fmt_money() });
     Ok(Json(json!({
         "from": period_to_str(from), "to": period_to_str(to),
         "operating": cf.operating.iter().map(line).collect::<Vec<_>>(),
@@ -12978,7 +13665,12 @@ async fn create_account(
         return Err(AppError::bad_request("科目已存在"));
     }
     accounts::insert(&db, &acc)?;
-    db.log(user.username(), "基础资料", "新建科目", &format!("{} {}", acc.code, acc.name))?;
+    db.log(
+        user.username(),
+        "基础资料",
+        "新建科目",
+        &format!("{} {}", acc.code, acc.name),
+    )?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -12995,7 +13687,12 @@ async fn update_account(
         return Err(AppError::not_found("科目不存在"));
     }
     accounts::update(&db, &acc)?;
-    db.log(user.username(), "基础资料", "修改科目", &format!("{} {}", acc.code, acc.name))?;
+    db.log(
+        user.username(),
+        "基础资料",
+        "修改科目",
+        &format!("{} {}", acc.code, acc.name),
+    )?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -13228,18 +13925,24 @@ async fn import_begin_batch(
             continue;
         }
         if !user.user.can_see_account(&code) {
-            return Err(AppError::forbidden(format!("无权维护科目 {code} 的期初余额")));
+            return Err(AppError::forbidden(format!(
+                "无权维护科目 {code} 的期初余额"
+            )));
         }
-        if !leaves.iter().any(|l| *l == code) && !dirs.contains_key(&code) {
+        if !leaves.contains(&code) && !dirs.contains_key(&code) {
             skipped.push(json!({"code": code, "why": "无此科目"}));
             continue;
         }
-        if seen.iter().any(|c| *c == code) || req.existing.iter().any(|c| *c == code) {
+        if seen.contains(&code) || req.existing.contains(&code) {
             skipped.push(json!({"code": code, "why": "已填过"}));
             continue;
         }
         seen.push(code.clone());
-        let dir = if r.dir == "credit" { Direction::Credit } else { Direction::Debit };
+        let dir = if r.dir == "credit" {
+            Direction::Credit
+        } else {
+            Direction::Debit
+        };
         let amt = Money::parse_or_zero(&r.amount);
         if amt.is_zero() {
             skipped.push(json!({"code": code, "why": "金额为零"}));
@@ -13294,7 +13997,9 @@ async fn save_begin(
     for r in &rows {
         let code = r.account_code.trim();
         if !code.is_empty() && !user.user.can_see_account(code) {
-            return Err(AppError::forbidden(format!("无权维护科目 {code} 的期初余额")));
+            return Err(AppError::forbidden(format!(
+                "无权维护科目 {code} 的期初余额"
+            )));
         }
     }
     // 科目必须真实存在。
@@ -13498,7 +14203,10 @@ async fn restore_backup(
     user.require(Perm::Backup)?;
     // 路径安全：仅允许 backups 目录下的纯文件名，禁止任何路径穿越；
     // 且只接受属于当前账套的备份（后缀 _<key>.fbk），防止跨租户恢复。
-    let file_name = match std::path::Path::new(&req.file).file_name().and_then(|s| s.to_str()) {
+    let file_name = match std::path::Path::new(&req.file)
+        .file_name()
+        .and_then(|s| s.to_str())
+    {
         Some(n) if !n.contains("..") && !n.contains('/') && !n.contains('\\') => n.to_string(),
         _ => return Err(AppError::bad_request("非法的备份文件名")),
     };
@@ -13535,7 +14243,12 @@ async fn restore_backup(
         let db = state2.db_for(&key)?;
         // 账套文件已被覆盖，恢复已完成；此处日志失败不能把请求打成 500，
         // 否则客户端看到失败会重试恢复，重复覆盖刚恢复好的库。
-        if let Err(e) = db.log(&username, "系统", "恢复账套", &format!("从 {file_name} 恢复")) {
+        if let Err(e) = db.log(
+            &username,
+            "系统",
+            "恢复账套",
+            &format!("从 {file_name} 恢复"),
+        ) {
             error!(file = %file_name, error = %e, "写操作日志失败（恢复账套）");
         }
         Ok(())
@@ -13624,7 +14337,12 @@ async fn generate_template(
     let mut v = t.to_voucher(period, date, word, no as i64, user.username())?;
     let vid = vouchers::save(&db, &mut v)?;
     template::mark_generated(&db, id, period)?;
-    db.log(user.username(), "凭证模板", "生成凭证", &format!("{} → 凭证 #{vid}", t.name))?;
+    db.log(
+        user.username(),
+        "凭证模板",
+        "生成凭证",
+        &format!("{} → 凭证 #{vid}", t.name),
+    )?;
     Ok(Json(json!({ "id": vid })))
 }
 
@@ -13723,7 +14441,10 @@ async fn save_item_plan(
         user.username(),
         "档案",
         "存货计划参数",
-        &format!("{code} 安全库存 {} 前置期 {} 批量 {}", req.safety_stock, req.lead_days, req.lot_size),
+        &format!(
+            "{code} 安全库存 {} 前置期 {} 批量 {}",
+            req.safety_stock, req.lead_days, req.lot_size
+        ),
     )?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -13736,7 +14457,12 @@ async fn create_aux(
     user.require(Perm::AuxEdit)?;
     let db = state.db_for(&user.book_key)?;
     let id = auxs::insert(&db, &e)?;
-    db.log(user.username(), "档案", "新建档案", &format!("{} {}", e.kind.label(), e.name))?;
+    db.log(
+        user.username(),
+        "档案",
+        "新建档案",
+        &format!("{} {}", e.kind.label(), e.name),
+    )?;
     Ok(Json(json!({"id": id})))
 }
 
@@ -13815,7 +14541,7 @@ struct AuxBatchImportReq {
     /// 只导入前端回传的这些行。**不接受「重新解析一遍文本」**：
     /// 用户在预览之后可能改过文本（比如去掉一行），若后端重新解析，
     /// 实际导入的就不是他看到并确认过的那批 —— 正是「确认了 A 写进去 B」
-/// 这类最难查的错。
+    /// 这类最难查的错。
     rows: Vec<AuxBatchRow>,
 }
 
@@ -13895,12 +14621,12 @@ async fn import_aux_batch(
         if code.is_empty() || name.is_empty() {
             continue;
         }
-        if seen.iter().any(|c| *c == code) {
+        if seen.contains(&code) {
             dup_in_batch.push(code);
             continue;
         }
         seen.push(code.clone());
-        if existing.iter().any(|c| *c == code) {
+        if existing.contains(&code) {
             in_book.push(code);
             continue;
         }
@@ -14021,10 +14747,7 @@ async fn list_payroll(
     let db = state.db_for(&user.book_key)?;
     let period = query_period(&state, &user, &q);
     let rows = business::payroll_list(&db, period)?;
-    let rows: Vec<business::Payroll> = scope_payroll(&user, &rows)
-        .into_iter()
-        .cloned()
-        .collect();
+    let rows: Vec<business::Payroll> = scope_payroll(&user, &rows).into_iter().cloned().collect();
     Ok(Json(rows))
 }
 
@@ -14048,7 +14771,11 @@ async fn export_payroll_bank_file(
     let period = query_period(&state, &user, &q);
     let rows = business::payroll_list(&db, period)?;
     let rows = scope_payroll(&user, &rows);
-    let mut out = vec![vec!["账号".to_string(), "户名".to_string(), "金额".to_string()]];
+    let mut out = vec![vec![
+        "账号".to_string(),
+        "户名".to_string(),
+        "金额".to_string(),
+    ]];
     let mut skipped = 0usize;
     for p in &rows {
         if !p.net.is_positive() {
@@ -14061,7 +14788,11 @@ async fn export_payroll_bank_file(
         }
         out.push(vec![
             acc,
-            if bank.is_empty() { p.employee.clone() } else { bank },
+            if bank.is_empty() {
+                p.employee.clone()
+            } else {
+                bank
+            },
             p.net.fmt_plain(),
         ]);
     }
@@ -14145,7 +14876,9 @@ async fn get_payroll_tax_report(
             })
         })
         .collect();
-    Ok(Json(json!({ "period": period_to_str(period), "rows": items })))
+    Ok(Json(
+        json!({ "period": period_to_str(period), "rows": items }),
+    ))
 }
 
 /// 录入/修改一条工资：后端按累计预扣预缴法算个税与实发，前端无需自己算税
@@ -14184,7 +14917,13 @@ async fn save_payroll(
         user.username(),
         "工资",
         "保存工资行",
-        &format!("{} {} 应发 {} 实发 {}", period.label(), employee, p.gross, p.net),
+        &format!(
+            "{} {} 应发 {} 实发 {}",
+            period.label(),
+            employee,
+            p.gross,
+            p.net
+        ),
     )?;
     let mut out = p;
     out.id = id;
@@ -14214,8 +14953,17 @@ async fn generate_payroll(
         .as_deref()
         .and_then(parse_period)
         .unwrap_or_else(|| current_period(&state, &user));
-    let mut rows: Vec<(String, String, Money, Money, Money, Money, Money, Money, Money)> =
-        Vec::with_capacity(req.rows.len());
+    let mut rows: Vec<(
+        String,
+        String,
+        Money,
+        Money,
+        Money,
+        Money,
+        Money,
+        Money,
+        Money,
+    )> = Vec::with_capacity(req.rows.len());
     for r in &req.rows {
         if r.employee.trim().is_empty() {
             continue;
@@ -14236,7 +14984,12 @@ async fn generate_payroll(
         return Err(AppError::bad_request("没有可导入的工资行"));
     }
     let n = business::payroll_generate(&db, period, &rows)?;
-    db.log(user.username(), "工资", "批量生成工资表", &format!("{} 生成 {} 条", period.label(), n))?;
+    db.log(
+        user.username(),
+        "工资",
+        "批量生成工资表",
+        &format!("{} 生成 {} 条", period.label(), n),
+    )?;
     Ok(Json(json!({ "ok": true, "count": n })))
 }
 
@@ -14248,8 +15001,8 @@ async fn delete_payroll(
     user.require(Perm::VoucherDelete)?;
     let db = state.db_for(&user.book_key)?;
     // 删除前拦截已生成凭证的工资行
-    let p = business::payroll_get_by_id(&db, id)?
-        .ok_or_else(|| AppError::not_found("工资行不存在"))?;
+    let p =
+        business::payroll_get_by_id(&db, id)?.ok_or_else(|| AppError::not_found("工资行不存在"))?;
     if !doc_in_scope(&user, &p.employee) {
         return Err(AppError::forbidden("无权操作他人的工资行"));
     }
@@ -14274,7 +15027,9 @@ async fn payroll_ytd(
         return Err(AppError::bad_request("缺少 employee 参数"));
     }
     if !doc_in_scope(&user, employee.trim()) {
-        return Err(AppError::forbidden("数据范围受限，不能查看他人的年度工资累计"));
+        return Err(AppError::forbidden(
+            "数据范围受限，不能查看他人的年度工资累计",
+        ));
     }
     Ok(Json(business::payroll_ytd(&db, period, employee.trim())?))
 }
@@ -14310,7 +15065,12 @@ async fn payroll_accrue(
         r.housing_payable.trim(),
         user.username(),
     )?;
-    db.log(user.username(), "工资", "生成计提凭证", &format!("{} 凭证 {:?}", period.label(), id))?;
+    db.log(
+        user.username(),
+        "工资",
+        "生成计提凭证",
+        &format!("{} 凭证 {:?}", period.label(), id),
+    )?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -14345,7 +15105,12 @@ async fn payroll_social_pay(
         r.bank_account.trim(),
         user.username(),
     )?;
-    db.log(user.username(), "工资", "生成社保缴纳凭证", &format!("{} 凭证 {:?}", period.label(), id))?;
+    db.log(
+        user.username(),
+        "工资",
+        "生成社保缴纳凭证",
+        &format!("{} 凭证 {:?}", period.label(), id),
+    )?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -14380,7 +15145,12 @@ async fn payroll_pay(
         r.social_account.trim(),
         user.username(),
     )?;
-    db.log(user.username(), "工资", "生成发放凭证", &format!("{} 凭证 {:?}", period.label(), id))?;
+    db.log(
+        user.username(),
+        "工资",
+        "生成发放凭证",
+        &format!("{} 凭证 {:?}", period.label(), id),
+    )?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -14499,7 +15269,12 @@ async fn create_claim(
         created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
     };
     let id = business::claim_insert(&db, &c)?;
-    db.log(user.username(), "报销", "新增报销单", &format!("{} {} {}", c.no, applicant, c.amount))?;
+    db.log(
+        user.username(),
+        "报销",
+        "新增报销单",
+        &format!("{} {} {}", c.no, applicant, c.amount),
+    )?;
     Ok(Json(json!({ "id": id, "no": c.no })))
 }
 
@@ -14511,8 +15286,7 @@ async fn update_claim(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = state.db_for(&user.book_key)?;
-    let mut c = business::claim_get(&db, id)?
-        .ok_or_else(|| AppError::not_found("报销单不存在"))?;
+    let mut c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !doc_in_scope(&user, &c.applicant) {
         return Err(AppError::forbidden("数据范围受限，不能修改他人的报销单"));
     }
@@ -14533,7 +15307,12 @@ async fn update_claim(
     c.amount = parse_money_checked(&r.amount)?;
     c.items = claim_items(&r.items)?;
     business::claim_update(&db, &c)?;
-    db.log(user.username(), "报销", "修改报销单", &format!("{} {}", c.no, c.amount))?;
+    db.log(
+        user.username(),
+        "报销",
+        "修改报销单",
+        &format!("{} {}", c.no, c.amount),
+    )?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -14544,8 +15323,7 @@ async fn delete_claim(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
     let db = state.db_for(&user.book_key)?;
-    let c = business::claim_get(&db, id)?
-        .ok_or_else(|| AppError::not_found("报销单不存在"))?;
+    let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !doc_in_scope(&user, &c.applicant) {
         return Err(AppError::forbidden("数据范围受限，不能删除他人的报销单"));
     }
@@ -14574,8 +15352,7 @@ async fn claim_transition(
     user.require(Perm::VoucherNew)?;
     let db = state.db_for(&user.book_key)?;
     let to = business::ClaimStatus::parse(&r.status);
-    let c = business::claim_get(&db, id)?
-        .ok_or_else(|| AppError::not_found("报销单不存在"))?;
+    let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !doc_in_scope(&user, &c.applicant) {
         return Err(AppError::forbidden("数据范围受限，不能操作他人的报销单"));
     }
@@ -14588,23 +15365,25 @@ async fn claim_transition(
         None
     };
     if let Some(appr) = gate_for {
-        match findb::workflow::intercept(
-            &db,
-            findb::workflow::BIZ_CLAIM,
-            id,
-            &user.user,
-            appr,
-            "",
-        )? {
-            findb::workflow::Gate::Pending { next } => {
-                db.log(user.username(), "报销", "工作流节点", &format!("#{id} → {next}"))?;
-                return Ok(Json(json!({ "ok": true, "status": to, "pending": next })));
-            }
-            _ => {}
+        if let findb::workflow::Gate::Pending { next } =
+            findb::workflow::intercept(&db, findb::workflow::BIZ_CLAIM, id, &user.user, appr, "")?
+        {
+            db.log(
+                user.username(),
+                "报销",
+                "工作流节点",
+                &format!("#{id} → {next}"),
+            )?;
+            return Ok(Json(json!({ "ok": true, "status": to, "pending": next })));
         }
     }
     business::claim_transition(&db, id, to, user.username())?;
-    db.log(user.username(), "报销", "状态流转", &format!("#{id} → {}", to.label()))?;
+    db.log(
+        user.username(),
+        "报销",
+        "状态流转",
+        &format!("#{id} → {}", to.label()),
+    )?;
     Ok(Json(json!({ "ok": true, "status": to })))
 }
 
@@ -14627,17 +15406,22 @@ async fn claim_voucher(
         return Err(AppError::bad_request("请填写支付科目"));
     }
     // 预检给出友好的 400（引擎层也有同样拦截，此处避免落到 500）
-    let c = business::claim_get(&db, id)?
-        .ok_or_else(|| AppError::not_found("报销单不存在"))?;
+    let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !doc_in_scope(&user, &c.applicant) {
-        return Err(AppError::forbidden("数据范围受限，不能为他人报销单生成凭证"));
+        return Err(AppError::forbidden(
+            "数据范围受限，不能为他人报销单生成凭证",
+        ));
     }
-    if c.voucher_id.is_some() {
+    if let Some(existing) = c.voucher_id {
         // 幂等：支付时已自动出过凭证 → 返回同一张（不新增）
-        let existing = c.voucher_id.unwrap();
         return Ok(Json(json!({ "id": existing, "already": true })));
     }
     let vid = business::claim_voucher(&db, id, pay, user.username())?;
-    db.log(user.username(), "报销", "生成凭证", &format!("#{id} 凭证 #{vid}"))?;
+    db.log(
+        user.username(),
+        "报销",
+        "生成凭证",
+        &format!("#{id} 凭证 #{vid}"),
+    )?;
     Ok(Json(json!({ "id": vid })))
 }

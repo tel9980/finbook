@@ -28,7 +28,13 @@ pub struct Serial {
 }
 
 /// 入库登记序列号（批量）
-pub fn serial_in(db: &Db, item: &str, serials: &[String], batch_no: &str, date: NaiveDate) -> DbResult<usize> {
+pub fn serial_in(
+    db: &Db,
+    item: &str,
+    serials: &[String],
+    batch_no: &str,
+    date: NaiveDate,
+) -> DbResult<usize> {
     let tx = db.write_tx()?;
     let mut n = 0;
     for s in serials {
@@ -156,7 +162,12 @@ pub fn inv_aging(db: &Db, upto: Period) -> DbResult<Vec<InvAging>> {
     let today = chrono::Local::now().date_naive();
     let mut out = Vec::new();
     for item in items {
-        let st = crate::business::stock_state(db, &item, upto, fincore::engine::costing::CostMethod::MovingAverage)?;
+        let st = crate::business::stock_state(
+            db,
+            &item,
+            upto,
+            fincore::engine::costing::CostMethod::MovingAverage,
+        )?;
         if st.qty.is_zero() {
             continue;
         }
@@ -172,9 +183,15 @@ pub fn inv_aging(db: &Db, upto: Period) -> DbResult<Vec<InvAging>> {
             }
             None => 0,
         };
-        out.push(InvAging { item, last_in, days, qty: st.qty, amount: st.amount });
+        out.push(InvAging {
+            item,
+            last_in,
+            days,
+            qty: st.qty,
+            amount: st.amount,
+        });
     }
-    out.sort_by(|a, b| b.days.cmp(&a.days));
+    out.sort_by_key(|a| std::cmp::Reverse(a.days));
     Ok(out)
 }
 
@@ -192,11 +209,16 @@ pub struct AbcRow {
 pub fn abc_analysis(db: &Db, upto: Period) -> DbResult<Vec<AbcRow>> {
     let mut aging = inv_aging(db, upto)?;
     // 按结存金额降序（inv_aging 返回的是按账龄排序，这里重排）
-    aging.sort_by(|a, b| b.amount.cmp(&a.amount));
+    aging.sort_by_key(|a| std::cmp::Reverse(a.amount));
     let total: Money = aging.iter().map(|a| a.amount).sum();
     let mut rows: Vec<AbcRow> = aging
         .iter()
-        .map(|a| AbcRow { item: a.item.clone(), amount: a.amount, cum_pct: Money::ZERO, class: "C".into() })
+        .map(|a| AbcRow {
+            item: a.item.clone(),
+            amount: a.amount,
+            cum_pct: Money::ZERO,
+            class: "C".into(),
+        })
         .collect();
     let mut cum = Money::ZERO;
     for r in rows.iter_mut() {
@@ -263,7 +285,7 @@ pub fn assemble(
             .into());
         }
         let amount = *qty * unit;
-        total = total + amount;
+        total += amount;
         plan.push((item.clone(), *qty, unit, amount));
     }
     let wh = crate::warehouse::resolve(db, "")?;
@@ -271,7 +293,7 @@ pub fn assemble(
     // 「子件已出、成品没进」——库存凭空少掉（`transfer_do` 已是这个写法）
     let tx = db.write_tx()?;
     for (item, qty, unit, amount) in &plan {
-        let mut move_record = StockMove {
+        let move_record = StockMove {
             id: 0,
             period,
             biz_date: date,
@@ -285,9 +307,9 @@ pub fn assemble(
             voucher_id: None,
             memo: format!("组装 {}", memo),
         };
-        stock_insert_of(&tx, &mut move_record)?;
+        stock_insert_of(&tx, &move_record)?;
     }
-    let mut parent_move = StockMove {
+    let parent_move = StockMove {
         id: 0,
         period,
         biz_date: date,
@@ -301,7 +323,7 @@ pub fn assemble(
         voucher_id: None,
         memo: format!("组装 {}", memo),
     };
-    stock_insert_of(&tx, &mut parent_move)?;
+    stock_insert_of(&tx, &parent_move)?;
     tx.commit()?;
     Ok(())
 }
@@ -336,10 +358,9 @@ pub fn disassemble(
     )?
     .unit_cost();
     if !unit.is_positive() {
-        return Err(fincore::FinError::msg(
-            "成品无成本价，无法拆卸（请先入库带价或执行期末结价）",
-        )
-        .into());
+        return Err(
+            fincore::FinError::msg("成品无成本价，无法拆卸（请先入库带价或执行期末结价）").into(),
+        );
     }
     let total = unit; // 成品出库 1 件
     let wh = crate::warehouse::resolve(db, "")?;
@@ -347,7 +368,7 @@ pub fn disassemble(
     // 否则中途失败会留下「成品已出、子件没进」的窟窿
     let tx = db.write_tx()?;
     // 成品出库
-    let mut parent_move = StockMove {
+    let parent_move = StockMove {
         id: 0,
         period,
         biz_date: date,
@@ -361,7 +382,7 @@ pub fn disassemble(
         voucher_id: None,
         memo: format!("拆卸 {}", memo),
     };
-    stock_insert_of(&tx, &mut parent_move)?;
+    stock_insert_of(&tx, &parent_move)?;
     // 子件入库：按数量比例分摊成本，尾差归最后一行
     let mut allocated = Money::ZERO;
     let last = children.len() - 1;
@@ -373,11 +394,9 @@ pub fn disassemble(
                 .checked_div(qty_sum.0)
                 .expect("qty_sum 已判正")
         };
-        allocated = allocated + amount;
-        let price = amount
-            .checked_div(qty.0)
-            .expect("子件数量已判正");
-        let mut child_move = StockMove {
+        allocated += amount;
+        let price = amount.checked_div(qty.0).expect("子件数量已判正");
+        let child_move = StockMove {
             id: 0,
             period,
             biz_date: date,
@@ -391,7 +410,7 @@ pub fn disassemble(
             voucher_id: None,
             memo: format!("拆卸 {}", memo),
         };
-        stock_insert_of(&tx, &mut child_move)?;
+        stock_insert_of(&tx, &child_move)?;
     }
     tx.commit()?;
     Ok(())
@@ -433,7 +452,7 @@ pub fn form_convert(
     use crate::business::{stock_insert_of, StockKind, StockMove};
     // 出库与入库同事务：只写进一半就是凭空少一批存货
     let tx = db.write_tx()?;
-    let mut out_move = StockMove {
+    let out_move = StockMove {
         id: 0,
         period,
         biz_date: date,
@@ -447,8 +466,8 @@ pub fn form_convert(
         voucher_id: None,
         memo: format!("形态转换 {}", memo),
     };
-    stock_insert_of(&tx, &mut out_move)?;
-    let mut in_move = StockMove {
+    stock_insert_of(&tx, &out_move)?;
+    let in_move = StockMove {
         id: 0,
         period,
         biz_date: date,
@@ -462,7 +481,7 @@ pub fn form_convert(
         voucher_id: None,
         memo: format!("形态转换 {}", memo),
     };
-    stock_insert_of(&tx, &mut in_move)?;
+    stock_insert_of(&tx, &in_move)?;
     tx.commit()?;
     Ok(())
 }
@@ -530,7 +549,11 @@ pub fn warehouse_stock(db: &Db, item: &str) -> DbResult<Vec<WhStock>> {
         std::collections::BTreeMap::new();
     for (w, qc, q) in rows {
         let e = map
-            .entry(if w.is_empty() { "默认仓".to_string() } else { w })
+            .entry(if w.is_empty() {
+                "默认仓".to_string()
+            } else {
+                w
+            })
             .or_insert((Money::ZERO, Money::ZERO, Money::ZERO, Money::ZERO));
         e.0 += q;
         match qc.as_str() {
@@ -557,7 +580,10 @@ pub fn warehouse_stock(db: &Db, item: &str) -> DbResult<Vec<WhStock>> {
 /// 调拨报表：期间内调拨流水
 pub fn transfer_report(db: &Db, period: Period) -> DbResult<Vec<crate::business::StockMove>> {
     let rows = crate::business::stock_list(db, period)?;
-    Ok(rows.into_iter().filter(|r| r.kind == crate::business::StockKind::Transfer).collect())
+    Ok(rows
+        .into_iter()
+        .filter(|r| r.kind == crate::business::StockKind::Transfer)
+        .collect())
 }
 
 // ---------------- 批次成本勾稽 / 批次调拨（链5） ----------------
@@ -612,7 +638,11 @@ pub fn batch_cost_report(
             amount: *a,
         })
         .collect();
-    detail.sort_by(|a, b| a.item.cmp(&b.item).then_with(|| a.batch_no.cmp(&b.batch_no)));
+    detail.sort_by(|a, b| {
+        a.item
+            .cmp(&b.item)
+            .then_with(|| a.batch_no.cmp(&b.batch_no))
+    });
 
     // 逐存货合计
     let mut tot: HashMap<String, (Money, Money)> = HashMap::new();
@@ -637,7 +667,10 @@ pub fn batch_cost_report(
     let mut totals: Vec<BatchCostTotal> = items
         .into_iter()
         .map(|item| {
-            let (q, a) = tot.get(&item).copied().unwrap_or((Money::ZERO, Money::ZERO));
+            let (q, a) = tot
+                .get(&item)
+                .copied()
+                .unwrap_or((Money::ZERO, Money::ZERO));
             let b = book.get(&item).copied().unwrap_or(Money::ZERO);
             BatchCostTotal {
                 diff: a - b,
@@ -693,9 +726,9 @@ pub fn transfer_do(
         return Err(fincore::FinError::not_found("批次不存在").into());
     }
     // 源仓分仓余额（出负入正净额）
-    let mut st = db.conn().prepare(
-        "SELECT qty FROM stock_move WHERE item=?1 AND batch_no=?2 AND warehouse=?3",
-    )?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT qty FROM stock_move WHERE item=?1 AND batch_no=?2 AND warehouse=?3")?;
     let rows = st
         .query_map(rusqlite::params![item, bn, from], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -783,13 +816,9 @@ pub fn item_master(db: &Db) -> DbResult<Vec<ItemMasterRow>> {
     // 1) 库存现量（逐行内存汇总，与 batch_balance 同模式）
     let mut qty_map: HashMap<String, Money> = HashMap::new();
     {
-        let mut st = db
-            .conn()
-            .prepare("SELECT item, qty FROM stock_move")?;
+        let mut st = db.conn().prepare("SELECT item, qty FROM stock_move")?;
         let rows = st
-            .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         for (item, q) in rows {
             *qty_map.entry(item).or_insert(Money::ZERO) += Money::parse_or_zero(&q);
@@ -798,9 +827,9 @@ pub fn item_master(db: &Db) -> DbResult<Vec<ItemMasterRow>> {
     // 2) 计划参数
     let mut plan_map: HashMap<String, (Money, i32, Money)> = HashMap::new();
     {
-        let mut st = db.conn().prepare(
-            "SELECT item_code, safety_stock, lead_days, lot_size FROM item_plan",
-        )?;
+        let mut st = db
+            .conn()
+            .prepare("SELECT item_code, safety_stock, lead_days, lot_size FROM item_plan")?;
         let rows = st
             .query_map([], |r| {
                 Ok((
@@ -818,13 +847,9 @@ pub fn item_master(db: &Db) -> DbResult<Vec<ItemMasterRow>> {
     // 3) 主单位
     let mut unit_map: HashMap<String, String> = HashMap::new();
     {
-        let mut st = db
-            .conn()
-            .prepare("SELECT item, base_unit FROM item_unit")?;
+        let mut st = db.conn().prepare("SELECT item, base_unit FROM item_unit")?;
         let rows = st
-            .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-            })?
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         for (c, u) in rows {
             unit_map.insert(c, u);
@@ -853,16 +878,20 @@ pub fn item_master(db: &Db) -> DbResult<Vec<ItemMasterRow>> {
         .map(|(id, code, name, memo, disabled, parent, props_json)| {
             let props: std::collections::BTreeMap<String, String> =
                 serde_json::from_str(&props_json).unwrap_or_default();
-            let (safety, lead, lot) = plan_map
-                .get(&code)
-                .cloned()
-                .unwrap_or((Money::ZERO, 0, Money::ZERO));
+            let (safety, lead, lot) =
+                plan_map
+                    .get(&code)
+                    .cloned()
+                    .unwrap_or((Money::ZERO, 0, Money::ZERO));
             ItemMasterRow {
                 shelf_life: props
                     .get("shelf_life_days")
                     .cloned()
                     .unwrap_or_else(|| "0".into()),
-                qc: matches!(props.get("qc_required").map(String::as_str), Some("1") | Some("true")),
+                qc: matches!(
+                    props.get("qc_required").map(String::as_str),
+                    Some("1") | Some("true")
+                ),
                 id,
                 code: code.clone(),
                 qty: qty_map.get(&code).copied().unwrap_or(Money::ZERO),
@@ -889,7 +918,14 @@ mod tests {
     fn serial_flow() {
         let db = mem();
         let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
-        serial_in(&db, "P001", &["S1".into(), "S2".into(), "S3".into()], "B1", d).unwrap();
+        serial_in(
+            &db,
+            "P001",
+            &["S1".into(), "S2".into(), "S3".into()],
+            "B1",
+            d,
+        )
+        .unwrap();
         assert_eq!(serial_list(&db, "P001").unwrap().len(), 3);
         serial_out(&db, &["S1".into()], d).unwrap();
         let list = serial_list(&db, "P001").unwrap();
@@ -900,10 +936,28 @@ mod tests {
     #[test]
     fn unit_conversion() {
         let db = mem();
-        unit_set(&db, &ItemUnit { item: "P001".into(), base_unit: "个".into(), alt_unit: "箱".into(), factor: m("10") }).unwrap();
+        unit_set(
+            &db,
+            &ItemUnit {
+                item: "P001".into(),
+                base_unit: "个".into(),
+                alt_unit: "箱".into(),
+                factor: m("10"),
+            },
+        )
+        .unwrap();
         assert_eq!(unit_to_alt(&db, "P001", m("50")).unwrap(), m("5"));
         // 系数非法
-        assert!(unit_set(&db, &ItemUnit { item: "P001".into(), base_unit: "个".into(), alt_unit: "箱".into(), factor: m("0") }).is_err());
+        assert!(unit_set(
+            &db,
+            &ItemUnit {
+                item: "P001".into(),
+                base_unit: "个".into(),
+                alt_unit: "箱".into(),
+                factor: m("0")
+            }
+        )
+        .is_err());
     }
 
     #[test]
@@ -914,11 +968,24 @@ mod tests {
         use crate::business::{stock_insert, StockKind, StockMove};
         // A=700(70%)、B=200(90%)、C=100(100%) → A/B/C 三档分明
         for (item, qty, price) in [("A", "70", "10"), ("B", "20", "10"), ("C", "10", "10")] {
-            stock_insert(&db, &StockMove {
-                id: 0, period: p, biz_date: d, kind: StockKind::Purchase,
-                item: item.into(), warehouse: "主仓".into(), batch_no: String::new(),
-                qty: m(qty), price: m(price), amount: m(qty) * m(price), voucher_id: None, memo: String::new(),
-            }).unwrap();
+            stock_insert(
+                &db,
+                &StockMove {
+                    id: 0,
+                    period: p,
+                    biz_date: d,
+                    kind: StockKind::Purchase,
+                    item: item.into(),
+                    warehouse: "主仓".into(),
+                    batch_no: String::new(),
+                    qty: m(qty),
+                    price: m(price),
+                    amount: m(qty) * m(price),
+                    voucher_id: None,
+                    memo: String::new(),
+                },
+            )
+            .unwrap();
         }
         let rows = abc_analysis(&db, p).unwrap();
         assert_eq!(rows.len(), 3);
@@ -998,7 +1065,11 @@ mod tests {
         )
         .unwrap()
         .unit_cost();
-        assert_eq!(rm1_unit, m("10"), "成品成本 20 全部摊给唯一子件（2 件 → 单价 10）");
+        assert_eq!(
+            rm1_unit,
+            m("10"),
+            "成品成本 20 全部摊给唯一子件（2 件 → 单价 10）"
+        );
         // 成品已无库存 → 再拆拒绝
         assert!(disassemble(&db, p, d, "FG", &[("RM1".into(), m("1"))], "拆").is_err());
     }

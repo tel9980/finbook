@@ -235,9 +235,18 @@ mod tests {
 
     #[test]
     fn signed_conversion() {
-        assert_eq!(signed_to_dir_amount(Money::parse("-100").unwrap()).0, Direction::Credit);
-        assert_eq!(signed_to_dir_amount(Money::parse("-100").unwrap()).1, Money::parse("100").unwrap());
-        assert_eq!(dir_amount_to_signed(Direction::Credit, Money::parse("5").unwrap()), Money::parse("-5").unwrap());
+        assert_eq!(
+            signed_to_dir_amount(Money::parse("-100").unwrap()).0,
+            Direction::Credit
+        );
+        assert_eq!(
+            signed_to_dir_amount(Money::parse("-100").unwrap()).1,
+            Money::parse("100").unwrap()
+        );
+        assert_eq!(
+            dir_amount_to_signed(Direction::Credit, Money::parse("5").unwrap()),
+            Money::parse("-5").unwrap()
+        );
     }
 
     #[test]
@@ -249,7 +258,10 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(r.end(), Money::parse("120").unwrap());
-        assert_eq!(r.end_dir_amount(), (Direction::Debit, Money::parse("120").unwrap()));
+        assert_eq!(
+            r.end_dir_amount(),
+            (Direction::Debit, Money::parse("120").unwrap())
+        );
         assert!(!r.is_abnormal(Direction::Debit));
         assert!(r.is_abnormal(Direction::Credit));
     }

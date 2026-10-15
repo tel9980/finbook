@@ -1472,15 +1472,31 @@ const MIGRATE_V2: &[(&str, &str, &str)] = &[
     ("user", "last_login_at", "TEXT NOT NULL DEFAULT ''"),
     ("user", "data_scope_json", "TEXT NOT NULL DEFAULT '{}'"),
     ("voucher_template", "freq", "TEXT NOT NULL DEFAULT ''"),
-    ("voucher_template", "start_period", "INTEGER NOT NULL DEFAULT 0"),
-    ("voucher_template", "end_period", "INTEGER NOT NULL DEFAULT 0"),
-    ("voucher_template", "last_period", "INTEGER NOT NULL DEFAULT 0"),
+    (
+        "voucher_template",
+        "start_period",
+        "INTEGER NOT NULL DEFAULT 0",
+    ),
+    (
+        "voucher_template",
+        "end_period",
+        "INTEGER NOT NULL DEFAULT 0",
+    ),
+    (
+        "voucher_template",
+        "last_period",
+        "INTEGER NOT NULL DEFAULT 0",
+    ),
     ("voucher_template", "active", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 /// v2 → v3：自动转账补对方科目
 const MIGRATE_V3: &[(&str, &str, &str)] = &[
-    ("auto_transfer", "offset_account", "TEXT NOT NULL DEFAULT ''"),
+    (
+        "auto_transfer",
+        "offset_account",
+        "TEXT NOT NULL DEFAULT ''",
+    ),
     ("payroll", "additional", "TEXT NOT NULL DEFAULT '0'"),
 ];
 
@@ -1529,12 +1545,28 @@ const MIGRATE_V6: &[(&str, &str, &str)] = &[
     // 采购订单表
     ("purchase_order", "id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
     ("purchase_order", "no", "TEXT NOT NULL UNIQUE"),
-    ("purchase_order", "supplier_code", "TEXT NOT NULL DEFAULT ''"),
-    ("purchase_order", "supplier_name", "TEXT NOT NULL DEFAULT ''"),
+    (
+        "purchase_order",
+        "supplier_code",
+        "TEXT NOT NULL DEFAULT ''",
+    ),
+    (
+        "purchase_order",
+        "supplier_name",
+        "TEXT NOT NULL DEFAULT ''",
+    ),
     ("purchase_order", "status", "TEXT NOT NULL DEFAULT 'draft'"),
-    ("purchase_order", "total_amount", "TEXT NOT NULL DEFAULT '0'"),
+    (
+        "purchase_order",
+        "total_amount",
+        "TEXT NOT NULL DEFAULT '0'",
+    ),
     ("purchase_order", "total_tax", "TEXT NOT NULL DEFAULT '0'"),
-    ("purchase_order", "received_amount", "TEXT NOT NULL DEFAULT '0'"),
+    (
+        "purchase_order",
+        "received_amount",
+        "TEXT NOT NULL DEFAULT '0'",
+    ),
     ("purchase_order", "prepared_by", "TEXT NOT NULL DEFAULT ''"),
     ("purchase_order", "memo", "TEXT NOT NULL DEFAULT ''"),
     ("purchase_order", "created_at", "TEXT NOT NULL DEFAULT ''"),
@@ -1582,7 +1614,11 @@ const MIGRATE_V6: &[(&str, &str, &str)] = &[
     ("voucher", "amended_by", "INTEGER NOT NULL DEFAULT 0"),
     ("voucher", "amend_reason", "TEXT NOT NULL DEFAULT ''"),
     // 到岸成本明细
-    ("landed_cost_item", "id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+    (
+        "landed_cost_item",
+        "id",
+        "INTEGER PRIMARY KEY AUTOINCREMENT",
+    ),
     ("landed_cost_item", "lcv_id", "INTEGER NOT NULL"),
     ("landed_cost_item", "po_id", "INTEGER NOT NULL"),
     ("landed_cost_item", "item_code", "TEXT NOT NULL"),
@@ -1590,10 +1626,18 @@ const MIGRATE_V6: &[(&str, &str, &str)] = &[
     ("landed_cost_item", "qty", "TEXT NOT NULL DEFAULT '0'"),
     ("landed_cost_item", "weight", "TEXT NOT NULL DEFAULT '0'"),
     ("landed_cost_item", "amount", "TEXT NOT NULL DEFAULT '0'"),
-    ("landed_cost_item", "manual_amount", "TEXT NOT NULL DEFAULT '0'"),
+    (
+        "landed_cost_item",
+        "manual_amount",
+        "TEXT NOT NULL DEFAULT '0'",
+    ),
     ("landed_cost_item", "allocated", "TEXT NOT NULL DEFAULT '0'"),
     ("landed_cost_item", "to_stock", "TEXT NOT NULL DEFAULT '0'"),
-    ("landed_cost_item", "to_expense", "TEXT NOT NULL DEFAULT '0'"),
+    (
+        "landed_cost_item",
+        "to_expense",
+        "TEXT NOT NULL DEFAULT '0'",
+    ),
     ("landed_cost_item", "memo", "TEXT NOT NULL DEFAULT ''"),
     // 销售订单表
     ("sales_order", "id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
@@ -1628,19 +1672,43 @@ const MIGRATE_V6: &[(&str, &str, &str)] = &[
     ("bom", "loss_rate", "TEXT NOT NULL DEFAULT '0'"),
     ("bom", "seq", "INTEGER NOT NULL DEFAULT 0"),
     // 生产订单表
-    ("production_order", "id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+    (
+        "production_order",
+        "id",
+        "INTEGER PRIMARY KEY AUTOINCREMENT",
+    ),
     ("production_order", "no", "TEXT NOT NULL UNIQUE"),
     ("production_order", "item_code", "TEXT NOT NULL"),
     ("production_order", "item_name", "TEXT NOT NULL"),
-    ("production_order", "planned_qty", "TEXT NOT NULL DEFAULT '0'"),
-    ("production_order", "completed_qty", "TEXT NOT NULL DEFAULT '0'"),
-    ("production_order", "status", "TEXT NOT NULL DEFAULT 'draft'"),
-    ("production_order", "work_center", "TEXT NOT NULL DEFAULT ''"),
+    (
+        "production_order",
+        "planned_qty",
+        "TEXT NOT NULL DEFAULT '0'",
+    ),
+    (
+        "production_order",
+        "completed_qty",
+        "TEXT NOT NULL DEFAULT '0'",
+    ),
+    (
+        "production_order",
+        "status",
+        "TEXT NOT NULL DEFAULT 'draft'",
+    ),
+    (
+        "production_order",
+        "work_center",
+        "TEXT NOT NULL DEFAULT ''",
+    ),
     // 来源销售订单：0 = 独立建单（备货/MRP 建议）。有了它才能回答
     // 「这批货是哪张销售订单要的」——否则产销之间在数据上是断的，
     // 生产完了也只能靠人肉记忆去对上订单。
     ("production_order", "so_id", "INTEGER NOT NULL DEFAULT 0"),
-    ("production_order", "prepared_by", "TEXT NOT NULL DEFAULT ''"),
+    (
+        "production_order",
+        "prepared_by",
+        "TEXT NOT NULL DEFAULT ''",
+    ),
     ("production_order", "memo", "TEXT NOT NULL DEFAULT ''"),
     ("production_order", "created_at", "TEXT NOT NULL DEFAULT ''"),
     ("production_order", "updated_at", "TEXT NOT NULL DEFAULT ''"),
@@ -1654,7 +1722,6 @@ const MIGRATE_V6: &[(&str, &str, &str)] = &[
 /// 其他 v7 新表（routing / prod_op / item_plan / mrp_result / budget_version /
 /// report_note / approval / approval_step / e_archive）由 DDL 的
 /// `CREATE TABLE IF NOT EXISTS` 在 init 时自动创建。
-
 /// v6 → v7：重建 budget 表以支持多版本
 fn migrate_v7(conn: &Connection) -> Result<(), DbError> {
     if column_exists(conn, "budget", "version")? {
@@ -1681,14 +1748,11 @@ fn migrate_v7(conn: &Connection) -> Result<(), DbError> {
 }
 
 /// v7 → v8：库存盘点表（新表，DDL 覆盖）+ stock_move 补批次列
-const MIGRATE_V8: &[(&str, &str, &str)] = &[
-    ("stock_move", "batch_no", "TEXT NOT NULL DEFAULT ''"),
-];
+const MIGRATE_V8: &[(&str, &str, &str)] = &[("stock_move", "batch_no", "TEXT NOT NULL DEFAULT ''")];
 
 /// v16 → v17：用户权限逐项覆盖（deny_perms_json）
-const MIGRATE_V17: &[(&str, &str, &str)] = &[
-    ("user", "deny_perms_json", "TEXT NOT NULL DEFAULT '[]'"),
-];
+const MIGRATE_V17: &[(&str, &str, &str)] =
+    &[("user", "deny_perms_json", "TEXT NOT NULL DEFAULT '[]'")];
 
 /// v18 → v19：资金台账挂凭证（票据/融资与总账联动，出纳资金台账可追溯到账务）
 const MIGRATE_V19: &[(&str, &str, &str)] = &[
@@ -1705,8 +1769,7 @@ const MIGRATE_V20: &[(&str, &str, &str)] = &[
 ];
 
 /// v20 → v21：兼任岗位（多角色）。有效权限 = 主岗位 + roles_json 并集 − deny。
-const MIGRATE_V21: &[(&str, &str, &str)] =
-    &[("user", "roles_json", "TEXT NOT NULL DEFAULT '[]'")];
+const MIGRATE_V21: &[(&str, &str, &str)] = &[("user", "roles_json", "TEXT NOT NULL DEFAULT '[]'")];
 
 /// v21 → v22：收付款单审核流（历史单据均已生成凭证 → 默认 'audited'）；
 /// 存货盘点两张新表由 DDL 直接建（每次 migrate 都会执行 CREATE IF NOT EXISTS）。
@@ -1715,9 +1778,21 @@ const MIGRATE_V22: &[(&str, &str, &str)] =
 
 /// v22 → v23：委外加工（生产订单加 委外类型 与 供应商 两组列）
 const MIGRATE_V23: &[(&str, &str, &str)] = &[
-    ("production_order", "order_kind", "TEXT NOT NULL DEFAULT 'inhouse'"),
-    ("production_order", "supplier_code", "TEXT NOT NULL DEFAULT ''"),
-    ("production_order", "supplier_name", "TEXT NOT NULL DEFAULT ''"),
+    (
+        "production_order",
+        "order_kind",
+        "TEXT NOT NULL DEFAULT 'inhouse'",
+    ),
+    (
+        "production_order",
+        "supplier_code",
+        "TEXT NOT NULL DEFAULT ''",
+    ),
+    (
+        "production_order",
+        "supplier_name",
+        "TEXT NOT NULL DEFAULT ''",
+    ),
 ];
 
 /// v23 → v24：来料检验状态机（stock_move.qc_status：''可用 / pending待检 / quarantine隔离）
@@ -2042,10 +2117,7 @@ fn migrate_generic(conn: &Connection, list: &[(&str, &str, &str)]) -> Result<(),
         if column_exists(conn, table, col)? {
             continue;
         }
-        conn.execute(
-            &format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"),
-            [],
-        )?;
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {col} {decl}"), [])?;
     }
     Ok(())
 }
@@ -2168,7 +2240,9 @@ mod tests {
             }
             // 形如 `CREATE [UNIQUE] INDEX ... ON <table>(<cols>)`
             let Some(lo) = s.find('(') else { continue };
-            let Some(hi) = s[lo..].find(')').map(|k| lo + k) else { continue };
+            let Some(hi) = s[lo..].find(')').map(|k| lo + k) else {
+                continue;
+            };
             let table = s[..lo]
                 .split_whitespace()
                 .last()
@@ -2180,7 +2254,6 @@ mod tests {
             checked += 1;
             for c in s[lo + 1..hi].split(',') {
                 let col = c
-                    .trim()
                     .split_whitespace()
                     .next()
                     .unwrap_or("")
@@ -2264,9 +2337,11 @@ mod tests {
             );
         }
         let v: String = conn
-            .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(
             v,
@@ -2354,9 +2429,17 @@ mod tests {
             );
         }
         let v: String = conn
-            .query_row("SELECT value FROM meta WHERE key='schema_version'", [], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(v, SCHEMA_VERSION.to_string(), "版本号没推进 = 迁移整体回滚了");
+        assert_eq!(
+            v,
+            SCHEMA_VERSION.to_string(),
+            "版本号没推进 = 迁移整体回滚了"
+        );
         let idx: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_po_rcpt_item'",
@@ -2367,9 +2450,11 @@ mod tests {
         assert_eq!(idx, 1, "idx_po_rcpt_item 必须在加列之后建起来");
         // 旧数据完好，新列取默认值（'' = 整单收货，与升级前口径一致）
         let row: (String, String, String) = conn
-            .query_row("SELECT qty, item_code, warehouse FROM po_receipt WHERE po_id=7", [], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+            .query_row(
+                "SELECT qty, item_code, warehouse FROM po_receipt WHERE po_id=7",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .unwrap();
         assert_eq!(row.0, "100", "历史收货量不能丢");
         assert_eq!(row.1, "", "旧行的新列应取默认空串（= 整单收货）");
@@ -2417,7 +2502,11 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(v, SCHEMA_VERSION.to_string(), "版本号没推进 = 下次打开白跑一遍迁移");
+        assert_eq!(
+            v,
+            SCHEMA_VERSION.to_string(),
+            "版本号没推进 = 下次打开白跑一遍迁移"
+        );
         // 幂等：再跑一次不报错
         init(&conn).unwrap();
         for c in ["amends_id", "amended_by", "amend_reason"] {
