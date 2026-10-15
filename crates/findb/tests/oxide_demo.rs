@@ -118,5 +118,60 @@ fn 演示账28张全已记账且试算平衡() {
         "缺 510108 委外加工费"
     );
 
+    // 8) 核销配对：凭证之间能配的配上（A 发票全额配平、B 票据等额、供应商 FIFO）；
+    //    期初三笔无分录、配不上——留在账龄里，余额照样轧平
+    let sum_open = |acct: &str| {
+        findb::settle::open_entries(&db, acct, p, false)
+            .expect("查未清")
+            .iter()
+            .map(|e| {
+                // open() 是绝对值；净额要按原方向还原符号（与配对顺序无关）
+                let o = e.open();
+                if e.debit > Money::ZERO { o } else { Money::ZERO - o }
+            })
+            .fold(Money::ZERO, |a, b| a + b)
+    };
+    // 未清分录净额恒等于分录净发生（配对只标配对关系，不改金额，顺序无关）
+    assert_eq!(sum_open("112201"), m("-56160"));
+    assert_eq!(sum_open("220201"), m("-6000"));
+    assert!(
+        !findb::settle::list(&db, "112201")
+            .expect("查配对")
+            .is_empty(),
+        "应收应有核销配对"
+    );
+    assert!(
+        !findb::settle::list(&db, "220201")
+            .expect("查配对")
+            .is_empty(),
+        "应付应有核销配对"
+    );
+
+    // 9) 账龄按单位合计（期初明细 + 凭证未清合并看）
+    let buckets = vec![
+        fincore::engine::aging::AgingBucket { label: "30天内", from: 0, to: Some(30) },
+        fincore::engine::aging::AgingBucket { label: "31-60天", from: 31, to: Some(60) },
+        fincore::engine::aging::AgingBucket { label: "60天以上", from: 61, to: None },
+    ];
+    let as_of = chrono::NaiveDate::from_ymd_opt(2026, 11, 30).unwrap();
+    let aging_ar = findb::settle::aging(&db, "112201", p, as_of, &buckets).expect("应收账龄");
+    let ar_line = |key: &str| aging_ar.iter().find(|l| l.key == key);
+    // C01：期初单据 68000（配不上）躺在账龄里；本月发票全额配平，
+    // 两笔收款尾 25300＋40000 躺在预收栏；净额 2700＝余额
+    let c01 = ar_line("C01").expect("C01 账龄行");
+    assert_eq!(c01.total, m("68000"));
+    assert_eq!(c01.credit_total, m("65300"));
+    // C02：预收 30000 不进账龄桶，只进预收栏
+    let c02 = ar_line("C02").expect("C02 账龄行");
+    assert!(c02.total.is_zero());
+    assert_eq!(c02.credit_total, m("30000"));
+    // C03：本月开票未收，全额在账龄里
+    assert_eq!(ar_line("C03").map(|l| l.total), Some(m("39140")));
+    // 供应商两家：期初单据＋本月未清＝余额，预收栏为零
+    let aging_ap = findb::settle::aging(&db, "220201", p, as_of, &buckets).expect("应付账龄");
+    let ap_line = |key: &str| aging_ap.iter().find(|l| l.key == key);
+    assert_eq!(ap_line("S01").map(|l| l.total), Some(m("23800")));
+    assert_eq!(ap_line("S02").map(|l| l.total), Some(m("20200")));
+
     let _ = std::fs::remove_file(&path);
 }

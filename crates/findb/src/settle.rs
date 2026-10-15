@@ -102,9 +102,14 @@ pub fn settled_map(db: &Db, entry_ids: &[i64]) -> DbResult<std::collections::Has
          ) ORDER BY k"
     );
     let mut st = db.conn().prepare(&sql)?;
+    // 两个 IN 各吃全部 id（先全部、再全部）：之前写的是逐个翻倍
+    // `[id1,id1,id2,id2…]`，每个 IN 只吃到连续一半 —— from 侧永远漏后一半、
+    // to 侧永远漏前一半。两行以内碰巧全对，三行以上已配平的分录会被当成未清，
+    // 自动核销第二轮就去重复配，被超额校验拦下（"超过核销方未核销额 0.00"）。
     let ids2: Vec<&dyn rusqlite::ToSql> = entry_ids
         .iter()
-        .flat_map(|i| [i as &dyn rusqlite::ToSql, i as &dyn rusqlite::ToSql])
+        .chain(entry_ids.iter())
+        .map(|i| i as &dyn rusqlite::ToSql)
         .collect();
     let rows = st
         .query_map(ids2.as_slice(), |r| {
@@ -630,6 +635,11 @@ pub fn aging(
     //
     // 能发生的情形是**用户自己加的**不带 aux 的应收/应付科目（预置的 112201/220201
     // 在科目表里就声明了核算客商，凭证校验会先拒掉）。
+    //
+    // 方向归一：应付类科目（2 开头）分录是贷增借减，账龄展示统一翻成正数
+    // （往来期初明细存的本来就是正数）。否则整张应付账龄全落在预收/预付栏：
+    // 合计恒 0、最长账龄恒 0 —— 新手打开以为没有欠款。
+    let flip = account.as_bytes().first() == Some(&b'2');
     let mut items: Vec<AgingItem> = entries
         .iter()
         .filter(|e| !crate::balances::aux_key_value_of(&e.aux_key, party).is_empty())
@@ -645,7 +655,7 @@ pub fn aging(
             // 只有那一个权威定义点。
             key: crate::balances::aux_key_value_of(&e.aux_key, party),
             date: e.date,
-            amount: e.signed(),
+            amount: if flip { e.signed().negated() } else { e.signed() },
             settled: e.settled,
             doc_no: format!("{}-{}", e.word, e.no),
         })
@@ -662,7 +672,10 @@ pub fn aging(
             items.push(AgingItem {
                 key: o.party_code.clone(),
                 date: d,
-                amount: if o.kind == "ar" { o.amount } else { o.amount.negated() },
+                // 期初单据恒按正数进账龄（入库时已要求金额为正）。
+                // 应付翻转只在分录侧做一次 —— 这里若再按 kind 取反，
+                // 翻两次就回到负数，整张应付账龄又掉回预付栏。
+                amount: o.amount,
                 settled: Money::ZERO,
                 doc_no: format!(
                     "期初 {}",
@@ -1280,7 +1293,11 @@ mod tests {
             lines.iter().map(|l| (l.key.clone(), l.total.fmt_money())).collect::<Vec<_>>()
         );
         assert_eq!(lines[0].key, "S01", "key 是**裸供应商编码**");
-        assert_eq!(lines[0].total, Money::parse("2000").unwrap());
+        // 这笔是借方 220201（预付供应商）—— 翻正后落在预付栏，不进合计。
+        // （归一化之前它进合计栏，和"欠供应商多少"混在一起；且整张应付账龄的
+        // 合计恒 0、最长账龄恒 0。预付就该在预付栏。）
+        assert!(lines[0].total.is_zero());
+        assert_eq!(lines[0].credit_total, Money::parse("2000").unwrap());
     }
 
     /// 没挂客户辅助核算的分录不进往来账龄。
@@ -1649,6 +1666,67 @@ mod tests {
             res.pairs,
             list(&db, "1122").unwrap().len(),
             "核销笔数必须等于实际记录数：{res:?}"
+        );
+    }
+
+    /// settled_map 参数曾经是 [id1,id1,id2,id2…] 交错排列，而 SQL 里两个 IN
+    /// 各吃连续 N 个 —— from 侧永远漏后一半、to 侧永远漏前一半。
+    /// 两行以内碰巧全对（N=1 时两边吃到同一个 id），三行以上已配平的分录
+    /// 在循环视图里还是"未清"，自动核销第二轮就去重复配，被超额校验拦下
+    /// （"核销金额 24700.00 超过核销方未核销额 0.00"）。
+    /// 触发条件是 to 侧分录的 id 排在第一位 —— 现实里就是"先收款、后开票"
+    /// （氧化厂演示账：11-03 收 68000，11-04 才开 92700 发票），稳定复现。
+    #[test]
+    fn settled_map_三行以上双向都计数() {
+        let db = tmpdb("settle_map_3rows");
+        let p = Period::new(2026, 1).unwrap();
+        // 先收款 68000、再开票 92700、再收款 50000，同客户
+        let (_, e_r68) = ar_voucher(
+            &db,
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 3).unwrap(),
+            1,
+            "C01",
+            "68000",
+            false,
+            "1001",
+        );
+        let (_, e_inv) = ar_voucher(
+            &db,
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            2,
+            "C01",
+            "92700",
+            true,
+            "600101",
+        );
+        let (_, e_r50) = ar_voucher(
+            &db,
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            3,
+            "C01",
+            "50000",
+            false,
+            "1001",
+        );
+
+        // 手工配第一对：发票 → 68000 收款
+        settle(&db, e_inv, e_r68, Money::parse("68000").unwrap(), "u").unwrap();
+        // 三个 id 必须都有数：修之前 to 侧的 e_r68 会漏掉（还是 0）
+        let sm = settled_map(&db, &[e_r68, e_inv, e_r50]).unwrap();
+        assert_eq!(sm.get(&e_inv), Some(&Money::parse("68000").unwrap()));
+        assert_eq!(sm.get(&e_r68), Some(&Money::parse("68000").unwrap()));
+        assert!(sm.get(&e_r50).is_none());
+
+        // 自动核销必须一口气吃完发票剩下的 24700，而不是报错
+        let res = auto_settle(&db, "112201", p, Money::ZERO, "u").unwrap();
+        assert_eq!(res.amount, Money::parse("24700").unwrap());
+        assert_eq!(
+            settled_of(db.conn(), e_inv).unwrap(),
+            Money::parse("92700").unwrap(),
+            "发票应全额配平"
         );
     }
 

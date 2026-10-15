@@ -79,7 +79,7 @@ pub struct AgingItem {
     pub key: String,
     /// 单据日期
     pub date: NaiveDate,
-    /// 原始金额（带符号：应收为正、应付为正统一用正数，方向由调用方保证）
+    /// 原始金额（带符号：借正贷负；调用方按分录/单据方向传入）
     pub amount: Money,
     /// 已核销金额
     pub settled: Money,
@@ -88,9 +88,17 @@ pub struct AgingItem {
 }
 
 impl AgingItem {
-    /// 未核销余额
+    /// 未核销余额（带符号）。
+    ///
+    /// `settled` 是正数累计：借方（正金额）求余用减；贷方（负金额，
+    /// 如收款/预收）必须用加 —— 直接 `amount - settled` 会把贷方余越算越大
+    /// （`-50000 - 24700 = -74700`，实际余 `-25300`），预收栏虚增。
     pub fn open(&self) -> Money {
-        let o = self.amount - self.settled;
+        let o = if self.amount.is_negative() {
+            self.amount + self.settled
+        } else {
+            self.amount - self.settled
+        };
         if o.abs() < Money::parse("0.005").unwrap() {
             Money::ZERO
         } else {
@@ -285,6 +293,25 @@ mod tests {
         assert_eq!(lines[0].total, m("1000"));
         assert_eq!(lines[0].credit_total, m("1500"));
         assert_eq!(lines[0].net(), m("-500"));
+    }
+
+    /// 贷方部分核销后，余必须变小而不是变大。
+    ///
+    /// 回归：`open()` 曾是 `amount - settled`，贷方 `-50000` 配掉 `24700` 后
+    /// 余变成 `-74700`（越配越多），预收栏虚增。本单测钉住 `-25300`。
+    #[test]
+    fn credit_side_partial_settle_reduces_open() {
+        let as_of = d(2026, 3, 31);
+        let items = vec![
+            item("C01", d(2026, 3, 5), "92700", "92700"), // 发票全额配平 → 不出现
+            item("C01", d(2026, 3, 3), "-50000", "24700"), // 收款余 -25300
+            item("C01", d(2026, 3, 10), "-40000", "0"),   // 收款余 -40000
+        ];
+        let lines = analyze(&items, as_of, &buckets_by_days()).unwrap();
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].total.is_zero());
+        assert_eq!(lines[0].credit_total, m("65300"));
+        assert_eq!(lines[0].net(), m("-65300"));
     }
 
     /// 贷方单据（预收）不参与 `max_days`。

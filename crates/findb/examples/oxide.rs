@@ -10,7 +10,9 @@
 //!   - 收付款不一一对应：部分收、预收、部分付，余额自然轧差
 //!   - G银行=对公有票户，N银行+微信=现金户（微信走 1001，摘要注明）
 //!   - 承兑汇票收一笔、到期兑付一笔（112101）
-//!   - 月末：制造费用结转成本 → 结转损益；**不结账**，留给会计自己点
+//!   - 月末：制造费用结转成本 → 计提附加税 → 结转损益；**不结账**，留给会计自己点
+//!   - 往来三层：期初逐单明细（arap_opening）＋ 11 月凭证 ＋ 自动核销配对；
+//!     期初单据无分录、配不上是正常的——账龄合并看，余额轧差为准
 //!
 //! 产出可直接打开对照：28 张凭证全部已记账，试算平衡，报表有数。
 
@@ -366,6 +368,47 @@ pub fn build(path: &Path) {
         n += 1;
     }
     println!("导入并记账 {n} 张凭证");
+
+    // ---------- 往来期初明细（启用前的逐单欠款：这就是"基础对应表"的期初部分） ----------
+    //
+    // 为什么需要它：核销配对只认凭证分录，期初余额没有分录、配不上。
+    // 期初欠款的逐单台账记在这里，进账龄分析与未清口径。
+    for (kind, party, name, doc_no, doc_date, amount) in [
+        ("ar", "C01", "宏远汽配厂", "XF-202610-001", "2026-10-28", "68000"),
+        ("ap", "S01", "恒信化工商行", "CL-202610-001", "2026-10-25", "23000"),
+        ("ap", "S02", "大发外发加工厂", "WW-202610-001", "2026-10-26", "15000"),
+    ] {
+        findb::settle::arap_opening_insert(
+            &db,
+            &findb::settle::ArapOpening {
+                id: 0,
+                kind: kind.to_string(),
+                party_code: party.to_string(),
+                party_name: name.to_string(),
+                doc_no: doc_no.to_string(),
+                doc_date: doc_date.to_string(),
+                amount: m(amount),
+                memo: "10月遗留".to_string(),
+                created_by: "李会计".to_string(),
+            },
+            "李会计",
+        )
+        .expect("写往来期初");
+    }
+
+    // ---------- 自动核销（FIFO：同单位内凭证之间能配的配上，尾数留给手工） ----------
+    //
+    // 配得上：A 的 50000+40000 吃掉 92700 中的 90000（剩 2700 尾）；
+    // B 的票据 57680 与发票等额配平；供应商两笔付款 FIFO 吃掉最早单据。
+    // 配不上：10 月三笔期初单据（无分录）——它们在账龄表里，收到钱后余额自动轧平。
+    let ar_settle = findb::settle::auto_settle(&db, "112201", p, Money::ZERO, "李会计")
+        .expect("应收自动核销");
+    let ap_settle = findb::settle::auto_settle(&db, "220201", p, Money::ZERO, "李会计")
+        .expect("应付自动核销");
+    println!(
+        "自动核销：应收配对 {} 笔、应付配对 {} 笔",
+        ar_settle.pairs, ap_settle.pairs
+    );
 
     let n_acc = findb::accounts::list(&db).map(|v| v.len()).unwrap_or(0);
     println!();
