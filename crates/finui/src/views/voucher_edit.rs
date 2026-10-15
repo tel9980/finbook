@@ -83,6 +83,10 @@ pub struct VoucherEdit {
     pub picker: AccountPickerState,
     /// 正在编辑辅助核算的行号
     pub aux_row: Option<usize>,
+    /// 凭证页就地建档：正在新建哪个维度的档案（None = 没在建）
+    pub aux_creating: Option<AuxKind>,
+    /// 就地建档的名称输入
+    pub aux_new_name: String,
     pub print_open: bool,
     pub words: Vec<String>,
     /// 常用摘要弹窗
@@ -115,6 +119,8 @@ impl Default for VoucherEdit {
             confirm_discard: None,
             picker: AccountPickerState::default(),
             aux_row: None,
+            aux_creating: None,
+            aux_new_name: String::new(),
             print_open: false,
             words: Vec::new(),
             summary_popup: false,
@@ -1141,6 +1147,7 @@ impl VoucherEdit {
         let title = format!("辅助核算 — 第 {} 行 {}", i + 1, code);
         let mut new_aux = self.rows[i].aux.clone();
         let mut new_cf = self.rows[i].cf.clone();
+        let mut do_create: Option<AuxKind> = None;
 
         egui::Window::new(title)
             .open(&mut open)
@@ -1187,7 +1194,35 @@ impl VoucherEdit {
                         } else if Some(&sel) != cur.as_ref() {
                             new_aux.set(k, Some(sel));
                         }
+                        // 就地建档：凭证做到一半发现缺档案，不用丢下凭证去翻菜单
+                        if ui
+                            .small_button("＋新建")
+                            .on_hover_text("直接在这里建一条：只填名称，编码自动编")
+                            .clicked()
+                            && ctx.can(Perm::AuxEdit)
+                        {
+                            self.aux_creating = Some(k);
+                            self.aux_new_name.clear();
+                        }
                     });
+                    // 就地建档的输入行
+                    if self.aux_creating == Some(k) {
+                        ui.horizontal(|ui| {
+                            ui.label("新名称：");
+                            ui.add_sized(
+                                [180.0, 22.0],
+                                egui::TextEdit::singleline(&mut self.aux_new_name)
+                                    .hint_text("只填名称，编码自动编"),
+                            );
+                            if ui.small_button("保存").clicked() {
+                                do_create = Some(k);
+                            }
+                            if ui.small_button("取消").clicked() {
+                                self.aux_creating = None;
+                                self.aux_new_name.clear();
+                            }
+                        });
+                    }
 
                     // 空档案的死路提示。
                     //
@@ -1344,6 +1379,33 @@ impl VoucherEdit {
                     });
                 });
             });
+
+        // 凭证页就地建档：只填名称，编码按库里最大号自动编，建完直接选上
+        if let Some(k) = do_create {
+            let name = self.aux_new_name.trim().to_string();
+            if name.is_empty() {
+                ctx.error("名称不能为空");
+            } else {
+                let existing = findb::auxs::codes(ctx.db(), k).unwrap_or_default();
+                let code = fincore::batch::aux::next_code(k, &existing);
+                let e = fincore::AuxEntity::new(k, code.clone(), name);
+                match findb::auxs::insert(ctx.db(), &e) {
+                    Ok(_) => {
+                        ctx.reload_aux_names();
+                        new_aux.set(k, Some(code.clone()));
+                        self.aux_creating = None;
+                        self.aux_new_name.clear();
+                        ctx.info(format!(
+                            "已新建{}档案 {}（编码自动编为 {}），已填入本行",
+                            k.label(),
+                            e.name,
+                            code
+                        ));
+                    }
+                    Err(err) => ctx.error(format!("新建档案失败：{err}")),
+                }
+            }
+        }
 
         self.rows[i].aux = new_aux;
         self.rows[i].cf = new_cf;

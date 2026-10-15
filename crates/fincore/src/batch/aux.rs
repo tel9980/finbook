@@ -64,6 +64,15 @@ impl Parsed {
     }
 }
 
+/// 下一个自动编码（单个新增留空、凭证页就地建档时用）。
+///
+/// 与批量粘贴同一规则：库里最大号 +1（C01、C02…），小白不用自己想编码。
+/// 跳过库里已有的号（删过的编码有空洞时不会撞车）。
+pub fn next_code(kind: AuxKind, existing: &[String]) -> String {
+    let mut cg = CodeGen::new(code_prefix(kind), existing);
+    cg.next_code()
+}
+
 /// 各类档案的编码前缀。与项目里既有惯例一致（示例账套就是 C01/S01/D01/E01/B01）。
 pub fn code_prefix(kind: AuxKind) -> &'static str {
     match kind {
@@ -329,6 +338,17 @@ mod tests {
         assert_eq!(code_prefix(AuxKind::Dept), "D");
         assert_eq!(code_prefix(AuxKind::Employee), "E");
         assert_eq!(code_prefix(AuxKind::Bank), "B");
+    }
+
+    /// 单个新增留空、就地建档都走这个：与批量粘贴同一发号规则
+    #[test]
+    fn 自动编号与批量粘贴同规则() {
+        assert_eq!(next_code(AuxKind::Customer, &[]), "C01");
+        assert_eq!(
+            next_code(AuxKind::Customer, &["C01".into(), "C05".into()]),
+            "C06"
+        );
+        assert_eq!(next_code(AuxKind::Supplier, &[]), "S01");
     }
 
     #[test]

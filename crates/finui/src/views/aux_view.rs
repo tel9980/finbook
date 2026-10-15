@@ -279,6 +279,11 @@ impl AuxView {
                     ui.label("编码：");
                     ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut e.code));
                     ui.end_row();
+                    ui.label("");
+                    ui.label(
+                        RichText::new("编码留空自动编号（接着最大号往下排）").weak().size(12.0),
+                    );
+                    ui.end_row();
                     ui.label("名称：");
                     ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut e.name));
                     ui.end_row();
@@ -345,8 +350,15 @@ impl AuxView {
             return;
         }
         if save {
-            let e = self.editing.clone().unwrap();
+            let mut e = self.editing.clone().unwrap();
             self.err.clear();
+            if e.code.trim().is_empty() {
+                // 留空自动编号：与批量粘贴同一规则（库里最大号 +1）
+                let all: Vec<String> =
+                    findb::auxs::codes(ctx.db(), e.kind).unwrap_or_default();
+                e.code = fincore::batch::aux::next_code(e.kind, &all);
+                self.editing = Some(e.clone());
+            }
             let existing: Vec<String> = self
                 .rows
                 .iter()
