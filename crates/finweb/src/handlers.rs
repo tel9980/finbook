@@ -13505,6 +13505,10 @@ fn statement_table(
     };
     let mut bq = BalanceQuery::range(bq_from, to);
     bq = bq.with_user_scope(&user.user);
+    // 利润表剔除结转损益凭证：结完账损益科目借贷相抵，不剔利润表全是 0
+    if key != "balance_sheet" {
+        bq = bq.with_exclude_carry(true);
+    }
     let snap = BalanceSnapshot::load(db, &bq)?;
     let company = db.options().company;
     Ok(fincore::report::render(

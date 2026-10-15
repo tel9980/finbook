@@ -149,6 +149,10 @@ impl ReportsView {
                 };
                 let mut bq = BalanceQuery::range(bq_from, to);
                 bq = bq.with_user_scope(ctx.user());
+                // 利润表剔除结转损益凭证：结完账损益科目借贷相抵，不剔利润表全是 0
+                if self.tab != Tab::Balance {
+                    bq = bq.with_exclude_carry(true);
+                }
                 let snap = match BalanceSnapshot::load(ctx.db(), &bq) {
                     Ok(s) => s,
                     Err(e) => {

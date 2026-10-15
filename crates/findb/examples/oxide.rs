@@ -49,10 +49,18 @@ fn aux_ref(kind: &str, code: &str) -> AuxRef {
     a
 }
 
-fn voucher(period: Period, date: &str, word: &'static str, no: i32, lines: &[Line]) -> Voucher {
+fn voucher(
+    period: Period,
+    date: &str,
+    word: &'static str,
+    no: i32,
+    source: fincore::VoucherSource,
+    lines: &[Line],
+) -> Voucher {
     let d = NaiveDate::parse_from_str(date, "%Y-%m-%d").expect("date");
     let mut v = Voucher::new(period, d, word, no);
     v.prepared_by = "李会计".to_string();
+    v.source = source;
     for (i, (code, summary, dr, cr, aux, qty)) in lines.iter().enumerate() {
         let mut en = Entry::new((i + 1) as i32, *code, *summary);
         en.debit = m(dr);
@@ -730,8 +738,15 @@ pub fn build(path: &Path) {
     specs[last].2 = 14;
 
     let mut n = 0;
-    for (date, word, no, lines) in &specs {
-        let mut v = voucher(p, date, word, *no, lines);
+    for (idx, (date, word, no, lines)) in specs.iter().enumerate() {
+        // 最后一张是结转损益：标 CarryForward，利润表靠它剔除结转分录
+        // （制造费用结转是真实成本确认，必须保持手工来源，不能标）
+        let source = if idx == last {
+            fincore::VoucherSource::CarryForward
+        } else {
+            fincore::VoucherSource::Manual
+        };
+        let mut v = voucher(p, date, word, *no, source, lines);
         let id = findb::vouchers::save(&db, &mut v)
             .unwrap_or_else(|e| panic!("{date} 凭证保存失败：{e}"));
         findb::vouchers::post(&db, id, "李会计")

@@ -15,7 +15,11 @@ fn m(s: &str) -> Money {
 }
 
 fn build_book() -> PathBuf {
-    let path = std::env::temp_dir().join(format!("oxide_demo_{}.fbk", std::process::id()));
+    build_book_named("oxide_demo")
+}
+
+fn build_book_named(name: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!("{}_{}.fbk", name, std::process::id()));
     let _ = std::fs::remove_file(&path);
     oxide::build(&path);
     path
@@ -187,5 +191,79 @@ fn 演示账28张全已记账且试算平衡() {
     assert_eq!(ap_line("S01").map(|l| l.total), Some(m("23800")));
     assert_eq!(ap_line("S02").map(|l| l.total), Some(m("20200")));
 
+    let _ = std::fs::remove_file(&path);
+}
+
+/// 基础报表：资产负债表左右相等、利润表净利润勾稽、现金流量表自平。
+#[test]
+fn 演示账三大报表勾稽() {
+    let path = build_book_named("oxide_reports");
+    let db = findb::Db::open(&path).expect("打开演示账");
+    let from = fincore::Period::new(2026, 1).unwrap();
+    let to = fincore::Period::new(2026, 11).unwrap();
+    let snap = findb::balances::BalanceSnapshot::load(
+        &db,
+        &findb::balances::BalanceQuery::range(from, to),
+    )
+    .expect("取余额快照");
+
+    // 资产负债表：资产合计 == 负债和所有者权益合计（期末列）
+    let bs_def = fincore::report::balance_sheet::balance_sheet_def();
+    let bs = fincore::report::render(
+        &bs_def,
+        &snap,
+        "恒亮氧化加工厂",
+        "2026-11 期末",
+        vec![
+            Box::new(fincore::report::identity),
+            Box::new(fincore::report::to_begin),
+        ],
+    );
+    let end_of = |idx: usize| bs.rows[idx].values[0];
+    let assets =
+        end_of(fincore::report::balance_sheet::asset_total_row(&bs_def).expect("资产合计行"));
+    let liab_eq = end_of(
+        fincore::report::balance_sheet::liab_equity_total_row(&bs_def).expect("负债权益合计行"),
+    );
+    assert_eq!(assets, m("354500"), "资产合计");
+    assert_eq!(liab_eq, m("354500"), "负债和所有者权益合计");
+    assert_eq!(assets, liab_eq, "资产负债表左右必须相等");
+
+    // 利润表：本期净利润 == 53817.60（快照口径与界面一致：剔除结转损益凭证）
+    fn to_ytd(k: fincore::report::AmountKind) -> fincore::report::AmountKind {
+        match k {
+            fincore::report::AmountKind::PeriodDebit => fincore::report::AmountKind::YearDebit,
+            fincore::report::AmountKind::PeriodCredit => fincore::report::AmountKind::YearCredit,
+            other => other,
+        }
+    }
+    let snap_is = findb::balances::BalanceSnapshot::load(
+        &db,
+        &findb::balances::BalanceQuery::range(from, to).with_exclude_carry(true),
+    )
+    .expect("取利润表口径快照");
+    let is_def = fincore::report::income::income_statement_def();
+    let is = fincore::report::render(
+        &is_def,
+        &snap_is,
+        "恒亮氧化加工厂",
+        "2026-11",
+        vec![Box::new(fincore::report::identity), Box::new(to_ytd)],
+    );
+    let profit =
+        is.rows[fincore::report::income::net_profit_row(&is_def).expect("净利润行")].values[0];
+    assert_eq!(profit, m("53817.60"), "本期净利润");
+
+    // 现金流量表：自带勾稽（净增加 == 期末 − 期初）+ 首尾数
+    let cf = findb::reports::cash_flow_statement(&db, from, to, None).expect("现金流量表");
+    assert!(cf.ties(), "现金流量表必须自平");
+    assert_eq!(cf.begin_cash, m("203000"), "期初现金");
+    assert_eq!(cf.end_cash, m("311360"), "期末现金");
+    assert_eq!(cf.net_increase, m("108360"), "现金净增加");
+
+    println!(
+        "资产 {assets:?} = 负债权益 {liab_eq:?}；净利润 {profit:?}；现金 {:?} -> {:?}（净增加 {:?}）",
+        cf.begin_cash, cf.end_cash, cf.net_increase
+    );
     let _ = std::fs::remove_file(&path);
 }

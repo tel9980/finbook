@@ -786,12 +786,15 @@ pub fn checklist(db: &Db, period: Period) -> DbResult<Vec<CheckItem>> {
     Ok(out)
 }
 
-/// 损益是否已结转：看本期有没有来源为 carry 的凭证
+/// 损益是否已结转：看本期有没有系统生成的结转凭证（source='carry_forward'）。
+///
+/// 注意字面量必须与 VoucherSource::CarryForward 的序列化一致（snake_case）。
+/// 旧写法 'carry' 对不上库里实际存的值，这一检查曾永远返回"未结转"。
 fn is_profit_carried(db: &Db, period: Period) -> DbResult<bool> {
     let n: i64 = db
         .conn()
         .query_row(
-            "SELECT COUNT(*) FROM voucher WHERE period=?1 AND source IN ('carry','year_end')",
+            "SELECT COUNT(*) FROM voucher WHERE period=?1 AND source='carry_forward'",
             rusqlite::params![period.ymm()],
             |r| r.get(0),
         )
@@ -1077,5 +1080,43 @@ mod tests {
         assert!(items.iter().any(|i| i.key == "depreciation"));
         assert!(items.iter().any(|i| i.key == "bank"));
         assert!(items.iter().any(|i| i.key == "fx"));
+    }
+
+    /// 结账检查"已结转"必须认出系统结转凭证。
+    ///
+    /// 回归：is_profit_carried 查的是 source IN ('carry','year_end')，
+    /// 而库里实际存的是 'carry_forward'（snake_case 序列化）——检查恒报
+    /// "未结转"，用户迟早学会无视检查清单（狼来了）。
+    #[test]
+    fn checklist_认得出已结转() {
+        let db = tmpdb("carried");
+        let p = Period::new(2026, 1).unwrap();
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
+        let carry = checklist(&db, p)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.key == "carry")
+            .unwrap();
+        assert!(!carry.ok, "没结转时应为未完成");
+        let mut v = Voucher::new(p, d, "转", 1);
+        v.source = fincore::VoucherSource::CarryForward;
+        v.push_entry(Entry {
+            debit: Money::parse("100").unwrap(),
+            credit: Money::ZERO,
+            ..Entry::new(1, "600101", "结转")
+        });
+        v.push_entry(Entry {
+            debit: Money::ZERO,
+            credit: Money::parse("100").unwrap(),
+            ..Entry::new(2, "4103", "结转")
+        });
+        let id = crate::vouchers::save(&db, &mut v).unwrap();
+        crate::vouchers::post(&db, id, "poster").unwrap();
+        let carry = checklist(&db, p)
+            .unwrap()
+            .into_iter()
+            .find(|i| i.key == "carry")
+            .unwrap();
+        assert!(carry.ok, "结转后应为已完成");
     }
 }

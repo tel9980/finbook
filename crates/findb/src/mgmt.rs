@@ -586,7 +586,10 @@ pub struct DimProfit {
 /// 分摊规则很公司特化，这里只做**直接归属**：分录上带了某部门/项目就算它的，
 /// 共同费用不摊——宁可显示"未分配"，也不要编一个假的分摊率出来。
 pub fn dim_profit(db: &Db, period: Period, dim: AuxKind) -> DbResult<Vec<DimProfit>> {
-    let mut q = BalanceQuery::period(period).with_leaf_only(true);
+    // 利润表口径：剔除结转损益凭证（结完账损益科目借贷相抵，不剔全是 0）
+    let mut q = BalanceQuery::period(period)
+        .with_leaf_only(true)
+        .with_exclude_carry(true);
     q.aux = None;
     let snap = BalanceSnapshot::load(db, &q)?;
     let chart = crate::accounts::chart(db)?;

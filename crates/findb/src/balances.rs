@@ -41,6 +41,11 @@ pub struct BalanceQuery {
     /// 只统计已记账凭证（**H-3 定案：默认 true**——草稿与已审核未记账一律不入余额；
     /// 显式传 false 时为"含未记账（排除作废）"的临时查看口径）
     pub posted_only: bool,
+    /// 剔除结转损益凭证（默认 false —— 试算/余额/资产负债表必须含它）。
+    ///
+    /// 只给**利润表**开：结转后损益科目借贷相抵，不剔的话结完账利润表
+    /// 全是 0。折旧/调汇/自动转账等真实费用不受影响（只认 source='carry_forward'）。
+    pub exclude_carry: bool,
     /// 只统计某人填制的凭证（数据范围 own_voucher_only）
     pub prepared_by: Option<String>,
 }
@@ -58,6 +63,7 @@ impl BalanceQuery {
             max_level: None,
             posted_only: true,
             prepared_by: None,
+            exclude_carry: false,
         }
     }
     pub fn range(from: Period, to: Period) -> Self {
@@ -82,6 +88,11 @@ impl BalanceQuery {
     /// 只统计已记账凭证（账簿"只含已记账"勾选项；false = 含未记账、排除作废）
     pub fn with_posted_only(mut self, on: bool) -> Self {
         self.posted_only = on;
+        self
+    }
+    /// 利润表专用：剔除结转损益凭证（其它口径一律别开）
+    pub fn with_exclude_carry(mut self, on: bool) -> Self {
+        self.exclude_carry = on;
         self
     }
     pub fn with_code_range(mut self, from: Option<String>, to: Option<String>) -> Self {
@@ -220,6 +231,11 @@ impl BalanceSnapshot {
                  FROM voucher_entry e JOIN voucher v ON e.voucher_id=v.id
                  WHERE {status_filter} AND e.period <= ?1"
             );
+            // 利润表专用：结转损益凭证（source='carry_forward'）不进发生额，
+            // 否则结完账利润表全是 0。其它口径一律含它。
+            if q.exclude_carry {
+                sql.push_str(" AND v.source <> 'carry_forward'");
+            }
             let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(q.to.ymm())];
             if let Some(f) = &q.code_from {
                 params.push(Box::new(f.clone()));
