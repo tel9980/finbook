@@ -210,7 +210,7 @@ function openQuickSearch() {
   const input = $("#qs-input", mask);
   const box = $("#qs-results", mask);
   input.focus();
-  const KIND = { voucher: "凭证", po: "采购订单", so: "销售订单", req: "请购单", claim: "报销单" };
+  const KIND = { voucher: "凭证", po: "采购订单", so: "销售订单", req: "请购单", claim: "报销单", aux: "档案" };
   let timer = null;
   const run = async () => {
     const kw = input.value.trim();
@@ -220,11 +220,11 @@ function openQuickSearch() {
       const rows = r.rows || [];
       box.className = "";
       box.innerHTML = rows.length
-        ? rows.map((x, i) => `<button class="btn ghost" data-qs="${i}" data-view="${esc(x.view)}" style="display:flex;width:100%;justify-content:space-between;gap:8px;margin-bottom:4px;text-align:left">
+        ? rows.map((x, i) => `<button class="btn ghost" data-qs="${i}" data-view="${esc(x.view)}" data-auxkind="${esc(x.aux_kind || "")}" style="display:flex;width:100%;justify-content:space-between;gap:8px;margin-bottom:4px;text-align:left">
             <span><span class="tag">${KIND[x.kind] || esc(x.kind)}</span> ${esc(x.label)}</span>
             <span class="muted" style="font-size:12px;white-space:nowrap">${esc(x.sub || "")}</span></button>`).join("")
         : `<div class="muted">无匹配结果</div>`;
-      $all("[data-qs]", mask).forEach((b) => b.onclick = () => { closeModal(); goView(b.dataset.view); });
+      $all("[data-qs]", mask).forEach((b) => b.onclick = () => { closeModal(); if (b.dataset.auxkind) state.auxKind = b.dataset.auxkind; goView(b.dataset.view); });
     } catch (e) { box.innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
   };
   input.oninput = () => { clearTimeout(timer); timer = setTimeout(run, 260); };
@@ -543,7 +543,7 @@ document.addEventListener("keydown", (e) => {
 function openShortcuts() {
   const rows = [
     ["/", "定位侧栏功能搜索框（搜功能名，如「明细账」）——69 个功能平铺时的主要出路"],
-    ["Ctrl+K", "全局快速搜索单据（凭证 / 采购 / 销售 / 请购 / 报销）"],
+    ["Ctrl+K", "全局快速搜索（凭证 / 采购 / 销售 / 请购 / 报销 / 档案）"],
     ["浏览器后退", "回到上一个页面（地址栏现在是 #/页面名，可直接发给同事）"],
     ["Ctrl+Enter", "提交当前弹窗主按钮（保存 / 确定）"],
     ["Ctrl+S", "保存当前录单弹窗"],

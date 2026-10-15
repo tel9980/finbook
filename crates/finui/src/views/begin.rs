@@ -383,8 +383,56 @@ impl BeginView {
                         }));
                     });
                     row.col(|ui| {
-                        let txt = crate::views::voucher_edit::aux_text(&r.aux, aux_names);
-                        ui.label(RichText::new(if txt.is_empty() { "—" } else { &txt }).weak());
+                        // 单维度辅助核算直接下拉选，选完点工具栏保存落库。
+                        // 多维度的极少见，仍只读显示。
+                        let dims: Vec<fincore::AuxKind> = ctx
+                            .chart()
+                            .get(&r.code)
+                            .map(|a| a.aux.list())
+                            .unwrap_or_default();
+                        if dims.len() == 1 {
+                            let ak = dims[0];
+                            let opts = findb::auxs::codes(ctx.db(), ak).unwrap_or_default();
+                            let cur = r.aux.get(ak).cloned().unwrap_or_default();
+                            let mut sel = cur.clone();
+                            let label = if cur.is_empty() {
+                                "— 点击选择 —".to_string()
+                            } else {
+                                let nm = aux_names
+                                    .get(&format!("{}:{}", ak.code(), cur))
+                                    .cloned()
+                                    .unwrap_or_default();
+                                format!("{cur} {nm}")
+                            };
+                            egui::ComboBox::from_id_salt(format!("begin_aux_{i}"))
+                                .selected_text(label)
+                                .width(130.0)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut sel, String::new(), "（无）");
+                                    for c in &opts {
+                                        let nm = aux_names
+                                            .get(&format!("{}:{}", ak.code(), c))
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        ui.selectable_value(
+                                            &mut sel,
+                                            c.clone(),
+                                            format!("{c} {nm}"),
+                                        );
+                                    }
+                                });
+                            if sel != cur {
+                                if sel.is_empty() {
+                                    r.aux.set(ak, None);
+                                } else {
+                                    r.aux.set(ak, Some(sel));
+                                }
+                                r.changed = true;
+                            }
+                        } else {
+                            let txt = crate::views::voucher_edit::aux_text(&r.aux, aux_names);
+                            ui.label(RichText::new(if txt.is_empty() { "—" } else { &txt }).weak());
+                        }
                     });
                     row.col(|ui| {
                         let mut is_credit = r.dir == Direction::Credit;

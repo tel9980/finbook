@@ -5,6 +5,8 @@
 //! - 借贷不平不能保存，差额一键补平
 //! - 与 Web 端一致：无需审核，保存即记账（Posted），已作废凭证只读
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use egui::{Align, Color32, Layout, RichText, Ui};
 use egui_extras::{Column, DatePickerButton, TableBuilder};
@@ -87,6 +89,8 @@ pub struct VoucherEdit {
     pub aux_creating: Option<AuxKind>,
     /// 就地建档的名称输入
     pub aux_new_name: String,
+    /// 辅助核算下拉按维度记住的过滤词（档案多了翻找用）
+    pub aux_filter: BTreeMap<AuxKind, String>,
     pub print_open: bool,
     pub words: Vec<String>,
     /// 常用摘要弹窗
@@ -121,6 +125,7 @@ impl Default for VoucherEdit {
             aux_row: None,
             aux_creating: None,
             aux_new_name: String::new(),
+            aux_filter: BTreeMap::new(),
             print_open: false,
             words: Vec::new(),
             summary_popup: false,
@@ -1182,10 +1187,20 @@ impl VoucherEdit {
                             .selected_text(label)
                             .width(260.0)
                             .show_ui(ui, |ui| {
+                                // 档案多了翻不动：输入编码/名称关键字过滤
+                                let fw = self.aux_filter.entry(k).or_default();
+                                ui.add_sized(
+                                    [240.0, 22.0],
+                                    egui::TextEdit::singleline(fw).hint_text("输入编码或名称过滤"),
+                                );
+                                let fw = fw.trim().to_string();
                                 ui.selectable_value(&mut sel, String::new(), "（不核算）")
                                     .clicked();
                                 for c in &opts {
                                     let t = format!("{} {}", c, aux_name(ctx.db(), k, c));
+                                    if !fw.is_empty() && !t.contains(&fw) {
+                                        continue;
+                                    }
                                     ui.selectable_value(&mut sel, c.clone(), t);
                                 }
                             });

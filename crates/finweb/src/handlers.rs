@@ -3177,6 +3177,46 @@ async fn quick_search(
         ));
     }
 
+    // 档案：编码/名称直达辅助档案页（kind 带到前端切页签）。
+    // 门槛与档案页的新增按钮一致（AuxEdit），只读账号不打扰。
+    if user.can(Perm::AuxEdit) {
+        let kind_label = |k: &str| match k {
+            "customer" => "客户",
+            "supplier" => "供应商",
+            "dept" => "部门",
+            "employee" => "职员",
+            "project" => "项目",
+            "item" => "存货",
+            "bank" => "银行账户",
+            _ => "档案",
+        };
+        if let Ok(mut st) = db.conn().prepare(
+            "SELECT id, kind, code, name FROM aux_entity
+             WHERE disabled = 0 AND (code LIKE ?1 OR name LIKE ?2)
+             ORDER BY kind, code LIMIT 6",
+        ) {
+            if let Ok(iter) = st.query_map(rusqlite::params![like, like], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            }) {
+                for row in iter.flatten() {
+                    rows.push(json!({
+                        "kind": "aux",
+                        "id": row.0,
+                        "label": format!("{} {} {}", kind_label(&row.1), row.2, row.3),
+                        "sub": "",
+                        "view": "aux",
+                        "aux_kind": row.1,
+                    }));
+                }
+            }
+        }
+    }
+
     // 我的报销（数据范围与列表页一致）
     let mut mine = 0;
     for c in findb::business::claim_list(&db, cur, None)? {

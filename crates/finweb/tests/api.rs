@@ -16103,6 +16103,57 @@ async fn quick_search_flow() {
     assert_eq!(r["rows"].as_array().unwrap().len(), 0, "无结果不报错");
 }
 
+/// Ctrl+K 搜档案：编码/名称命中 → kind=aux 且带 aux_kind 跳转字段
+#[tokio::test]
+async fn quick_search_aux() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 建一条客户档案（名字带少见字，避免撞上预置档案）
+    let ent = serde_json::json!({
+        "id": 0, "kind": "customer", "code": "C077", "name": "快搜氧化客户",
+        "parent_code": null, "disabled": false, "props": {}, "memo": ""
+    });
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post("/api/aux", &sid, ent))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "建档案应成功");
+
+    // 按名称搜到
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/quick-search?q=%E5%BF%AB%E6%90%9C%E6%B0%A7%E5%8C%96",
+            &sid,
+        )) // 快搜氧化
+        .await
+        .unwrap();
+    let r: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert!(
+        r["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["kind"] == "aux" && x["view"] == "aux" && x["aux_kind"] == "customer"),
+        "应搜到档案并带跳转字段：{r}"
+    );
+
+    // 按编码搜到
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/quick-search?q=C077", &sid))
+        .await
+        .unwrap();
+    let r: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert!(
+        r["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["kind"] == "aux"),
+        "编码应搜到档案：{r}"
+    );
+}
+
 /// 单据下推与追溯（对标金蝶源单→目标单）：审批 → 下推PO → 双向链 → 到货流水并入 → 拆单。
 #[tokio::test]
 async fn doc_push_chain() {
