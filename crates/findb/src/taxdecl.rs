@@ -121,6 +121,68 @@ impl TaxOptions {
     }
 }
 
+/// 申报日历的一条提醒（纯日期逻辑，不读账套状态）。
+#[derive(Clone, Debug)]
+pub struct TaxTodo {
+    pub key: &'static str,
+    pub label: String,
+    pub detail: String,
+}
+
+/// 申报日历：按今天算出"正在申报期"的事项。
+///
+/// 只报窗口期内（申报期之外不打扰）：每月 1–15 日是增值税/个税的申报期，
+/// 1/4/7/10 月多一个企业所得税预缴，1–5 月是汇算清缴，1–6 月是工商年报。
+/// 小规模增值税按季（1/4/7/10 月才报），一般纳税人按月 —— 报税期写错比
+/// 不提醒更糟（会计白跑一趟税局）。
+pub fn deadline_todos(today: chrono::NaiveDate, taxpayer: &str) -> Vec<TaxTodo> {
+    use chrono::Datelike;
+    let (m, d) = (today.month(), today.day());
+    let small = taxpayer.trim() == "small";
+    let quarter_month = matches!(m, 1 | 4 | 7 | 10);
+    let mut out = Vec::new();
+    if d <= 15 && (!small || quarter_month) {
+        out.push(TaxTodo {
+            key: "tax_vat",
+            label: "增值税及附加税费申报（本月15日前）".to_string(),
+            detail: if small {
+                "小规模按季申报：查科目余额表 222102，未交多少报多少".to_string()
+            } else {
+                "一般纳税人按月申报：销项－进项＝应缴，税务申报页自动算表".to_string()
+            },
+        });
+    }
+    if d <= 15 {
+        out.push(TaxTodo {
+            key: "tax_iit",
+            label: "个人所得税（工资薪金）申报（本月15日前）".to_string(),
+            detail: "业务 → 工资 → 个税明细：本期应扣多少报多少".to_string(),
+        });
+    }
+    if d <= 15 && quarter_month {
+        out.push(TaxTodo {
+            key: "tax_cit",
+            label: "企业所得税预缴申报（本月15日前）".to_string(),
+            detail: "按本年累计利润预缴，季度初的三个月".to_string(),
+        });
+    }
+    if m <= 5 {
+        out.push(TaxTodo {
+            key: "tax_final",
+            label: "企业所得税汇算清缴（5月31日前）".to_string(),
+            detail: "上年度全年算总账，多退少补".to_string(),
+        });
+    }
+    if m <= 6 {
+        out.push(TaxTodo {
+            key: "tax_annual",
+            label: "工商年报（6月30日前）".to_string(),
+            detail: "国家企业信用信息公示系统填报".to_string(),
+        });
+    }
+    out
+}
+
 /// 税率规范化：`0.13` / `13%` / `13` / `13.0` → `13`
 ///
 /// 不规范化就没法分档——`0.13` 与 `13%` 是同一税率却会落进两个桶。实际数据里两种
@@ -831,5 +893,36 @@ mod tests {
             "留抵必须提示人工结转：{:?}",
             f.warnings
         );
+    }
+
+    fn tax_keys(today: &str, taxpayer: &str) -> Vec<&'static str> {
+        deadline_todos(
+            chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").unwrap(),
+            taxpayer,
+        )
+        .iter()
+        .map(|t| t.key)
+        .collect()
+    }
+
+    /// 申报期边界：15 日含、16 日不含；小规模 11 月无增值税但有个税
+    #[test]
+    fn deadline_申报期边界() {
+        assert!(tax_keys("2026-11-15", "general").contains(&"tax_vat"));
+        assert!(!tax_keys("2026-11-16", "general").contains(&"tax_vat"));
+        assert!(!tax_keys("2026-11-10", "small").contains(&"tax_vat"), "小规模非季月不报增值税");
+        assert!(tax_keys("2026-11-10", "small").contains(&"tax_iit"), "个税按月人人都要报");
+        assert!(tax_keys("2026-10-10", "small").contains(&"tax_vat"), "季月小规模要报");
+    }
+
+    /// 季度与年度事项只在窗口出现
+    #[test]
+    fn deadline_季度年度窗口() {
+        assert!(tax_keys("2026-01-10", "general").contains(&"tax_cit"));
+        assert!(!tax_keys("2026-02-10", "general").contains(&"tax_cit"));
+        assert!(tax_keys("2026-05-31", "general").contains(&"tax_final"));
+        assert!(!tax_keys("2026-06-01", "general").contains(&"tax_final"));
+        assert!(tax_keys("2026-06-30", "general").contains(&"tax_annual"));
+        assert!(!tax_keys("2026-07-01", "general").contains(&"tax_annual"));
     }
 }

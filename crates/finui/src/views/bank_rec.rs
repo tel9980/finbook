@@ -389,6 +389,45 @@ impl BankRecView {
                     .weak(),
                 );
                 ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("下载 Excel 模板")
+                        .on_hover_text("保存 .xlsx 空表（带示例和填表说明）")
+                        .clicked()
+                    {
+                        let sheets = crate::views::export::batch_template_sheets(
+                            "银行对账单",
+                            &findb::bank::import_template(),
+                        );
+                        match crate::views::export::save_template(&sheets, "银行对账单导入模板")
+                        {
+                            Ok(Some(m)) => {
+                                ctx.info(m);
+                            }
+                            Ok(None) => {}
+                            Err(e) => ctx.error(e),
+                        }
+                    }
+                    if ui
+                        .button("从 Excel 文件载入")
+                        .on_hover_text("选择填好的 .xlsx，直接读进输入框，检查后点「导入」")
+                        .clicked()
+                    {
+                        if let Some(path) =
+                            crate::views::export::pick_open(&["xlsx", "xls", "ods"])
+                        {
+                            match findb::imports::read_xlsx(&path) {
+                                Ok(rows) => {
+                                    self.import_text =
+                                        findb::imports::xlsx_to_csv_text(&rows);
+                                    ctx.info("已载入，检查无误后点「导入」");
+                                }
+                                Err(e) => ctx.error(format!("读取 Excel 失败：{e}")),
+                            }
+                        }
+                    }
+                });
+                ui.add_space(6.0);
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.add_sized(
                         [ui.available_width(), 260.0],

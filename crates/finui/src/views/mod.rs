@@ -38,6 +38,7 @@ pub mod scm_deep;
 pub mod template;
 pub mod users;
 pub mod voucher_edit;
+pub mod voucher_import;
 pub mod voucher_list;
 
 use crate::state::{AppCtx, DataKind, NavItem};

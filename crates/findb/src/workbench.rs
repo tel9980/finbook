@@ -538,6 +538,16 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
         out.cards.push(card("审批", "wf_running", "运行中审批流程", running.to_string(), "个"));
         out.todos.push(todo("审批", "wf_pending", "待我审批的流程", pend, "workflow"));
     }
+    // ---- 税务：申报日历提醒（窗口期内才出现；与 collect_todos 同口径）----
+    if user.can(Perm::FinReport) {
+        let taxpayer = crate::taxdecl::TaxOptions::load(db)
+            .map(|o| o.taxpayer)
+            .unwrap_or_default();
+        let today = chrono::Local::now().date_naive();
+        for t in crate::taxdecl::deadline_todos(today, &taxpayer) {
+            out.todos.push(todo("税务", t.key, &t.label, 1, "tax-decl"));
+        }
+    }
 
     Ok(out)
 }
@@ -628,6 +638,16 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
     {
         let pend = crate::workflow::pending_for(db, user)?.len() as i64;
         todos.push(todo("审批", "wf_pending", "待我审批的流程", pend, "workflow"));
+    }
+    // 税务：申报日历提醒（窗口期内才出现；小规模/一般人按账套税务设置区分）
+    if user.can(Perm::FinReport) {
+        let taxpayer = crate::taxdecl::TaxOptions::load(db)
+            .map(|o| o.taxpayer)
+            .unwrap_or_default();
+        let today = chrono::Local::now().date_naive();
+        for t in crate::taxdecl::deadline_todos(today, &taxpayer) {
+            todos.push(todo("税务", t.key, &t.label, 1, "tax-decl"));
+        }
     }
     Ok(todos)
 }

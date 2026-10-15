@@ -143,6 +143,14 @@ impl Dashboard {
                 format!("缺号：{}", show.join("、")),
             ));
         }
+        // 报税日历：与 Web 工作台同口径（申报窗口期内才出现）
+        let taxpayer = findb::taxdecl::TaxOptions::load(db)
+            .map(|o| o.taxpayer)
+            .unwrap_or_default();
+        let today = chrono::Local::now().date_naive();
+        for t in findb::taxdecl::deadline_todos(today, &taxpayer) {
+            todos.push((t.label, t.detail));
+        }
         self.todos = todos;
     }
 

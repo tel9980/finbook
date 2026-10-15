@@ -1257,6 +1257,50 @@ fn fill_required(db: &Db, e: &mut Entry) {
     }
 }
 
+/// 凭证导入模板（桌面端「下载模板」用，通用列布局）。
+/// 金蝶/用友列见各模板解析；桌面窗口内有三套写法的文字说明。
+pub fn voucher_template() -> fincore::batch::Template {
+    fincore::batch::Template {
+        headers: vec![
+            "日期".to_string(),
+            "凭证字".to_string(),
+            "摘要".to_string(),
+            "科目编码".to_string(),
+            "借方".to_string(),
+            "贷方".to_string(),
+        ],
+        examples: vec![
+            vec![
+                "2026-11-03".to_string(),
+                "记".to_string(),
+                "收宏远汽配加工费".to_string(),
+                "100201".to_string(),
+                "68000".to_string(),
+                "0".to_string(),
+            ],
+            vec![
+                "2026-11-03".to_string(),
+                "记".to_string(),
+                "收宏远汽配加工费".to_string(),
+                "112201".to_string(),
+                "0".to_string(),
+                "68000".to_string(),
+            ],
+        ],
+        help: vec![
+            "第一页第一行是表头，从第二行开始填你自己的凭证。".to_string(),
+            "先把两行示例删掉，再填。".to_string(),
+            "通用写法：日期,凭证字,摘要,科目编码,借方,贷方（后可加 客户编码,银行编码 两列）。"
+                .to_string(),
+            "同一张凭证写多行：日期相同、借贷合计相等的连续行会被并成一张。".to_string(),
+            "日期必须在当前期间内；跨月分两次导。".to_string(),
+            "账套里没有的科目整行跳过（不新建）：先在「会计科目」建好或改编码一致再导。"
+                .to_string(),
+            "导进来全是草稿：检查无误后记账。".to_string(),
+        ],
+    }
+}
+
 /// 导入期初余额表（CSV 文本）
 ///
 /// - 通用列：`科目编码, 方向(借/贷), 金额`；方向省略时按金额正负推断
@@ -1967,6 +2011,21 @@ mod tests {
         // 无辅助列时保持空
         let line = extract_voucher_line(ImportTemplate::Generic, &split_csv("2026-01-05,记,收货款,100201,0,1000")).unwrap();
         assert!(line.aux.is_empty());
+    }
+
+    /// 凭证模板出去的列，预检必须认得（表头跳过、两行并成一张平的凭证、零阻断）。
+    #[test]
+    fn 凭证模板列能被预检认回来() {
+        let t = voucher_template();
+        let mut text = t.headers.join(",");
+        for r in &t.examples {
+            text.push('\n');
+            text.push_str(&r.join(","));
+        }
+        let db = mem();
+        let pv = analyze_import(&db, &text, ImportTemplate::Generic, false, None).unwrap();
+        assert_eq!(pv.total_rows, t.examples.len(), "应为 2 行数据");
+        assert_eq!(pv.errors(), 0, "模板自身不应有阻断错误：{:?}", pv.issues);
     }
 
     #[test]

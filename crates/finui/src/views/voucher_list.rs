@@ -27,6 +27,8 @@ pub struct VoucherList {
     pub paging: Paging,
     /// 需要重新查询
     pub dirty: bool,
+    /// 批量导入窗口
+    pub import: super::voucher_import::Ui,
     key: String,
 }
 
@@ -45,6 +47,7 @@ impl Default for VoucherList {
             sel: HashSet::new(),
             paging: Paging::default(),
             dirty: true,
+            import: Default::default(),
             key: String::new(),
         }
     }
@@ -176,6 +179,15 @@ impl VoucherList {
         widgets::toolbar(ui, |ui| {
             if ui.button("填制凭证").clicked() && ctx.can(Perm::VoucherNew) {
                 act = Action::New;
+            }
+            if ui
+                .button("导入凭证")
+                .on_hover_text("从旧软件粘贴或载入 Excel 批量导入（草稿，预检后执行）")
+                .clicked()
+                && ctx.can(Perm::VoucherNew)
+            {
+                self.import = Default::default();
+                self.import.open = true;
             }
             // 与 Web 端一致：无审核环节，仅保留批量记账（未记账 → 已记账）
             if ui.button("批量记账").clicked() && ctx.can(Perm::VoucherPost) {
@@ -349,6 +361,11 @@ impl VoucherList {
                 self.paging.bar(ui, self.rows.len());
             });
         });
+
+        // ---------------- 批量导入 ----------------
+        if self.import.window(ctx, ui) {
+            self.dirty = true;
+        }
 
         act
     }

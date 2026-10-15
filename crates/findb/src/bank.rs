@@ -763,6 +763,48 @@ pub fn parse_money(s: &str) -> Money {
 /// 列顺序（首行是表头则自动跳过）：业务日期, 摘要, 结算号, 借方发生额, 贷方发生额, 余额
 /// 也兼容"单金额列"格式：业务日期, 摘要, 结算号, 金额, 余额（负数表示支出）。
 /// 返回 (导入条数, 跳过的行数)。
+pub fn import_template() -> fincore::batch::Template {
+    fincore::batch::Template {
+        headers: vec![
+            "业务日期".to_string(),
+            "摘要".to_string(),
+            "结算号".to_string(),
+            "借方发生额".to_string(),
+            "贷方发生额".to_string(),
+            "余额".to_string(),
+        ],
+        examples: vec![
+            vec![
+                "2026-11-03".to_string(),
+                "收到宏远汽配货款".to_string(),
+                "SN0001".to_string(),
+                "68000".to_string(),
+                String::new(),
+                "221000".to_string(),
+            ],
+            vec![
+                "2026-11-08".to_string(),
+                "付恒信化工货款".to_string(),
+                "SN0002".to_string(),
+                String::new(),
+                "30000".to_string(),
+                "191000".to_string(),
+            ],
+        ],
+        help: vec![
+            "第一页第一行是表头，从第二行开始填银行流水。".to_string(),
+            "先把两行示例删掉，再填。".to_string(),
+            "借方发生额＝收入（银行存款增加），贷方发生额＝支出；只填一边，另一边留空。"
+                .to_string(),
+            "注意：银行导出的对账单借贷是反的（银行视角：借＝支出）——从网银复制过来时，".to_string(),
+            "把借贷两列对调一下再粘，否则自动勾对不上。".to_string(),
+            "银行给的表只有一列金额也行：写成「日期,摘要,结算号,金额,余额」，支出记负数。".to_string(),
+            "第一列不是日期会被当表头跳过 —— 表头只能放第一行。".to_string(),
+            "填完后回软件：银行对账页点「导入 CSV」→「从 Excel 文件载入」直接读进来。"
+                .to_string(),
+        ],
+    }
+}
 pub fn import_csv(
     db: &Db,
     period: Period,
@@ -1099,5 +1141,26 @@ mod tests {
         let rows = list(&db, p, "100201").unwrap();
         assert_eq!(rows[0].debit, Money::parse("1000").unwrap());
         assert_eq!(rows[1].credit, Money::parse("15").unwrap());
+    }
+
+    /// 模板出去的列，导入必须能认回来（表头跳过、示例两行入库、零警告）。
+    #[test]
+    fn 模板列能被导入认回来() {
+        let t = import_template();
+        let mut text = t.headers.join(",");
+        for r in &t.examples {
+            text.push('\n');
+            text.push_str(&r.join(","));
+        }
+        let db = tmpdb("template");
+        let p = Period::new(2026, 11).unwrap();
+        let (n, warns) = import_csv(&db, p, "100201", &text).unwrap();
+        assert!(warns.is_empty(), "模板自身不应产生警告：{warns:?}");
+        assert_eq!(n, t.examples.len());
+        let rows = list(&db, p, "100201").unwrap();
+        assert_eq!(rows[0].debit, Money::parse("68000").unwrap());
+        assert!(rows[0].credit.is_zero());
+        assert_eq!(rows[1].credit, Money::parse("30000").unwrap());
+        assert!(rows[1].debit.is_zero());
     }
 }
