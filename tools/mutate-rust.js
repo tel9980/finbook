@@ -34,15 +34,15 @@ const MUT = [
   {
     name: "⑤ 会计去掉结账权",
     file: "crates/fincore/src/user.rs",
-    from: "                PeriodClose,\n                Opening, CarryForward",
-    to: "                Opening, CarryForward",
+    from: "                // 实测确认过这条死路。\n                PeriodClose,\n                Opening,\n                CarryForward,",
+    to: "                // 实测确认过这条死路。\n                Opening,\n                CarryForward,",
     cmd: CORE("two_person_company_can_close_the_month"),
   },
   {
     name: "⑤ 会计读 /api/options 重新收紧成 403",
     file: "crates/finweb/src/handlers.rs",
     from:
-      "    if !user.can(Perm::SysOption)\n        && !(user.can(Perm::VoucherPost) || user.can(Perm::VoucherAudit))\n    {",
+      "    if !user.can(Perm::SysOption) && !(user.can(Perm::VoucherPost) || user.can(Perm::VoucherAudit))\n    {",
     to: "    if !user.can(Perm::SysOption) {",
     cmd: API("accountant_can_read_book_options_to_see_audit_flag"),
   },
@@ -109,9 +109,9 @@ const MUT = [
     name: "⑩ 财务主管重新兼上出纳签字（岗位建不出来）",
     file: "crates/fincore/src/user.rs",
     from:
-      "                VoucherPost, VoucherUnpost, AccountEdit, AuxEdit, Opening,\n                CarryForward, PeriodClose, Report, FinReport, Export, AuditLog, OrderOps,",
+      "                VoucherPost,\n                VoucherUnpost,\n                AccountEdit,\n                AuxEdit,\n                Opening,",
     to:
-      "                VoucherPost, VoucherUnpost, CashierSign, AccountEdit, AuxEdit, Opening,\n                CarryForward, PeriodClose, Report, FinReport, Export, AuditLog, OrderOps,",
+      "                VoucherPost,\n                VoucherUnpost,\n                CashierSign,\n                AccountEdit,\n                AuxEdit,\n                Opening,",
     cmd: CORE("every_role_passes_duty_separation"),
   },
   {
@@ -136,7 +136,7 @@ const MUT = [
     name: "逐请求设备复核改回读单列 device_id（退回一台机）",
     file: "crates/finweb/src/state.rs",
     from:
-        "        if !ru.is_admin && !state.realm.device_allowed(&info.username, &info.device_id)? {",
+        "        if !ru.is_admin\n            && !state\n                .realm\n                .device_allowed(&info.username, &info.device_id)?\n        {",
     to:
         "        if !ru.is_admin && !ru.device_id.is_empty() && ru.device_id != info.device_id {",
     cmd: API("platform_device_binding_and_reset"),

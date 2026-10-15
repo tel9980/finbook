@@ -2,6 +2,10 @@
 # 234 条 clippy 警告、fmt 想重排几乎所有文件 —— 都是存量代码的风格债，
 # 与功能无关）。锁死版本保证"今天绿明天还绿"；要升级时改这个数字，
 # 顺手把新 lint 带出来的警告清了再合。
+#
+# targets 必须写在这里：dtolnay action 认到本文件后，yml 里 inputs 的
+# targets 不再生效；不写的话 Windows 交叉编译因缺 target 直接失败。
 [toolchain]
 channel = "1.99.0"
 profile = "minimal"
+targets = ["x86_64-pc-windows-gnu"]
