@@ -652,8 +652,8 @@ impl SettleView {
         let lines = self.lines.clone();
         // `AgingLine.key` 是**裸编码** `C01`，而 `aux_name` 吃的是 `customer=C01`
         // 形式的 aux_key —— 直接传会查不到名称，账龄表第一列全是编码。
-        // 维度由科目首位决定（`settle::party_kind`），补回 `kind=value` 再查。
-        let party = findb::settle::party_kind(&self.account);
+        // 维度按科目的真实辅助核算取（2203 预收挂客户），见 `settle::party_kind_in`。
+        let party = findb::settle::party_kind_in(ctx.db(), &self.account);
         let names: Vec<String> = lines
             .iter()
             .map(|l| Self::aux_name(ctx, &findb::balances::aux_key_frag(&l.key, party)))

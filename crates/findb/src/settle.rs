@@ -5,7 +5,7 @@
 
 use chrono::NaiveDate;
 use fincore::engine::aging::{AgingBucket, AgingItem, AgingLine};
-use fincore::{Money, Period};
+use fincore::{Direction, Money, Period};
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::{Db, DbResult};
@@ -610,6 +610,33 @@ pub fn party_kind(account: &str) -> fincore::AuxKind {
     }
 }
 
+/// 往来维度：按科目的**真实辅助核算**取；取不到（如父级科目无辅助标记、
+/// 账套里没这个科目）才退回首位推断。
+///
+/// 首位规则对 2203（预收挂的是客户核算）、1123（其他应收挂的是供应商）
+/// 是错的 —— 账龄整页空白且不报错（2203 已实锤：5000 余额账龄 0 行）。
+pub fn party_kind_of(chart: &fincore::Chart, account: &str) -> fincore::AuxKind {
+    use fincore::AuxKind::{Customer, Employee, Supplier};
+    if let Some(a) = chart.get(account) {
+        let kinds = a.aux.list();
+        // 单一维度是常态；真有两个时按客户＞供应商＞职员取
+        for k in [Customer, Supplier, Employee] {
+            if kinds.contains(&k) {
+                return k;
+            }
+        }
+    }
+    party_kind(account)
+}
+
+/// 带账套的维度查询：读得到科目表就按真实辅助核算，读不到退回首位推断。
+/// 界面层（往来核销页、Web 账龄接口）统一走这个，别自己重写一遍。
+pub fn party_kind_in(db: &Db, account: &str) -> fincore::AuxKind {
+    crate::accounts::chart(db)
+        .map(|c| party_kind_of(&c, account))
+        .unwrap_or_else(|_| party_kind(account))
+}
+
 /// 账龄分析
 pub fn aging(
     db: &Db,
@@ -619,16 +646,19 @@ pub fn aging(
     buckets: &[AgingBucket],
 ) -> DbResult<Vec<AgingLine>> {
     let entries = open_entries(db, account, upto, false)?;
-    // 往来维度由**科目首位**决定（见 [party_kind]）。
+    // 往来维度按科目的真实辅助核算取（取不到才按首位推），见 party_kind_of。
     //
     // ⚠️ 不能写死 customer —— 应付挂的是 `supplier=`，写死 customer 会让
     // 应付账龄一行都不出（整个 2202 报表变空白，而且**不报错**）。
-    let party = party_kind(account);
+    // 同理不能只按首位猜：2203 预收挂的是客户核算，首位规则下整页空白。
+    let chart = crate::accounts::chart(db)?;
+    let party = party_kind_of(&chart, account);
     // 期初明细的 ar/ap 与维度是同一条规则，一起算一次。
-    let want = match account.as_bytes().first() {
-        Some(b'1') => Some("ar"),
-        Some(b'2') => Some("ap"),
-        _ => None,
+    let want = match party {
+        fincore::AuxKind::Supplier => Some("ap"),
+        // Customer 与 Employee：期初单据只有 ar/ap 两种 kind，
+        // 1221 职员单据历来存 ar，保持现状
+        _ => Some("ar"),
     };
     // 没挂往来单位的分录不进往来账龄 —— 往来账龄的每一行都应该是一个
     // 具体的往来单位；一行 key 为空的记录在界面上无法解释、也无法操作。
@@ -636,10 +666,14 @@ pub fn aging(
     // 能发生的情形是**用户自己加的**不带 aux 的应收/应付科目（预置的 112201/220201
     // 在科目表里就声明了核算客商，凭证校验会先拒掉）。
     //
-    // 方向归一：应付类科目（2 开头）分录是贷增借减，账龄展示统一翻成正数
+    // 方向归一：贷方性质科目的分录是贷增借减，账龄展示统一翻成正数
     // （往来期初明细存的本来就是正数）。否则整张应付账龄全落在预收/预付栏：
     // 合计恒 0、最长账龄恒 0 —— 新手打开以为没有欠款。
-    let flip = account.as_bytes().first() == Some(&b'2');
+    // 按科目真实方向取（取不到才按首位推；标准表上两者一致）。
+    let flip = chart
+        .get(account)
+        .map(|a| a.dir == Direction::Credit)
+        .unwrap_or_else(|| account.starts_with('2'));
     let mut items: Vec<AgingItem> = entries
         .iter()
         .filter(|e| !crate::balances::aux_key_value_of(&e.aux_key, party).is_empty())
@@ -1250,6 +1284,63 @@ mod tests {
             Money::parse("3500").unwrap(),
             "金额应相加（3000 凭证 + 500 期初），不能分在两行里"
         );
+    }
+
+    /// 维度按科目的真实辅助核算取，不按首位猜。
+    /// 2203 预收挂的是客户核算、1123 其他应收挂的是供应商 —— 首位规则下
+    /// 2203 整页空白（已实锤：5000 余额账龄 0 行），1123 同理。
+    #[test]
+    fn party_dim_按科目真实辅助核算() {
+        let db = tmpdb("party_dim");
+        let chart = crate::accounts::chart(&db).unwrap();
+        assert_eq!(party_kind_of(&chart, "2203"), fincore::AuxKind::Customer);
+        assert_eq!(party_kind_of(&chart, "1123"), fincore::AuxKind::Supplier);
+        // 父级科目无辅助标记，退回首位推断（行为不变）
+        assert_eq!(party_kind_of(&chart, "1122"), fincore::AuxKind::Customer);
+        assert_eq!(party_kind_of(&chart, "2202"), fincore::AuxKind::Supplier);
+        // 账套里没有的科目，退回首位推断
+        assert_eq!(party_kind_of(&chart, "9999"), fincore::AuxKind::Customer);
+    }
+
+    /// 2203 预收账款的账龄必须出行（挂客户核算，收预收时贷记）。
+    #[test]
+    fn aging_2203_预收按客户出() {
+        let db = tmpdb("aging_2203");
+        let p = Period::new(2026, 11).unwrap();
+        let mut v = Voucher::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
+            "收",
+            1,
+        );
+        v.push_entry(Entry {
+            debit: Money::parse("5000").unwrap(),
+            credit: Money::ZERO,
+            ..Entry::new(1, "1001", "收预收")
+        });
+        v.push_entry(Entry {
+            debit: Money::ZERO,
+            credit: Money::parse("5000").unwrap(),
+            aux: AuxRef {
+                customer: Some("C01".into()),
+                ..Default::default()
+            },
+            ..Entry::new(2, "2203", "预收甲款")
+        });
+        let vid = crate::vouchers::save(&db, &mut v).unwrap();
+        crate::vouchers::post(&db, vid, "poster").unwrap();
+
+        let lines = aging(
+            &db,
+            "2203",
+            p,
+            NaiveDate::from_ymd_opt(2026, 11, 30).unwrap(),
+            &fincore::engine::aging::buckets_by_days(),
+        )
+        .unwrap();
+        assert_eq!(lines.len(), 1, "2203 账龄必须出行");
+        assert_eq!(lines[0].key, "C01");
+        assert_eq!(lines[0].total, Money::parse("5000").unwrap());
     }
 
     /// 应付账龄（2202）必须仍按 **supplier** 维度出行。

@@ -12465,7 +12465,7 @@ async fn get_settle_aging(
     let labels: Vec<&str> = buckets.iter().map(|b| b.label).collect();
     // key 是**裸编码**（`C01`），名称另查 —— 页面上显示 `customer=C01` 是内部存储格式，
     // 对用户没有意义。以前 key 本身就是整条 aux_key，前端想显示名称也做不到。
-    let party = findb::settle::party_kind(account.trim());
+    let party = findb::settle::party_kind_in(&db, account.trim());
     let names: std::collections::HashMap<String, String> =
         findb::auxs::list(&db, &fincore::AuxQuery::kind(party))?
             .into_iter()
