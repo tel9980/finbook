@@ -387,6 +387,9 @@ pub fn router(state: Arc<WebState>) -> Router {
         // 账龄 Tab。必须与 `/:code` 分开注册：axum 0.8 里 `:code` 只匹配一段，
         // `/C01/aging` 会落到另一个 handler，写在一起容易看错。
         .route("/api/customers/:code/aging", get(get_customer_aging))
+        // 交易历史 / 催款记录。同样各自一段路径，不当 `:code` 的子参数解析。
+        .route("/api/customers/:code/trade", get(get_customer_trade))
+        .route("/api/customers/:code/dunning", get(get_customer_dunning))
         .route("/api/items/master", get(items_master))
         .route("/api/import/run", post(import_run))
         // 账簿 / 报表
@@ -4925,6 +4928,97 @@ async fn get_customer_aging(
             "max_days": a.max_days,
             "empty": a.empty,
         },
+    })))
+}
+
+/// 客户交易历史：报价 / 销售订单 / 发货 / 收款。
+///
+/// 期间口径：`to` 缺省用 `period`（会话当前期间），`from` 缺省用 `to` 的**年初**
+/// —— 与资产负债表第二列「年初余额」同一个理由：交易历史看的是「本年买过什么」，
+/// 默认给一个 12 个月的窗口，而不是单月。
+/// 只读，权限与另外两个客户视图一致（`Perm::Report`）。
+async fn get_customer_trade(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(code): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let db = state.db_for(&user.book_key)?;
+    let code = code.trim().to_string();
+    if code.is_empty() {
+        return Err(AppError::bad_request("缺少客户编码 code"));
+    }
+    if findb::auxs::get(&db, fincore::AuxKind::Customer, &code)?.is_none() {
+        return Err(AppError::not_found(format!("客户 {code} 未建档")));
+    }
+    let per = period_from_query(&state, &user, q.get("period"));
+    let to = match q.get("to").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        None => per,
+        Some(s) => Period::from_ymm_checked(period_checked_digits(s))
+            .map_err(|_| AppError::bad_request(format!("to 不是合法期间：{s}")))?,
+    };
+    let from = match q.get("from").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        None => Period::new(to.year(), 1).unwrap_or(to),
+        Some(s) => Period::from_ymm_checked(period_checked_digits(s))
+            .map_err(|_| AppError::bad_request(format!("from 不是合法期间：{s}")))?,
+    };
+    let rows = findb::customers::trade(&db, &code, from, to)?;
+    Ok(Json(json!({
+        "code": code,
+        "from": from.ymm(),
+        "to": to.ymm(),
+        "rows": rows
+            .iter()
+            .map(|r| json!({
+                "date": r.date,
+                "kind": r.kind,
+                "kind_label": r.kind_label,
+                "doc_no": r.doc_no,
+                "summary": r.summary,
+                "amount": r.amount.fmt_money(),
+                "qty": r.qty.fmt_money(),
+                "status": r.status,
+                "status_label": r.status_label,
+            }))
+            .collect::<Vec<_>>(),
+        "total": rows.len(),
+    })))
+}
+
+/// 客户催款记录：催款单 + 往来对账单。只读展示，状态由各自模块决定。
+async fn get_customer_dunning(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(code): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let db = state.db_for(&user.book_key)?;
+    let code = code.trim().to_string();
+    if code.is_empty() {
+        return Err(AppError::bad_request("缺少客户编码 code"));
+    }
+    if findb::auxs::get(&db, fincore::AuxKind::Customer, &code)?.is_none() {
+        return Err(AppError::not_found(format!("客户 {code} 未建档")));
+    }
+    let rows = findb::customers::dunning_records(&db, &code)?;
+    Ok(Json(json!({
+        "code": code,
+        "rows": rows
+            .iter()
+            .map(|r| json!({
+                "date": r.date,
+                "kind": r.kind,
+                "kind_label": r.kind_label,
+                "no": r.no,
+                "summary": r.summary,
+                "amount": r.amount.fmt_money(),
+                "item_count": r.item_count,
+                "status": r.status,
+                "status_label": r.status_label,
+            }))
+            .collect::<Vec<_>>(),
+        "total": rows.len(),
     })))
 }
 

@@ -164,4 +164,88 @@ test("客户管理：出纳能看到名单，但侧栏没有辅助档案（改�
   await expect(page.locator("#main")).not.toContainText("删除", { timeout: 5_000 });
 });
 
+test("客户管理：交易历史与催款两个 Tab", async ({ page }) => {
+  await newBook(page, `E2E客户交易${Date.now()}`);
+  await mkCustomer(page, "KT01", "客户交易");
+  // 一笔已记账应收：催款单 / 对账单才有得算
+  await postReceivable(page, "2026-01-07", "KT01", "1000");
+  await postFirstVoucher(page, "202601");
+
+  // 销售订单（已确认）→ 收款，都走真实接口（页面上这两步是另一个模块的主题）
+  const soR = await page.request.post("/api/sales/so", {
+    data: {
+      period: 202601,
+      date: "2026-01-05",
+      customer_code: "KT01",
+      customer_name: "客户交易",
+      status: "Confirmed",
+      memo: "",
+      lines: [
+        {
+          item_code: "RM1",
+          item_name: "氧化料",
+          qty_ordered: "10",
+          unit_price: "100",
+          tax_rate: "0",
+        },
+      ],
+    },
+  });
+  expect(soR.ok(), "建销售订单：" + (await soR.text())).toBe(true);
+  const soId = (await soR.json()).id;
+  expect(soId, "订单应返回 id").toBeTruthy();
+
+  // 发货依赖默认仓与库存；即便失败也不影响本用例主题（四类单据的合并由
+  // findb::customers::tests::trade_* 逐条钉住）。
+  await page.request.post("/api/sales/shipment", {
+    data: { so_id: soId, period: 202601, date: "2026-01-08", qty: "5", memo: "发一半" },
+  });
+
+  // 收款 800（同时落 so_payment 与 receipt_doc）
+  const payR = await page.request.post("/api/sales/payment", {
+    data: { so_id: soId, period: 202601, date: "2026-01-10", amount: "800", memo: "收到货款" },
+  });
+  expect(payR.ok(), "收款应成功：" + (await payR.text())).toBe(true);
+
+  // 催款单 + 对账单（催款 Tab 的两个来源）
+  const dunR = await page.request.post("/api/settle/dunnings", {
+    data: {
+      kind: "ar",
+      party_code: "KT01",
+      party_name: "客户交易",
+      date: "2026-01-31",
+      memo: "催收",
+    },
+  });
+  expect(dunR.ok(), "建催款单：" + (await dunR.text())).toBe(true);
+  const stR = await page.request.post("/api/settle/statements", {
+    data: {
+      kind: "ar",
+      party_code: "KT01",
+      party_name: "客户交易",
+      from: 202601,
+      to: 202601,
+    },
+  });
+  expect(stR.ok(), "建对账单：" + (await stR.text())).toBe(true);
+
+  // 打开客户详情
+  await page.click('.nav-item[data-view="customers"]');
+  await expect(page.locator("#cu-list")).toContainText("客户交易", { timeout: 15_000 });
+  await page.locator("[data-cu-open]").first().click();
+  await expect(page.locator("#cd-body")).not.toContainText("加载中", { timeout: 15_000 });
+
+  // 交易历史 Tab：销售订单 + 收款必须出现
+  await page.click('[data-cd="trade"]');
+  await expect(page.locator("#cd-trade")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator("#cd-trade")).toContainText("销售订单", { timeout: 10_000 });
+  await expect(page.locator("#cd-trade")).toContainText("收款", { timeout: 10_000 });
+
+  // 催款 Tab：催款单 + 对账单都要在
+  await page.click('[data-cd="dunning"]');
+  await expect(page.locator("#cd-dunning")).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator("#cd-dunning")).toContainText("催款单", { timeout: 10_000 });
+  await expect(page.locator("#cd-dunning")).toContainText("对账单", { timeout: 10_000 });
+});
+
 module.exports = {};

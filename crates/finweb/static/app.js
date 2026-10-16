@@ -6634,6 +6634,8 @@ function openCustomerDetail(code, period) {
     <div class="subtabs" id="cd-subtabs">
       <button class="subtab on" data-cd="lines">往来明细</button>
       <button class="subtab" data-cd="aging">账龄</button>
+      <button class="subtab" data-cd="trade">交易历史</button>
+      <button class="subtab" data-cd="dunning">催款</button>
     </div>
     <div id="cd-body" class="muted">加载中…</div>
     <div class="foot"><button class="btn ghost" id="cd-close">关闭</button></div>`);
@@ -6643,7 +6645,7 @@ function openCustomerDetail(code, period) {
   // 每次切换都重取会让人多点一下就多等一个来回。
   const showSub = (which) => {
     $all("[data-cd]", m).forEach((b) => b.classList.toggle("on", b.dataset.cd === which));
-    ["lines", "aging"].forEach((k) => {
+    ["lines", "aging", "trade", "dunning"].forEach((k) => {
       const el = $("#cd-" + k, m);
       if (el) el.style.display = k === which ? "" : "none";
     });
@@ -6681,7 +6683,17 @@ function openCustomerDetail(code, period) {
           <td class="num">${Number(l.open) !== 0 ? `<b>${fmt(l.open)}</b>` : ""}</td>
         </tr>`).join("")}</tbody></table>` : `<div class="muted">没有往来记录</div>`}
         </div>`;
+      // 三个子面板**同步**插占位再异步填数：否则用户在占位插入前点 Tab，
+      // showSub 找不到元素，等数据回来时面板仍是 display:none —— 点了没反应。
+      $("#cd-body", m).insertAdjacentHTML(
+        "beforeend",
+        '<div id="cd-aging" style="display:none"><div class="muted">加载中…</div></div>' +
+          '<div id="cd-trade" style="display:none"><div class="muted">加载中…</div></div>' +
+          '<div id="cd-dunning" style="display:none"><div class="muted">加载中…</div></div>',
+      );
       renderAging();
+      renderTrade();
+      renderDunning();
     } catch (e) {
       $("#cd-body", m).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
     }
@@ -6691,8 +6703,6 @@ function openCustomerDetail(code, period) {
   //（明细是这一屏的主体，账龄是补充）。第一版把两个请求塞进同一个 try，
   // 于是账龄一失败整个弹窗变成一行红字，用户连自己欠多少都看不到。
   function renderAging() {
-    const body = $("#cd-body", m);
-    body.insertAdjacentHTML("beforeend", '<div id="cd-aging" style="display:none"><div class="muted">账龄加载中…</div></div>');
     // 不传 as_of：用后端默认的「期间期末」。前端若传今天，查历史期间时
     // 天数会按今天算 —— 「2025 年的账龄」在 2026 年看会全落进最老的一档，
     // 那不是账龄，那是错。
@@ -6726,6 +6736,66 @@ function openCustomerDetail(code, period) {
       .catch((e) => {
         const el = $("#cd-aging", m);
         if (el) el.innerHTML = `<div style="color:var(--err)">账龄取数失败：${esc(e.message)}</div>`;
+      });
+  }
+
+  // 交易历史面板：报价 / 订单 / 发货 / 收款。
+  // 默认「本年」（from=年初、to=期间）—— 与账龄一样独立取数、独立失败，
+  // 挂了不影响往来明细这一屏的主体。
+  function renderTrade() {
+    api(`/customers/${encodeURIComponent(code)}/trade?period=${encodeURIComponent(period || "")}`)
+      .then((r) => {
+        const el = $("#cd-trade", m);
+        if (!el) return; // 弹窗已关
+        const rows = r.rows || [];
+        const yr = String(r.from || "").replace(/\D/g, "").slice(0, 4);
+        el.innerHTML = rows.length
+          ? `<div class="muted" style="font-size:12px;margin-bottom:4px">${esc(yr)} 年：报价 / 订单 / 发货 / 收款，按日期倒序（收款取收付款单，为会计口径）</div>
+          <table class="grid"><thead><tr>
+            <th>日期</th><th>类型</th><th>单据</th><th>摘要</th>
+            <th class="num">金额</th><th class="num">数量</th><th>状态</th>
+          </tr></thead><tbody>${rows.map((x) => `<tr>
+            <td>${esc(x.date)}</td>
+            <td>${esc(x.kind_label)}</td>
+            <td>${esc(x.doc_no || "")}</td>
+            <td>${esc(x.summary || "")}</td>
+            <td class="num">${x.kind === "shipment" ? '<span class="muted">—</span>' : fmt(x.amount)}</td>
+            <td class="num">${Number(String(x.qty || "").replace(/,/g, "")) ? esc(x.qty) : ""}</td>
+            <td>${esc(x.status_label || "")}</td>
+          </tr>`).join("")}</tbody></table>`
+          : `<div class="muted">该期间没有交易记录</div>`;
+      })
+      .catch((e) => {
+        const el = $("#cd-trade", m);
+        if (el) el.innerHTML = `<div style="color:var(--err)">交易历史取数失败：${esc(e.message)}</div>`;
+      });
+  }
+
+  // 催款记录面板：催款单 + 往来对账单。金额/状态都来自后端各自模块，前端不重算。
+  function renderDunning() {
+    api(`/customers/${encodeURIComponent(code)}/dunning`)
+      .then((r) => {
+        const el = $("#cd-dunning", m);
+        if (!el) return;
+        const rows = r.rows || [];
+        el.innerHTML = rows.length
+          ? `<table class="grid"><thead><tr>
+               <th>日期</th><th>类型</th><th>单号</th><th>期间 / 备注</th>
+               <th class="num">金额</th><th class="num">笔数</th><th>状态</th>
+             </tr></thead><tbody>${rows.map((x) => `<tr>
+               <td>${esc(x.date)}</td>
+               <td>${esc(x.kind_label)}</td>
+               <td>${esc(x.no || "")}</td>
+               <td>${esc(x.summary || "")}</td>
+               <td class="num">${fmt(x.amount)}</td>
+               <td class="num">${Number(x.item_count) || ""}</td>
+               <td>${esc(x.status_label || "")}</td>
+             </tr>`).join("")}</tbody></table>`
+          : `<div class="muted">暂无催款单或对账单</div>`;
+      })
+      .catch((e) => {
+        const el = $("#cd-dunning", m);
+        if (el) el.innerHTML = `<div style="color:var(--err)">催款记录取数失败：${esc(e.message)}</div>`;
       });
   }
 }

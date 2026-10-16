@@ -500,3 +500,124 @@ async fn customer_aging_readable_by_cashier() {
         body_string(resp).await
     );
 }
+
+/// ⑧ 交易历史端点：合并报价/订单/发货/收款、按客户隔离、缺失客户 404。
+///
+/// 本层只验**接口与隔离**；「四类单据怎么合并、发货 JOIN 对不对」由
+/// `findb::customers::tests::trade_*` 钉住（交易历史是单据流，不是余额，
+/// 不在 Web 层重算 —— 否则又成两套口径）。
+#[tokio::test]
+async fn customer_trade_endpoint_merges_and_isolates() {
+    let (state, books_dir, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    mk_customer(&state, &sid, "C01", "客户甲").await;
+    mk_customer(&state, &sid, "C02", "客户乙").await;
+
+    {
+        let db = findb::Db::open(books_dir.join("b1.fbk")).expect("打开账套");
+        db.conn()
+            .execute(
+                "INSERT INTO sales_order(period,no,date,customer_code,customer_name,status,total_amount,total_tax)
+                 VALUES(202601,'XS-1','2026-01-05','C01','客户甲','confirmed','2000','0')",
+                [],
+            )
+            .unwrap();
+        let so_id = db.conn().last_insert_rowid();
+        db.conn()
+            .execute(
+                "INSERT INTO so_shipment(so_id,period,date,qty,memo) VALUES(?1,202601,'2026-01-08','5','发一半')",
+                rusqlite::params![so_id],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO receipt_doc(no,period,date,kind,fund_account,party,amount,memo,status,created_by,created_at)
+                 VALUES('SK-1',202601,'2026-01-10','receipt','100201','C01','800','收到货款','audited','u','2026-01-10 09:00:00')",
+                [],
+            )
+            .unwrap();
+        // 干扰：C02 的订单不该出现
+        db.conn()
+            .execute(
+                "INSERT INTO sales_order(period,no,date,customer_code,customer_name,status,total_amount,total_tax)
+                 VALUES(202601,'XS-9','2026-01-06','C02','客户乙','confirmed','999','0')",
+                [],
+            )
+            .unwrap();
+    }
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/customers/C01/trade?period=202601", &sid))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = body_string(resp).await;
+    assert_eq!(status, StatusCode::OK, "交易历史应 200：{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let rows = v["rows"].as_array().expect("rows 应为数组");
+    assert_eq!(rows.len(), 3, "1 订单 + 1 发货 + 1 收款：{rows:?}");
+    assert_eq!(rows[0]["kind"], "receipt", "按日期倒序，收款(01-10) 最新");
+    assert_eq!(rows[0]["doc_no"], "SK-1");
+    assert_eq!(rows[1]["kind"], "shipment");
+    assert_eq!(rows[2]["kind"], "order");
+    assert!(
+        rows.iter().all(|r| r["doc_no"] != "XS-9"),
+        "不得混入 C02 的订单：{rows:?}"
+    );
+
+    // 缺失客户 → 404（与另外两个客户视图一致，而不是空 rows / 500）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/customers/NOPE/trade", &sid))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "缺失客户的交易历史应 404"
+    );
+}
+
+/// ⑨ 催款端点：催款单 + 对账单，按客户隔离，缺失客户 404。
+#[tokio::test]
+async fn customer_dunning_endpoint_lists_records() {
+    let (state, books_dir, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    mk_customer(&state, &sid, "C01", "客户甲").await;
+    mk_customer(&state, &sid, "C02", "客户乙").await;
+    // 两笔已记账应收：C01 开催款单 + 对账单；C02 只开催款单（干扰项）
+    post_ar(&state, &sid, "2026-01-05", "C01", "1000").await;
+    post_ar(&state, &sid, "2026-01-06", "C02", "300").await;
+
+    {
+        let db = findb::Db::open(books_dir.join("b1.fbk")).expect("打开账套");
+        let p = fincore::Period::new(2026, 1).unwrap();
+        let dt = chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
+        findb::settle::dunning_create(&db, "ar", "", "C01", "客户甲", dt, "催收", "boss").unwrap();
+        findb::statement::create(&db, "ar", "", "C01", "客户甲", p, p, "", "boss").unwrap();
+        findb::settle::dunning_create(&db, "ar", "", "C02", "客户乙", dt, "催收", "boss").unwrap();
+    }
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/customers/C01/dunning", &sid))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = body_string(resp).await;
+    assert_eq!(status, StatusCode::OK, "催款记录应 200：{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let rows = v["rows"].as_array().expect("rows 应为数组");
+    let dunning_n = rows.iter().filter(|r| r["kind"] == "dunning").count();
+    let statement_n = rows.iter().filter(|r| r["kind"] == "statement").count();
+    assert_eq!(dunning_n, 1, "只应有 C01 的 1 张催款单：{rows:?}");
+    assert_eq!(statement_n, 1, "只应有 C01 的 1 张对账单：{rows:?}");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/customers/NOPE/dunning", &sid))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "缺失客户的催款记录应 404"
+    );
+}

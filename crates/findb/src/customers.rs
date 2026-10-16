@@ -294,6 +294,265 @@ pub fn detail(db: &Db, code: &str, period: Period) -> DbResult<Option<CustomerDe
     }))
 }
 
+// ---------------- 交易历史（报价 / 订单 / 发货 / 收款） ----------------
+
+/// 交易历史的一行。口径见 docs/客户管理模块设计.md §3.1 Tab 3、§3.4。
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct TradeRow {
+    pub date: String,
+    /// quotation / order / shipment / receipt
+    pub kind: String,
+    /// 中文标签（报价 / 销售订单 / 发货 / 收款）
+    pub kind_label: String,
+    pub doc_no: String,
+    pub summary: String,
+    /// 金额。发货行只有数量没有金额，看 `qty`。
+    pub amount: Money,
+    /// 数量（发货行有意义，其余行为 0）
+    pub qty: Money,
+    pub status: String,
+    pub status_label: String,
+}
+
+fn quo_status_label(s: &str) -> &'static str {
+    match s {
+        "draft" => "草稿",
+        "approved" => "已审批",
+        "converted" => "已转订单",
+        "cancelled" => "已作废",
+        _ => "",
+    }
+}
+
+fn so_status_label(s: &str) -> &'static str {
+    match s {
+        "draft" => "草稿",
+        "confirmed" => "已确认",
+        "partial_ship" => "部分发货",
+        "completed" => "已完成",
+        "cancelled" => "已作废",
+        _ => "",
+    }
+}
+
+fn receipt_status_label(s: &str) -> &'static str {
+    match s {
+        "draft" => "待审核",
+        "audited" => "已审核",
+        _ => "",
+    }
+}
+
+/// 客户交易历史：报价 → 销售订单 → 发货 → 收款，按日期倒序。
+///
+/// 【为什么这里可以直接查业务表，而余额不行】这是「客户买过什么」的**单据流水**，
+/// 不是余额 —— 余额的口径被 `open_entries` 独占（见本文件头）。单据有自己的来源表，
+/// 直接读它们才是对的；而**收款取 `receipt_doc`，不取 `so_payment`**，因为同一笔钱
+/// `so_payment` 与 `receipt_doc` 各记一份，客户维度只能认其中一个（设计 §3.4）。
+pub fn trade(db: &Db, code: &str, from: Period, to: Period) -> DbResult<Vec<TradeRow>> {
+    let code = code.trim();
+    let (f, t) = (from.ymm(), to.ymm());
+    let mut out: Vec<TradeRow> = Vec::new();
+
+    // 报价单
+    {
+        let mut st = db.conn().prepare(
+            "SELECT date, no, item_name, qty, unit_price, status FROM quotation
+             WHERE customer_code = ?1 AND period >= ?2 AND period <= ?3
+             ORDER BY date DESC, id DESC",
+        )?;
+        let rows = st.query_map(rusqlite::params![code, f, t], |r| {
+            let qty = Money::parse_or_zero(&r.get::<_, String>(3)?);
+            let price = Money::parse_or_zero(&r.get::<_, String>(4)?);
+            let status: String = r.get(5)?;
+            Ok(TradeRow {
+                date: r.get(0)?,
+                kind: "quotation".into(),
+                kind_label: "报价".into(),
+                doc_no: r.get(1)?,
+                summary: r.get(2)?,
+                amount: qty * price,
+                qty,
+                status_label: quo_status_label(&status).to_string(),
+                status,
+            })
+        })?;
+        for r in rows {
+            out.push(r?);
+        }
+    }
+
+    // 销售订单
+    {
+        let mut st = db.conn().prepare(
+            "SELECT date, no, total_amount, status, memo FROM sales_order
+             WHERE customer_code = ?1 AND period >= ?2 AND period <= ?3
+             ORDER BY date DESC, id DESC",
+        )?;
+        let rows = st.query_map(rusqlite::params![code, f, t], |r| {
+            let status: String = r.get(3)?;
+            Ok(TradeRow {
+                date: r.get(0)?,
+                kind: "order".into(),
+                kind_label: "销售订单".into(),
+                doc_no: r.get(1)?,
+                summary: r.get(4)?,
+                amount: Money::parse_or_zero(&r.get::<_, String>(2)?),
+                qty: Money::ZERO,
+                status_label: so_status_label(&status).to_string(),
+                status,
+            })
+        })?;
+        for r in rows {
+            out.push(r?);
+        }
+    }
+
+    // 发货（so_shipment 只有 so_id → JOIN 订单取客户编码）
+    {
+        let mut st = db.conn().prepare(
+            "SELECT s.date, o.no, s.qty, s.memo
+             FROM so_shipment s JOIN sales_order o ON s.so_id = o.id
+             WHERE o.customer_code = ?1 AND s.period >= ?2 AND s.period <= ?3
+             ORDER BY s.date DESC, s.id DESC",
+        )?;
+        let rows = st.query_map(rusqlite::params![code, f, t], |r| {
+            Ok(TradeRow {
+                date: r.get(0)?,
+                kind: "shipment".into(),
+                kind_label: "发货".into(),
+                doc_no: r.get(1)?,
+                summary: r.get(3)?,
+                amount: Money::ZERO,
+                qty: Money::parse_or_zero(&r.get::<_, String>(2)?),
+                status: String::new(),
+                status_label: String::new(),
+            })
+        })?;
+        for r in rows {
+            out.push(r?);
+        }
+    }
+
+    // 收款（会计口径：receipt_doc 按往来单位；只认 kind='receipt'）
+    {
+        let mut st = db.conn().prepare(
+            "SELECT date, no, amount, memo, status FROM receipt_doc
+             WHERE kind = 'receipt' AND party = ?1 AND period >= ?2 AND period <= ?3
+             ORDER BY date DESC, id DESC",
+        )?;
+        let rows = st.query_map(rusqlite::params![code, f, t], |r| {
+            let status: String = r.get(4)?;
+            Ok(TradeRow {
+                date: r.get(0)?,
+                kind: "receipt".into(),
+                kind_label: "收款".into(),
+                doc_no: r.get(1)?,
+                summary: r.get(3)?,
+                amount: Money::parse_or_zero(&r.get::<_, String>(2)?),
+                qty: Money::ZERO,
+                status_label: receipt_status_label(&status).to_string(),
+                status,
+            })
+        })?;
+        for r in rows {
+            out.push(r?);
+        }
+    }
+
+    // 各来源已按日期倒序；稳定排序后同日仍保持「报价→订单→发货→收款」的相对次序。
+    out.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(out)
+}
+
+// ---------------- 催款记录（催款单 + 往来对账单） ----------------
+
+/// 催款记录的一行：催款单（dunning）+ 往来对账单（ar_statement）。
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct CustomerDunning {
+    /// 排序与展示日期：催款=单据日期，对账单=生成日期
+    pub date: String,
+    /// dunning / statement
+    pub kind: String,
+    pub kind_label: String,
+    pub no: String,
+    /// 催款=备注；对账单=对账期间
+    pub summary: String,
+    pub amount: Money,
+    pub item_count: i64,
+    pub status: String,
+    pub status_label: String,
+}
+
+fn dunning_status_label(s: &str) -> &'static str {
+    match s {
+        "draft" => "草稿",
+        "sent" => "已发出",
+        "settled" => "已结清",
+        "cancelled" => "已作废",
+        _ => "",
+    }
+}
+
+fn statement_status_label(s: &str) -> &'static str {
+    match s {
+        "draft" => "草稿",
+        "sent" => "已发出",
+        "confirmed" => "已确认",
+        "cancelled" => "已作废",
+        _ => "",
+    }
+}
+
+/// 该客户的催款记录：催款单 + 往来对账单，按日期倒序。
+///
+/// 两者都**复用**各自模块的 list（`settle::dunning_list` / `statement::list`），
+/// 本模块只按客户过滤 —— 不重算金额、不自定义状态。
+pub fn dunning_records(db: &Db, code: &str) -> DbResult<Vec<CustomerDunning>> {
+    let code = code.trim();
+    let mut out: Vec<CustomerDunning> = Vec::new();
+
+    for d in settle::dunning_list(db, Some("ar"))? {
+        if d.party_code.trim() != code {
+            continue;
+        }
+        out.push(CustomerDunning {
+            date: d.date.format("%Y-%m-%d").to_string(),
+            kind: "dunning".into(),
+            kind_label: "催款单".into(),
+            no: d.no,
+            summary: d.memo,
+            amount: d.amount,
+            item_count: d.item_count,
+            status_label: dunning_status_label(&d.status).to_string(),
+            status: d.status,
+        });
+    }
+
+    for s in crate::statement::list(db, Some("ar"))? {
+        if s.party_code.trim() != code {
+            continue;
+        }
+        // 对账单没有单一「单据日期」：用生成时间的前 10 位当日期排序；
+        // 展示上「对账期间」比时间戳更有意义，放 summary。
+        let date = s.created_at.get(..10).unwrap_or(&s.created_at).to_string();
+        out.push(CustomerDunning {
+            date,
+            kind: "statement".into(),
+            kind_label: "对账单".into(),
+            no: s.no,
+            summary: format!("{} 至 {}", s.period_from.label(), s.period_to.label()),
+            amount: s.end_balance,
+            item_count: s.line_count,
+            status_label: statement_status_label(&s.status).to_string(),
+            status: s.status,
+        });
+    }
+
+    out.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok(out)
+}
+
 // ---------------- 账龄（复用 settle::aging，桶与算法都不在这里重算） ----------------
 
 /// 一个客户的账龄分桶。
@@ -790,5 +1049,121 @@ mod tests {
             "C01 不得命中 C011 的 700（等值比较，不是前缀匹配）：{:?}",
             a
         );
+    }
+
+    // ---- 交易历史 ----
+
+    /// 交易历史把四类单据（报价/订单/发货/收款）合并、按日期倒序，并严格按客户隔离。
+    ///
+    /// 发货表 `so_shipment` 只有 `so_id`、没有客户编码，靠 JOIN 订单拿客户 ——
+    /// 这条测试钉住那个 JOIN：写错 JOIN 条件时发货行要么消失、要么串到别的客户。
+    /// 收款取 `receipt_doc`（会计口径），并与 C02 的订单隔离。
+    #[test]
+    fn trade_merges_sources_sorted_and_isolated() {
+        let db = mem();
+        mk_cust(&db, "C01", "客户甲");
+        mk_cust(&db, "C02", "客户乙");
+        let p1 = Period::new(2026, 1).unwrap();
+
+        db.conn()
+            .execute(
+                "INSERT INTO quotation(no,period,date,customer_code,customer_name,item_code,item_name,qty,unit_price,status,prepared_by,memo)
+                 VALUES('BJ-1',202601,'2026-01-03','C01','客户甲','RM1','氧化料','10','100','approved','u','')",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO sales_order(period,no,date,customer_code,customer_name,status,total_amount,total_tax)
+                 VALUES(202601,'XS-1','2026-01-05','C01','客户甲','confirmed','2000','0')",
+                [],
+            )
+            .unwrap();
+        let so_id = db.conn().last_insert_rowid();
+        db.conn()
+            .execute(
+                "INSERT INTO so_shipment(so_id,period,date,qty,memo) VALUES(?1,202601,'2026-01-08','5','发一半')",
+                rusqlite::params![so_id],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO receipt_doc(no,period,date,kind,fund_account,party,amount,memo,status,created_by,created_at)
+                 VALUES('SK-1',202601,'2026-01-10','receipt','100201','C01','800','收到货款','audited','u','2026-01-10 09:00:00')",
+                [],
+            )
+            .unwrap();
+        // 干扰：C02 的订单不该出现
+        db.conn()
+            .execute(
+                "INSERT INTO sales_order(period,no,date,customer_code,customer_name,status,total_amount,total_tax)
+                 VALUES(202601,'XS-9','2026-01-06','C02','客户乙','confirmed','999','0')",
+                [],
+            )
+            .unwrap();
+
+        let rows = trade(&db, "C01", p1, p1).unwrap();
+        let kinds: Vec<&str> = rows.iter().map(|r| r.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            vec!["receipt", "shipment", "order", "quotation"],
+            "应按日期倒序：收款(01-10) > 发货(01-08) > 订单(01-05) > 报价(01-03)"
+        );
+        assert_eq!(rows[0].amount, m("800"), "收款金额");
+        assert_eq!(rows[1].qty, m("5"), "发货行带数量");
+        assert!(
+            rows.iter().all(|r| r.doc_no != "XS-9"),
+            "不得混入 C02 的订单：{:?}",
+            rows.iter().map(|r| &r.doc_no).collect::<Vec<_>>()
+        );
+
+        // 期间外应为空（防止「忽略 from/to 一律全返回」）
+        let p2 = Period::new(2026, 2).unwrap();
+        assert!(
+            trade(&db, "C01", p2, p2).unwrap().is_empty(),
+            "期间外应为空"
+        );
+    }
+
+    // ---- 催款记录 ----
+
+    /// 催款 Tab 同时收催款单与对账单，且只返回该客户的。
+    #[test]
+    fn dunning_records_include_dunning_and_statement_for_customer_only() {
+        let db = mem();
+        mk_cust(&db, "C01", "客户甲");
+        mk_cust(&db, "C02", "客户乙");
+        let p = Period::new(2026, 1).unwrap();
+        ar_posted(&db, "2026-01-05", "C01", "1000", true);
+        ar_posted(&db, "2026-01-06", "C02", "300", true);
+
+        settle::dunning_create(&db, "ar", "", "C01", "客户甲", d("2026-01-31"), "催收", "u")
+            .unwrap();
+        crate::statement::create(&db, "ar", "", "C01", "客户甲", p, p, "", "u").unwrap();
+        // 干扰：C02 的催款单不该出现
+        settle::dunning_create(&db, "ar", "", "C02", "客户乙", d("2026-01-31"), "催收", "u")
+            .unwrap();
+
+        let rows = dunning_records(&db, "C01").unwrap();
+        assert_eq!(
+            rows.iter().filter(|r| r.kind == "dunning").count(),
+            1,
+            "只应有 C01 的 1 张催款单：{:?}",
+            rows.iter().map(|r| (&r.kind, &r.no)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            rows.iter().filter(|r| r.kind == "statement").count(),
+            1,
+            "只应有 C01 的 1 张对账单"
+        );
+        assert_eq!(
+            rows.iter().find(|r| r.kind == "statement").unwrap().amount,
+            m("1000"),
+            "对账单期末余额应等于 C01 的应收"
+        );
+
+        // 没有记录的客户返回空（而不是别人的）
+        mk_cust(&db, "C03", "客户丙");
+        assert!(dunning_records(&db, "C03").unwrap().is_empty());
     }
 }
