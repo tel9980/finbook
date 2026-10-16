@@ -47,6 +47,7 @@ pub mod stocktake;
 pub mod summaries;
 pub mod taxdecl;
 pub mod template;
+pub mod transfer;
 pub mod users;
 pub mod vouchers;
 pub mod warehouse;

@@ -262,15 +262,8 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
         memo.trim().to_string()
     };
     let summary = v.memo.clone();
-    let bank_like = fund.starts_with("1002");
-    let fund_aux = if bank_like {
-        AuxRef {
-            bank: Some("B01".to_string()),
-            ..Default::default()
-        }
-    } else {
-        AuxRef::default()
-    };
+    // 资金腿辅助核算统一取一处（收付款/调拨共用），见 funds::fund_account_aux
+    let fund_aux = crate::funds::fund_account_aux(&fund);
     let mut line: i32 = 1;
     if receipt {
         v.push_entry(Entry {

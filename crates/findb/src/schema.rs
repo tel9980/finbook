@@ -1314,6 +1314,24 @@ CREATE TABLE IF NOT EXISTS receipt_doc (
 );
 CREATE INDEX IF NOT EXISTS idx_receipt_doc_period ON receipt_doc(period, kind);
 
+-- 资金调拨单（账户间转账：借 转入 / 贷 转出；对标金蝶「资金调拨单」）
+-- 与 receipt_doc 同构（建单草稿 → 审核出凭证 → 撤审/删除链），区别：无往来单位、不核销。
+CREATE TABLE IF NOT EXISTS fund_transfer (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    no           TEXT NOT NULL DEFAULT '',
+    period       INTEGER NOT NULL,
+    date         TEXT NOT NULL,
+    from_account TEXT NOT NULL DEFAULT '',      -- 转出资金账户（末级，如 100201）
+    to_account   TEXT NOT NULL DEFAULT '',      -- 转入资金账户（末级，如 1001）
+    amount       TEXT NOT NULL DEFAULT '0',
+    memo         TEXT NOT NULL DEFAULT '',
+    voucher_id   INTEGER,
+    status       TEXT NOT NULL DEFAULT 'draft', -- draft 待审核 / audited 已审核
+    created_by   TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_fund_transfer_period ON fund_transfer(period);
+
 -- 存货盘点单（账面按仓库快照 + 实盘录入 → 应用生成其他入库/出库流水与盘盈盘亏凭证）
 CREATE TABLE IF NOT EXISTS inv_count (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

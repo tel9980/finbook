@@ -149,7 +149,7 @@ async function postAll(page, period) {
   return n;
 }
 
-/// 收付款单的「审核」判据与后端 `require_receipt_gate` 必须一致：
+/// 收付款单 / 资金调拨单的「审核」判据与后端 `require_fund_doc_gate` 必须一致：
 /// voucher_audit **或** voucher_post。
 /// 原来两边都只认 voucher_audit，而后端那侧还与 `enable_audit` 无关 —— 于是
 /// 「只有会计+出纳、没有财务主管」的小微企业，出纳录的单**谁也审不了**，
@@ -370,7 +370,7 @@ test("两人公司的收付款：出纳建单→会计审→出纳签字→会�
   expect(auditAsCashier.status(), "出纳不该能审核收付款单").toBe(403);
 
   // 会计审核 → 生成凭证并按往来 FIFO 自动核销
-  // 会计没有 voucher_audit，但有 voucher_post —— 后端 require_receipt_gate 认这个
+  // 会计没有 voucher_audit，但有 voucher_post —— 后端 require_fund_doc_gate 认这个
   await p.asAccountant();
   await page.click('.nav-item[data-view="funds"]');
   await page.click("#ft-receipt");
@@ -403,4 +403,57 @@ test("两人公司的收付款：出纳建单→会计审→出纳签字→会�
   const aging = await (await page.request.get("/api/settle/aging?account=1122")).json();
   const open = (aging.rows || aging).filter((r) => parseFloat(r.open_amount ?? r.open ?? 0) !== 0);
   expect(open.length, `收款核销后应收应被清掉：${JSON.stringify(aging)}`).toBe(0);
+});
+
+test("两人公司的资金调拨：出纳建单→会计审→出纳签字→会计记账（两端资金科目，不核销）", async ({ page }) => {
+  // 调拨是账户间转账：借 转入 / 贷 转出，两端都是现金/银行科目 → 命中出纳签字闸门，
+  // 与收付款单同一条分工（出纳录/签，会计审/记）。此处不涉及往来，因此**不核销**。
+  const p = await twoPersonBook(page, `E2E调拨${Date.now()}`, { enableAudit: false });
+
+  await p.asCashier();
+  await page.click('.nav-item[data-view="funds"]');
+  // funds 分页签，调拨在「资金调拨」页签下（默认停在「资金日报」）
+  await page.click("#ft-transfer");
+  await expect(page.locator("#tf-list")).not.toContainText("加载中", { timeout: 15_000 });
+
+  await page.fill("#tf-date", "2026-01-05");
+  await page.selectOption("#tf-from", "100201");
+  await page.selectOption("#tf-to", "1001");
+  await page.fill("#tf-amt", "500");
+  await page.fill("#tf-memo", "提现备用");
+  await page.click("#tf-new");
+  await expect(page.locator("#tf-list")).toContainText("待审核", { timeout: 15_000 });
+  await expect(page.locator("#tf-list")).toContainText("500");
+
+  // 出纳没有 voucher_audit / voucher_post —— 界面不给「审核」按钮，接口也该拦
+  await expect(page.locator("#tf-list [data-tf-audit]")).toHaveCount(0);
+  const rows = (await (await page.request.get("/api/funds/transfers")).json()).rows;
+  const tid = rows[0].id;
+  const auditAsCashier = await page.request.post(`/api/funds/transfers/${tid}/audit`, { data: {} });
+  expect(auditAsCashier.status(), "出纳不该能审核资金调拨单").toBe(403);
+
+  // 会计审核（没有 voucher_audit 但有 voucher_post —— 后端 require_fund_doc_gate 认这个）
+  await p.asAccountant();
+  await page.click('.nav-item[data-view="funds"]');
+  await page.click("#ft-transfer");
+  await expect(page.locator("#tf-list")).toContainText("待审核", { timeout: 15_000 });
+  await expect(page.locator("#tf-list [data-tf-audit]"), "会计应有审核按钮（voucher_post 也算数）")
+    .toHaveCount(1);
+  await page.locator("#tf-list [data-tf-audit]").first().click();
+  await expect(page.locator("#tf-list")).toContainText("已审核", { timeout: 15_000 });
+  await expect(page.locator("#tf-list")).toContainText("凭证 #", { timeout: 10_000 });
+
+  // 两端都是资金科目 → 签字关开着，没出纳签字不能记。凭证 id 取自单据事实，不猜 status。
+  const after = (await (await page.request.get("/api/funds/transfers")).json()).rows;
+  const vid = after.find((r) => r.id === tid).voucher_id;
+  expect(vid, "审核后资金调拨单应带出凭证 id").toBeTruthy();
+  expect((await page.request.post(`/api/vouchers/${vid}/post`, { data: {} })).status(),
+    "没出纳签字不能记账").toBe(400);
+
+  await p.asCashier();
+  expect((await page.request.post(`/api/vouchers/${vid}/sign`, { data: {} })).ok(),
+    "出纳应能签这张凭证").toBe(true);
+  await p.asAccountant();
+  const posted = await page.request.post(`/api/vouchers/${vid}/post`, { data: {} });
+  expect(posted.ok(), `签字后会计应能记账：${posted.status()} ${await posted.text()}`).toBe(true);
 });

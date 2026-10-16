@@ -12425,6 +12425,153 @@ async fn receipt_doc_api_flow() {
     assert_eq!(resp.status(), StatusCode::OK, "草稿可直接删除");
 }
 
+/// 资金调拨：建单（草稿）→ 审核出凭证（借 转入 / 贷 转出，银行腿挂 B01）→
+/// 撤审回草稿 → 删除链；守卫同户 / 非资金科目。
+#[tokio::test]
+async fn fund_transfer_api_flow() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 守卫：转出 = 转入 拒绝
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/funds/transfers",
+            &sid,
+            serde_json::json!({
+                "date": "2026-01-05", "from_account": "100201", "to_account": "100201",
+                "amount": "500", "memo": "同户"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "同户调拨应拒绝");
+
+    // 守卫：转入非资金科目（6602）拒绝
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/funds/transfers",
+            &sid,
+            serde_json::json!({
+                "date": "2026-01-05", "from_account": "100201", "to_account": "6602",
+                "amount": "500", "memo": "非资金科目"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "非资金科目应拒绝");
+
+    // 建单：提现备用（银行 → 现金），此时只落草稿、不出凭证
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/funds/transfers",
+            &sid,
+            serde_json::json!({
+                "date": "2026-01-05", "from_account": "100201", "to_account": "1001",
+                "amount": "500", "memo": "提现备用"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "新增调拨单应成功");
+    let r: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let doc_id = r["id"].as_i64().unwrap();
+    assert_eq!(r["status"], "draft");
+    assert!(r["voucher_id"].is_null(), "草稿阶段不应生成凭证");
+
+    // 审核 → 生成凭证
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/funds/transfers/{doc_id}/audit"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "审核应成功");
+    let vid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()
+        ["voucher_id"]
+        .as_i64()
+        .expect("审核应生成凭证");
+
+    // 重复审核拒绝（条件更新防并发重复出凭证）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/funds/transfers/{doc_id}/audit"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "重复审核应拒绝");
+
+    // 凭证：借 转入 1001 / 贷 转出 100201（银行腿必须挂 bank=B01）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(&format!("/api/vouchers/{vid}"), &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["entries"][0]["account_code"], "1001");
+    assert_eq!(v["entries"][0]["debit"], serde_json::json!("500.00"));
+    assert_eq!(v["entries"][1]["account_code"], "100201");
+    assert_eq!(v["entries"][1]["credit"], serde_json::json!("500.00"));
+    assert_eq!(v["entries"][1]["aux"]["bank"], "B01");
+
+    // 列表可见且已审核
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/funds/transfers", &sid))
+        .await
+        .unwrap();
+    let r: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = r["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["status"], "audited");
+
+    // 删除链：凭证存在 → 拒
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/funds/transfers/{doc_id}/delete"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "凭证存在时不能删单");
+
+    // 撤审 → 凭证删除、单据回草稿
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/funds/transfers/{doc_id}/unaudit"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "撤审应成功");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(&format!("/api/vouchers/{vid}"), &sid))
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::OK, "撤审后凭证应已删除");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/funds/transfers", &sid))
+        .await
+        .unwrap();
+    let r: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(r["rows"][0]["status"], "draft", "撤审应回草稿");
+    assert!(r["rows"][0]["voucher_id"].is_null());
+
+    // 草稿可直接删
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/funds/transfers/{doc_id}/delete"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "草稿可直接删除");
+}
+
 /// 报价单转订单 + 单据套打（字段白名单 / 批量紧凑分页 / A4）。
 #[tokio::test]
 async fn quote_to_order_and_doc_print() {
@@ -19959,7 +20106,7 @@ async fn accountant_can_read_book_options_to_see_audit_flag() {
 // 特别注意：这条判据**与 `enable_audit` 无关**。所以在建账向导里选「不启用审核环节」
 // 也救不了它 —— 向导的承诺在收付款这条路径上是破的。
 //
-// 修法：`require_receipt_gate` = VoucherAudit **或** VoucherPost。
+// 修法：`require_fund_doc_gate` = VoucherAudit **或** VoucherPost。
 // ===========================================================================
 
 /// 建一个「出纳 + 会计」都在套里的账套，返回两个 sid 的取用方式。

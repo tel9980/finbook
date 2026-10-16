@@ -100,7 +100,7 @@ const MUT = [
     // 只放开"审"不放开"撤审" → 会计能审却撤不回来
     name: "⑨ 撤审仍用旧判据（能审不能撤）",
     file: "crates/finweb/src/handlers.rs",
-    from: "    require_receipt_gate(&user)?;\n    let db = state.db_for(&user.book_key)?;\n    findb::receipt::receipt_unaudit(&db, id)?;",
+    from: "    require_fund_doc_gate(&user)?;\n    let db = state.db_for(&user.book_key)?;\n    findb::receipt::receipt_unaudit(&db, id)?;",
     to: "    user.require(Perm::VoucherAudit)?;\n    let db = state.db_for(&user.book_key)?;\n    findb::receipt::receipt_unaudit(&db, id)?;",
     cmd: API("receipt_audit_gates_on_audit_or_post_permission"),
   },

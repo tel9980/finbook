@@ -1,6 +1,6 @@
 //! 资金 / 预算分析 / 成本核算 三个拓展视图
 //!
-//! - 资金管理：日报（按日）/ 票据 / 融资 / 现金盘点 / 支票簿 / 出纳日记账(日清) / 借支 / 资金预算 / 资金预测
+//! - 资金管理：日报（按日）/ 票据 / 融资 / 现金盘点 / 支票簿 / 出纳日记账(日清) / 借支 / 资金预算 / 收付款 / 资金调拨 / 资金预测
 //! - 预算分析：年度逐月预算 vs 实际（含部门维度）
 //! - 成本核算：计价方式配置、期末结价
 //!
@@ -18,7 +18,7 @@ use crate::widgets;
 // ===========================================================================
 
 pub struct FundsView {
-    pub tab: u8, // 0=资金日报 1=票据 2=融资 3=资金预测
+    pub tab: u8, // 0=资金日报 1=票据 2=融资 3=现金盘点 4=支票簿 5=日记账 6=借支 7=资金预算 8=收付款 9=资金调拨 10=资金预测
     pub bill_kind: String,
     pub loan_kind: String,
     pub dirty: bool,
@@ -44,6 +44,12 @@ pub struct FundsView {
     pub rc_party: String,
     pub rc_amount: String,
     pub rc_memo: String,
+    // 资金调拨录入（日期 / 转出账户 / 转入账户 / 金额 / 备注）
+    pub tf_date: String,
+    pub tf_from: String,
+    pub tf_to: String,
+    pub tf_amount: String,
+    pub tf_memo: String,
     // 出纳日记账（科目 + 日清日期）
     pub j_account: String,
     pub j_date: String,
@@ -93,6 +99,11 @@ impl Default for FundsView {
             rc_party: String::new(),
             rc_amount: String::new(),
             rc_memo: String::new(),
+            tf_date: String::new(),
+            tf_from: "100201".to_string(),
+            tf_to: "1001".to_string(),
+            tf_amount: String::new(),
+            tf_memo: String::new(),
         }
     }
 }
@@ -104,7 +115,10 @@ impl FundsView {
 
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         widgets::page_header(ui, "资金管理", |ui| {
-            ui.label(RichText::new("现金/银行资金日报 · 票据 · 融资 · 资金预测").weak());
+            ui.label(
+                RichText::new("现金/银行资金日报 · 票据 · 融资 · 收付款 · 资金调拨 · 资金预测")
+                    .weak(),
+            );
         });
 
         widgets::toolbar(ui, |ui| {
@@ -118,6 +132,7 @@ impl FundsView {
                 "借支",
                 "资金预算",
                 "收付款",
+                "资金调拨",
                 "资金预测",
             ]
             .iter()
@@ -144,6 +159,7 @@ impl FundsView {
             6 => self.show_advances(ctx, ui),
             7 => self.show_budget(ctx, ui),
             8 => self.show_receipts(ctx, ui),
+            9 => self.show_transfers(ctx, ui),
             _ => self.show_forecast(ctx, ui),
         }
     }
@@ -460,6 +476,33 @@ impl FundsView {
                     ]);
                 }
                 ("收付款单", sh)
+            }
+            9 => {
+                let rows = findb::transfer::transfer_list(ctx.db()).unwrap_or_default();
+                let mut sh = crate::views::export::Sheet::new(
+                    "资金调拨",
+                    vec![
+                        "单号".to_string(),
+                        "日期".to_string(),
+                        "转出".to_string(),
+                        "转入".to_string(),
+                        "金额".to_string(),
+                        "凭证".to_string(),
+                        "备注".to_string(),
+                    ],
+                );
+                for d in rows {
+                    sh.push(vec![
+                        d.no.clone(),
+                        d.date.format("%Y-%m-%d").to_string(),
+                        d.from_account.clone(),
+                        d.to_account.clone(),
+                        d.amount.fmt_plain(),
+                        d.voucher_id.map(|v| format!("#{v}")).unwrap_or_default(),
+                        d.memo.clone(),
+                    ]);
+                }
+                ("资金调拨", sh)
             }
             _ => {
                 let fc = findb::funds::funds_forecast(ctx.db(), ctx.period()).unwrap_or_default();
@@ -1764,6 +1807,171 @@ impl FundsView {
                 Ok(()) => {
                     ctx.log("资金", "删除收付款单", &format!("#{id}"));
                     ctx.info("已删除收付款单");
+                }
+                Err(e) => ctx.error(e.to_string()),
+            }
+        }
+    }
+
+    fn show_transfers(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        let today = chrono::Local::now()
+            .date_naive()
+            .format("%Y-%m-%d")
+            .to_string();
+        if self.tf_date.is_empty() {
+            self.tf_date = today.clone();
+        }
+        widgets::toolbar(ui, |ui| {
+            ui.label("日期");
+            ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.tf_date));
+            ui.label("转出");
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.tf_from).hint_text("100201"),
+            );
+            ui.label("转入");
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.tf_to).hint_text("1001"),
+            );
+            ui.label("金额");
+            ui.add_sized(
+                [100.0, 22.0],
+                egui::TextEdit::singleline(&mut self.tf_amount),
+            );
+            ui.label("备注");
+            ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut self.tf_memo));
+            if ui.button("新增调拨").clicked() {
+                match chrono::NaiveDate::parse_from_str(&self.tf_date, "%Y-%m-%d") {
+                    Ok(date) => {
+                        let who = ctx.user().username.clone();
+                        let amount = Money::parse_or_zero(&self.tf_amount);
+                        match findb::transfer::transfer_create(
+                            ctx.db(),
+                            date,
+                            &self.tf_from,
+                            &self.tf_to,
+                            amount,
+                            &self.tf_memo,
+                            &who,
+                        ) {
+                            Ok(doc_id) => {
+                                ctx.log(
+                                    "资金",
+                                    "新增资金调拨（待审核）",
+                                    &format!("单 #{doc_id} {}→{}", self.tf_from, self.tf_to),
+                                );
+                                ctx.info("已保存为草稿；审核后生成凭证：借 转入 / 贷 转出");
+                                self.tf_amount.clear();
+                                self.tf_memo.clear();
+                            }
+                            Err(e) => ctx.error(e.to_string()),
+                        }
+                    }
+                    Err(_) => ctx.error("日期格式应为 YYYY-MM-DD"),
+                }
+            }
+        });
+        ui.label(
+            RichText::new(
+                "账户间转账（现金/银行之间）：两端不能相同、须为资金科目；审核后生成凭证 借 转入 / 贷 转出，不涉及往来、不核销",
+            )
+            .weak(),
+        );
+
+        let rows = findb::transfer::transfer_list(ctx.db()).unwrap_or_default();
+        let cols = [
+            widgets::TCol::new("单号", 140.0).fixed(),
+            widgets::TCol::new("日期", 100.0).fixed(),
+            widgets::TCol::new("转出", 100.0).fixed(),
+            widgets::TCol::new("转入", 100.0).fixed(),
+            widgets::TCol::new("金额", 120.0).right(),
+            widgets::TCol::new("凭证", 90.0).fixed(),
+            widgets::TCol::new("状态", 64.0).fixed(),
+            widgets::TCol::new("备注", 160.0),
+            widgets::TCol::new("操作", 130.0).fixed(),
+        ];
+        let mut del: Option<i64> = None;
+        let mut act: Option<(i64, bool)> = None; // (id, true=审核 / false=撤审)
+        widgets::grid(ui, "fund_transfers", &cols, rows.len(), 24.0, |i, c, ui| {
+            let d = &rows[i];
+            match c {
+                0 => {
+                    ui.label(RichText::new(&d.no).monospace());
+                }
+                1 => {
+                    ui.label(d.date.format("%Y-%m-%d").to_string());
+                }
+                2 => {
+                    ui.label(RichText::new(&d.from_account).monospace());
+                }
+                3 => {
+                    ui.label(RichText::new(&d.to_account).monospace());
+                }
+                4 => widgets::amount_label(ui, d.amount),
+                5 => match d.voucher_id {
+                    Some(v) => {
+                        ui.label(RichText::new(format!("#{v}")).color(palette::CREDIT));
+                    }
+                    None => {
+                        ui.label("—");
+                    }
+                },
+                6 => {
+                    if d.status == "audited" {
+                        ui.label("已审核");
+                    } else {
+                        ui.label(RichText::new("待审核").weak());
+                    }
+                }
+                7 => {
+                    ui.label(&d.memo);
+                }
+                8 => {
+                    let can_audit =
+                        ctx.can(fincore::Perm::VoucherAudit) || ctx.can(fincore::Perm::VoucherPost);
+                    if d.status == "draft" && can_audit {
+                        if ui.small_button("审核").clicked() {
+                            act = Some((d.id, true));
+                        }
+                    } else if d.status == "audited"
+                        && can_audit
+                        && ui.small_button("撤审").clicked()
+                    {
+                        act = Some((d.id, false));
+                    }
+                    if ui.small_button("删除").clicked() {
+                        del = Some(d.id);
+                    }
+                }
+                _ => {}
+            }
+        });
+        if let Some((id, is_audit)) = act {
+            if is_audit {
+                let who = ctx.user().username.clone();
+                match findb::transfer::transfer_audit(ctx.db(), id, &who) {
+                    Ok(vid) => {
+                        ctx.log("资金", "审核资金调拨", &format!("#{id} 凭证 #{vid}"));
+                        ctx.info(format!("已审核，凭证 #{vid}"));
+                    }
+                    Err(e) => ctx.error(e.to_string()),
+                }
+            } else {
+                match findb::transfer::transfer_unaudit(ctx.db(), id) {
+                    Ok(()) => {
+                        ctx.log("资金", "撤销审核资金调拨", &format!("#{id}"));
+                        ctx.info("已撤销审核，单据回到草稿");
+                    }
+                    Err(e) => ctx.error(e.to_string()),
+                }
+            }
+        }
+        if let Some(id) = del {
+            match findb::transfer::transfer_delete(ctx.db(), id) {
+                Ok(()) => {
+                    ctx.log("资金", "删除资金调拨", &format!("#{id}"));
+                    ctx.info("已删除资金调拨单");
                 }
                 Err(e) => ctx.error(e.to_string()),
             }

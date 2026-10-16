@@ -9636,6 +9636,7 @@ async function viewFunds(main) {
       <button class="btn sm ${state.fundsTab === "shift" ? "primary" : "ghost"}" id="ft-shift">交接班</button>
       <button class="btn sm ${state.fundsTab === "budget" ? "primary" : "ghost"}" id="ft-budget">资金预算</button>
       <button class="btn sm ${state.fundsTab === "receipt" ? "primary" : "ghost"}" id="ft-receipt">收付款</button>
+      <button class="btn sm ${state.fundsTab === "transfer" ? "primary" : "ghost"}" id="ft-transfer">资金调拨</button>
       <button class="btn sm ${state.fundsTab === "forecast" ? "primary" : "ghost"}" id="ft-forecast">资金预测</button>
     </div>
     <div id="funds-body" class="muted">加载中…</div>`;
@@ -9643,7 +9644,7 @@ async function viewFunds(main) {
   // 资金管理页写按钮按 voucher_new 显隐：导航放行的是 fin_report（只读/成本会计可进页），
   // 而页内写操作服务端要求 voucher_new——显隐与权限一致，避免"看得见点不了"
   const FUNDS_WRITE_IDS = ["#rc-new", "#cc-new", "#ck-new", "#ad-new", "#bill-new", "#loan-new",
-    "#jn-clear", "#jn-unclear", "#jn-receipt", "#jn-payment"];
+    "#jn-clear", "#jn-unclear", "#jn-receipt", "#jn-payment", "#tf-new"];
   const gateFundsWrites = () => {
     if (can("voucher_new")) return;
     FUNDS_WRITE_IDS.forEach((s) => { const el = $(s); if (el) el.remove(); });
@@ -9659,6 +9660,7 @@ async function viewFunds(main) {
   $("#ft-shift").onclick = () => switchTab("shift");
   $("#ft-budget").onclick = () => switchTab("budget");
   $("#ft-receipt").onclick = () => switchTab("receipt");
+  $("#ft-transfer").onclick = () => switchTab("transfer");
   $("#ft-forecast").onclick = () => switchTab("forecast");
 
   const body = $("#funds-body");
@@ -9705,6 +9707,8 @@ async function viewFunds(main) {
     renderBudget(body);
   } else if (tab === "receipt") {
     renderReceipts(body);
+  } else if (tab === "transfer") {
+    renderTransfers(body);
   } else {
     body.className = "";
     try {
@@ -9898,6 +9902,80 @@ async function renderReceipts(body) {
         try { await postJson(`/funds/receipts/${b.dataset.rcUnaudit}/unaudit`, {}); toast("已撤销审核", "ok"); load(); } catch (e) { toast(e.message, "err"); }
       });
     } catch (e) { $("#rc-list").innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+  }
+}
+
+// 资金调拨（账户间转账）：建单（草稿）→ 审核出凭证（借 转入 / 贷 转出）→ 撤审/删除。
+// 两端都是现金/银行科目，不涉及往来、不核销。
+async function renderTransfers(body) {
+  body.className = "";
+  body.innerHTML = `<div class="toolbar">
+      <label>日期 <input type="date" id="tf-date" value="${today()}" /></label>
+      <label>转出 <select id="tf-from" style="width:190px"></select></label>
+      <label>转入 <select id="tf-to" style="width:190px"></select></label>
+      <label>金额 <input id="tf-amt" style="width:110px" /></label>
+      <label>备注 <input id="tf-memo" style="width:150px" /></label>
+      <button class="btn primary" id="tf-new">新增调拨</button>
+    </div>
+    <div class="muted" style="font-size:12px;margin-bottom:6px">保存为待审核单；审核后生成凭证：<b>借 转入账户 / 贷 转出账户</b>（账户间转账，不改往来账）。两端须为现金/银行科目且不能相同。</div>
+    <div class="panel"><h4 style="margin:0">资金调拨单</h4><div id="tf-list" class="muted" style="margin-top:8px">加载中…</div></div>`;
+
+  const accts = (await ensureAccounts()).filter((a) => a.is_cash || a.is_bank);
+  const fill = (sel, def) => {
+    const el = $(sel);
+    if (!el) return;
+    el.innerHTML = accts.length
+      ? accts.map((a) => `<option value="${esc(a.code)}">${esc(a.code)} ${esc(a.name)}</option>`).join("")
+      : `<option value="">（先到会计科目设现金/银行科目）</option>`;
+    if (def && accts.some((a) => a.code === def)) el.value = def;
+  };
+  fill("#tf-from", "100201");
+  fill("#tf-to", "1001");
+
+  $("#tf-new").onclick = async () => {
+    const from = $("#tf-from").value, to = $("#tf-to").value;
+    if (!from || !to) { toast("请选择转出 / 转入账户", "err"); return; }
+    if (from === to) { toast("转出与转入不能相同", "err"); return; }
+    if (!($("#tf-amt").value || "").trim()) { toast("请填写金额", "err"); return; }
+    try {
+      await postJson("/funds/transfers", {
+        date: $("#tf-date").value, from_account: from, to_account: to,
+        amount: $("#tf-amt").value.trim(), memo: $("#tf-memo").value.trim(),
+      });
+      toast("已保存为待审核单（审核后生成凭证）", "ok");
+      $("#tf-amt").value = ""; $("#tf-memo").value = "";
+      load();
+    } catch (e) { toast(e.message, "err"); }
+  };
+  await load();
+
+  async function load() {
+    try {
+      const r = await api("/funds/transfers");
+      const rows = r.rows || [];
+      $("#tf-list").innerHTML = rows.length
+        ? `<table class="grid"><thead><tr><th>单号</th><th>日期</th><th>转出</th><th>转入</th><th class="num">金额</th><th>凭证</th><th>状态</th><th>备注</th><th></th></tr></thead><tbody>${rows.map((d) => `<tr>
+            <td>${esc(d.no)}</td><td>${esc(d.date)}</td>
+            <td>${esc(d.from_account)}</td><td>${esc(d.to_account)}</td>
+            <td class="num">${fmt(d.amount)}</td>
+            <td>${d.voucher_id ? `<a href="#" data-tf-v="${d.voucher_id}">凭证 #${d.voucher_id}</a>` : "—"}</td>
+            <td>${d.status === "audited" ? '<span class="tag ok">已审核</span>' : '<span class="tag warn">待审核</span>'}</td>
+            <td>${esc(d.memo || "")}</td>
+            <td class="row-actions">${can("voucher_audit") || can("voucher_post") ? (d.status === "draft" ? `<button class="btn ghost sm" data-tf-audit="${d.id}">审核</button>` : `<button class="btn ghost sm" data-tf-unaudit="${d.id}">撤审</button>`) : ""}<button class="btn ghost sm" data-tf-d="${d.id}">删除</button></td></tr>`).join("")}</tbody></table>`
+        : `<div class="muted">暂无资金调拨单</div>`;
+      $all("[data-tf-v]").forEach((a) => a.onclick = (e) => { e.preventDefault(); openVoucherEditor(parseInt(a.dataset.tfV, 10)); });
+      $all("[data-tf-d]").forEach((b) => b.onclick = async () => { if (!(await confirmDialog("删除该资金调拨单？其凭证需先作废或删除", true))) return; try { await api(`/funds/transfers/${b.dataset.tfD}/delete`, { method: "POST" }); toast("已删除", "ok"); load(); } catch (e) { toast(e.message, "err"); } });
+      $all("[data-tf-audit]").forEach((b) => b.onclick = async () => {
+        try {
+          const r = await postJson(`/funds/transfers/${b.dataset.tfAudit}/audit`, {});
+          toast(`已审核，凭证 #${r.voucher_id}`, "ok"); load();
+        } catch (e) { toast(e.message, "err"); }
+      });
+      $all("[data-tf-unaudit]").forEach((b) => b.onclick = async () => {
+        if (!(await confirmDialog("撤销审核？将删除其未记账凭证，单据回到草稿。", true))) return;
+        try { await postJson(`/funds/transfers/${b.dataset.tfUnaudit}/unaudit`, {}); toast("已撤销审核", "ok"); load(); } catch (e) { toast(e.message, "err"); }
+      });
+    } catch (e) { $("#tf-list").innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
   }
 }
 

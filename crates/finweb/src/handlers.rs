@@ -647,6 +647,14 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/funds/receipts/print-form", get(print_receipt_form))
         .route("/api/funds/receipts/:id/audit", post(audit_receipt))
         .route("/api/funds/receipts/:id/unaudit", post(unaudit_receipt))
+        // 资金调拨（账户间转账）：与收付款单同构的建单/审核/撤审/删除链
+        .route(
+            "/api/funds/transfers",
+            get(list_transfers).post(create_transfer),
+        )
+        .route("/api/funds/transfers/:id/audit", post(audit_transfer))
+        .route("/api/funds/transfers/:id/unaudit", post(unaudit_transfer))
+        .route("/api/funds/transfers/:id/delete", post(delete_transfer))
         .route("/api/inventory/counts", get(list_counts))
         .route("/api/inventory/count", post(create_count))
         .route("/api/inventory/count/:id/apply", post(apply_count))
@@ -11411,7 +11419,7 @@ async fn delete_receipt(
 
 // ---------------- 收付款单审核流 + 存货盘点 ----------------
 
-/// 收付款单的「审核」判据：**VoucherAudit 或 VoucherPost 二者其一**。
+/// 资金类单据（收付款单 / 资金调拨单）的「审核」判据：**VoucherAudit 或 VoucherPost 二者其一**。
 ///
 /// 原来只认 `VoucherAudit`，于是「只有会计 + 出纳、没有财务主管」的小微企业
 /// **永远把收付款单变不成凭证** —— 出纳录单，会计想审，但 `Role::Accountant`
@@ -11419,28 +11427,28 @@ async fn delete_receipt(
 /// 审不了。这条死路是在 2026-09-29 补出纳日常 E2E 时实测撞出来的。
 ///
 /// 为什么放开给 `VoucherPost` 是安全的、而且才是对的控制：
-/// · 收付款单的凭证是**系统按单据自动生成**的（不是人手敲的），三方分离针对的是
-///   「自己录的凭证自己审自己记」；单据来源不同，可审的人也就该不同。
+/// · 收付款单 / 调拨单的凭证是**系统按单据自动生成**的（不是人手敲的），三方分离
+///   针对的是「自己录的凭证自己审自己记」；单据来源不同，可审的人也就该不同。
 /// · 真正的控制是「**要记账的那个人看过这张单**」。`VoucherPost` 恰好就是记账权
 ///   持有者 —— 会计审完直接记；出纳（只有 VoucherNew/Edit/Sign）自己审不了自己
 ///   提的单，两头仍然分开。
 /// · 不动 `enable_audit`：手工凭证的审核闸门原样保留，两人公司在建账向导里选
 ///   「不启用审核环节」即可，两条路径互不影响。
 ///
-/// `audit_receipt` 与 `unaudit_receipt` **必须用同一个判据** —— 只给"审"放开而
-/// 不给"撤审"，会出现「会计能审但撤不回来」，那比一开始就没有还糟。
-fn require_receipt_gate(user: &CurrentUser) -> Result<(), AppError> {
+/// 「审核」与「撤审」**必须用同一个判据** —— 只给"审"放开而不给"撤审"，会出现
+/// 「会计能审但撤不回来」，那比一开始就没有还糟。
+fn require_fund_doc_gate(user: &CurrentUser) -> Result<(), AppError> {
     if user.can(Perm::VoucherAudit) || user.can(Perm::VoucherPost) {
         Ok(())
     } else {
         Err(AppError::forbidden(
-            "没有「凭证审核」或「记账」权限，不能审核收付款单",
+            "没有「凭证审核」或「记账」权限，不能审核资金单据",
         ))
     }
 }
 
 /// 审核收付款单（对标金蝶）：同事务生成资金凭证 + FIFO 自动核销。审核权 =
-/// **VoucherAudit 或 VoucherPost**（见 `require_receipt_gate`）——出纳录单，
+/// **VoucherAudit 或 VoucherPost**（见 `require_fund_doc_gate`）——出纳录单，
 /// 有记账权的人把关；两者都没有时（出纳想审自己提的单）仍然拦住。
 async fn audit_receipt(
     State(state): State<Arc<WebState>>,
@@ -11464,7 +11472,7 @@ async fn audit_receipt(
             return Ok(Json(json!({ "ok": true, "rejected": true })));
         }
         findb::workflow::Gate::NoFlow => {
-            require_receipt_gate(&user)?;
+            require_fund_doc_gate(&user)?;
         }
         findb::workflow::Gate::Final { approved: true } => {}
     }
@@ -11486,7 +11494,7 @@ async fn unaudit_receipt(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_receipt_gate(&user)?;
+    require_fund_doc_gate(&user)?;
     let db = state.db_for(&user.book_key)?;
     findb::receipt::receipt_unaudit(&db, id)?;
     db.log(
@@ -11495,6 +11503,117 @@ async fn unaudit_receipt(
         "撤销审核收付款单",
         &format!("#{id}"),
     )?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---------------- 资金调拨（账户间转账） ----------------
+
+#[derive(Deserialize)]
+struct TransferCreateReq {
+    #[serde(default)]
+    date: String,
+    pub from_account: String,
+    pub to_account: String,
+    pub amount: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+async fn list_transfers(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::FinReport)?;
+    let db = state.db_for(&user.book_key)?;
+    Ok(Json(
+        json!({ "rows": findb::transfer::transfer_list(&db)? }),
+    ))
+}
+
+/// 新增资金调拨单：只落草稿单据；凭证在「审核」时生成（对标金蝶录单 → 审核）
+async fn create_transfer(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<TransferCreateReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::VoucherNew)?;
+    let db = state.db_for(&user.book_key)?;
+    let date = if req.date.is_empty() {
+        chrono::Local::now().date_naive()
+    } else {
+        chrono::NaiveDate::parse_from_str(&req.date, "%Y-%m-%d")
+            .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
+    };
+    let amount = parse_money_checked(&req.amount)?;
+    let id = findb::transfer::transfer_create(
+        &db,
+        date,
+        &req.from_account,
+        &req.to_account,
+        amount,
+        &req.memo,
+        user.username(),
+    )?;
+    db.log(
+        user.username(),
+        "资金",
+        "新增资金调拨单（待审核）",
+        &format!(
+            "#{id} {}→{} {}",
+            req.from_account.trim(),
+            req.to_account.trim(),
+            amount.fmt_money()
+        ),
+    )?;
+    Ok(Json(json!({ "ok": true, "id": id, "status": "draft" })))
+}
+
+/// 审核资金调拨单：生成凭证（借 转入 / 贷 转出）。审核权同收付款单
+/// （`require_fund_doc_gate`：VoucherAudit 或 VoucherPost）
+async fn audit_transfer(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_fund_doc_gate(&user)?;
+    let db = state.db_for(&user.book_key)?;
+    let vid = findb::transfer::transfer_audit(&db, id, user.username())?;
+    db.log(
+        user.username(),
+        "资金",
+        "审核资金调拨单",
+        &format!("#{id} 凭证 #{vid}"),
+    )?;
+    Ok(Json(json!({ "ok": true, "voucher_id": vid })))
+}
+
+/// 撤销审核：删除未记账凭证 → 单据回草稿（判据与审核一致）
+async fn unaudit_transfer(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_fund_doc_gate(&user)?;
+    let db = state.db_for(&user.book_key)?;
+    findb::transfer::transfer_unaudit(&db, id)?;
+    db.log(
+        user.username(),
+        "资金",
+        "撤销审核资金调拨单",
+        &format!("#{id}"),
+    )?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_transfer(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::VoucherNew)?;
+    let db = state.db_for(&user.book_key)?;
+    findb::transfer::transfer_delete(&db, id)?;
+    db.log(user.username(), "资金", "删除资金调拨单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
 
