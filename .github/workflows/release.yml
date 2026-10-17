@@ -1,0 +1,212 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── 发布门禁：tag 与版本号一致 + 全量测试通过 ─────────────────────────
+  verify:
+    name: Verify tag & tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 校验 tag 与 Cargo.toml 版本一致
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          W=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "tag=$V workspace=$W"
+          if [ "$V" != "$W" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 Cargo.toml 版本 $W 不一致，拒绝发布"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 全量测试（发布门禁）
+        run: cargo test --workspace --locked
+
+  # ── 桌面版（Linux x64） ──────────────────────────────────────────────
+  desktop-linux:
+    name: Desktop (Linux x64)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build desktop
+        run: cargo build --release --locked -p finbook
+      - name: 生成示例账套
+        # 发布包里必须带一份**有数据**的示例账套：新手打开空白账套什么也
+        # 学不到，先看到「记完一个月账应该长什么样」才有参照。
+        run: |
+          cargo run --release --locked -p findb --example create -- dist/示例账套.fbk
+          cargo run --release --locked -p findb --example demo   -- dist/示例账套.fbk
+      - name: package
+        run: |
+          mkdir -p dist/pack
+          cp target/release/finbook docs/新手使用说明.txt dist/示例账套.fbk dist/pack/
+          # 发布说明随包一起上传：Publish job 只下载 artifact、不 checkout
+          # 仓库，工作目录里没有 docs/，说明文件必须搭这个便车。
+          mkdir -p dist/docs-releases
+          cp "docs/releases/${GITHUB_REF_NAME}.md" dist/docs-releases/ 2>/dev/null \
+            || echo "::warning::没有 docs/releases/${GITHUB_REF_NAME}.md，发布将用自动生成的说明"
+          tar -C dist/pack -czf "dist/finbook-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-linux
+          path: dist/*
+
+  # ── 桌面版（Windows x64，mingw 交叉编译） ────────────────────────────
+  desktop-windows:
+    name: Desktop (Windows x64)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: build desktop
+        run: cargo build --release --locked --target x86_64-pc-windows-gnu -p finbook
+      - name: 生成示例账套
+        run: |
+          cargo run --release --locked -p findb --example create -- dist/示例账套.fbk
+          cargo run --release --locked -p findb --example demo   -- dist/示例账套.fbk
+      - name: package
+        run: |
+          mkdir -p dist/pack
+          cp target/x86_64-pc-windows-gnu/release/finbook.exe \
+             docs/新手使用说明.txt dist/示例账套.fbk dist/pack/
+          # 说明文件跟着走（Publish 靠它生成 Release 正文，见 Linux job 同处注释）
+          mkdir -p dist/docs-releases
+          cp "docs/releases/${GITHUB_REF_NAME}.md" dist/docs-releases/ 2>/dev/null || true
+          # 不能用 zip -j（会拍平目录名，中文文件名也容易在 Windows 下乱码）；
+          # 保持包内一层目录，解压出来就是一个能直接双击的文件夹。
+          (cd dist/pack && zip -r "../finbook-${GITHUB_REF_NAME#v}-windows-x86_64.zip" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows
+          path: dist/*
+
+  # ── 服务器版（Linux x64：finweb + static + systemd 单元） ─────────────
+  server-linux:
+    name: Server (Linux x64)
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build finweb
+        run: cargo build --release --locked -p finweb
+      - name: package
+        run: |
+          mkdir -p dist/server
+          cp target/release/finweb dist/server/
+          cp -r crates/finweb/static dist/server/static
+          rm -f dist/server/static/util.test.js
+          cp deploy/finweb.service dist/server/
+          tar -C dist/server -czf "dist/finweb-${GITHUB_REF_NAME#v}-linux-x86_64.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-linux
+          path: dist/*
+
+  # ── 汇总并发布到 GitHub Release ─────────────────────────────────────
+  publish:
+    name: Publish
+    needs: [desktop-linux, desktop-windows, server-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: 生成校验和
+        # 不能写成 `sha256sum * > SHA256SUMS`：shell 先展开通配符，而此时
+        # SHA256SUMS 已被重定向创建（空文件），于是它把自己也算进去 ——
+        # 读一个正在被写的文件，结果不稳定。2026-10-12 的 v1.1.0 发布就是这么
+        # 红的：四个 job 里三个成功，Publish 卡在这一步。
+        # 显式列出要算的文件，绕开通配符。
+        run: |
+          cd dist
+          sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
+          cat SHA256SUMS
+      - name: 创建或更新 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 上一步已经 cd 到 dist/，但那只是那一个 step —— 每个 step 都是新 shell，
+          # 这里的工作目录是仓库根。上一版我在本 step 里找 docs/releases/*.md，
+          # 在 dist/ 下当然找不到，静默退回了 --generate-notes（没报错，所以更难发现）。
+          # 统一用 $GITHUB_WORKSPACE 显式定位，不再依赖当前目录。
+          cd "$GITHUB_WORKSPACE"
+
+          # 只上传归档与校验和：download-artifact 合并后 dist/ 下有子目录，
+          # 而 `dist/*` 会把子目录也匹配进来，gh release upload 遇到目录会失败
+          # （和上面 sha256sum 同一个坑）。
+          ASSETS=()
+          for f in dist/*.tar.gz dist/*.zip dist/SHA256SUMS; do
+            [ -f "$f" ] && ASSETS+=("$f")
+          done
+          if [ ${#ASSETS[@]} -eq 0 ]; then
+            echo "::error::dist/ 下没有找到任何发布产物，打包步骤可能全失败了"
+            ls -la dist/ || true
+            exit 1
+          fi
+          echo "将上传 ${#ASSETS[@]} 个文件："
+          printf '  %s\n' "${ASSETS[@]}"
+
+          # 说明文件不能从工作目录读：download-artifact 只拉 artifact，
+          # 并不 checkout 仓库，所以 $GITHUB_WORKSPACE 里没有 docs/。
+          # （前两版分别栽在「相对路径 cd dist」和「目录里压根没源码」上，
+          #   两次都是被 [ -f ] 守卫静默吞掉，日志看起来一切正常。）
+          # 所以各打包 job 把说明文件一并塞进 artifact，这里从 dist/ 读。
+          NOTES=""
+          for cand in dist/docs-releases/*.md dist/*-release-notes.md; do
+            if [ -f "$cand" ]; then NOTES="$cand"; break; fi
+          done
+          if [ -n "$NOTES" ]; then
+            echo "使用发布说明：$NOTES"
+            NOTES_ARGS=(--notes-file "$NOTES")
+          else
+            echo "::warning::未找到发布说明文件，改用自动生成的提交列表"
+            echo "候选："; ls -la dist/ || true
+            NOTES_ARGS=(--generate-notes)
+          fi
+
+          # 先 create 再 upload，不用 `gh release view` 探测。
+          # 原因：v1.1.0 第二次发布踩过——删除 tag 会连带删掉它指向的
+          # Release，而 `gh release view` 在「tag 存在但 Release 不存在」
+          # 时的退出码并不可靠，于是走进了 upload 分支。upload **不会创建**
+          # Release，于是 job 显示 success，Release 却根本没建出来
+          # （API 查 tag 得到 404）。这种「绿但没产物」比直接报错更难查。
+          #
+          # create 撞上已存在的 Release 会失败，此时再退回 upload 覆盖。
+          if gh release create "$GITHUB_REF_NAME" \
+               --repo "$GITHUB_REPOSITORY" \
+               --verify-tag \
+               --title "FinBook ${GITHUB_REF_NAME}" \
+               "${NOTES_ARGS[@]}" \
+               "${ASSETS[@]}"; then
+            echo "已创建 Release $GITHUB_REF_NAME"
+          else
+            echo "Release 已存在，改为覆盖上传产物"
+            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+            # 正文也一并更新（upload 只换附件，不改正文）
+            if [ -n "$NOTES" ]; then
+              gh release edit "$GITHUB_REF_NAME" --notes-file "$NOTES" --repo "$GITHUB_REPOSITORY"
+            fi
+          fi

@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinBook 财务系统 · 代码审核报告</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#171d2b; --panel-2:#1d2436; --line:#2a3247;
+    --txt:#e6eaf2; --muted:#9aa4b8; --faint:#6b7488;
+    --crit:#ff4d5e; --high:#ff8a3d; --med:#ffc53d; --low:#4da3ff; --ok:#37d67a; --info:#b18cff;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--txt);line-height:1.6;font-size:15px}
+  a{color:var(--info);text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  header.hero{padding:56px 0 28px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#141a2b 0%,var(--bg) 100%)}
+  header.hero .kicker{color:var(--info);font-size:12px;letter-spacing:2px;text-transform:uppercase;font-weight:600}
+  header.hero h1{font-size:30px;margin:10px 0 6px;font-weight:700;letter-spacing:-.5px}
+  header.hero .meta{color:var(--muted);font-size:14px;margin:0}
+  .hero .tags{margin-top:16px;display:flex;flex-wrap:wrap;gap:8px}
+  .pill{border:1px solid var(--line);color:var(--muted);font-size:12px;padding:4px 11px;border-radius:999px;background:var(--panel)}
+  main.wrap{padding:36px 0 80px}
+  section{margin:48px 0}
+  h2{font-size:21px;margin:0 0 6px;display:flex;align-items:center;gap:10px;font-weight:700}
+  h2 .num{font-size:13px;color:var(--faint);font-weight:500;border:1px solid var(--line);border-radius:6px;padding:1px 8px}
+  .lead{color:var(--muted);font-size:14px;margin:0 0 20px;max-width:820px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:22px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 18px 16px}
+  .card .n{font-size:30px;font-weight:700;line-height:1}
+  .card .l{color:var(--muted);font-size:13px;margin-top:6px}
+  .c-crit .n{color:var(--crit)} .c-high .n{color:var(--high)} .c-med .n{color:var(--med)} .c-low .n{color:var(--low)} .c-ok .n{color:var(--ok)}
+  .verdict{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--info);border-radius:12px;padding:20px 22px;margin:18px 0}
+  .verdict h3{margin:0 0 8px;font-size:15px}
+  .verdict p{margin:6px 0;color:var(--muted);font-size:14px}
+  details.finding{background:var(--panel);border:1px solid var(--line);border-radius:12px;margin:12px 0;overflow:hidden}
+  details.finding>summary{cursor:pointer;padding:16px 18px;list-style:none;display:flex;gap:14px;align-items:flex-start}
+  details.finding>summary::-webkit-details-marker{display:none}
+  details.finding .sev{flex:0 0 auto;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:.5px;padding:3px 9px;border-radius:6px;margin-top:2px;white-space:nowrap}
+  details.finding .body{flex:1}
+  details.finding h4{margin:0 0 4px;font-size:15px;font-weight:600}
+  details.finding .loc{font-family:var(--mono);font-size:12px;color:var(--muted)}
+  details.finding .tags{margin-top:8px;display:flex;flex-wrap:wrap;gap:6px}
+  details.finding .tag{font-size:11px;color:var(--faint);border:1px solid var(--line);padding:1px 8px;border-radius:5px;background:var(--panel-2)}
+  details.finding .content{padding:2px 18px 18px 62px;color:var(--muted);font-size:14px}
+  details.finding .content p{margin:8px 0}
+  details.finding .content .fix{color:var(--txt)}
+  details.finding .content .fix b{color:var(--ok);font-weight:600}
+  pre{background:#0b0f19;border:1px solid var(--line);border-radius:8px;padding:13px 14px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.5;color:#c9d4ea;margin:10px 0}
+  .sev-crit{background:rgba(255,77,94,.15);color:var(--crit)}
+  .sev-high{background:rgba(255,138,61,.15);color:var(--high)}
+  .sev-med{background:rgba(255,197,61,.15);color:var(--med)}
+  .sev-low{background:rgba(77,163,255,.15);color:var(--low)}
+  details[open]>summary{border-bottom:1px solid var(--line)}
+  .good{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+  .good .g{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px 16px;font-size:14px;color:var(--muted)}
+  .good .g b{color:var(--ok);font-weight:600}
+  .roadmap li{margin:8px 0;color:var(--muted);font-size:14px}
+  .roadmap li b{color:var(--txt)}
+  table.clippy{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:12px}
+  table.clippy th,table.clippy td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+  table.clippy th{color:var(--muted);font-weight:600;font-family:var(--mono);font-size:12px}
+  table.clippy td.n{font-family:var(--mono);color:var(--med)}
+  footer{border-top:1px solid var(--line);padding:28px 0 60px;color:var(--faint);font-size:12.5px}
+  .toc{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+  .toc a{font-size:12.5px;border:1px solid var(--line);color:var(--muted);padding:4px 11px;border-radius:999px;background:var(--panel)}
+  .toc a:hover{border-color:var(--info);color:var(--info)}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <div class="kicker">Security · Correctness · Code Quality Review</div>
+    <h1>FinBook 财务系统 · 代码审核报告</h1>
+    <p class="meta">审核日期 2026-09-01 · 审核范围：fincore / findb / finweb / finui / finbook 全工作区 · 技术栈：Rust + Axum + SQLite + 原生 JS + egui</p>
+    <div class="tags">
+      <span class="pill">合计约 1.5 万行</span>
+      <span class="pill">cargo clippy：0 error</span>
+      <span class="pill">cargo build：通过</span>
+      <span class="pill">44 项实质发现</span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <div class="toc">
+    <a href="#summary">总览</a><a href="#critical">严重</a><a href="#high-sec">高危·安全</a><a href="#high-corr">高危·正确性</a><a href="#medium">中危</a><a href="#low">低危</a><a href="#strengths">做得好的</a><a href="#build">构建与 Lint</a><a href="#roadmap">修复路线</a>
+  </div>
+
+  <!-- ============ 总览 ============ -->
+  <section id="summary">
+    <h2>一、总览</h2>
+    <div class="cards">
+      <div class="card c-crit"><div class="n">1</div><div class="l">严重（立即阻断部署）</div></div>
+      <div class="card c-high"><div class="n">11</div><div class="l">高危（越权 / 账务错误）</div></div>
+      <div class="card c-med"><div class="n">18</div><div class="l">中危（加固 / 数据完整性）</div></div>
+      <div class="card c-low"><div class="n">14</div><div class="l">低危（健壮性 / 质量）</div></div>
+      <div class="card c-ok"><div class="n">~46</div><div class="l">clippy 警告（多为风格）</div></div>
+    </div>
+
+    <div class="verdict">
+      <h3>总体结论</h3>
+      <p><b style="color:var(--ok)">工程底线是扎实的：</b>金额全链路使用定点 Decimal（无 f64 入账）；SQL 全部参数化（未发现任何 SQL 注入面）；口令采用 argon2id + 每用户随机盐，并在登录时透明升级旧哈希；会话令牌为 128-bit 加密随机；凭证落库有「界面 + validate_for_save 持久层」双重校验；复式记账借贷平衡、期末损益结转方向、折旧尾差拉平等核心逻辑正确。</p>
+      <p><b style="color:var(--high)">最需要警惕的风险集中在「授权完整性」与「账务口径」两处：</b>Web 层做了「仅本人凭证」的数据范围设计，却在所有凭证读写接口里完全没有落地（IORD）；凭证删除与反审核存在缺守卫 / 缺权限的越权路径；核销与资产负债表的备抵科目各有一处「算错钱 / 虚增资产」的正确性缺陷。此外，首次登录即获管理员的初始化流程叠加默认全网卡明文监听，构成部署即被接管的现实风险。</p>
+      <p><b style="color:var(--info)">判定：</b>作为原型 / 内网单机财务工具可用且质量中上；但在修掉下述高危项之前，<b>不建议暴露到不可信网络或用于真实多用户核算</b>。修复优先级见文末路线图。</p>
+    </div>
+  </section>
+
+  <!-- ============ 严重 ============ -->
+  <section id="critical">
+    <h2>二、严重问题 <span class="num">1 项</span></h2>
+    <p class="lead">可能导致系统在部署/初始化阶段即被完全接管的问题。</p>
+
+    <details class="finding" open>
+      <summary><span class="sev sev-crit">CRIT</span><div class="body">
+        <h4>首次登录者自动成为管理员，叠加默认全网卡明文监听 → 部署即被接管</h4>
+        <div class="loc">finweb/src/handlers.rs:146-163 · findb/src/users.rs:188-206 · finweb/src/main.rs:23,68-70</div>
+        <div class="tags"><span class="tag">安全</span><span class="tag">权限提升</span><span class="tag">初始化竞争</span></div>
+      </div></summary>
+      <div class="content">
+        <p>账套用户数为 0 时，任何人第一次调用 <code>/api/login</code> 即用其提交的用户名+口令直接建为管理员（仅要求口令 ≥6 位，<b>绕过 PasswordPolicy</b>，且 <code>must_change_pwd=false</code>）。同时服务默认监听 <code>0.0.0.0:8080</code>、纯 HTTP，启动日志还印出「首次登录的账号将自动成为管理员」。未初始化完成的账套一旦暴露到网络，攻击者可抢先完成首登，成为系统管理员并完全接管账套。</p>
+        <pre>// handlers.rs
+if count == 0 {
+    if username.is_empty() || req.password.len() &lt; 6 { /* 仅长度校验 */ }
+    users::create_admin(&amp;db, &amp;username, &amp;req.password, &amp;username)?; // 直接 Role::Admin
+}
+// users.rs create_admin: must_change_pwd = false</pre>
+        <p class="fix"><b>修复：</b>默认监听改为 <code>127.0.0.1</code>；首次建账收口为一次性初始化流程（本地回环 / 一次性 token / 环境变量设定管理员）；管理员口令必须通过 <code>policy.check</code> 并强制 <code>must_change_pwd=true</code>；部署层强制 HTTPS。</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ 高危 - 安全 ============ -->
+  <section id="high-sec">
+    <h2>三、高危 — 安全与越权 <span class="num">7 项</span></h2>
+    <p class="lead">已登录用户可越权查看 / 篡改他人或全盘数据的授权缺口。</p>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>Web 层完全未执行「仅本人凭证」数据范围 → 任何会计角色可全盘查看/改/删凭证（IDOR）</h4>
+        <div class="loc">finweb/src/handlers.rs:527-560 (list) · 562-574 (get) · 628-647 (edit) · 752-762 (delete)</div>
+        <div class="tags"><span class="tag">越权</span><span class="tag">IDOR</span><span class="tag">失效访问控制</span></div>
+      </div></summary>
+      <div class="content">
+        <p>建号时对非管理员设置了 <code>data_scope.own_voucher_only = true</code>（注释明确「防越权翻看他人/全盘数据」），但在 Web 层该字段从未被读取：凭证列表/详情/编辑/删除均按裸 <code>Path(id)</code> 或 <code>VoucherQuery::default()</code> 处理，从未调用已实现的 <code>with_data_scope</code> / <code>can_see_voucher</code>。后果：拥有 VoucherEdit/VoucherDelete 的普通「会计」账号可读取、修改、删除<b>全账套</b>凭证。</p>
+        <pre>// handlers.rs:536 —— 未应用数据范围
+let mut query = VoucherQuery::default(); query.asc = true;
+let list = vouchers::list(&amp;db, &amp;query)?;  // 缺少 .with_data_scope(&amp;user.user)</pre>
+        <p class="fix"><b>修复：</b>list 用 <code>query.with_data_scope(&amp;user.user)</code>；get/edit/delete 取回后校验 <code>user.user.can_see_voucher(&amp;v)</code>，不满足返回 403。</p>
+      </div>
+    </details>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>voucher_unaudit 无任何权限校验，且语义错误（任意登录用户可退审他人凭证）</h4>
+        <div class="loc">finweb/src/handlers.rs:735-750</div>
+        <div class="tags"><span class="tag">越权</span><span class="tag">缺失鉴权</span><span class="tag">状态机</span></div>
+      </div></summary>
+      <div class="content">
+        <p>该处理函数全程无 <code>user.require(...)</code>（对比同组 voucher_audit 有 <code>Perm::VoucherAudit</code>、voucher_delete 有 <code>Perm::VoucherDelete</code>，这是唯一缺口）。更糟的是逻辑：注释写「取消记账」，却调用 <code>vouchers::unaudit</code>（要求状态为 Audited），而「取消记账」应调用 <code>vouchers::unpost</code>（Posted→Audited）。</p>
+        <pre>async fn voucher_unaudit(...) -&gt; ... {
+    if v.status == VoucherStatus::Posted {
+        vouchers::unaudit(&amp;db, id)?;   // 无权限校验；且 unaudit 只接受 Audited
+    }
+}</pre>
+        <p class="fix"><b>修复：</b>函数开头补 <code>user.require(Perm::VoucherAudit)?</code>（或按语义改 <code>VoucherUnpost</code> 并调用 <code>unpost</code>），并明确该接口到底做「反审核」还是「反记账」。</p>
+      </div>
+    </details>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>凭证删除持久层无守卫，validate_delete 全仓库零调用</h4>
+        <div class="loc">findb/src/vouchers.rs:392-396 · fincore/src/engine/validate.rs:275-286 · finui/src/lib.rs:82</div>
+        <div class="tags"><span class="tag">数据完整性</span><span class="tag">死代码防线</span></div>
+      </div></summary>
+      <div class="content">
+        <p><code>vouchers::delete</code> 是裸 <code>DELETE FROM voucher WHERE id=?</code>，不校验状态、不校验结账期间、不校验所有权——与同文件 save/audit/post/unpost/set_void「持久层最后防线」的自述相矛盾。已实现、本应拦截「已记账不能删 / 已结账期间不能删」的 <code>validate_delete</code> 从未被调用。Web（<code>handlers.rs:759</code>）与桌面端（<code>finui/lib.rs:82</code>）均直删。后果：有 VoucherDelete 权限者（或桌面端）可删除<b>已记账 / 已结账期间 / 他人</b>的凭证。</p>
+        <p class="fix"><b>修复：</b>在 <code>delete</code> 内先 <code>get</code> 再 <code>validate_delete</code>，或由两个调用方显式校验 status/closed 后再删。</p>
+      </div>
+    </details>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>prepared_by 身份字段三种口径并存，导致数据权限与「制单人/审核人分离」失效</h4>
+        <div class="loc">finui/src/views/voucher_edit.rs:188,397 · finweb/src/handlers.rs:666 · findb/src/vouchers.rs:64-71 · fincore/src/user.rs:410</div>
+        <div class="tags"><span class="tag">一致性</span><span class="tag">数据权限</span></div>
+      </div></summary>
+      <div class="content">
+        <p>同一字段四处用三种口径：桌面端存 <code>display_name</code>、Web 端存 <code>username</code>、<code>with_data_scope</code> 按 <code>display_name</code> 过滤、<code>can_see_voucher</code> 按 <code>username</code> 比较。当 <code>display_name != username</code> 时，桌面端 own_voucher_only 用户把自己凭证全被过滤掉（看不到自己的凭证）；两终端交替访问时过滤进一步错乱。显示名不唯一、可改，还造成同显示名用户互相可见。</p>
+        <p class="fix"><b>修复：</b>全项目统一 <code>prepared_by</code> 只存唯一不可变的 <code>username</code>，两处过滤都按 username 比较。</p>
+      </div>
+    </details>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>DataScope 默认全放行 + can_see_voucher 忽略部门维度 + 科目区间「任一命中即放行」</h4>
+        <div class="loc">fincore/src/user.rs:184-193 · 408-421</div>
+        <div class="tags"><span class="tag">默认放行</span><span class="tag">越区泄漏</span></div>
+      </div></summary>
+      <div class="content">
+        <p><code>DataScope::default()</code> 全空 → <code>is_unrestricted()==true</code>，收敛依赖外部建号逻辑事后补设置，一旦遗漏则普通用户默认可见全盘。且 <code>can_see_voucher</code> 只判断 own_voucher_only 与科目区间，<b>完全忽略 <code>scope.depts</code></b>；科目区间过滤用 <code>entries.any(允许)</code>，凭证只要有一条分录在范围内整张可见，超出范围科目的金额随之外泄。</p>
+        <p class="fix"><b>修复：</b>非 Admin 账号在 <code>User::new</code> 默认 <code>own_voucher_only=true</code>；can_see_voucher 增加部门校验；科目范围改「全部分录均在范围内」或对范围外分录脱敏。</p>
+      </div>
+    </details>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>must_change_pwd（强制改密）仅前端约束，后端照发全量会话、逐请求不拦截</h4>
+        <div class="loc">finweb/src/handlers.rs:170-185 · finweb/src/state.rs:334-375 · findb/src/security.rs:214-235</div>
+        <div class="tags"><span class="tag">策略执行不完整</span><span class="tag">会话</span></div>
+      </div></summary>
+      <div class="content">
+        <p>登录返回 <code>MustChangePassword(u)</code> 时，<code>post_login</code> 仍用 u 创建会话并下发 Cookie（<code>Ok(u) | MustChangePassword(u)</code> 同分支）；<code>CurrentUser</code> 提取器只校验 disabled 与 device_id，从不校验 must_change_pwd。知道旧口令者拿到有效令牌后可直接调用业务接口，绕开「管理员重置后必须立即改密」。</p>
+        <p class="fix"><b>修复：</b>must_change_pwd 时仅签发受限会话；提取器中拦截除 /api/change-password、/api/logout、/api/me 外的请求。</p>
+      </div>
+    </details>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>会话 Cookie 缺 Secure 标志，配合默认明文 HTTP，令牌可被窃听重放</h4>
+        <div class="loc">finweb/src/state.rs:438-444 · finweb/src/main.rs:23,68</div>
+        <div class="tags"><span class="tag">会话安全</span><span class="tag">传输层</span></div>
+      </div></summary>
+      <div class="content">
+        <p>Cookie 只设 <code>HttpOnly; SameSite=Lax; Max-Age</code>，无 <code>Secure</code>，而默认监听 <code>http://0.0.0.0:8080</code>。令牌（128-bit 加密随机，本身安全）在网络明文传输，可被同网段窃听重放至上限 7 天，取得完整权限。</p>
+        <pre>format!("finbook_sid={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}", token, max_age_secs)</pre>
+        <p class="fix"><b>修复：</b>生产强制走 HTTPS 反代并给 Cookie 加 <code>Secure</code>；或至少默认绑定回环地址并对局域网风险文档化。</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ 高危 - 正确性 ============ -->
+  <section id="high-corr">
+    <h2>四、高危 — 账务正确性 <span class="num">4 项</span></h2>
+    <p class="lead">会直接导致金额算错或报表失真的缺陷。</p>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>资产负债表坏账准备 / 存货跌价准备 .neg() 方向错误，资产被高估 2 倍备抵</h4>
+        <div class="loc">fincore/src/report/balance_sheet.rs:45 · 81</div>
+        <div class="tags"><span class="tag">报表</span><span class="tag">符号约定</span><span class="tag">虚增资产</span></div>
+      </div></summary>
+      <div class="content">
+        <p>坏账准备(1231)、存货跌价准备(1471) 是贷方余额的备抵科目，在全引擎「正=借、负=贷」约定下其 End 取数本就是<b>负数</b>。模板却用 <code>.neg()</code> 把符号翻正，结果把准备<b>加回</b>资产。对照同表「固定资产」累计折旧(1602)/减值(1603) 是「不加 .neg() 靠负号自然冲减」，说明这两处 .neg() 属笔误。</p>
+        <pre>Term::acct(&amp;["1231"], AmountKind::End).neg(),   // 应收账款——坏账准备，负号被翻转
+Term::acct(&amp;["1471"], AmountKind::End).neg(),   // 存货——跌价准备</pre>
+        <p class="fix"><b>修复：</b>去掉这两个 <code>.neg()</code>（负号本身即代表「减」）。收入/费用表的 PeriodDebit/PeriodCredit 是非负发生额，其 neg() 语义正确、勿动。</p>
+      </div>
+    </details>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>往来核销在 SQL 侧对 TEXT 金额做加法 + 千分位存储 → 直接算错金额</h4>
+        <div class="loc">findb/src/settle.rs:169-185</div>
+        <div class="tags"><span class="tag">金额精度</span><span class="tag">SQL 算术</span></div>
+      </div></summary>
+      <div class="content">
+        <p><code>settle()</code> 用 <code>ON CONFLICT ... DO UPDATE SET amount=amount+excluded.amount</code> 让 SQLite 对 TEXT 金额列做加法，插入参数却用 <code>amount.to_string()</code>（Display 带千分位）。金额 ≥1000 时存成 <code>"1,000.00"</code>，SQLite 算术到逗号截断为 1，同一对分录再次核销得到错误累计；即便 <1000，TEXT 相加也走 REAL 引入浮点误差。</p>
+        <pre>// settle.rs:173
+ON CONFLICT(from_entry,to_entry) DO UPDATE SET amount=amount+excluded.amount
+// settle.rs:180 —— 带千分位的字符串
+amount.to_string(),</pre>
+        <p class="fix"><b>修复：</b>不要在 SQL 里做金额加法；先读回、在 Rust 侧用 <code>Money</code> 累加后写回；金额统一用无千分位的 <code>money_param</code>/<code>fmt_plain</code> 落库。</p>
+      </div>
+    </details>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>余额 / 账簿 / 报表只排除作废凭证，未排除「未审核、未记账」凭证</h4>
+        <div class="loc">findb/src/balances.rs:167-171,586,592,674 · vouchers.rs:719 · reports.rs:177 · bank.rs:188</div>
+        <div class="tags"><span class="tag">账务口径</span><span class="tag">状态机</span></div>
+      </div></summary>
+      <div class="content">
+        <p>模块文档写「余额 = 期初 + 已记账凭证发生额」，但 SQL 统一是 <code>WHERE v.status != 'void'</code>，即草稿、已审核未记账也全部计入科目余额/试算平衡/明细账/总账/现金流量。与之呼应，<code>LedgerQuery.posted_only</code> 字段因此完全失效；<code>counts()</code> 对 Draft 也返回 true、<code>can_edit()</code> 对 Posted 返回 true，状态机边界不严谨（记成 Posted 后修改金额不会强制重新过账）。</p>
+        <pre>-- balances.rs:170
+WHERE v.status != 'void' AND e.period &lt;= ?1</pre>
+        <p class="fix"><b>修复：</b>明确「记账是否构成余额边界」的产品决策后，统一余额/账簿/报表过滤为 <code>v.status = 'posted'</code>（至少让 posted_only 生效），并同步修正注释与 counts/can_edit 语义。</p>
+      </div>
+    </details>
+
+    <details class="finding">
+      <summary><span class="sev sev-high">HIGH</span><div class="body">
+        <h4>业务凭证生成与单据回写不在同一事务 → 部分提交并催生重复凭证</h4>
+        <div class="loc">findb/src/business.rs:1073-1075 · 287-293 · 611-617</div>
+        <div class="tags"><span class="tag">事务边界</span><span class="tag">幂等</span></div>
+      </div></summary>
+      <div class="content">
+        <p><code>claim_voucher</code>/<code>stock_cost_voucher</code>/<code>payroll_accrue_voucher</code> 里，<code>vouchers::save()</code> 内部自行 commit 后，回写 <code>voucher_id</code> 的 UPDATE 是另一独立写。若回写失败：凭证已入库但单据未关联；<code>claim_voucher</code> 靠 <code>voucher_id.is_some()</code> 防重，失败后重试会再生成一张凭证。</p>
+        <p class="fix"><b>修复：</b>把「生成凭证 + 回写单据/流水」包进同一事务（或让 save 接受外部事务句柄）。</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============ 中危 ============ -->
+  <section id="medium">
+    <h2>五、中危问题 <span class="num">18 项</span></h2>
+    <p class="lead">加固项、数据完整性与若干认证/口令流程缺陷。</p>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>登录响应可枚举用户名（与注释意图相反）</h4><div class="loc">findb/src/security.rs:163-168 · finweb/src/handlers.rs:187-197</div><div class="tags"><span class="tag">信息泄露</span></div></div></summary><div class="content"><p>不存在用户返回 401「用户不存在」，存在用户口令错误返回 400「口令错误，还剩 N 次」，状态码与文案均不同，构成用户名枚举 oracle。</p><p class="fix"><b>修复：</b>两种失败统一返回 401 与同一文案；剩余次数仅对已认证上下文显示。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>登录失败仅按用户名锁定，无按 IP 限流</h4><div class="loc">findb/src/security.rs:177-187</div><div class="tags"><span class="tag">暴力破解</span></div></div></summary><div class="content"><p>失败计数与锁定都 key 在 username 上，不记录来源 IP，攻击者轮换大量用户名可无节流撞库，锁定机制对分布式字典攻击失效。</p><p class="fix"><b>修复：</b>Web 层按 IP 增加失败计数与延时（固定窗口限流），失败响应加线性退避。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>锁定失败计数窗口单位错误：lock_minutes×60 → 15 分钟锁定时长变成 15 小时窗口</h4><div class="loc">findb/src/security.rs:180</div><div class="tags"><span class="tag">正确性</span></div></div></summary><div class="content"><p><code>recent_fails(db, username, policy.lock_minutes.max(1) * 60)</code> 把「分钟数×60」传给按分钟解释的 recent_fails，使默认失败窗口变成 900 分钟。相隔数小时的 5 次失误也会触发锁定，属过度锁定。</p><p class="fix"><b>修复：</b>失败窗口用独立常量（如 10~15 分钟），与锁定时长解耦。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>设备绑定（一人一机）完全信任客户端自报 device_id，无服务端核验</h4><div class="loc">finweb/src/handlers.rs:165,175 · findb/src/security.rs:192-207 · finweb/src/state.rs:361-366</div><div class="tags"><span class="tag">可欺骗软控制</span></div></div></summary><div class="content"><p>请求体里的任意字符串直接作为 device_id 参与首次绑定与后续比对，全程无服务端生成/签名/挑战。拿到口令者可自报目标设备 machine-id 编造指纹，或新设备首登时把自己绑成唯一合法设备。</p><p class="fix"><b>修复：</b>登录时下发随机 challenge，客户端用本机密钥签名；或绑定改管理员显式审批。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>附件上传无大小上限、整文件读入内存、无 MIME/扩展名校验</h4><div class="loc">findb/src/attach.rs:158-201</div><div class="tags"><span class="tag">资源耗尽</span><span class="tag">上传</span></div></div></summary><div class="content"><p><code>INLINE_LIMIT</code> 只是内存/外存分界并非上限；<code>add_file</code> 用 <code>std::fs::read</code> 整读入内存；<code>kind</code> 仅取原始文件名扩展名，不校验 MIME。可致磁盘/内存耗尽，任意扩展名落盘。</p><p class="fix"><b>修复：</b>设最大大小（如 20MB）并在读取前 <code>metadata().len()</code> 校验；限定白名单扩展名；大文件流式写入。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>附件读取/删除/导出路径用 join/push 拼接，未做规范化（潜在路径穿越）</h4><div class="loc">findb/src/attach.rs:139-148 · 204-212 · 352-357</div><div class="tags"><span class="tag">路径穿越</span></div></div></summary><div class="content"><p><code>read/delete</code> 用 <code>dir_of(db).join(rel)</code>，rel 取自 DB 的 path 列；<code>temp_export_path</code> 用 <code>push("stamp_name")</code> 把用户可控附件名拼进路径。若 path 列被污染或附件名含分隔符，可读写附件目录之外。</p><p class="fix"><b>修复：</b>对 rel/name 拒绝含 <code>\ / ..</code> 与绝对路径前缀的内容；或只取 <code>file_name()</code> 并断言父目录等于 base。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>数据导入不在事务中，中途失败留下半套数据</h4><div class="loc">findb/src/imports.rs:465-529 · 568-656</div><div class="tags"><span class="tag">事务</span><span class="tag">数据完整性</span></div></div></summary><div class="content"><p>每行/每张凭证的 upsert/save 各自独立提交，整个导入无外层事务；第 N 条违反约束时前 N-1 条已落库且只体现在 warnings，难以回滚。</p><p class="fix"><b>修复：</b>用 <code>unchecked_transaction()</code> 包住整个 import_*，全部成功再 commit。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>桌面端管理员重置口令走弱校验路径，绕过口令策略且不强制改密</h4><div class="loc">findb/src/users.rs:246-251 · finui/src/views/users.rs:236</div><div class="tags"><span class="tag">口令策略</span></div></div></summary><div class="content"><p><code>reset_password</code> 不调 policy.check、不设 must_change_pwd；change_password 仅校验「至少 6 位」。与管理端 <code>security::admin_reset_password</code> 的完整校验行为不一致，管理员可设 <code>123</code> 这类弱口令且用户不被强制修改。</p><p class="fix"><b>修复：</b>桌面端统一改调 <code>security::admin_reset_password</code> / <code>change_password_checked</code>。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>未认证接口泄露账套文件绝对路径与公司信息</h4><div class="loc">finweb/src/handlers.rs:110 · 124</div><div class="tags"><span class="tag">信息泄露</span></div></div></summary><div class="content"><p><code>/api/setup/status</code> 与 <code>/api/books</code> 无需登录即返回账套 SQLite 文件全路径及公司名，向未认证访问者暴露服务器目录结构。</p><p class="fix"><b>修复：</b>去掉 path 字段（前端不需要），或要求该接口已登录。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>argon2 失败静默降级为弱式 SHA-256 + 时间种子 LCG 盐</h4><div class="loc">fincore/src/user.rs:439-447 · 477-512</div><div class="tags"><span class="tag">口令</span><span class="tag">密码学</span></div></div></summary><div class="content"><p>argon2id 参数达标（符合 OWASP），但 <code>hash_password</code> 失败时 <code>unwrap_or_else(|_| legacy_hash_password)</code> 静默降级为 <code>salt$sha256</code>，且 <code>random_hex</code> 用 SystemTime 做种子的 LCG（可预测盐），而它正是 legacy 盐来源。</p><p class="fix"><b>修复：</b>兜底改为返回错误（或重试），绝不让新哈希走非 argon2 路径；盐一律 OsRng。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>借贷平衡按 2 位小数判定，容忍亚分位差额；Web 端非法金额静默转 0</h4><div class="loc">fincore/src/voucher.rs:393-395 · fincore/src/engine/validate.rs:90-97 · finweb/src/state.rs:469-474</div><div class="tags"><span class="tag">金额精度</span><span class="tag">静默兜底</span></div></div></summary><div class="content"><p><code>balanced() = diff().round2().is_zero()</code>，借方 100.004 vs 贷方 100.002 差额 0.002 会被判平衡入库；且 <code>Money::parse</code> 接受任意位小数未规约到 2 位。Web 层 <code>parse_money</code> 解析失败静默返回 ZERO，<code>"12.34.56"</code>/<code>"abc"</code> 被当 0，配合可保存「借贷全 0」凭证。</p><p class="fix"><b>修复：</b>平衡判定用全精度 <code>diff().is_zero()</code>，或入账前强制每条分录 ≤2 位小数；Web 层金额解析失败返回 400 而非归零。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>导入 parse_money 丢弃 Unicode 负号、非法金额静默记 0</h4><div class="loc">findb/src/imports.rs:270-277</div><div class="tags"><span class="tag">正确性</span><span class="tag">数据污染</span></div></div></summary><div class="content"><p>只保留 ASCII 数字/符号，其余丢弃：<code>"−100"</code>（U+2212）被剥负号变 100 方向反转；<code>"1.2.3"</code>/<code>"abc"</code> 静默变 0 而非报错跳过，污染财务数据且无提示。</p><p class="fix"><b>修复：</b>先规范化 Unicode 负号/全角字符再解析；解析失败返回 Option 并计入 warnings 跳过该行。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>金额写入格式不一致：fmt_plain 与千分位 Display 混用</h4><div class="loc">findb/src/bank.rs:124-126 · business.rs:142-144,395-407 · automation.rs:61,389,416 · mgmt.rs:85 · assets.rs:236-274 · settle.rs:180</div><div class="tags"><span class="tag">一致性</span><span class="tag">金额精度</span></div></div></summary><div class="content"><p>voucher_entry 用无千分位的 money_param，而 bank_statement/stock_move/payroll/fixed_asset/budget/fx_rate 等业务表用带千分位的 <code>Money::to_string()</code>。同一库两种格式并存，SQL 侧比较/运算一旦碰到即出错（见核销 H-2）。</p><p class="fix"><b>修复：</b>金额列全部统一走 <code>money_param</code>。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>工资 / 存货结转 / 调汇凭证无「已生成过」幂等防护</h4><div class="loc">findb/src/business.rs:548-739,253-296 · findb/src/automation.rs:182-220</div><div class="tags"><span class="tag">幂等</span><span class="tag">重复凭证</span></div></div></summary><div class="content"><p>这些入口直接 next_no + save，没有 claim_voucher 的 voucher_id 判重或 at_run 的 at_generated 检查，重复点击/回写失败重试会生成重复的计提、结转、发放凭证（fx_adjust 靠 diff 归零间接防重，工资/存货无此性质）。</p><p class="fix"><b>修复：</b>加「期间+来源+摘要」的已生成检查。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>DB 读错误 / 日期金额解析失败被静默吞掉</h4><div class="loc">findb/src/periods.rs:11-22 · automation.rs:503,662,695 · findb/src/lib.rs:390-396 · findb/src/vouchers.rs:110-112</div><div class="tags"><span class="tag">健壮性</span><span class="tag">静默兜底</span></div></div></summary><div class="content"><p><code>closed_upto</code> 用 <code>.ok().flatten()</code>，读失败被当「无已结账期间」，放行写入已结账期间；at_generated 报错被当「未生成过」可能重复生成；损坏的日期/金额静默变 1970-01-01 或 0，账簿在无告警下给出错误结果。</p><p class="fix"><b>修复：</b>传播错误而非兜底；持久层读到非法值时显式报错。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>资产负债「年初余额」列实际取的是本期期初；ProfitLossNet 默认返回 0</h4><div class="loc">fincore/src/report/mod.rs:430-437 · 232-234</div><div class="tags"><span class="tag">报表</span><span class="tag">口径</span></div></div></summary><div class="content"><p><code>to_begin</code> 把 End→Begin，而该 Begin 语义是「启用期/本期期初」非「年初」，账套年中启用时报表失实。另 profit_loss_net trait 默认实现返回 ZERO，若底层未覆盖则未分配利润漏掉未结转本期盈亏且无告警。</p><p class="fix"><b>修复：</b>数据源提供 year_begin，或用「期初 − 本年累计借 + 本年累计贷」映射；profit_loss_net 未被覆盖时 debug_assert/日志告警。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>公式引擎一元负号不能作用于函数/括号；extra_perms 无例外（拒绝）机制</h4><div class="loc">fincore/src/engine/formula.rs:71-93 · fincore/src/user.rs:313,357-362</div><div class="tags"><span class="tag">正确性</span><span class="tag">权限模型</span></div></div></summary><div class="content"><p>词法器遇非值态 <code>-</code> 只扫描数字，后跟字母或 <code>(</code> 即报错，<code>-FS("6001")</code>、<code>-(1+2)</code> 无法求值。另 <code>can()</code> 仅做并集（角色权限 ∪ extra_perms），注释所称「追加或例外」的撤销机制不存在，财务主管等无法被单独收权。</p><p class="fix"><b>修复：</b>非值态 <code>-</code> 后跟非数字发出 Tok::Minus 交 factor 处理；权限模型删「例外」措辞或引入 deny_perms。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-med">MED</span><div class="body"><h4>发票 update 绕过状态校验；报销单号 / 对账导入 / 资产清理缺幂等与原子性</h4><div class="loc">findb/src/invoices.rs:178-204 · business.rs:893-917 · bank.rs:113-133 · assets.rs:444-458</div><div class="tags"><span class="tag">状态机</span><span class="tag">原子性</span></div></div></summary><div class="content"><p><code>invoices::update</code> 不查 status，任意状态字符串可直接写入，绕过 set_status 流转。报销单号无冲突处理、对账单导入无判重（重复导入翻倍累积）、资产清理的卡片更新与折旧删除分两步独立写可留中间态。</p><p class="fix"><b>修复：</b>update 走状态机；报销/对账加 ON CONFLICT 或 precheck；dispose 包事务。</p></div></details>
+  </section>
+
+  <!-- ============ 低危 ============ -->
+  <section id="low">
+    <h2>六、低危问题 <span class="num">14 项</span></h2>
+    <p class="lead">健壮性、边界处理与小瑕疵，建议随迭代逐步清理。</p>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>Money 除法除零静默返回 0</h4><div class="loc">fincore/src/money.rs:353-399</div><div class="tags"><span class="tag">健壮性</span></div></div></summary><div class="content"><p>Div 三个实现除零一律返回 ZERO，掩盖真实计算错误（单价、单位成本、费率倒算）。</p><p class="fix"><b>修复：</b>除法返回 Result 或提供 checked_div，账务路径禁止静默归零。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>Period::from_ymm 未校验，first_day/last_day 的 expect 可能 panic</h4><div class="loc">fincore/src/period.rs:29-31 · 104-116</div><div class="tags"><span class="tag">健壮性</span></div></div></summary><div class="content"><p>from_ymm(0) 等非法值进入 year()/month()，month=0 时 first_day 的 expect panic。</p><p class="fix"><b>修复：</b>from_ymm 改 Result 或用 unwrap_or 兜底。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>账龄：未来日期单据落入「最末档」；成本负单价被静默当作未提供</h4><div class="loc">fincore/src/engine/aging.rs:144-162 · fincore/src/engine/costing.rs:106-118</div><div class="tags"><span class="tag">边界</span></div></div></summary><div class="content"><p>days 为负时不命中任何 bucket，落到「365 天以上」档；入库负价格落入「没给单价」分支，出库负单价会算负成本不报错。</p><p class="fix"><b>修复：</b>days&lt;0 跳过或单列「未到期」；负单价显式返回 FinError。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>validate_post / validate_audit 不复核借贷平衡（纵深防御缺失）</h4><div class="loc">fincore/src/engine/validate.rs:231-258</div><div class="tags"><span class="tag">纵深防御</span></div></div></summary><div class="content"><p>二者仅校验状态/审核人分离/签字要求，未复核 balanced 与日期期间一致；导入/系统生成路径若绕过保存校验，可把不平衡凭证记成 Posted。</p><p class="fix"><b>修复：</b>post/audit 校验叠加 balanced 与期间一致性。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>报表小项分类瑕疵（1512 误入流动资产；1015 未定义）</h4><div class="loc">fincore/src/report/balance_sheet.rs:90,17</div><div class="tags"><span class="tag">报表</span></div></div></summary><div class="content"><p>其他流动资产引用 1512（长期股权投资减值准备，非流动备抵）；货币资金引用 1015（存放同业）但默认科目表未定义，恒为 0。</p><p class="fix"><b>修复：</b>1512 移出流动资产；1015 补入科目表或移除引用。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>外币 / 现金流量项目校验为死代码</h4><div class="loc">fincore/src/engine/validate.rs:194-227</div><div class="tags"><span class="tag">死代码</span></div></div></summary><div class="content"><p>外币校验条件逻辑空转，现金流量检查块 if{} 为空（注释声明的软提示未实现）。</p><p class="fix"><b>修复：</b>按注释意图补齐或删除空分支。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>LIKE 模式未转义用户输入通配符（% / _）</h4><div class="loc">findb/src/auxs.rs:169-177 · accounts.rs:141-153</div><div class="tags"><span class="tag">查询正确性</span></div></div></summary><div class="content"><p>档案/科目编码含 % 或 _ 会误匹配其它记录（非注入，仍是参数化，但结果错误）。</p><p class="fix"><b>修复：</b>对 LIKE 模式中的通配符做转义。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>附件读错误信息回显完整绝对路径；Web 数据库错误回传客户端</h4><div class="loc">findb/src/attach.rs:146 · finweb/src/state.rs:420</div><div class="tags"><span class="tag">信息泄露</span></div></div></summary><div class="content"><p>错误信息拼接 p.display() 全路径；AppError::Db 直接 format 错误文本返回前端，SQLite 错误可能含表结构/SQL 片段。</p><p class="fix"><b>修复：</b>只报附件名/id，详细错误仅写服务端日志。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>导入自由文本存在 CSV/公式注入风险；fill_required 硬编码可能不存在的辅助档案</h4><div class="loc">findb/src/imports.rs:143-152,629,640-649 · 404-431</div><div class="tags"><span class="tag">公式注入</span><span class="tag">一致性</span></div></div></summary><div class="content"><p>summary/word 原样写入，若导出为 Excel/WPS 打开，<code>=HYPERLINK</code>、<code>+cmd</code> 等可触发公式注入；必填辅助核算硬填 B01/C01/S01 等默认码，不校验是否存在于 aux_entity，可产生指向不存在档案的分录。</p><p class="fix"><b>修复：</b>写入/导出前对 <code>=+-@\t\r</code> 开头文本加前缀转义；缺失时计入 warning 而非硬编码。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>trial_balance_csv 的 account_code 未 csv_escape</h4><div class="loc">finweb/src/handlers.rs:1219</div><div class="tags"><span class="tag">CSV 注入</span></div></div></summary><div class="content"><p>只有 account_name 被转义，科目编码含逗号/引号会破坏 CSV，若以 = 开头可被 Excel 公式注入。</p><p class="fix"><b>修复：</b>所有列统一 csv_escape。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>前端 esc() 不转义单引号</h4><div class="loc">finweb/static/app.js:8-11</div><div class="tags"><span class="tag">XSS 脚手架</span></div></div></summary><div class="content"><p>仅转义 &amp; &lt; &gt; &quot;，不转义 '。当前模板均用双引号包裹属性暂未可利用，但属脆弱脚手架。</p><p class="fix"><b>修复：</b>补上单引号转义。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>改密不写审计日志；voucher_post 实为空操作</h4><div class="loc">finweb/src/handlers.rs:222-233 · 700-715</div><div class="tags"><span class="tag">审计</span><span class="tag">语义</span></div></div></summary><div class="content"><p>post_change_password 不写日志（对比管理员重置会写）；voucher_post 保存时已置 Posted，「审核→记账」前端流程在 Web 端形同虚设。</p><p class="fix"><b>修复：</b>改密留痕；明确 Web 端记账状态机。</p></div></details>
+
+    <details class="finding"><summary><span class="sev sev-low">LOW</span><div class="body"><h4>文档/格式瑕疵：user.rs 注释仍写「加盐 SHA-256」、Perm 缩进错乱、backup 手工 SQL 转义</h4><div class="loc">fincore/src/user.rs:4,38-41 · findb/src/lib.rs:259-263</div><div class="tags"><span class="tag">代码质量</span></div></div></summary><div class="content"><p>模块文档与当前 argon2id 实现不符；Perm 枚举缩进不齐；backup 用 replace('\'',"''") 手工转义拼 VACUUM INTO（目前安全但依赖手工转义）。</p><p class="fix"><b>修复：</b>更新文档、格式化、为带单引号路径补回归测试。</p></div></details>
+  </section>
+
+  <!-- ============ 做得好的 ============ -->
+  <section id="strengths">
+    <h2>七、做得好的方面</h2>
+    <p class="lead">审查中确认稳健、值得保留的实现。</p>
+    <div class="good">
+      <div class="g"><b>金额定点</b>— 金额全链路用 rust_decimal 定点运算，无 f64 入账；SQLite 金额列按 TEXT 存十进制字符串，规避 IEEE754 精度事故。</div>
+      <div class="g"><b>SQL 参数化</b>— 全部用 rusqlite 参数绑定，动态 SQL 仅拼接静态列名与计数占位符，未发现任何 SQL 注入面。</div>
+      <div class="g"><b>口令安全</b>— argon2id（m≈19MiB, t=2, p=1，符合 OWASP）+ 每用户 OsRng 随机盐，登录时透明升级旧哈希。</div>
+      <div class="g"><b>会话令牌</b>— thread_rng 生成 128-bit 十六进制令牌，HttpOnly + SameSite=Lax。</div>
+      <div class="g"><b>复式记账校验</b>— validate_for_save 持久层第二道防线，借贷平衡、结账期间锁定、科目禁用等规则在落库前强制。</div>
+      <div class="g"><b>期末正确性</b>— 损益结转方向、折旧尾差拉平、个税累计预扣实现正确。</div>
+      <div class="g"><b>并发与唯一性</b>— WAL + busy_timeout + synchronous=NORMAL；(period,word,no) 等 UNIQUE 约束兜底凭证号唯一。</div>
+      <div class="g"><b>设备绑定复核</b>— 除设备绑定本身可欺骗外，登录后的 disabled / device 逐请求复核做得严谨。</div>
+    </div>
+  </section>
+
+  <!-- ============ 构建与 Lint ============ -->
+  <section id="build">
+    <h2>八、构建与 Lint 结果</h2>
+    <p class="lead"><code>cargo clippy --workspace --all-targets</code> 通过（exit 0，无编译错误），共约 46 条警告，绝大多数为风格类，无高危。关键信号如下。</p>
+    <table class="clippy">
+      <thead><tr><th>crate</th><th>警告数</th><th>代表性问题</th></tr></thead>
+      <tbody>
+        <tr><td class="n">fincore</td><td>4</td><td>too_many_arguments（period_end）、enum variant size 差大、report/mod.rs 的 <code>neg</code> 方法名与 <code>std::ops::Neg</code> 混淆（与四-1 的 .neg() 笔误直接对应）</td></tr>
+        <tr><td class="n">findb</td><td>5+</td><td>business.rs 函数参数 12/7、复杂类型应抽 type 别名、Default 后字段逐一赋值</td></tr>
+        <tr><td class="n">finweb</td><td>8</td><td>map(..).flatten() → filter_map、unwrap_or → unwrap_or_default、Iterator::last 对 DoubleEnded 的全遍历、BookRegistry/SessionStore 建议补 Default</td></tr>
+        <tr><td class="n">finui</td><td>46</td><td>大量 f32 类型回退、if 可合并、<b>多处 Arc&lt;T&gt; not Send+Sync</b>（login.rs、lib.rs、finbook/main.rs）、unwrap 后 is_some、冗余 pattern</td></tr>
+      </tbody>
+    </table>
+    <p style="color:var(--muted);font-size:14px">其中 <b style="color:var(--med)">「Arc&lt;T&gt; that is not Send and Sync」</b>值得关注：它提示 rusqlite::Connection 被 <code>Arc</code> 包裹后不具备 Send/Sync 语义，在 Axum 多线程 State 模型下若未来引入跨线程共享或 tokio 任务，会有并发/编译约束隐患，建议确认当前单线程访问假设并文档化。</p>
+  </section>
+
+  <!-- ============ 修复路线 ============ -->
+  <section id="roadmap">
+    <h2>九、建议修复路线</h2>
+    <ol class="roadmap">
+      <li><b>P0（上线前阻断）</b>：CRIT 首登接管（默认回环 + 初始化收口 + TLS）；会话 Cookie 加 Secure。</li>
+      <li><b>P0（授权完整性）</b>：Web 层落地 DataScope（IDOR）、voucher_unaudit 补权限并修正语义、凭证删除补 validate_delete、prepared_by 统一为 username、can_see_voucher 补部门与科目全量校验。</li>
+      <li><b>P1（账务正确性）</b>：修复资产负债表备抵 .neg()、核销 SQL 金额加法、余额/账簿对「未记账」的过滤口径、balanced() 全精度判定、业务凭证与回写同事务。</li>
+      <li><b>P1（数据完整性）</b>：导入包事务、金额/日期解析失败显式报错、工资/存货/调汇幂等、附件大小/扩展名/路径规范化。</li>
+      <li><b>P2（加固）</b>：登录用户名枚举收敛、按 IP 限流、锁定窗口单位修正、argon2 失败不降级、桌面 reset_password 套策略、must_change_pwd 服务端强制。</li>
+      <li><b>P2（质量）</b>：清理 clippy 警告（尤其 Arc Send/Sync 语义与 neg 命名）、补齐审计日志、更新过时文档。</li>
+    </ol>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    FinBook 代码审核报告 · 生成于 2026-09-01 · 所有发现均基于源码实读，行号为审核时快照，可能与后续修改有偏移。本报告仅作安全与质量参考。
+  </div>
+</footer>
+</body>
+</html>

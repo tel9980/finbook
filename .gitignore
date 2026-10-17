@@ -1,0 +1,23 @@
+# Rust 构建产物
+/target
+
+# 账套数据库（运行时数据，不入库）
+*.fbk
+*.fbk-journal
+*.fbk-wal
+*.fbk-shm
+
+# 附件目录
+.attachments/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# E2E（Playwright）
+/e2e/node_modules/
+/e2e/test-results/
+/e2e/playwright-report/

@@ -1,0 +1,299 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── 全量测试（workspace 单测 + findb 两端到端 + 前端工具函数） ────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test --workspace
+        run: cargo test --workspace --locked
+      - name: 前端工具函数测试（node:test）
+        run: node --test crates/finweb/static/util.test.js
+      # 语法检查 + 「同一函数内重复 id」检测，按退出码判定。
+      # 重复 id 是合法 JS，语法检查抓不到，但后果是功能静默失效：
+      # #pv-social 同时用作科目输入框和按钮 id，$("#pv-social") 只拿到前者，
+      # 于是「生成社保缴纳凭证」按钮从未绑定 onclick——点了没反应、不报错，
+      # 而对应端点的集成测试一直是绿的。
+      - name: 前端静态检查（语法 + 重复 id + 行为约束 + nginx 锚点）
+        run: node tools/check-js.js
+      # CI 配置自检 + 变异清单是否过期。变异清单靠字面匹配源码，源码一改就可能
+      # 对不上 —— 那样脚本会报「未生效」，守护的检查从此再没人验证，而 CI 全绿。
+      - name: CI 配置与变异清单自检
+        run: node tools/check-ci.js
+
+  # ── 变异测试：验证上面那些检查/测试**不是永远通过的** ───────────────────
+  #
+  # 为什么要单独一个 job：静态检查与集成测试最大的失败模式是「写成永远通过的样子」
+  # ——判据钉的是表象而不是机制，重构一下代码形状就悄悄失效，而 CI 全绿。
+  # 本轮就有三条这样的检查被变异测试抓住（详见 DEPLOY.md 4.3）。
+  #
+  # 这不是"多跑一遍测试"，而是**反过来验证测试本身**：逐条把被守护的代码改坏，
+  # 要求对应检查/测试必须报红。跑完自动还原源码。
+  mutation:
+    name: Mutation (checks must fail when code is broken)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 自检自身也要被验证（改坏 CI 配置与清单 → 必须报红）
+        run: node tools/check-ci.js --selftest
+      - name: 前端检查的变异（改坏 app.js → check-js 必须报错）
+        run: node tools/mutate-check.js
+      - name: 集成测试的变异（改坏 Rust → 对应测试必须失败）
+        run: node tools/mutate-rust.js
+      - name: 确认源码已还原（否则这条 job 自己就是个脏工作区）
+        run: git diff --exit-code
+
+  # ── lint（记录型：fincore/findb 收窄允许项；UI 层允许既有 f32 警告） ────
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy（fincore/findb）
+        run: cargo clippy -p fincore -p findb --all-targets -- -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::should_implement_trait -A clippy::field_reassign_with_default
+      # 与上一条同口径：这几个 lint 是项目既定接受的设计风格（长参数表/复杂类型/
+      # 结构体 Default 外赋值），不是待修项。两处允许集保持一致，改一处记得改另一处。
+      - name: clippy（全 workspace）
+        run: cargo clippy --workspace --all-targets -- -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::should_implement_trait -A clippy::field_reassign_with_default
+
+  # ── 依赖漏洞扫描（cargo-audit 读 Cargo.lock，不编译，秒级） ───────────
+  audit:
+    name: Security audit (cargo-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      # 默认即"发现未修复的 RUSTSEC 漏洞公告 → 失败"；yanked/警告不拦
+      - name: cargo audit
+        run: cargo audit
+
+  # ── Docker 镜像烟雾测试（防止预取层空占位产物被打进镜像） ────────────
+  docker:
+    name: Docker image smoke test
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: 构建镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: finbook:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: 启动并健康检查（真 finweb 才能通过 /api/health）
+        run: |
+          # 关键：账套目录必须**事先存在**。镜像里 ENV FINBOOK_REQUIRE_BOOKS_DIR=true，
+          # 而全新 /data 下只有镜像预建的空目录，没有 books/。finweb 启动时发现账套
+          # 目录不存在就拒绝启动（这是 DEPLOY.md §10 那个防静默数据丢失的守卫），
+          # 表现为容器 Exited(1) + 健康检查永远不通。
+          #
+          # 生产上没踩到是因为数据卷里早就建好了 books/。但**首次部署的人一定会踩**，
+          # 所以 smoke test 必须走真实的部署形态：挂卷 + 预建 books/。
+          #
+          # 不用 -e FINBOOK_REQUIRE_BOOKS_DIR=0：那样守卫就没被验证，
+          # 守卫自己哪天被改坏也不会有人知道。
+          docker volume create finbook-ci-data >/dev/null
+          docker run --rm -v finbook-ci-data:/data --entrypoint mkdir finbook:ci -p /data/books
+          docker run --rm -v finbook-ci-data:/data --entrypoint chown finbook:ci -R finbook:finbook /data
+          docker run -d --name finbook-ci -p 127.0.0.1:18080:8080 \
+            -v finbook-ci-data:/data \
+            -e FINBOOK_ADMIN_USER=admin \
+            -e FINBOOK_ADMIN_PASS='Admin!2026' \
+            finbook:ci
+          ok=0
+          for i in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:18080/api/health 2>/dev/null | grep -q ok; then
+              echo "health ok（第 ${i} 次探测）"
+              ok=1
+              break
+            fi
+            # 容器一退出就没必要继续等了：再探 90 次也是同样的 refused
+            if [ "$(docker inspect -f '{{.State.Running}}' finbook-ci 2>/dev/null)" != "true" ]; then
+              echo "容器在第 ${i} 次探测前已退出，不再等待"
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" = "1" ]; then exit 0; fi
+          # ---- 失败诊断 ----
+          # 容器自己的输出**实测是空的**（一个字节都没打印就退了），所以只打
+          # docker logs 等于什么都没说。必须带上能区分死因的字段：
+          #   OOMKilled  → 被内核 OOM 杀
+          #   ExitCode   → 进程自己退了
+          #   Error      → 根本没起来（挂载/权限/镜像问题）
+          echo "::error::容器健康检查失败，下面是死因诊断："
+          echo "--- docker ps -a ---"
+          docker ps -a --filter name=finbook-ci --format '{{.Names}} {{.Status}} {{.Ports}}' || true
+          echo "--- inspect: 状态 / 退出码 / 是否 OOM ---"
+          docker inspect -f 'Running={{.State.Running}} Status={{.State.Status}} ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}} StartedAt={{.State.StartedAt}} FinishedAt={{.State.FinishedAt}}' finbook-ci || true
+          echo "--- inspect: 镜像里 /usr/local/bin/finweb 是否存在且可执行 ---"
+          docker run --rm --entrypoint sh finbook:ci -c \
+            'ls -l /usr/local/bin/finweb; /usr/local/bin/finweb --help 2>&1 | head -5' || true
+          echo "--- 容器日志（可能为空）---"
+          docker logs finbook-ci 2>&1 | tail -60 || true
+          echo "--- 镜像能否单独起（不映射端口，只看进程是否立刻退出）---"
+          docker run --rm finbook:ci 2>&1 | head -30 || true
+          exit 1
+      - name: 清理
+        if: always()
+        run: |
+          docker rm -f finbook-ci || true
+          docker volume rm -f finbook-ci-data || true
+
+  # ── release 构建产物（Linux x64） ─────────────────────────────────────
+  build-linux:
+    name: Build (Linux x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build release
+        run: cargo build --release --locked -p finbook -p finweb
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: finbook-linux-x64
+          path: |
+            target/release/finbook
+            target/release/finweb
+
+  # ── release 构建产物（Windows x64，mingw 交叉编译） ──────────────────
+  build-windows:
+    name: Build (Windows x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: 安装 mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: 交叉编译 release
+        run: cargo build --release --locked --target x86_64-pc-windows-gnu -p finbook -p finweb
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: finbook-windows-x64
+          path: |
+            target/x86_64-pc-windows-gnu/release/finbook.exe
+            target/x86_64-pc-windows-gnu/release/finweb.exe
+
+  # ── Web 端到端（Playwright：真实浏览器 + 真实 finweb 服务） ───────────
+  e2e:
+    name: Web E2E (Playwright)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: 构建 finweb
+        run: cargo build --release --locked -p finweb
+      - name: 启动 finweb（临时数据目录）
+        run: |
+          mkdir -p /tmp/finbook-e2e/data
+          nohup env FINBOOK_REALM=/tmp/finbook-e2e/data/realm.db \
+            FINBOOK_BOOKS_DIR=/tmp/finbook-e2e/data/books \
+            FINBOOK_LISTEN=127.0.0.1:18080 \
+            FINWEB_STATIC_DIR="$PWD/crates/finweb/static" \
+            FINBOOK_ADMIN_USER=admin \
+            FINBOOK_ADMIN_PASS='Admin!2026' \
+            ./target/release/finweb > /tmp/finbook-e2e/server.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/api/health >/dev/null; then
+              echo "server up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::finweb 启动失败"
+          cat /tmp/finbook-e2e/server.log
+          exit 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 安装 Playwright 与浏览器
+        working-directory: e2e
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+      - name: 运行 E2E
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: http://127.0.0.1:18080
+        run: npx playwright test
+      - name: 失败时输出服务端日志
+        if: failure()
+        run: tail -120 /tmp/finbook-e2e/server.log || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-trace
+          path: e2e/test-results
+
+  # ── 后端覆盖率（llvm-cov，产出 lcov 报告） ────────────────────────────
+  coverage:
+    name: Coverage (backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - name: 后端覆盖率（排除桌面 UI，行覆盖门槛 70%）
+        run: |
+          cargo llvm-cov --workspace \
+            --ignore-filename-regex 'crates/(finui|finbook)/' \
+            --fail-under-lines 70 \
+            --lcov --output-path lcov.info --summary-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info

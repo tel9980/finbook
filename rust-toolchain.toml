@@ -1,0 +1,13 @@
+# 锁定工具链：CI 用浮动 stable，新版 lint/fmt 规则会漂移（1.99 下全仓
+# 234 条 clippy 警告、fmt 想重排几乎所有文件 —— 都是存量代码的风格债，
+# 与功能无关）。锁死版本保证"今天绿明天还绿"；要升级时改这个数字，
+# 顺手把新 lint 带出来的警告清了再合。
+#
+# targets/components 必须写在这里：dtolnay action 认到本文件后，yml 里
+# inputs 的 targets/components 不再生效；不写的话 Windows 交叉编译因缺
+# target 失败、clippy 任务因缺组件失败（minimal profile 本来就不带）。
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+targets = ["x86_64-pc-windows-gnu"]
+components = ["clippy", "rustfmt"]
