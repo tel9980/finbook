@@ -15,4 +15,16 @@ ignore = [
     # 待 accesskit/egui 上游升级 zbus_xml 后删除本两条。
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+
+    # RUSTSEC-2026-0367 / 0368 / 0369 — zip 2.4.2 与 8.6.0（经 calamine 0.36 /
+    # rust_xlsxwriter 0.80 传入）"提取归档时保留 SUID/SGID 位 / 符号链接指向解压目录之外"。
+    # 三条都需要调用 `ZipArchive::extract()` / `ZipStreamReader::extract()`（把归档
+    # **写盘**）才可触发。本项目全仓没有一处 extract()：zip 只用于「读 Excel(.xlsx) 的
+    # 归档结构」（findb/imports.rs 的 check_zip_bomb：ZipArchive::new + by_index + size），
+    # calamine / rust_xlsxwriter 亦只在内存里读写，从不落盘解压。攻击面不可达。
+    # 升级路径：需 zip >= 9.0.0，而 8.6.0 由 calamine / rust_xlsxwriter 锁死，上游未跟进；
+    # 待其发布兼容版本后随依赖升级一并移除本三条。
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]
