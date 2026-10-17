@@ -16,7 +16,7 @@
 > | 标准成本 / 成本差异 ❌ | 已实现（cost_variance、landed_cost 系列测试） |
 > | 税务申报 ❌ 排除 | 增值税申报表已实现（`findb::taxdecl`：主表 / 附加税 / 明细 / 待办提醒）；仅税企直连与发票查验不做 |
 | 资金调拨 ❌ | 已实现（`findb::transfer`：账户间转账 借 转入 / 贷 转出 + SPA / finui 页签） |
-| 往来只能「同科目同往来单位」一对一核销 | 已补齐：差异核销（抹零，`findb::settle::settle_with_diff`）与往来对冲单（应收↔应付抵销，`findb::offset`） |
+| 往来只能「同科目同往来单位」一对一核销 | 已补齐：差异核销（抹零，`findb::settle::settle_with_diff`）、往来对冲单（应收↔应付 / 三方抵账，`findb::offset`）、跨往来单位 / 跨科目互抵（代收代付，`findb::settle::settle_cross`） |
 >
 > **现状看 [README.md](README.md)**（功能清单与测试基线表）、
 > **部署看 [DEPLOY.md](DEPLOY.md)**。本文只作为「当时做了什么」的记录保留。

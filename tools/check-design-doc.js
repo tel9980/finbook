@@ -47,11 +47,11 @@ const REFS = [
   { file: "crates/findb/src/scm.rs", line: 1303, re: /credit_check\(db, &customer, period\)/, why: "订单流转时的信用拦截" },
   { file: "crates/findb/src/sales.rs", line: 790, re: /^pub fn customer_credit_limit/, why: "额度从 props_json 读" },
   { file: "crates/findb/src/sales.rs", line: 810, re: /^pub fn credit_check/, why: "占用/额度/是否超限" },
-  { file: "crates/findb/src/settle.rs", line: 474, re: /^pub fn open_entries\b/, why: "余额唯一口径" },
-  { file: "crates/findb/src/settle.rs", line: 490, re: /^pub fn open_entries_with\b/, why: "含子科目的 SQL" },
-  { file: "crates/findb/src/settle.rs", line: 508, re: /account_code LIKE/, why: "传一级科目即含子科目" },
-  { file: "crates/findb/src/settle.rs", line: 768, re: /^pub fn aging\b/, why: "账龄桶" },
-  { file: "crates/findb/src/settle.rs", line: 733, re: /^pub fn party_kind\b/, why: "往来维度按科目真实辅助核算取（取不到才按首位推）" },
+  { file: "crates/findb/src/settle.rs", line: 631, re: /^pub fn open_entries\b/, why: "余额唯一口径" },
+  { file: "crates/findb/src/settle.rs", line: 647, re: /^pub fn open_entries_with\b/, why: "含子科目的 SQL" },
+  { file: "crates/findb/src/settle.rs", line: 665, re: /account_code LIKE/, why: "传一级科目即含子科目" },
+  { file: "crates/findb/src/settle.rs", line: 890, re: /^pub fn party_kind\b/, why: "往来维度按科目真实辅助核算取（取不到才按首位推）" },
+  { file: "crates/findb/src/settle.rs", line: 925, re: /^pub fn aging\b/, why: "账龄桶" },
   { file: "crates/findb/src/auxs.rs", line: 188, re: /^pub fn check_parent\b/, why: "档案分级环校验" },
 ];
 

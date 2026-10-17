@@ -170,3 +170,44 @@ test("往来对冲：同一公司应收/应付轧差，出凭证并两端核销"
   const ap = await (await page.request.get("/api/settle/open?account=220201&upto=202601")).json();
   expect((ap.rows || []).length, `应付应被全额冲销：${JSON.stringify(ap)}`).toBe(0);
 });
+
+test("往来核销·跨单位互抵：A 打来的钱清 B 的货款（同科目跨往来单位），自动出过渡凭证", async ({ page }) => {
+  await newBook(page, `E2E互抵${Date.now()}`);
+  // B 的货款：借 应收-B 100
+  await postVoucher(page, {
+    date: "2026-01-10",
+    post: true,
+    rows: [
+      { code: "112201", summary: "B货款", debit: "100", aux: { customer: "B01" } },
+      { code: "600101", summary: "B货款", credit: "100" },
+    ],
+  });
+  // A 打来的钱记在 A 名下：贷 应收-A 100
+  await postVoucher(page, {
+    date: "2026-01-15",
+    post: true,
+    rows: [
+      { code: "1001", summary: "A代付", debit: "100" },
+      { code: "112201", summary: "A代付", credit: "100", aux: { customer: "A01" } },
+    ],
+  });
+
+  await page.click('.nav-item[data-view="settle"]');
+  await page.click("#st-load");
+  await expect(page.locator("#st-sum")).toContainText("未核销 2 笔", { timeout: 10_000 });
+
+  // 借方选 B 的货款、贷方选 A 的收款（两行都在 1122 清单里）
+  await page.locator("#st-table tbody tr").filter({ hasText: "B货款" }).first()
+    .locator("[data-from]").click();
+  await page.locator("#st-table tbody tr").filter({ hasText: "A代付" }).first()
+    .locator("[data-to]").click();
+
+  // 互抵走原生 prompt：按顺序回填 互抵金额100 / 日期
+  const answers = ["100", "2026-01-31"];
+  page.on("dialog", async (d) => { await d.accept(answers.length ? answers.shift() : ""); });
+  await page.click("#st-manual-cross");
+
+  // 两边同时清
+  await expect(page.locator("#st-sum")).toContainText("未核销 0 笔", { timeout: 10_000 });
+  await expect(page.locator("#st-sum")).toContainText("合计 0.00", { timeout: 10_000 });
+});

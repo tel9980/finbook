@@ -731,6 +731,8 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/settle/open", get(get_settle_open))
         .route("/api/settle/auto", post(auto_settle_endpoint))
         .route("/api/settle/run", post(manual_settle_endpoint))
+        // 通用往来互抵：跨往来单位 / 跨科目（代收代付、三方抵账），自动出过渡凭证
+        .route("/api/settle/cross", post(cross_settle_endpoint))
         .route("/api/settle/records", get(list_settle_records))
         .route("/api/settle/unsettle", post(unsettle_endpoint))
         .route("/api/settle/aging", get(get_settle_aging))
@@ -13225,6 +13227,19 @@ struct UnsettleReq {
     pub id: i64,
 }
 
+/// 通用往来互抵请求：借方挂账 + 贷方挂账，科目/往来单位可以不同
+#[derive(Deserialize)]
+struct SettleCrossReq {
+    /// 借方挂账分录（被冲减的应收 / 预付等）
+    pub debit_entry: i64,
+    /// 贷方挂账分录（被冲减的应付 / 预收等）
+    pub credit_entry: i64,
+    pub amount: String,
+    /// 过渡凭证日期（`YYYY-MM-DD`，缺省今天）
+    #[serde(default)]
+    pub date: String,
+}
+
 async fn get_settle_open(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -13357,6 +13372,48 @@ async fn manual_settle_endpoint(
     Ok(Json(
         json!({ "id": r.settle_id, "diff_voucher_id": r.diff_voucher_id }),
     ))
+}
+
+/// 通用往来互抵：跨往来单位 / 跨科目（代收代付、三方抵账）。
+/// 自动生成一张过渡凭证把两边接上，再各自核销。
+async fn cross_settle_endpoint(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<SettleCrossReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::VoucherNew)?;
+    let amount = parse_money_checked(&req.amount)?;
+    let date = if req.date.trim().is_empty() {
+        chrono::Local::now().date_naive()
+    } else {
+        chrono::NaiveDate::parse_from_str(req.date.trim(), "%Y-%m-%d")
+            .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
+    };
+    let db = state.db_for(&user.book_key)?;
+    let r = findb::settle::settle_cross(
+        &db,
+        req.debit_entry,
+        req.credit_entry,
+        amount,
+        date,
+        user.username(),
+    )?;
+    db.log(
+        user.username(),
+        "往来",
+        "跨单位互抵",
+        &format!(
+            "借#{} ↔ 贷#{} {}（过渡凭证 #{:?}）",
+            req.debit_entry,
+            req.credit_entry,
+            amount.fmt_money(),
+            r.bridge_voucher_id
+        ),
+    )?;
+    Ok(Json(json!({
+        "bridge_voucher_id": r.bridge_voucher_id,
+        "settle_ids": r.settle_ids,
+    })))
 }
 
 // ---------------- 往来对冲单（应收 ↔ 应付相互抵销） ----------------

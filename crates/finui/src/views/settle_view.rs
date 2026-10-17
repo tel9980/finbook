@@ -77,6 +77,13 @@ pub struct SettleView {
     pub diff: String,
     /// 差异科目（默认财务费用-其他；营业外支出等可改）
     pub diff_account: String,
+    /// 跨单位/科目互抵：借方与贷方的科目或往来单位可以不同（代收代付 / 三方抵账），
+    /// 核销时自动出一张过渡凭证把两边接上
+    pub cross: bool,
+    /// 互抵的对方往来科目（如 1122 ↔ 2202；同科目跨单位时留空）
+    pub cross_account: String,
+    /// 互抵过渡凭证日期（`YYYY-MM-DD`）
+    pub cross_date: String,
     pub auto: Option<AutoSettleResult>,
     pub tolerance: String,
     /// 往来对冲单列表 + 录单字段
@@ -117,6 +124,9 @@ impl Default for SettleView {
             // 660305 财务费用-其他：内置科目表里带「部门」核算的是 6603 一级本身，
             // 明细 660305 不强制部门，抹零能直接出凭证，不用先补部门。
             diff_account: "660305".to_string(),
+            cross: false,
+            cross_account: String::new(),
+            cross_date: String::new(),
             auto: None,
             tolerance: "0.01".to_string(),
             offsets: Vec::new(),
@@ -160,6 +170,9 @@ impl SettleView {
         if self.of_date.is_empty() {
             self.of_date = chrono::Local::now().date_naive().to_string();
         }
+        if self.cross_date.is_empty() {
+            self.cross_date = chrono::Local::now().date_naive().to_string();
+        }
         self.dirty = true;
     }
 
@@ -175,14 +188,16 @@ impl SettleView {
         let upto = self.upto(ctx);
         // 缓存 key 按"期间 + Tab + 科目 + 截止期间 + 过滤条件"组，避免每帧重查
         let key = format!(
-            "{}|{:?}|{}|{}|{}|{}|{}",
+            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}",
             ctx.period().ymm(),
             self.tab,
             self.account,
             upto.ymm(),
             self.only_open,
             self.as_of,
-            self.scheme.idx()
+            self.scheme.idx(),
+            self.cross,
+            self.cross_account
         );
         if !self.dirty && self.key == key {
             return;
@@ -192,8 +207,23 @@ impl SettleView {
 
         self.buckets = self.scheme.buckets();
         // include_all 与"只显示未核销完"正好相反
-        self.entries = findb::settle::open_entries(ctx.db(), &self.account, upto, !self.only_open)
-            .unwrap_or_default();
+        let mut entries =
+            findb::settle::open_entries(ctx.db(), &self.account, upto, !self.only_open)
+                .unwrap_or_default();
+        // 「跨单位/科目互抵」：把对方科目的未核销清单合并进来，才能同时挑到两侧
+        // （同科目跨单位时对方科目留空即可——当前科目的借/贷两行本就在同一张表里）
+        let a2 = self.cross_account.trim();
+        if self.tab == SettleTab::Manual && self.cross && !a2.is_empty() && a2 != self.account {
+            let more = findb::settle::open_entries(ctx.db(), a2, upto, !self.only_open)
+                .unwrap_or_default();
+            for e in more {
+                if !entries.iter().any(|x| x.entry_id == e.entry_id) {
+                    entries.push(e);
+                }
+            }
+            entries.sort_by_key(|a| (a.date, a.no, a.line));
+        }
+        self.entries = entries;
         self.records = findb::settle::list(ctx.db(), &self.account).unwrap_or_default();
         self.offsets = findb::offset::offset_list(ctx.db()).unwrap_or_default();
 
@@ -311,7 +341,8 @@ impl SettleView {
         ui.label(
             RichText::new(
                 "上方挑一笔借方（应收 / 预付），下方挑一笔贷方（收款 / 付款），填好本次核销金额后核销。\
-                 超核销、跨科目、跨往来单位、自核自都会被拒绝。",
+                 普通核销要求同科目、同往来单位、不超额、不自核自；\
+                 若是「A 的付款冲 B 的货款」这类跨往来单位 / 跨科目的场景，勾选下面的「跨单位互抵」。",
             )
             .weak(),
         );
@@ -472,10 +503,80 @@ impl SettleView {
                 if ui.button("核销").clicked() && ctx.can(Perm::VoucherNew) {
                     go = true;
                 }
+                ui.separator();
+                ui.checkbox(&mut self.cross, "跨单位/科目互抵")
+                    .on_hover_text(
+                        "A 的付款冲 B 的货款、客户应收抵供应商应付（三方抵账）等——\
+                     借方与贷方的科目或往来单位可以不同，核销时自动出一张过渡凭证把两边接上；\
+                     同科目同往来单位时仍走普通核销、不出过渡凭证。",
+                    );
+                if self.cross {
+                    ui.separator();
+                    ui.label("对方科目");
+                    ui.add_sized(
+                        [80.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.cross_account).hint_text("如 2202"),
+                    );
+                    ui.label("过渡凭证日期");
+                    ui.add_sized(
+                        [96.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.cross_date).hint_text("YYYY-MM-DD"),
+                    );
+                }
             });
         });
         if go {
-            self.do_settle(ctx);
+            if self.cross {
+                self.do_cross(ctx);
+            } else {
+                self.do_settle(ctx);
+            }
+        }
+    }
+
+    /// 跨单位 / 跨科目互抵：数据层自动出过渡凭证并各自核销，这里只负责把话说清楚。
+    fn do_cross(&mut self, ctx: &mut AppCtx<'_>) {
+        let (Some(f), Some(t)) = (self.sel_from, self.sel_to) else {
+            ctx.error("请先在借方和贷方各选一行");
+            return;
+        };
+        if Money::parse(self.diff.trim())
+            .map(|d| d.is_positive())
+            .unwrap_or(false)
+        {
+            ctx.error("跨单位互抵不填差异；请先互抵，再单独用「差异核销」抹零");
+            return;
+        }
+        let Ok(amt) = Money::parse(self.amount.trim()) else {
+            ctx.error("互抵金额格式不正确");
+            return;
+        };
+        let date = NaiveDate::parse_from_str(self.cross_date.trim(), "%Y-%m-%d")
+            .unwrap_or_else(|_| chrono::Local::now().date_naive());
+        let who = ctx.user().display_name.clone();
+        match findb::settle::settle_cross(ctx.db(), f, t, amt, date, &who) {
+            Ok(r) => {
+                match r.bridge_voucher_id {
+                    Some(vid) => {
+                        ctx.log(
+                            "往来",
+                            "跨单位互抵",
+                            &format!("#{f} ↔ #{t} {amt}（过渡凭证 #{vid}）"),
+                        );
+                        ctx.info(format!(
+                            "已互抵 {}，过渡凭证 #{vid} 请到凭证列表记账",
+                            amt.fmt_money()
+                        ));
+                    }
+                    None => {
+                        ctx.log("往来", "手工核销", &format!("#{f} ↔ #{t} {amt}"));
+                        ctx.info(format!("已核销 {}", amt.fmt_money()));
+                    }
+                }
+                self.clear_sel();
+                self.dirty = true;
+            }
+            Err(e) => ctx.error(e.to_string()),
         }
     }
 

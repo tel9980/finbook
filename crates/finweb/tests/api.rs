@@ -20618,3 +20618,260 @@ async fn web_arap_offset_flow() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "撤审后应可删除");
 }
+
+/// Web 通用往来互抵：A 打来的钱清 B 的货款（同科目跨往来单位）、
+/// 客户应收抵供应商应付（跨科目三方抵账）——都自动出过渡凭证并各自核销。
+#[tokio::test]
+async fn web_settle_cross_flow() {
+    async fn add_posted(
+        state: &Arc<WebState>,
+        sid: &str,
+        date: &str,
+        entries: serde_json::Value,
+    ) -> i64 {
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/vouchers",
+                sid,
+                serde_json::json!({
+                    "id": 0, "period": 202601, "date": date, "word": "记",
+                    "no": 0, "attachments": 0, "memo": "互抵测试", "entries": entries
+                }),
+            ))
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = body_string(resp).await;
+        assert_eq!(status, StatusCode::OK, "建凭证应成功：{body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let vid = v["id"].as_i64().unwrap();
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                &format!("/api/vouchers/{vid}/post"),
+                sid,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "记账应成功");
+        vid
+    }
+
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // B 的货款：借 112201 客户 B01 1000
+    add_posted(
+        &state,
+        &sid,
+        "2026-01-10",
+        serde_json::json!([
+            { "line": 1, "account_code": "112201", "summary": "B货款", "debit": "1000", "credit": "0", "aux": { "customer": "B01" } },
+            { "line": 2, "account_code": "600101", "summary": "B货款", "debit": "0", "credit": "1000" }
+        ]),
+    )
+    .await;
+    // A 打来的钱记在 A 名下：贷 112201 客户 A01 1000
+    add_posted(
+        &state,
+        &sid,
+        "2026-01-15",
+        serde_json::json!([
+            { "line": 1, "account_code": "1001", "summary": "A代付", "debit": "1000", "credit": "0" },
+            { "line": 2, "account_code": "112201", "summary": "A代付", "debit": "0", "credit": "1000", "aux": { "customer": "A01" } }
+        ]),
+    )
+    .await;
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/settle/open?account=112201&upto=202601",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let open: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = open["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "B 的应收 + A 的收款：{open}");
+    let debit_entry = rows
+        .iter()
+        .find(|r| r["debit"] != serde_json::json!("0.00"))
+        .unwrap()["entry_id"]
+        .as_i64()
+        .unwrap();
+    let credit_entry = rows
+        .iter()
+        .find(|r| r["credit"] != serde_json::json!("0.00"))
+        .unwrap()["entry_id"]
+        .as_i64()
+        .unwrap();
+
+    // 守卫：方向反了（拿贷方当借方）→ 400
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/settle/cross",
+            &sid,
+            serde_json::json!({
+                "debit_entry": credit_entry, "credit_entry": debit_entry, "amount": "1000"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "方向反了应拒绝");
+
+    // 正常互抵 1000（同科目跨往来单位）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/settle/cross",
+            &sid,
+            serde_json::json!({
+                "debit_entry": debit_entry, "credit_entry": credit_entry,
+                "amount": "1000", "date": "2026-01-31"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "跨往来单位互抵应成功");
+    let r: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let vid = r["bridge_voucher_id"].as_i64().expect("必须出过渡凭证");
+
+    // 过渡凭证：借 112201（A 的收款）/ 贷 112201（B 的货款）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(&format!("/api/vouchers/{vid}"), &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["entries"][0]["account_code"], "112201");
+    assert_eq!(v["entries"][0]["debit"], serde_json::json!("1000.00"));
+    assert_eq!(v["entries"][1]["account_code"], "112201");
+    assert_eq!(v["entries"][1]["credit"], serde_json::json!("1000.00"));
+
+    // 两边同时清
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/settle/open?account=112201&upto=202601",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let open: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        open["rows"].as_array().unwrap().len(),
+        0,
+        "互抵后应收应全清：{open}"
+    );
+
+    // ---- 跨科目三方抵账：客户 A02 欠我们 500，我们欠供应商 S02 300 ----
+    add_posted(
+        &state,
+        &sid,
+        "2026-01-12",
+        serde_json::json!([
+            { "line": 1, "account_code": "112201", "summary": "A02应收", "debit": "500", "credit": "0", "aux": { "customer": "A02" } },
+            { "line": 2, "account_code": "600101", "summary": "A02应收", "debit": "0", "credit": "500" }
+        ]),
+    )
+    .await;
+    add_posted(
+        &state,
+        &sid,
+        "2026-01-13",
+        serde_json::json!([
+            { "line": 1, "account_code": "1001", "summary": "S02应付", "debit": "300", "credit": "0" },
+            { "line": 2, "account_code": "220201", "summary": "S02应付", "debit": "0", "credit": "300", "aux": { "supplier": "S02" } }
+        ]),
+    )
+    .await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/settle/open?account=112201&upto=202601",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let open: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let ar_entry = open["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["aux_key"] == serde_json::json!("customer=A02"))
+        .unwrap()["entry_id"]
+        .as_i64()
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/settle/open?account=220201&upto=202601",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let open: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let ap_entry = open["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["aux_key"] == serde_json::json!("supplier=S02"))
+        .unwrap()["entry_id"]
+        .as_i64()
+        .unwrap();
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/settle/cross",
+            &sid,
+            serde_json::json!({
+                "debit_entry": ar_entry, "credit_entry": ap_entry,
+                "amount": "300", "date": "2026-01-31"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "三方抵账应成功");
+    let r: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let vid2 = r["bridge_voucher_id"]
+        .as_i64()
+        .expect("跨科目必须出过渡凭证");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(&format!("/api/vouchers/{vid2}"), &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        v["entries"][0]["account_code"], "220201",
+        "过渡凭证借方应是应付"
+    );
+    assert_eq!(
+        v["entries"][1]["account_code"], "112201",
+        "过渡凭证贷方应是应收"
+    );
+
+    // 应收 A02 剩 200、应付 S02 清 0
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/settle/open?account=112201&upto=202601",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let open: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = open["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0]["open"],
+        serde_json::json!("200.00"),
+        "应收 A02 抵 300 后剩 200"
+    );
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/settle/open?account=220201&upto=202601",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let open: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        open["rows"].as_array().unwrap().len(),
+        0,
+        "应付 S02 应全额冲销"
+    );
+}

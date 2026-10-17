@@ -1340,18 +1340,26 @@ cargo test --workspace
 
 | 套件 | 数量 |
 |------|------|
-| `fincore`（纯计算引擎） | 155 |
-| `findb`（持久化 + DAO + 安全闸门） | 354 |
+| `fincore`（纯计算引擎） | 162 |
+| `findb`（持久化 + DAO + 安全闸门） | 377 |
 | `findb` 端到端 `core_loop` | 21 |
 | `findb` 端到端 `ext_loop` | 7 |
+| `findb` 端到端 `oxide_demo` | 2 |
 | `finui` | 54 |
 | `finweb` lib | 4 |
 | `finweb` `aux_preset.rs` | 4 |
 | `finweb` `batch_paste.rs` | 11 |
-| `finweb` REST API 集成 | 186 |
-| `finweb` 客户视图 API | 7 |
-| **小计** | **806** |
-| Playwright E2E | 98 |
+| `finweb` REST API 集成 | 191 |
+| `finweb` 客户视图 API | 9 |
+| **小计** | **842** |
+| Playwright E2E | 103 |
+
+> 2026-10-17 重新校准：跨单位互抵（v1.8.0）新增 5 条（`findb` +4、`finweb` API +1）；
+> 同时补齐长期落后未更新的几行（`fincore` 155→162、`findb` 354→377、
+> `finweb` API 186→191、客户视图 7→9），并补上一直漏记的 `oxide_demo` 2 条。
+> 核对方式：跑一次 `cargo test --workspace`，按每个套件的 `test result: ok. N passed`
+> 逐行对，不要数总输出行数（同 §8 那条 E2E 的理由：重试会把失败用例数两遍）。
+>
 
 > 本轮一次性校准了整张表（此前 `findb` 还停在 340、客户视图还停在 4，
 > 是历次补测试没回头更新）。核对方式：跑一次 `cargo test --workspace`，
@@ -1398,6 +1406,9 @@ cargo test --workspace
 > 94 → 98：新增 `e2e/tests/batch-paste.spec.js` 4 条（§4.72），共 33 个文件。
 > `--list` 报 `Total: 98 tests in 33 files`，CI 的 Web E2E job 全绿
 > （run 38388514371）。
+>
+> 98 → 103：v1.7.0 差异核销 / 往来对冲 +2、v1.8.0 跨单位互抵 +1，其余为期间新增未回填。
+> `--list` 报 `Total: 103 tests in 33 files`（2026-10-17，本机跑通后核对）。
 
 > 这次特意是**跑通了才改的** —— 改之前先在 CI 上确认这 90 条全绿
 > （2026-10-12，Web E2E job success），而不是拿一个未经证实的数字去填。

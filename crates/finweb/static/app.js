@@ -7251,6 +7251,7 @@ async function viewSettle(main) {
   main.innerHTML = `<h2>往来核销</h2>
     <div class="toolbar">
       <label>往来科目 <input id="st-acct" value="1122" style="width:100px" /></label>
+      <label title="互抵时若两侧科目不同（如客户应收抵供应商应付），把对方科目填这里，两张未核销清单会合并显示，才能挑到跨科目的两行">对方科目 <input id="st-acct2" placeholder="如 2202" style="width:90px" /></label>
       <label>截止期间 <input id="st-upto" value="${esc(cur)}" style="width:90px" /></label>
       <label title="核销/账龄/催款只认已记账分录（全仓 H-3 口径）。勾上可把待记账的往来一并列出查看，但它们不可核销——对标金蝶：未审核单据在列表里可见，但不参与核销。"><input type="checkbox" id="st-draft" /> 含未记账</label>
       <button class="btn" id="st-load">查询未核销</button>
@@ -7259,6 +7260,7 @@ async function viewSettle(main) {
       ${can("voucher_new") ? `<button class="btn ghost" id="st-auto">自动核销</button>` : ""}
       ${can("voucher_new") ? `<button class="btn ghost" id="st-manual">手工核销</button>` : ""}
       ${can("voucher_new") ? `<button class="btn ghost" id="st-manual-diff" title="实收/实付与挂账有零头时，把差异记入损益，被核销方一次结清">差异核销</button>` : ""}
+      ${can("voucher_new") ? `<button class="btn ghost" id="st-manual-cross" title="A 的付款冲 B 的货款 / 三方抵账：借方与贷方分录的科目或往来单位可以不同，系统自动出一张过渡凭证把两边接上">跨单位互抵</button>` : ""}
       <button class="btn ghost" id="st-aging">账龄分析</button>
       <button class="btn ghost" id="st-records">核销记录</button>
     </div>
@@ -7294,7 +7296,7 @@ async function viewSettle(main) {
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h4 style="margin:0">往来对冲单（应收 ↔ 应付相互抵销）</h4><span class="grow"></span>
         <button class="btn ghost sm" id="off-reload">刷新</button>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:4px">某公司既欠我们（应收）、我们又欠它（应付）时，月末轧差只结净额：录单 → 审核出「借 应付 / 贷 应收」凭证，并对两端各自按先进先出核销，两边往来同时变清。对冲额不得超过任一端未核销合计。</div>
+      <div class="muted" style="font-size:12px;margin-top:4px">某公司既欠我们（应收）、我们又欠它（应付）时，月末轧差只结净额；也可以是<b>两家不同公司</b>——客户 A 欠我们、我们欠供应商 B，三方约定 A 直接把钱顶给 B（三方抵账），客户填 A、供应商填 B 即可。录单 → 审核出「借 应付 / 贷 应收」凭证，并对两端各自按先进先出核销，两边往来同时变清。对冲额不得超过任一端未核销合计。</div>
       ${can("voucher_new") ? `<div class="toolbar" style="margin-top:6px">
         <label>日期 <input id="off-date" style="width:110px" /></label>
         <label>客户(应收) <input id="off-cust" style="width:100px" placeholder="C01" /></label>
@@ -7308,6 +7310,7 @@ async function viewSettle(main) {
   let selFrom = null, selTo = null, rows = [];
   const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
   const acct = () => $("#st-acct", main).value.trim();
+  const acct2 = () => ($("#st-acct2", main) ? $("#st-acct2", main).value.trim() : "");
   const upto = () => $("#st-upto", main).value.trim();
 
   function render() {
@@ -7330,11 +7333,17 @@ async function viewSettle(main) {
   }
 
   async function load() {
-    const a = acct(), u = upto();
+    const a = acct(), a2 = acct2(), u = upto();
     const withDraft = $("#st-draft", main) && $("#st-draft", main).checked ? "&draft=1" : "";
     try {
       const d = await api(`/settle/open?account=${encodeURIComponent(a)}&upto=${encodeURIComponent(u)}${withDraft}`);
       rows = d.rows || [];
+      // 互抵对方科目：把两张未核销清单合并，才能同时挑到跨科目（应收 ↔ 应付）的两行
+      if (a2 && a2 !== a) {
+        const d2 = await api(`/settle/open?account=${encodeURIComponent(a2)}&upto=${encodeURIComponent(u)}${withDraft}`);
+        const seen = new Set(rows.map((r) => r.entry_id));
+        (d2.rows || []).forEach((r) => { if (!seen.has(r.entry_id)) rows.push(r); });
+      }
       selFrom = selTo = null;
       $("#st-extra", main).innerHTML = "";
       render();
@@ -7530,6 +7539,18 @@ async function viewSettle(main) {
     try {
       const r = await post("/settle/run", { from_entry: selFrom, to_entry: selTo, amount: amt, diff: (diff || "").trim(), diff_account: (diffAcct || "").trim() });
       toast(r.diff_voucher_id ? `已核销，差异凭证 #${r.diff_voucher_id}` : "已核销", "ok");
+      load();
+    } catch (e) { toast(e.message, "err"); }
+  };
+  if ($("#st-manual-cross", main)) $("#st-manual-cross").onclick = async () => {
+    if (!selFrom || !selTo) { toast("请分别选择「原单」(借方) 与「收/付」(贷方) 两行", "err"); return; }
+    const amt = prompt("互抵金额", "");
+    if (amt === null) return;
+    const dt = prompt("过渡凭证日期（YYYY-MM-DD）", new Date().toISOString().slice(0, 10));
+    if (dt === null) return;
+    try {
+      const r = await post("/settle/cross", { debit_entry: selFrom, credit_entry: selTo, amount: amt, date: (dt || "").trim() });
+      toast(r.bridge_voucher_id ? `已互抵，过渡凭证 #${r.bridge_voucher_id}（到凭证列表记账后即入账）` : "已互抵", "ok");
       load();
     } catch (e) { toast(e.message, "err"); }
   };
