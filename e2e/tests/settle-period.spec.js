@@ -88,3 +88,85 @@ test("期末处理：结转损益→记账→结账，期间状态推进", async
   await page.click("#cf-ok");
   await expect(page.locator("#pe-status")).toContainText("已结账至：2026-01", { timeout: 10_000 });
 });
+
+test("往来核销·差异核销：应收100、实收98，抹零2记入损益，被核销方一次结清", async ({ page }) => {
+  await newBook(page, `E2E抹零${Date.now()}`);
+  await postVoucher(page, {
+    date: "2026-01-10",
+    post: true,
+    rows: [
+      { code: "112201", summary: "销售应收", debit: "100", aux: { customer: "C01" } },
+      { code: "1001", summary: "销售应收", credit: "100" },
+    ],
+  });
+  await postVoucher(page, {
+    date: "2026-01-20",
+    post: true,
+    rows: [
+      { code: "1001", summary: "收回货款", debit: "98" },
+      { code: "112201", summary: "收回货款", credit: "98", aux: { customer: "C01" } },
+    ],
+  });
+
+  await page.click('.nav-item[data-view="settle"]');
+  await page.click("#st-load");
+  await expect(page.locator("#st-sum")).toContainText("未核销 2 笔", { timeout: 10_000 });
+
+  // 借方（应收）选「原单」，贷方（收款）选「收/付」
+  await page.locator("#st-table tbody tr").filter({ hasText: "销售应收" }).first()
+    .locator("[data-from]").click();
+  await page.locator("#st-table tbody tr").filter({ hasText: "收回货款" }).first()
+    .locator("[data-to]").click();
+
+  // 差异核销走原生 prompt：按顺序回填 核销额98 / 差异2 / 差异科目660305
+  const answers = ["98", "2", "660305"];
+  page.on("dialog", async (d) => { await d.accept(answers.length ? answers.shift() : ""); });
+  await page.click("#st-manual-diff");
+
+  // 核销 98 + 差异 2 = 100 → 应收全额结清
+  await expect(page.locator("#st-sum")).toContainText("未核销 0 笔", { timeout: 10_000 });
+  await expect(page.locator("#st-sum")).toContainText("合计 0.00", { timeout: 10_000 });
+});
+
+test("往来对冲：同一公司应收/应付轧差，出凭证并两端核销", async ({ page }) => {
+  await newBook(page, `E2E对冲${Date.now()}`);
+  // 应收 1000（客户 C01）
+  await postVoucher(page, {
+    date: "2026-01-05",
+    post: true,
+    rows: [
+      { code: "112201", summary: "销售应收", debit: "1000", aux: { customer: "C01" } },
+      { code: "600101", summary: "销售应收", credit: "1000" },
+    ],
+  });
+  // 应付 600（供应商 S01）
+  await postVoucher(page, {
+    date: "2026-01-06",
+    post: true,
+    rows: [
+      { code: "1001", summary: "采购付款", debit: "600" },
+      { code: "220201", summary: "采购应付", credit: "600", aux: { supplier: "S01" } },
+    ],
+  });
+
+  await page.click('.nav-item[data-view="settle"]');
+  await expect(page.locator("#off-date")).toBeVisible({ timeout: 15_000 });
+  await page.fill("#off-cust", "C01");
+  await page.fill("#off-sup", "S01");
+  await page.fill("#off-amt", "600");
+  await page.click("#off-new");
+  await expect(page.locator("#off-list")).toContainText("待审核", { timeout: 10_000 });
+  await expect(page.locator("#off-list")).toContainText("600");
+
+  // 审核 → 出凭证 + 两端核销
+  await page.locator('#off-list [data-off-act="audit"]').first().click();
+  await page.click("#cf-ok");
+  await expect(page.locator("#off-list")).toContainText("已审核", { timeout: 15_000 });
+
+  // 应收对冲 600 后剩 400、应付全局清
+  const ar = await (await page.request.get("/api/settle/open?account=112201&upto=202601")).json();
+  const arOpen = (ar.rows || []).reduce((a, r) => a + (parseFloat(String(r.open).replace(/,/g, "")) || 0), 0);
+  expect(arOpen, `应收应剩 400：${JSON.stringify(ar)}`).toBeCloseTo(400, 2);
+  const ap = await (await page.request.get("/api/settle/open?account=220201&upto=202601")).json();
+  expect((ap.rows || []).length, `应付应被全额冲销：${JSON.stringify(ap)}`).toBe(0);
+});

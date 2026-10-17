@@ -734,6 +734,11 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/settle/records", get(list_settle_records))
         .route("/api/settle/unsettle", post(unsettle_endpoint))
         .route("/api/settle/aging", get(get_settle_aging))
+        // 往来对冲单（应收 ↔ 应付相互抵销：借 应付 / 贷 应收，两端各自 FIFO 核销）
+        .route("/api/settle/offsets", get(list_offsets).post(create_offset))
+        .route("/api/settle/offsets/:id/audit", post(audit_offset))
+        .route("/api/settle/offsets/:id/unaudit", post(unaudit_offset))
+        .route("/api/settle/offsets/:id/delete", post(delete_offset))
         .route(
             "/api/settle/dunnings",
             get(list_dunnings).post(create_dunning),
@@ -11442,7 +11447,7 @@ fn require_fund_doc_gate(user: &CurrentUser) -> Result<(), AppError> {
         Ok(())
     } else {
         Err(AppError::forbidden(
-            "没有「凭证审核」或「记账」权限，不能审核资金单据",
+            "没有「凭证审核」或「记账」权限，不能审核该单据",
         ))
     }
 }
@@ -13207,6 +13212,12 @@ struct SettleRunReq {
     pub from_entry: i64,
     pub to_entry: i64,
     pub amount: String,
+    /// 差异（现金折扣 / 抹零）金额：> 0 时自动出一张差异凭证把零头记入损益
+    #[serde(default)]
+    pub diff: String,
+    /// 差异科目（如 660305 财务费用-其他 / 6711 营业外支出）；差异为 0 时可空
+    #[serde(default)]
+    pub diff_account: String,
 }
 
 #[derive(Deserialize)]
@@ -13299,20 +13310,168 @@ async fn manual_settle_endpoint(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let amount = parse_money_checked(&req.amount)?;
+    let diff = if req.diff.trim().is_empty() {
+        Money::ZERO
+    } else {
+        parse_money_checked(&req.diff)?
+    };
     let db = state.db_for(&user.book_key)?;
-    let id = findb::settle::settle(&db, req.from_entry, req.to_entry, amount, user.username())?;
+    // 差异为 0 时 settle_with_diff 内部退化成普通核销，不必分支
+    let r = findb::settle::settle_with_diff(
+        &db,
+        req.from_entry,
+        req.to_entry,
+        amount,
+        diff,
+        &req.diff_account,
+        user.username(),
+    )?;
+    if diff.is_positive() {
+        db.log(
+            user.username(),
+            "往来",
+            "差异核销",
+            &format!(
+                "分录#{} ↔ 分录#{} {}（差异 {} 记入 {}，凭证 #{:?}）",
+                req.from_entry,
+                req.to_entry,
+                amount.fmt_money(),
+                diff.fmt_money(),
+                req.diff_account.trim(),
+                r.diff_voucher_id
+            ),
+        )?;
+    } else {
+        db.log(
+            user.username(),
+            "往来",
+            "手工核销",
+            &format!(
+                "分录#{} ↔ 分录#{} {}",
+                req.from_entry,
+                req.to_entry,
+                amount.fmt_money()
+            ),
+        )?;
+    }
+    Ok(Json(
+        json!({ "id": r.settle_id, "diff_voucher_id": r.diff_voucher_id }),
+    ))
+}
+
+// ---------------- 往来对冲单（应收 ↔ 应付相互抵销） ----------------
+
+#[derive(Deserialize)]
+struct OffsetCreateReq {
+    #[serde(default)]
+    date: String,
+    pub customer: String,
+    pub supplier: String,
+    #[serde(default)]
+    pub ar_account: String,
+    #[serde(default)]
+    pub ap_account: String,
+    pub amount: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+async fn list_offsets(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let db = state.db_for(&user.book_key)?;
+    Ok(Json(json!({ "rows": findb::offset::offset_list(&db)? })))
+}
+
+/// 新增往来对冲单：只落草稿单据；凭证与两端 FIFO 核销在「审核」时生成
+async fn create_offset(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<OffsetCreateReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::VoucherNew)?;
+    let db = state.db_for(&user.book_key)?;
+    let date = if req.date.is_empty() {
+        chrono::Local::now().date_naive()
+    } else {
+        chrono::NaiveDate::parse_from_str(&req.date, "%Y-%m-%d")
+            .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
+    };
+    let amount = parse_money_checked(&req.amount)?;
+    let id = findb::offset::offset_create(
+        &db,
+        date,
+        &req.customer,
+        &req.supplier,
+        &req.ar_account,
+        &req.ap_account,
+        amount,
+        &req.memo,
+        user.username(),
+    )?;
     db.log(
         user.username(),
         "往来",
-        "手工核销",
+        "新增往来对冲单（待审核）",
         &format!(
-            "分录#{} ↔ 分录#{} {}",
-            req.from_entry,
-            req.to_entry,
+            "#{id} 客户{} ↔ 供应商{} {}",
+            req.customer.trim(),
+            req.supplier.trim(),
             amount.fmt_money()
         ),
     )?;
-    Ok(Json(json!({ "id": id })))
+    Ok(Json(json!({ "ok": true, "id": id, "status": "draft" })))
+}
+
+/// 审核往来对冲单：生成凭证（借 应付 / 贷 应收）+ 两端 FIFO 核销。
+/// 判据同资金单据（`require_fund_doc_gate`：VoucherAudit 或 VoucherPost）
+async fn audit_offset(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_fund_doc_gate(&user)?;
+    let db = state.db_for(&user.book_key)?;
+    let (vid, n) = findb::offset::offset_audit(&db, id, user.username())?;
+    db.log(
+        user.username(),
+        "往来",
+        "审核往来对冲单",
+        &format!("#{id} 凭证 #{vid} 核销 {n} 笔"),
+    )?;
+    Ok(Json(json!({ "ok": true, "voucher_id": vid, "settled": n })))
+}
+
+/// 撤销审核：删除未记账凭证（含核销清理）→ 单据回草稿（判据与审核一致）
+async fn unaudit_offset(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_fund_doc_gate(&user)?;
+    let db = state.db_for(&user.book_key)?;
+    findb::offset::offset_unaudit(&db, id)?;
+    db.log(
+        user.username(),
+        "往来",
+        "撤销审核往来对冲单",
+        &format!("#{id}"),
+    )?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn delete_offset(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::VoucherNew)?;
+    let db = state.db_for(&user.book_key)?;
+    findb::offset::offset_delete(&db, id)?;
+    db.log(user.username(), "往来", "删除往来对冲单", &format!("#{id}"))?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn list_settle_records(

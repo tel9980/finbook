@@ -8,6 +8,7 @@ use chrono::NaiveDate;
 use egui::{RichText, Ui};
 use fincore::engine::aging::{self, AgingBucket, AgingLine};
 use fincore::{Money, Period, Perm};
+use findb::offset::ArapOffset;
 use findb::settle::{AutoSettleResult, OpenEntry, SettleRecord};
 
 use crate::state::AppCtx;
@@ -18,6 +19,7 @@ use crate::widgets;
 pub enum SettleTab {
     Manual,
     Auto,
+    Offset,
     Aging,
 }
 
@@ -71,8 +73,21 @@ pub struct SettleView {
     /// 贷方（核销方）选中行
     pub sel_to: Option<i64>,
     pub amount: String,
+    /// 差异（现金折扣 / 抹零）金额：手工核销时把零头记入差异科目
+    pub diff: String,
+    /// 差异科目（默认财务费用-其他；营业外支出等可改）
+    pub diff_account: String,
     pub auto: Option<AutoSettleResult>,
     pub tolerance: String,
+    /// 往来对冲单列表 + 录单字段
+    pub offsets: Vec<ArapOffset>,
+    pub of_date: String,
+    pub of_customer: String,
+    pub of_supplier: String,
+    pub of_ar: String,
+    pub of_ap: String,
+    pub of_amount: String,
+    pub of_memo: String,
     /// 账龄基准日（`YYYY-MM-DD`）
     pub as_of: String,
     pub scheme: AgingScheme,
@@ -98,8 +113,20 @@ impl Default for SettleView {
             sel_from: None,
             sel_to: None,
             amount: String::new(),
+            diff: String::new(),
+            // 660305 财务费用-其他：内置科目表里带「部门」核算的是 6603 一级本身，
+            // 明细 660305 不强制部门，抹零能直接出凭证，不用先补部门。
+            diff_account: "660305".to_string(),
             auto: None,
             tolerance: "0.01".to_string(),
+            offsets: Vec::new(),
+            of_date: String::new(),
+            of_customer: String::new(),
+            of_supplier: String::new(),
+            of_ar: String::new(),
+            of_ap: String::new(),
+            of_amount: String::new(),
+            of_memo: String::new(),
             as_of: String::new(),
             scheme: AgingScheme::ByDays,
             buckets: aging::buckets_by_days(),
@@ -129,6 +156,9 @@ impl SettleView {
         }
         if self.as_of.is_empty() {
             self.as_of = self.upto(ctx).last_day().to_string();
+        }
+        if self.of_date.is_empty() {
+            self.of_date = chrono::Local::now().date_naive().to_string();
         }
         self.dirty = true;
     }
@@ -165,6 +195,7 @@ impl SettleView {
         self.entries = findb::settle::open_entries(ctx.db(), &self.account, upto, !self.only_open)
             .unwrap_or_default();
         self.records = findb::settle::list(ctx.db(), &self.account).unwrap_or_default();
+        self.offsets = findb::offset::offset_list(ctx.db()).unwrap_or_default();
 
         if self.tab == SettleTab::Aging {
             let as_of = self.as_of_date(upto);
@@ -190,6 +221,7 @@ impl SettleView {
         widgets::toolbar(ui, |ui| {
             ui.selectable_value(&mut self.tab, SettleTab::Manual, "手工核销");
             ui.selectable_value(&mut self.tab, SettleTab::Auto, "自动核销");
+            ui.selectable_value(&mut self.tab, SettleTab::Offset, "往来对冲");
             ui.selectable_value(&mut self.tab, SettleTab::Aging, "账龄分析");
             ui.separator();
             ui.label("科目");
@@ -239,6 +271,7 @@ impl SettleView {
         match self.tab {
             SettleTab::Manual => self.show_manual(ctx, ui),
             SettleTab::Auto => self.show_auto(ctx, ui),
+            SettleTab::Offset => self.show_offset(ctx, ui),
             SettleTab::Aging => self.show_aging(ctx, ui),
         }
     }
@@ -247,6 +280,7 @@ impl SettleView {
         self.sel_from = None;
         self.sel_to = None;
         self.amount.clear();
+        self.diff.clear();
         self.auto = None;
     }
 
@@ -420,7 +454,18 @@ impl SettleView {
         let mut go = false;
         widgets::toolbar(ui, |ui| {
             ui.label("本次核销金额");
-            widgets::money_input(ui, &mut self.amount, 140.0);
+            widgets::money_input(ui, &mut self.amount, 120.0);
+            ui.separator();
+            ui.label("差异(抹零)").on_hover_text(
+                "实收/实付与挂账的零头。填了会自动出一张「借 差异科目 / 贷 应收」\
+                  （或反向）的凭证，被核销方一次结清，零头落到损益。",
+            );
+            widgets::money_input(ui, &mut self.diff, 90.0);
+            ui.label("差异科目");
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.diff_account).hint_text("660305"),
+            );
             ui.separator();
             ui.label(RichText::new(&info).weak());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -443,12 +488,41 @@ impl SettleView {
             ctx.error("核销金额格式不正确");
             return;
         };
+        let diff = if self.diff.trim().is_empty() {
+            Money::ZERO
+        } else {
+            match Money::parse(self.diff.trim()) {
+                Ok(d) => d,
+                Err(_) => {
+                    ctx.error("差异金额格式不正确");
+                    return;
+                }
+            }
+        };
         let who = ctx.user().display_name.clone();
-        // 数据层会拒掉自核自、跨科目、跨往来单位与超核销，这里只负责把错误说出来
-        match findb::settle::settle(ctx.db(), f, t, amt, &who) {
-            Ok(_) => {
-                ctx.log("往来", "手工核销", &format!("#{f} ↔ #{t} {amt}"));
-                ctx.info(format!("已核销 {}", amt.fmt_money()));
+        let diff_acct = self.diff_account.trim().to_string();
+        // 数据层会拒掉自核自、跨科目、跨往来单位、超额与差异校验，这里只负责把错误说出来
+        match findb::settle::settle_with_diff(ctx.db(), f, t, amt, diff, &diff_acct, &who) {
+            Ok(r) => {
+                if diff.is_positive() {
+                    ctx.log(
+                        "往来",
+                        "差异核销",
+                        &format!(
+                            "#{f} ↔ #{t} {amt}（差异 {diff} 记入 {diff_acct}，凭证 #{:?}）",
+                            r.diff_voucher_id
+                        ),
+                    );
+                    ctx.info(format!(
+                        "已核销 {}，差异 {} 记入 {}",
+                        amt.fmt_money(),
+                        diff.fmt_money(),
+                        diff_acct
+                    ));
+                } else {
+                    ctx.log("往来", "手工核销", &format!("#{f} ↔ #{t} {amt}"));
+                    ctx.info(format!("已核销 {}", amt.fmt_money()));
+                }
                 self.clear_sel();
                 self.dirty = true;
             }
@@ -619,6 +693,209 @@ impl SettleView {
     }
 
     // ------------------------- 账龄分析 -------------------------
+    // ------------------------- 往来对冲 -------------------------
+    fn show_offset(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        let mut create = false;
+        widgets::card(
+            ui,
+            "往来对冲单（应收 ↔ 应付相互抵销）",
+            |ui| {
+                ui.label(
+                    RichText::new(
+                        "某公司既欠我们（应收）、我们又欠它（应付）时，月末轧差只结净额。\
+                     录单 → 审核：系统出「借 应付 / 贷 应收」凭证，并对两端各自按先进先出核销，\
+                     两边往来同时变清，差额（净额）继续挂账。对冲额不得超过任一端未核销合计。",
+                    )
+                    .weak(),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("日期");
+                    ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut self.of_date));
+                    ui.label("客户(应收)");
+                    ui.add_sized(
+                        [110.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.of_customer),
+                    );
+                    ui.label("供应商(应付)");
+                    ui.add_sized(
+                        [110.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.of_supplier),
+                    );
+                    ui.label("对冲金额");
+                    widgets::money_input(ui, &mut self.of_amount, 110.0);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("应收科目");
+                    widgets::account_combo(ui, "of_ar", &mut self.of_ar, ctx.chart(), false, 170.0);
+                    ui.label("应付科目");
+                    widgets::account_combo(ui, "of_ap", &mut self.of_ap, ctx.chart(), false, 170.0);
+                    ui.label(RichText::new("（留空取账套默认应收 / 应付）").weak());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(
+                                ctx.can(Perm::VoucherNew),
+                                egui::Button::new(
+                                    RichText::new("新增对冲单").color(egui::Color32::WHITE),
+                                )
+                                .fill(palette::PRIMARY),
+                            )
+                            .clicked()
+                        {
+                            create = true;
+                        }
+                    });
+                });
+            },
+        );
+
+        if create {
+            self.do_create_offset(ctx);
+        }
+
+        ui.add_space(8.0);
+        self.show_offset_list(ctx, ui);
+    }
+
+    fn do_create_offset(&mut self, ctx: &mut AppCtx<'_>) {
+        let Ok(date) = NaiveDate::parse_from_str(self.of_date.trim(), "%Y-%m-%d") else {
+            ctx.error("日期格式应为 YYYY-MM-DD");
+            return;
+        };
+        let Ok(amount) = Money::parse(self.of_amount.trim()) else {
+            ctx.error("对冲金额格式不正确");
+            return;
+        };
+        let who = ctx.user().display_name.clone();
+        match findb::offset::offset_create(
+            ctx.db(),
+            date,
+            &self.of_customer,
+            &self.of_supplier,
+            &self.of_ar,
+            &self.of_ap,
+            amount,
+            &self.of_memo,
+            &who,
+        ) {
+            Ok(id) => {
+                ctx.log("往来", "新增往来对冲单（待审核）", &format!("#{id}"));
+                ctx.info("已新增对冲单；审核后生成凭证并两端自动核销");
+                self.of_customer.clear();
+                self.of_supplier.clear();
+                self.of_amount.clear();
+                self.of_memo.clear();
+                self.dirty = true;
+            }
+            Err(e) => ctx.error(e.to_string()),
+        }
+    }
+
+    fn show_offset_list(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        ui.label(RichText::new("对冲单").strong());
+        let rows = std::mem::take(&mut self.offsets);
+        let cols = [
+            widgets::TCol::new("日期", 100.0).fixed(),
+            widgets::TCol::new("单号", 150.0),
+            widgets::TCol::new("客户(应收)", 120.0),
+            widgets::TCol::new("供应商(应付)", 120.0),
+            widgets::TCol::new("金额", 120.0).right(),
+            widgets::TCol::new("状态", 80.0),
+            widgets::TCol::new("操作", 220.0),
+        ];
+        let mut act: Option<(i64, &'static str)> = None;
+        widgets::grid(ui, "arap_offsets", &cols, rows.len(), 24.0, |i, c, ui| {
+            let r = &rows[i];
+            match c {
+                0 => {
+                    ui.label(r.date.to_string());
+                }
+                1 => {
+                    ui.label(&r.no);
+                }
+                2 => {
+                    ui.label(&r.customer);
+                }
+                3 => {
+                    ui.label(&r.supplier);
+                }
+                4 => widgets::amount_label(ui, r.amount),
+                5 => {
+                    ui.label(if r.status == "audited" {
+                        "已审核"
+                    } else {
+                        "待审核"
+                    });
+                }
+                6 => {
+                    if r.status == "draft"
+                        && ui
+                            .add_enabled(
+                                ctx.can(Perm::VoucherNew),
+                                egui::Button::new("审核").small(),
+                            )
+                            .clicked()
+                    {
+                        act = Some((r.id, "audit"));
+                    }
+                    if r.status == "audited"
+                        && ui
+                            .add_enabled(
+                                ctx.can(Perm::VoucherAudit) || ctx.can(Perm::VoucherPost),
+                                egui::Button::new("撤审").small(),
+                            )
+                            .clicked()
+                    {
+                        act = Some((r.id, "unaudit"));
+                    }
+                    if r.status != "audited"
+                        && ui
+                            .add_enabled(
+                                ctx.can(Perm::VoucherNew),
+                                egui::Button::new("删除").small(),
+                            )
+                            .clicked()
+                    {
+                        act = Some((r.id, "delete"));
+                    }
+                }
+                _ => {}
+            }
+        });
+        self.offsets = rows;
+
+        if let Some((id, op)) = act {
+            let who = ctx.user().display_name.clone();
+            let res: Result<String, String> = match op {
+                "audit" => match findb::offset::offset_audit(ctx.db(), id, &who) {
+                    Ok((vid, n)) => Ok(format!("已审核：凭证 #{vid}，两端核销 {n} 笔")),
+                    Err(e) => Err(e.to_string()),
+                },
+                "unaudit" => match findb::offset::offset_unaudit(ctx.db(), id) {
+                    Ok(()) => Ok("已撤销审核（凭证与核销已回退）".to_string()),
+                    Err(e) => Err(e.to_string()),
+                },
+                _ => match findb::offset::offset_delete(ctx.db(), id) {
+                    Ok(()) => Ok("已删除".to_string()),
+                    Err(e) => Err(e.to_string()),
+                },
+            };
+            match res {
+                Ok(msg) => {
+                    let act_name = match op {
+                        "audit" => "审核往来对冲单",
+                        "unaudit" => "撤销审核往来对冲单",
+                        _ => "删除往来对冲单",
+                    };
+                    ctx.log("往来", act_name, &format!("#{id}"));
+                    ctx.info(msg);
+                    self.dirty = true;
+                }
+                Err(e) => ctx.error(e),
+            }
+        }
+    }
+
     fn show_aging(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         let upto = self.upto(ctx);
         widgets::toolbar(ui, |ui| {

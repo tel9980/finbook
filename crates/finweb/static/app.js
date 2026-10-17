@@ -7258,6 +7258,7 @@ async function viewSettle(main) {
       <label>尾差 <input id="st-tol" value="0.01" style="width:60px" /></label>
       ${can("voucher_new") ? `<button class="btn ghost" id="st-auto">自动核销</button>` : ""}
       ${can("voucher_new") ? `<button class="btn ghost" id="st-manual">手工核销</button>` : ""}
+      ${can("voucher_new") ? `<button class="btn ghost" id="st-manual-diff" title="实收/实付与挂账有零头时，把差异记入损益，被核销方一次结清">差异核销</button>` : ""}
       <button class="btn ghost" id="st-aging">账龄分析</button>
       <button class="btn ghost" id="st-records">核销记录</button>
     </div>
@@ -7288,6 +7289,21 @@ async function viewSettle(main) {
       </div>
       <div class="muted" style="font-size:12px;margin-top:4px">按期间出账单：期初 + 本期发生 = 期末，逐行带滚动余额；只取已记账分录。发出后数字锁定，客户回签确认即闭环。</div>
       <div id="stm-list" class="muted" style="margin-top:8px">加载中…</div>
+    </div>
+    <div class="panel" style="margin-top:12px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h4 style="margin:0">往来对冲单（应收 ↔ 应付相互抵销）</h4><span class="grow"></span>
+        <button class="btn ghost sm" id="off-reload">刷新</button>
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:4px">某公司既欠我们（应收）、我们又欠它（应付）时，月末轧差只结净额：录单 → 审核出「借 应付 / 贷 应收」凭证，并对两端各自按先进先出核销，两边往来同时变清。对冲额不得超过任一端未核销合计。</div>
+      ${can("voucher_new") ? `<div class="toolbar" style="margin-top:6px">
+        <label>日期 <input id="off-date" style="width:110px" /></label>
+        <label>客户(应收) <input id="off-cust" style="width:100px" placeholder="C01" /></label>
+        <label>供应商(应付) <input id="off-sup" style="width:100px" placeholder="S01" /></label>
+        <label>对冲金额 <input id="off-amt" style="width:90px" /></label>
+        <label>备注 <input id="off-memo" style="width:140px" /></label>
+        <button class="btn primary sm" id="off-new">新增对冲单</button>
+      </div>` : ""}
+      <div id="off-list" class="muted" style="margin-top:8px">加载中…</div>
     </div>`;
   let selFrom = null, selTo = null, rows = [];
   const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
@@ -7500,6 +7516,23 @@ async function viewSettle(main) {
     if (amt === null) return;
     try { await post("/settle/run", { from_entry: selFrom, to_entry: selTo, amount: amt }); toast("已核销", "ok"); load(); } catch (e) { toast(e.message, "err"); }
   };
+  if ($("#st-manual-diff", main)) $("#st-manual-diff", main).onclick = async () => {
+    if (!selFrom || !selTo) { toast("请分别选择「原单」与「收/付」两行", "err"); return; }
+    const amt = prompt("本次核销金额（实收/实付）", "");
+    if (amt === null) return;
+    const diff = prompt("差异（抹零）金额；无差异直接确定", "");
+    if (diff === null) return;
+    let diffAcct = "";
+    if ((diff || "").trim() !== "") {
+      diffAcct = prompt("差异科目（默认 660305 财务费用-其他；也可填 6711 营业外支出）", "660305");
+      if (diffAcct === null) return;
+    }
+    try {
+      const r = await post("/settle/run", { from_entry: selFrom, to_entry: selTo, amount: amt, diff: (diff || "").trim(), diff_account: (diffAcct || "").trim() });
+      toast(r.diff_voucher_id ? `已核销，差异凭证 #${r.diff_voucher_id}` : "已核销", "ok");
+      load();
+    } catch (e) { toast(e.message, "err"); }
+  };
   if ($("#st-aging", main)) $("#st-aging", main).onclick = async () => {
     try {
       const d = await api(`/settle/aging?account=${encodeURIComponent(acct())}&upto=${encodeURIComponent(upto())}`);
@@ -7516,6 +7549,43 @@ async function viewSettle(main) {
       });
     } catch (e) { toast(e.message, "err"); }
   };
+  // ---- 往来对冲单（应收 ↔ 应付相互抵销）----
+  async function loadOffsets() {
+    const el = $("#off-list", main);
+    if (!el) return;
+    try {
+      const r = await api("/settle/offsets");
+      const rows = r.rows || [];
+      if (!rows.length) { el.innerHTML = `<div class="muted">暂无对冲单</div>`; return; }
+      el.innerHTML = `<table class="grid"><thead><tr><th>日期</th><th>单号</th><th>客户(应收)</th><th>供应商(应付)</th><th class="num">金额</th><th>状态</th><th></th></tr></thead><tbody>${rows.map((o) => `<tr><td>${esc(o.date)}</td><td>${esc(o.no)}</td><td>${esc(o.customer)}</td><td>${esc(o.supplier)}</td><td class="num">${fmt(o.amount)}</td><td>${o.status === "audited" ? "已审核" : "待审核"}</td><td>${can("voucher_new") && o.status === "draft" ? `<button class="btn sm ghost" data-off-act="audit" data-off-id="${o.id}">审核</button> ` : ""}${(can("voucher_audit") || can("voucher_post")) && o.status === "audited" ? `<button class="btn sm ghost" data-off-act="unaudit" data-off-id="${o.id}">撤审</button> ` : ""}${can("voucher_new") && o.status !== "audited" ? `<button class="btn sm ghost" data-off-act="delete" data-off-id="${o.id}">删除</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
+      $all("[data-off-act]", el).forEach((b) => b.onclick = async () => {
+        const act = b.dataset.offAct, id = b.dataset.offId;
+        const label = act === "audit" ? "审核（出凭证并两端核销）" : act === "unaudit" ? "撤审（回退凭证与核销）" : "删除";
+        if (!(await confirmDialog(`确定${label}该对冲单？`, false))) return;
+        try { await post(`/settle/offsets/${id}/${act}`, {}); toast("已处理", "ok"); loadOffsets(); load(); } catch (e) { toast(e.message, "err"); }
+      });
+    } catch (e) { el.innerHTML = `<div class="muted">${esc(e.message)}</div>`; }
+  }
+  if ($("#off-reload", main)) $("#off-reload", main).onclick = loadOffsets;
+  if ($("#off-date", main)) $("#off-date", main).value = new Date().toISOString().slice(0, 10);
+  if ($("#off-new", main)) $("#off-new", main).onclick = async () => {
+    const body = {
+      date: $("#off-date", main).value.trim(),
+      customer: $("#off-cust", main).value.trim(),
+      supplier: $("#off-sup", main).value.trim(),
+      amount: $("#off-amt", main).value.trim(),
+      memo: $("#off-memo", main).value.trim(),
+    };
+    if (!body.customer || !body.supplier || !body.amount) { toast("客户、供应商、对冲金额都要填", "err"); return; }
+    try {
+      await post("/settle/offsets", body);
+      toast("已新增对冲单；到列表点「审核」出凭证并两端核销", "ok");
+      $("#off-cust", main).value = ""; $("#off-sup", main).value = "";
+      $("#off-amt", main).value = ""; $("#off-memo", main).value = "";
+      loadOffsets();
+    } catch (e) { toast(e.message, "err"); }
+  };
+  loadOffsets();
   load();
 }
 

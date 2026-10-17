@@ -29,6 +29,7 @@ pub mod invoices;
 pub mod landedcost;
 pub mod manufacturing;
 pub mod mgmt;
+pub mod offset;
 pub mod periods;
 pub mod printform;
 pub mod procurement;

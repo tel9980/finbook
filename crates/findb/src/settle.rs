@@ -5,7 +5,7 @@
 
 use chrono::NaiveDate;
 use fincore::engine::aging::{AgingBucket, AgingItem, AgingLine};
-use fincore::{Direction, Money, Period};
+use fincore::{AuxRef, Direction, Entry, Money, Period, Voucher, VoucherSource};
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::{Db, DbResult};
@@ -250,6 +250,125 @@ pub fn unsettle_entry(db: &Db, entry_id: i64) -> DbResult<usize> {
         "DELETE FROM settle_record WHERE from_entry=?1 OR to_entry=?1",
         rusqlite::params![entry_id],
     )?)
+}
+
+/// 带「差异」的核销结果。
+#[derive(Clone, Debug)]
+pub struct DiffSettleResult {
+    /// 实际金额那笔核销记录的 id
+    pub settle_id: i64,
+    /// 差异抹零生成的凭证 id；差异为 0 时为 `None`（退化成普通核销）
+    pub diff_voucher_id: Option<i64>,
+}
+
+/// 带「差异（现金折扣 / 抹零）」的核销。
+///
+/// 现实场景：应收 10000，客户实付 9980，差 20 抹零。只做
+/// `settle(from,to,9980)` 的话，被核销方还剩 20 永远挂着，账龄越拖越长。本函数在核销
+/// `amount` 之外，把 `diff` 通过**一张新凭证**记入 `diff_account`，并把这笔差异分录
+/// 与被核销方也核销掉——于是被核销方**全额结清**，差异落到损益（财务费用 / 营业外支出）。
+///
+/// 分录方向与核销方 `to_entry` 同侧（这样才能继续冲减被核销方）：
+/// - 收款抹零：`借 差异科目 / 贷 应收`（贷方与被核销的借方应收对冲）；
+/// - 付款抹零：`借 应付 / 贷 差异科目`。
+///
+/// 守卫：`amount>0`、`diff>=0`、`diff_account` 存在且不与被核销科目相同；超额由
+/// `settle_in_tx` 复校验。**事务原子**：差异凭证 + 两笔核销同进同出。
+pub fn settle_with_diff(
+    db: &Db,
+    from_entry: i64,
+    to_entry: i64,
+    amount: Money,
+    diff: Money,
+    diff_account: &str,
+    who: &str,
+) -> DbResult<DiffSettleResult> {
+    if diff < Money::ZERO {
+        return Err(fincore::FinError::validate("差异金额不能为负").into());
+    }
+    if amount <= Money::ZERO {
+        return Err(fincore::FinError::validate("核销金额必须大于零").into());
+    }
+    // 无差异：退化成普通核销（不生成差异凭证）
+    if diff.is_zero() {
+        let tx = db.write_tx()?;
+        let id = settle_in_tx(&tx, from_entry, to_entry, amount, who)?;
+        tx.commit()?;
+        return Ok(DiffSettleResult {
+            settle_id: id,
+            diff_voucher_id: None,
+        });
+    }
+    let diff_account = diff_account.trim();
+    if diff_account.is_empty() {
+        return Err(fincore::FinError::validate(
+            "差异科目不能为空（如 6603 财务费用 / 6711 营业外支出）",
+        )
+        .into());
+    }
+    if crate::accounts::get(db, diff_account)?.is_none() {
+        return Err(fincore::FinError::validate(format!("差异科目 {diff_account} 不存在")).into());
+    }
+    let tx = db.write_tx()?;
+    let f = entry_of(&tx, from_entry)?.ok_or_else(|| fincore::FinError::not_found("被核销分录"))?;
+    let t = entry_of(&tx, to_entry)?.ok_or_else(|| fincore::FinError::not_found("核销方分录"))?;
+    if diff_account == f.account_code {
+        return Err(fincore::FinError::validate(
+            "差异科目不能与被核销的往来科目相同（那样差异仍挂在往来上，清不掉）",
+        )
+        .into());
+    }
+    // 差异分录必须与被核销方同科目 + 同往来辅助，才能被 settle_in_tx 接受
+    let aux = AuxRef::from_key(&f.aux_key);
+    let period = f.period;
+    let date = f.date;
+    let to_is_debit = t.debit > Money::ZERO;
+    let summary = format!("核销差异 {}", f.account_code);
+    let mut v = Voucher::new(
+        period,
+        date,
+        "记",
+        crate::vouchers::next_no_of(&tx, period, "记")?,
+    );
+    v.prepared_by = who.to_string();
+    v.source = VoucherSource::Business;
+    v.memo = format!("核销差异（{}）", f.account_code);
+    // 差异分录与核销方 to_entry 同侧，另一侧落差异科目
+    if to_is_debit {
+        v.push_entry(Entry {
+            debit: diff,
+            aux: aux.clone(),
+            ..Entry::new(1, f.account_code.as_str(), summary.as_str())
+        });
+        v.push_entry(Entry {
+            credit: diff,
+            ..Entry::new(2, diff_account, summary.as_str())
+        });
+    } else {
+        v.push_entry(Entry {
+            debit: diff,
+            ..Entry::new(1, diff_account, summary.as_str())
+        });
+        v.push_entry(Entry {
+            credit: diff,
+            aux: aux.clone(),
+            ..Entry::new(2, f.account_code.as_str(), summary.as_str())
+        });
+    }
+    let vid = crate::vouchers::save_in(&tx, &mut v)?;
+    let diff_entry: i64 = tx.query_row(
+        "SELECT id FROM voucher_entry WHERE voucher_id=?1 AND account_code=?2 ORDER BY line LIMIT 1",
+        rusqlite::params![vid, f.account_code],
+        |r| r.get(0),
+    )?;
+    // 先核销实际金额，再核销差异（两笔都以被核销方为 from，故各自复校验未核销额）
+    let settle_id = settle_in_tx(&tx, from_entry, to_entry, amount, who)?;
+    settle_in_tx(&tx, from_entry, diff_entry, diff, who)?;
+    tx.commit()?;
+    Ok(DiffSettleResult {
+        settle_id,
+        diff_voucher_id: Some(vid),
+    })
 }
 
 // ---------------- 往来单据 ----------------
@@ -1762,6 +1881,103 @@ mod tests {
         let (_, e2) = ar_voucher(&db, p, d, 2, "C02", "100", false, "100201");
         // 往来单位不同
         assert!(settle(&db, e1, e2, Money::parse("100").unwrap(), "u").is_err());
+    }
+
+    /// 带差异（抹零）的核销：应收 1000，实收 998，差 2 记入差异科目，
+    /// 被核销方**全额结清**，差异落到损益，账龄不挂尾。
+    #[test]
+    fn settle_with_diff_writes_off_and_clears() {
+        let db = tmpdb("diff");
+        let p = Period::new(2026, 1).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let (_, e_ar) = ar_voucher(&db, p, d, 1, "C01", "1000", true, "600101");
+        let (_, e_cash) = ar_voucher(&db, p, d, 2, "C01", "998", false, "100201");
+
+        let r = settle_with_diff(
+            &db,
+            e_ar,
+            e_cash,
+            Money::parse("998").unwrap(),
+            Money::parse("2").unwrap(),
+            "660305",
+            "u",
+        )
+        .unwrap();
+        let dv_id = r.diff_voucher_id.expect("有差异必须生成差异凭证");
+        // 应收全额结清（998 实收 + 2 差异）
+        let left = open_entries(&db, "1122", p, false)
+            .unwrap()
+            .iter()
+            .fold(Money::ZERO, |a, e| a + e.open());
+        assert_eq!(left, Money::ZERO, "应收应被全额结清");
+        // 差异凭证：借 660305 / 贷 112201（带同往来单位），金额 2
+        let dv = crate::vouchers::get(&db, dv_id).unwrap().unwrap();
+        assert_eq!(dv.entries.len(), 2);
+        let debit = dv.entries.iter().find(|e| e.debit > Money::ZERO).unwrap();
+        assert_eq!(debit.account_code, "660305");
+        assert_eq!(debit.debit, Money::parse("2").unwrap());
+        let credit = dv.entries.iter().find(|e| e.credit > Money::ZERO).unwrap();
+        assert_eq!(credit.account_code, "112201");
+        assert_eq!(
+            credit.aux.customer.as_deref(),
+            Some("C01"),
+            "差异分录必须带同往来单位，否则核销对不上"
+        );
+
+        // 差异为 0：退化成普通核销，不生成差异凭证（凭证号跳开，避免与差异凭证撞号）
+        let (_, e_ar2) = ar_voucher(&db, p, d, 10, "C02", "500", true, "600101");
+        let (_, e_cash2) = ar_voucher(&db, p, d, 11, "C02", "500", false, "100201");
+        let r0 = settle_with_diff(
+            &db,
+            e_ar2,
+            e_cash2,
+            Money::parse("500").unwrap(),
+            Money::ZERO,
+            "",
+            "u",
+        )
+        .unwrap();
+        assert!(r0.diff_voucher_id.is_none(), "无差异不应生成凭证");
+    }
+
+    /// 差异核销的守卫：负差异 / 空或不存在或同往来的差异科目 / 超额，全部拦下且整单回滚。
+    #[test]
+    fn settle_with_diff_guards() {
+        let db = tmpdb("diffguard");
+        let p = Period::new(2026, 1).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let (_, e_ar) = ar_voucher(&db, p, d, 1, "C01", "1000", true, "600101");
+        let (_, e_cash) = ar_voucher(&db, p, d, 2, "C01", "998", false, "100201");
+        let (a, dv) = (Money::parse("998").unwrap(), Money::parse("2").unwrap());
+        assert!(settle_with_diff(
+            &db,
+            e_ar,
+            e_cash,
+            a,
+            Money::parse("-1").unwrap(),
+            "660305",
+            "u"
+        )
+        .is_err());
+        assert!(settle_with_diff(&db, e_ar, e_cash, a, dv, "", "u").is_err());
+        assert!(settle_with_diff(&db, e_ar, e_cash, a, dv, "999999", "u").is_err());
+        assert!(settle_with_diff(&db, e_ar, e_cash, a, dv, "112201", "u").is_err());
+        // 998 + 100 = 1098 > 未核销 1000
+        assert!(settle_with_diff(
+            &db,
+            e_ar,
+            e_cash,
+            a,
+            Money::parse("100").unwrap(),
+            "660305",
+            "u"
+        )
+        .is_err());
+        // 全部失败：一条核销记录都不该留下（整单回滚，不残留差异凭证与核销）
+        assert!(
+            list(&db, "1122").unwrap().is_empty(),
+            "失败应整单回滚，不得残留核销记录"
+        );
     }
 
     #[test]

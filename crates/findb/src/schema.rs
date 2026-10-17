@@ -1332,6 +1332,26 @@ CREATE TABLE IF NOT EXISTS fund_transfer (
 );
 CREATE INDEX IF NOT EXISTS idx_fund_transfer_period ON fund_transfer(period);
 
+-- 往来对冲单（应收 ↔ 应付相互抵销：借 应付 / 贷 应收，两端各自 FIFO 核销）
+-- 与 fund_transfer / receipt_doc 同构（建单草稿 → 审核出凭证 → 撤审/删除链）。
+CREATE TABLE IF NOT EXISTS arap_offset (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    no           TEXT NOT NULL DEFAULT '',
+    period       INTEGER NOT NULL,
+    date         TEXT NOT NULL,
+    customer     TEXT NOT NULL DEFAULT '',      -- 应收方客户辅助编码
+    supplier     TEXT NOT NULL DEFAULT '',      -- 应付方供应商辅助编码
+    ar_account   TEXT NOT NULL DEFAULT '',      -- 应收科目（默认账套配置 ar）
+    ap_account   TEXT NOT NULL DEFAULT '',      -- 应付科目（默认账套配置 ap）
+    amount       TEXT NOT NULL DEFAULT '0',
+    memo         TEXT NOT NULL DEFAULT '',
+    voucher_id   INTEGER,
+    status       TEXT NOT NULL DEFAULT 'draft', -- draft 待审核 / audited 已审核
+    created_by   TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_arap_offset_period ON arap_offset(period);
+
 -- 存货盘点单（账面按仓库快照 + 实盘录入 → 应用生成其他入库/出库流水与盘盈盘亏凭证）
 CREATE TABLE IF NOT EXISTS inv_count (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
