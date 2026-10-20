@@ -146,6 +146,11 @@ pub struct BalanceSnapshot {
     rows: BTreeMap<Key, BalanceRow>,
     /// (科目, 辅助核算) → 数量行
     qtys: BTreeMap<Key, QtyRow>,
+    /// **按科目编码的预聚合：自身 + 全部下级合计**。
+    /// 科目编码是层级前缀（`1002` ⊃ `100201` ⊃ `10020101`），
+    /// 在 `load()` 末尾按编码排序后用栈做一次"前缀累加"得到。
+    /// 之后 `for_account(code)` 变成 **O(log R) 查表**，而不是 O(R) 线性扫。
+    by_code: BTreeMap<String, BalanceRow>,
     /// 加载快照时的科目表。报表需要按科目类别取数（如"未结转损益净额"），
     /// 缓存下来避免调用方到处传 chart。
     chart: Option<Chart>,
@@ -300,11 +305,70 @@ impl BalanceSnapshot {
         }
 
         let chart = accounts::chart(db).ok();
+        // ── 前缀预聚合：按科目编码层级累加（自身 + 全部下级）
+        /// 科目编码是层级前缀（`1002` ⊃ `100201` ⊃ `10020101`）。
+        /// 做法：先把所有 (code, aux) 的直接值按 code 分组求和（忽略 aux 维度），
+        /// 再按 code 降序遍历，把每个 code 的值加到它的父 code 上。
+        /// 这样每个 code 最终存的是"自身 + 所有下级"的合计。
+        let mut by_code: BTreeMap<String, BalanceRow> = BTreeMap::new();
+
+        // 1) 先聚合同一 code 的所有 aux 维度 → 该 code 的直接值
+        for ((code, _aux_key), row) in &rows {
+            let e = by_code
+                .entry(code.clone())
+                .or_insert_with(|| BalanceRow {
+                    account_code: code.clone(),
+                    account_name: String::new(),
+                    aux: AuxRef::default(),
+                    ..Default::default()
+                });
+            e.begin += row.begin;
+            e.debit += row.debit;
+            e.credit += row.credit;
+            e.ytd_debit += row.ytd_debit;
+            e.ytd_credit += row.ytd_credit;
+        }
+
+        // 2) 按 code 降序遍历（子级先于父级），累加到父级
+        /// BTreeMap 的 keys() 是升序；`rev()` 变成降序。
+        /// 因为科目编码是前缀关系（父 < 子），降序保证先处理子级。
+        let codes: Vec<String> = by_code.keys().cloned().collect();
+        for code in codes.into_iter().rev() {
+            // 找父 code：当前 code 的最长真前缀，且该前缀存在于 by_code 中
+            if let Some(parent) = find_parent_code(&code, &by_code) {
+                // 先取出子值，再修改父值（避免同时可变/不可变借用）
+                let child_vals = {
+                    let child = by_code.get(&code).unwrap();
+                    (child.begin, child.debit, child.credit, child.ytd_debit, child.ytd_credit)
+                };
+                if let Some(parent_row) = by_code.get_mut(&parent) {
+                    parent_row.begin += child_vals.0;
+                    parent_row.debit += child_vals.1;
+                    parent_row.credit += child_vals.2;
+                    parent_row.ytd_debit += child_vals.3;
+                    parent_row.ytd_credit += child_vals.4;
+                }
+            }
+        }
+
+        // 辅助函数：在 by_code 的键中找 code 的最长真前缀
+        fn find_parent_code(code: &str, map: &BTreeMap<String, BalanceRow>) -> Option<String> {
+            // 从长到短尝试前缀
+            for len in (1..code.len()).rev() {
+                let prefix = &code[..len];
+                if map.contains_key(prefix) {
+                    return Some(prefix.to_string());
+                }
+            }
+            None
+        }
+
         Ok(Self {
             from: q.from,
             to: q.to,
             rows,
             qtys,
+            by_code,
             chart,
         })
     }
@@ -429,6 +493,30 @@ impl BalanceSnapshot {
 
     /// 汇总某科目（含所有下级、含所有辅助核算维度）的余额
     pub fn for_account(&self, code: &str, aux: Option<&AuxRef>) -> BalanceRow {
+        // Fast path: 无 aux 过滤 → 直接查预聚合表 O(log R)
+        if aux.is_none() {
+            if let Some(agg) = self.by_code.get(code) {
+                let mut r = agg.clone();
+                r.account_code = code.to_string(); // 保证返回的 account_code 与查询一致
+                // 数量账：by_code 不存 qty，需从 rows 聚合（仅在需要 qty 时）
+                if self.qtys.iter().any(|((c, _), _)| c.starts_with(code)) {
+                    let mut qr = QtyRow::default();
+                    for ((c, ak), q) in &self.qtys {
+                        if c.starts_with(code) {
+                            qr.begin += q.begin;
+                            qr.in_qty += q.in_qty;
+                            qr.out_qty += q.out_qty;
+                        }
+                    }
+                    if !qr.is_zero() {
+                        r.qty = Some(qr);
+                    }
+                }
+                return r;
+            }
+        }
+
+        // Slow path: 有 aux 过滤 → 线性扫描 rows（预聚合未含 aux 维度）
         let mut r = BalanceRow {
             account_code: code.to_string(),
             ..Default::default()

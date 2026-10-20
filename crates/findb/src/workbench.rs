@@ -1024,3 +1024,142 @@ mod tests {
         assert_eq!(d, vec!["审批", "报销"], "Viewer 只见本人报销与审批");
     }
 }
+
+/// 专用查询：一次性算出 12 期 × 5 个报表趋势值
+/// 避免 wb_report_domain 里 26 次完整报表渲染（每次都重扫 voucher_entry + 渲染）。
+///
+/// 返回：BTreeMap<period_ymm, (assets, liabilities, equity, revenue, net_profit)>
+/// 金额单位：Money（后续在 web 层转 f64 画图）。
+pub fn collect_report_trends(
+    db: &Db,
+    user: &User,
+    cur: Period,
+    n: i32,
+) -> DbResult<BTreeMap<i32, (Money, Money, Money, Money, Money)>> {
+    let n = n.clamp(3, 24);
+    let ps = period_series(cur, n);
+    let y0 = ps[0].ymm();
+    let y1 = cur.ymm();
+
+    // 预填 0，保证每期都有键
+    let mut m: BTreeMap<i32, (Money, Money, Money, Money, Money)> = BTreeMap::new();
+    for p in &ps {
+        m.insert(p.ymm(), (Money::ZERO, Money::ZERO, Money::ZERO, Money::ZERO, Money::ZERO));
+    }
+
+    // 获取用户的数据范围过滤条件
+    let scope = &user.data_scope;
+    let mut conds = vec!["v.status = 'posted'".to_string()];
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(y0), Box::new(y1)];
+    let mut param_idx = 3;
+
+    // 科目区间
+    let lo = scope.account_from.trim();
+    let hi = scope.account_to.trim();
+    if !lo.is_empty() {
+        params.push(Box::new(lo.to_string()));
+        conds.push(format!("a.code >= ?{}", param_idx));
+        param_idx += 1;
+    }
+    if !hi.is_empty() {
+        params.push(Box::new(hi.to_string()));
+        conds.push(format!("a.code <= ?{}", param_idx));
+        param_idx += 1;
+    }
+    // 仅本人填制的凭证
+    if scope.own_voucher_only {
+        params.push(Box::new(user.username.clone()));
+        conds.push(format!("v.prepared_by = ?{}", param_idx));
+        param_idx += 1;
+    }
+
+    let where_clause = conds.join(" AND ");
+
+    // 一条 SQL：按 period + category 聚合借/贷发生额（用 f64 聚合，仅用于趋势图展示，不参与账务计算）
+    // category 来自 account 表（asset/liability/equity/income/expense）
+    // 利润表口径：需要剔除结转损益凭证（v.source <> 'carry_forward'）
+    // 资产负债表口径：需要年初至期末累计（此处只取各期发生额，累计在 Rust 侧做）
+    let sql = format!(
+        r#"
+        SELECT e.period, a.category,
+               SUM(CAST(e.debit AS REAL)) as sum_debit,
+               SUM(CAST(e.credit AS REAL)) as sum_credit
+        FROM voucher_entry e
+        JOIN voucher v ON v.id = e.voucher_id
+        JOIN account a ON a.code = e.account_code
+        WHERE {where_clause}
+          AND e.period BETWEEN ?1 AND ?2
+          AND v.source <> 'carry_forward'
+        GROUP BY e.period, a.category
+        "#,
+    );
+
+    let mut stmt = db.conn().prepare(&sql)?;
+    let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt
+        .query_map(refs.as_slice(), |r| {
+            Ok((
+                r.get::<_, i32>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, f64>(2)?,  // sum_debit as f64
+                r.get::<_, f64>(3)?,  // sum_credit as f64
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // 先按 period 分组聚合：每期得到 5 大类的借/贷发生额（f64）
+    #[derive(Default)]
+    struct CatAmt {
+        asset_debit: f64,
+        asset_credit: f64,
+        liability_debit: f64,
+        liability_credit: f64,
+        equity_debit: f64,
+        equity_credit: f64,
+        income_debit: f64,
+        income_credit: f64,
+        expense_debit: f64,
+        expense_credit: f64,
+    }
+    let mut by_period: BTreeMap<i32, CatAmt> = BTreeMap::new();
+    for (p, cat, d, c) in rows {
+        let entry = by_period.entry(p).or_default();
+        match cat.as_str() {
+            "Asset" => { entry.asset_debit += d; entry.asset_credit += c; }
+            "Liability" => { entry.liability_debit += d; entry.liability_credit += c; }
+            "Equity" => { entry.equity_debit += d; entry.equity_credit += c; }
+            "Income" => { entry.income_debit += d; entry.income_credit += c; }
+            "Expense" => { entry.expense_debit += d; entry.expense_credit += c; }
+            _ => {}
+        }
+    }
+
+    // 逐期累计得到资产/负债/权益的期末余额（年初余额为 0，简化：工作台趋势只看本年发生额累计）
+    // 实际资产负债表包含期初余额（begin_balance），这里为趋势图简化只算本年发生额累计
+    // 这与 wb_report_domain 的资产负债表有差异（后者含期初），但作为趋势对比足够
+    let mut asset_cum = 0.0;
+    let mut liability_cum = 0.0;
+    let mut equity_cum = 0.0;
+
+    for p in &ps {
+        let cat = by_period.entry(p.ymm()).or_default();
+        // 本期净增
+        asset_cum += cat.asset_debit - cat.asset_credit;
+        liability_cum += cat.liability_debit - cat.liability_credit;
+        equity_cum += cat.equity_debit - cat.equity_credit;
+        let revenue = cat.income_credit - cat.income_debit; // 收入类贷方为正
+        let expense = cat.expense_debit - cat.expense_credit; // 费用类借方为正
+        let net_profit = revenue - expense;
+
+        // 转 Money（用 f64 字符串构造，仅用于趋势图展示，不参与账务计算）
+        m.insert(p.ymm(), (
+            Money::parse_or_zero(&asset_cum.to_string()),
+            Money::parse_or_zero(&liability_cum.to_string()),
+            Money::parse_or_zero(&equity_cum.to_string()),
+            Money::parse_or_zero(&revenue.to_string()),
+            Money::parse_or_zero(&net_profit.to_string()),
+        ));
+    }
+
+    Ok(m)
+}

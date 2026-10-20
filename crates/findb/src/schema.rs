@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 35;
+pub const SCHEMA_VERSION: i64 = 36;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1490,6 +1490,57 @@ CREATE TABLE IF NOT EXISTS workflow_instance (
 );
 CREATE INDEX IF NOT EXISTS idx_wf_flow_biz ON workflow_flow(biz_type, status);
 
+-- po_line / so_line 缺索引（采购/销售列表每单都会全表扫）
+CREATE INDEX IF NOT EXISTS idx_po_line_po ON po_line(po_id);
+CREATE INDEX IF NOT EXISTS idx_so_line_so ON so_line(so_id);
+
+-- stock_move 缺索引（批次/仓库/备注/类型/质检/凭证号）
+CREATE INDEX IF NOT EXISTS idx_stock_move_batch ON stock_move(batch_no);
+CREATE INDEX IF NOT EXISTS idx_stock_move_wh ON stock_move(warehouse);
+CREATE INDEX IF NOT EXISTS idx_stock_move_memo ON stock_move(memo);
+CREATE INDEX IF NOT EXISTS idx_stock_move_kind ON stock_move(kind);
+CREATE INDEX IF NOT EXISTS idx_stock_move_qc ON stock_move(qc_status);
+CREATE INDEX IF NOT EXISTS idx_stock_move_voucher ON stock_move(voucher_id);
+
+-- voucher_entry 缺索引（辅助核算 / 核销类型单号）
+CREATE INDEX IF NOT EXISTS idx_entry_aux ON voucher_entry(aux_key);
+CREATE INDEX IF NOT EXISTS idx_entry_settle ON voucher_entry(settle_type, settle_no);
+
+-- settle_record 缺索引（科目/辅助核算）
+CREATE INDEX IF NOT EXISTS idx_settle_acct ON settle_record(account_code);
+CREATE INDEX IF NOT EXISTS idx_settle_aux ON settle_record(aux_key);
+
+-- doc_link 缺反向索引（上游单据→下游单据）
+CREATE INDEX IF NOT EXISTS idx_doc_link_src ON doc_link(src_type, src_id);
+
+-- workflow_instance 缺 flow_id 索引
+CREATE INDEX IF NOT EXISTS idx_wf_inst_flow ON workflow_instance(flow_id);
+
+-- voucher 缺索引（制单人 / 备注）
+CREATE INDEX IF NOT EXISTS idx_voucher_prepared ON voucher(prepared_by);
+CREATE INDEX IF NOT EXISTS idx_voucher_memo ON voucher(memo);
+
+-- invoice 缺 status 索引
+CREATE INDEX IF NOT EXISTS idx_invoice_status ON invoice(status);
+
+-- arap_opening 缺 doc_no 索引（幂等判重）
+CREATE INDEX IF NOT EXISTS idx_arap_opening_doc ON arap_opening(kind, party_code, doc_no);
+
+-- inv_count 缺 warehouse 索引
+CREATE INDEX IF NOT EXISTS idx_inv_count_wh ON inv_count(warehouse);
+
+-- aux_entity 缺 name 索引（模糊搜索）
+CREATE INDEX IF NOT EXISTS idx_aux_name ON aux_entity(name);
+
+-- purchase_order / sales_order / purchase_req / quotation 缺单号/名称索引
+CREATE INDEX IF NOT EXISTS idx_po_no ON purchase_order(no);
+CREATE INDEX IF NOT EXISTS idx_po_supplier ON purchase_order(supplier_name);
+CREATE INDEX IF NOT EXISTS idx_so_no ON sales_order(no);
+CREATE INDEX IF NOT EXISTS idx_so_customer ON sales_order(customer_name);
+CREATE INDEX IF NOT EXISTS idx_pr_no ON purchase_req(no);
+CREATE INDEX IF NOT EXISTS idx_pr_item ON purchase_req(item_name);
+CREATE INDEX IF NOT EXISTS idx_quo_no ON quotation(no);
+
 -- 存货计价方式配置（按存货档案 code）
 CREATE TABLE IF NOT EXISTS item_cost_method (
     item          TEXT PRIMARY KEY,
@@ -1577,6 +1628,11 @@ const MIGRATE_V35: &[(&str, &str, &str)] = &[
     // 收进哪个仓库（ERPNext / Odoo 的 Purchase Receipt 都是行级带仓库）
     ("po_receipt", "warehouse", "TEXT NOT NULL DEFAULT ''"),
 ];
+
+/// V36：性能优化索引（见 schema.rs DDL 新增 CREATE INDEX）
+/// 这些索引对应的列大多是早已存在的（如 po_id/so_id/batch_no 等），
+/// 只需在旧账套上补建索引即可；不新增列，故清单为空。
+const MIGRATE_V36: &[(&str, &str, &str)] = &[];
 
 /// v5 → v6：供应链深化（采购订单 / 销售订单 / BOM / 生产订单）
 const MIGRATE_V6: &[(&str, &str, &str)] = &[
@@ -2040,7 +2096,13 @@ pub fn apply_pragmas(conn: &Connection) -> Result<(), DbError> {
         "PRAGMA busy_timeout = 5000;
          PRAGMA foreign_keys = ON;
          PRAGMA journal_mode = WAL;
-         PRAGMA synchronous = NORMAL;",
+         PRAGMA synchronous = NORMAL;
+         -- 缓存 32 MB（默认 2 MB），大幅降低全表扫描的磁盘 I/O
+         PRAGMA cache_size = -32000;
+         -- 启用 mmap I/O（256 MB），减少系统调用与页缓存拷贝
+         PRAGMA mmap_size = 268435456;
+         -- 临时表/排序用内存，避免临时 B-tree 落盘
+         PRAGMA temp_store = MEMORY;",
     )?;
     Ok(())
 }
@@ -2091,6 +2153,8 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             // v35 的列。放在所有老清单**之后**，这样「本次新增的列」只有这一处来源，
             // 配套测试才能机器校验（见 MIGRATE_V35 的文档注释）。
             migrate_generic(conn, MIGRATE_V35)?;
+            // v36 只补索引（不加列），紧跟在 v35 之后即可
+            migrate_generic(conn, MIGRATE_V36)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：

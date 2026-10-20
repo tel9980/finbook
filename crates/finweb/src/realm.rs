@@ -8,7 +8,7 @@
 //! 归属关系做"授权 + 身份对账"（见 [`ensure_book_admin`]），从而完整复用账套引擎的权限/设备绑定逻辑。
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 use fincore::user::{burn_argon2, hash_password, verify_password, PasswordPolicy, Role, User};
 use findb::{users, Db, DbError, DbResult};
@@ -119,9 +119,12 @@ CREATE INDEX IF NOT EXISTS idx_realm_user_device_username
 "#;
 
 /// 账号库（单进程内以 Mutex<Connection> 持有，WAL 模式下并发安全）
+/// 密码策略缓存（仅在变更时失效）
 pub struct RealmDb {
     inner: Mutex<Connection>,
     path: PathBuf,
+    /// 密码策略缓存（仅在变更时失效）
+    policy_cache: RwLock<Option<PasswordPolicy>>,
 }
 
 fn now() -> String {
@@ -195,6 +198,7 @@ impl RealmDb {
         let db = Self {
             inner: Mutex::new(conn),
             path,
+            policy_cache: RwLock::new(None),
         };
         db.init()?;
         Ok(db)
@@ -392,6 +396,10 @@ impl RealmDb {
 
     /// 平台口令策略（realm_option 存储；缺省 = 与桌面端一致的默认策略）
     pub fn policy(&self) -> DbResult<PasswordPolicy> {
+        // 先尝试读取缓存
+        if let Some(cached) = self.policy_cache.read().unwrap().clone() {
+            return Ok(cached);
+        }
         let conn = self.inner.lock().unwrap();
         let raw: Option<String> = conn
             .query_row(
@@ -400,9 +408,11 @@ impl RealmDb {
                 |r| r.get(0),
             )
             .optional()?;
-        Ok(raw
+        let policy = raw
             .and_then(|s| serde_json::from_str::<PasswordPolicy>(&s).ok())
-            .unwrap_or_default())
+            .unwrap_or_default();
+        *self.policy_cache.write().unwrap() = Some(policy.clone());
+        Ok(policy)
     }
 
     /// 保存平台口令策略（幂等 upsert）
@@ -415,6 +425,7 @@ impl RealmDb {
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             rusqlite::params![json],
         )?;
+        *self.policy_cache.write().unwrap() = Some(p.clone());
         Ok(())
     }
 

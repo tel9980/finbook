@@ -531,6 +531,7 @@ impl LoginView {
             tax_no: self.new_tax.trim().to_string(),
             enable_qty: false,
             enable_foreign: false,
+            enable_production: false,
             enable_audit: false,
             require_cashier: false,
             biz_accounts: Default::default(),

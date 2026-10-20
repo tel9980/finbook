@@ -983,6 +983,7 @@ mod reversible_tests {
             tax_no: String::new(),
             enable_qty: false,
             enable_foreign: false,
+            enable_production: false,
             enable_audit: false,
             require_cashier: false,
             biz_accounts: Default::default(),

@@ -678,6 +678,11 @@ pub struct BookOptions {
     pub enable_qty: bool,
     /// 启用外币核算
     pub enable_foreign: bool,
+    /// 启用生产制造模块（MRP 运算 / MPS 排产 / 工艺路线 / 工序报工）。
+    /// 小财务暂时用不到可关掉，侧栏「生产制造」整组隐藏；功能本身不删，
+    /// 取消勾选即恢复。
+    #[serde(default)]
+    pub enable_production: bool,
     /// 启用审核环节（未记账 → 已审核 → 已记账）。
     ///
     /// 默认**开启**（对标金蝶云·星空默认流程 + 会计内控底线）：制单、审核、记账
@@ -762,6 +767,9 @@ impl Default for BookOptions {
             tax_no: String::new(),
             enable_qty: false,
             enable_foreign: false,
+            // 生产制造默认关：小微/纯财务账套不需要 MRP/排产/工序报工，
+            // 侧栏「生产制造」整组隐藏，需要再在账套参数里显式开。
+            enable_production: false,
             // 审核环节默认开（三权分离）；要关得在账套参数里显式关，是一次有意识的决定
             enable_audit: true,
             // 出纳签字同样默认开：现金/银行是内控风险最高的一块，

@@ -8,6 +8,8 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
+use std::io::Cursor;
+use multipart::server::Multipart;
 use chrono::{Datelike, NaiveDate};
 use fincore::user::Perm;
 use fincore::{
@@ -1519,7 +1521,7 @@ async fn cost_wip_ep(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -1540,7 +1542,7 @@ async fn get_atp(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let item = q.get("item").map(|s| s.trim()).unwrap_or("");
     if item.is_empty() {
         return Err(AppError::bad_request("缺少存货编码 item"));
@@ -1592,7 +1594,7 @@ async fn prod_from_so_ep(
     Json(req): Json<ProdFromSoReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let date = if req.date.trim().is_empty() {
         period.first_day()
@@ -1748,7 +1750,7 @@ async fn list_landed_cost(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let rows = findb::landedcost::list(&db, period)?;
     Ok(Json(json!({
@@ -1766,7 +1768,7 @@ async fn save_landed_cost(
     Json(req): Json<LcSaveReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -1844,7 +1846,7 @@ async fn post_landed_cost(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let vid = findb::landedcost::post(&db, id, user.username())?;
     let after =
         findb::landedcost::get(&db, id)?.ok_or_else(|| AppError::not_found("到岸成本单不存在"))?;
@@ -1867,7 +1869,7 @@ async fn landed_cost_from_po(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let po_id = q
         .get("po_id")
         .and_then(|s| s.trim().parse::<i64>().ok())
@@ -1895,7 +1897,7 @@ async fn cost_variance_ep(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -1913,7 +1915,7 @@ async fn cost_forecast_ep(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -1943,7 +1945,7 @@ async fn cost_overhead_ep(
     Json(req): Json<OverheadReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = period_checked(req.period)?;
     let amount = parse_money_checked(&req.amount)?;
     if !amount.is_positive() {
@@ -2001,12 +2003,12 @@ async fn list_budget_rows(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let ver = findb::advanced::bversion_current(&db)?;
+    let ver = findb::advanced::bversion_current(&*db)?;
     let rows: Vec<serde_json::Value> = findb::mgmt::budget_list(&db, period)?
         .into_iter()
         .filter(|b| b.version == ver)
@@ -2032,7 +2034,7 @@ async fn save_budget_row(
     Json(req): Json<BudgetRowReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = period_checked(req.period)?;
     if req.account_code.trim().is_empty() {
         return Err(AppError::bad_request("科目编码不能为空"));
@@ -2041,7 +2043,7 @@ async fn save_budget_row(
     if amount.is_negative() {
         return Err(AppError::bad_request("预算金额不能为负"));
     }
-    let ver = findb::advanced::bversion_current(&db)?;
+    let ver = findb::advanced::bversion_current(&*db)?;
     let b = findb::mgmt::Budget {
         id: 0,
         period,
@@ -2078,7 +2080,7 @@ async fn delete_budget_row(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::mgmt::budget_delete(&db, id)?;
     db.log(user.username(), "预算", "删除预算行", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -2092,8 +2094,8 @@ async fn list_export_schedules(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Export)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::exports::sched_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::exports::sched_list(&*db)? })))
 }
 
 #[derive(Deserialize)]
@@ -2118,7 +2120,7 @@ async fn save_export_schedule(
     Json(req): Json<ExportScheduleReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Export)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let s = findb::exports::ExportSchedule {
         id: req.id,
         kind: req.kind.trim().to_string(),
@@ -2151,7 +2153,7 @@ async fn delete_export_schedule(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Export)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::exports::sched_delete(&db, id)?;
     db.log(user.username(), "导出", "删除计划任务", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -2164,7 +2166,7 @@ async fn run_export_schedule(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Export)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let dir = state.books_dir.join("exports");
     let path = findb::exports::sched_run(&db, id, &dir)?;
     db.log(user.username(), "导出", "立即执行计划任务", &path)?;
@@ -2508,8 +2510,8 @@ async fn list_users(
     user: CurrentUser,
 ) -> Result<Json<Vec<PublicUser>>, AppError> {
     user.require(Perm::UserManage)?;
-    let db = state.db_for(&user.book_key)?;
-    let list = users::list(&db)?
+    let db = &user.db;
+    let list = users::list(&*db)?
         .into_iter()
         .map(|u| PublicUser::from_user(&u))
         .collect();
@@ -2541,7 +2543,7 @@ async fn create_user(
     if ru.is_admin {
         return Err(AppError::forbidden("不能将管理员加入账套"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if users::get(&db, &username)?.is_some() {
         return Err(AppError::bad_request("该用户名已存在"));
     }
@@ -2594,7 +2596,7 @@ async fn update_user(
     Json(req): Json<UpdateUserReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::UserManage)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut u =
         users::get(&db, &username)?.ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
     // 账套归属者不可被停用 / 降权 / 改名，否则账套会失去主人
@@ -2638,7 +2640,7 @@ async fn update_user(
     if let Some(r) = req.role {
         // 不允许把最后一个管理员改成其他角色
         if u.is_admin() && r != Role::Admin {
-            let admins = users::list(&db)?
+            let admins = users::list(&*db)?
                 .into_iter()
                 .filter(|x| x.is_admin())
                 .count();
@@ -2695,7 +2697,7 @@ async fn reset_user_password(
     if !user.user.is_admin() {
         return Err(AppError::forbidden("只有管理员可以重置账号口令"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 单密码统一：账套内没有独立口令，重置即重置该用户的平台口令，
     // 再同步到其出现过的所有账套。目标必须是当前账套成员，防越权重置陌生人口令。
     if users::get(&db, &username)?.is_none() {
@@ -2769,7 +2771,7 @@ async fn reset_user_device(
     if !user.user.is_admin() {
         return Err(AppError::forbidden("只有管理员可以重置设备绑定"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 目标必须是本账套成员：否则凭用户名即可强制下线任意平台用户的全部会话
     if users::get(&db, &username)?.is_none() {
         return Err(AppError::not_found("该用户不在当前账套"));
@@ -2796,7 +2798,7 @@ async fn unlock_user(
     if !user.user.is_admin() {
         return Err(AppError::forbidden("只有管理员可以解锁账号"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     security::unlock_user(&db, &username)?;
     db.log(
         user.username(),
@@ -2843,7 +2845,7 @@ async fn delete_user(
     if !user.user.is_admin() {
         return Err(AppError::forbidden("只有管理员可以删除账号"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let u =
         users::get(&db, &username)?.ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
     // 账套归属者不可删除（删了账套就没有主人了）
@@ -2853,7 +2855,7 @@ async fn delete_user(
         }
     }
     if u.is_admin() {
-        let admins = users::list(&db)?
+        let admins = users::list(&*db)?
             .into_iter()
             .filter(|x| x.is_admin())
             .count();
@@ -2880,7 +2882,7 @@ async fn get_options(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<fincore::BookOptions>, AppError> {
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 读参数放宽到「能记账的人」，写仍然要 SysOption。
     //
     // 为什么：前端的凭证编辑器要用 `enable_audit` 决定「记账」按钮的行为，
@@ -2901,7 +2903,7 @@ async fn put_options(
     Json(opts): Json<fincore::BookOptions>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 落库前校验：非法启用期间会灌进会话并污染年度累计口径，后续 first_day/last_day panic
     period_checked(opts.start_period.ymm())?;
     if opts.code_scheme.is_empty()
@@ -2944,11 +2946,11 @@ async fn get_dashboard(
     user: CurrentUser,
 ) -> Result<Json<Dashboard>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (v, e, a) = db.stats()?;
     let start = db.options().start_period;
     let cur = current_period(&state, &user);
-    let closed = periods::closed_upto(&db)?;
+    let closed = periods::closed_upto(&*db)?;
     Ok(Json(Dashboard {
         company: user.company.clone(),
         start_period: period_to_str(start),
@@ -2969,7 +2971,7 @@ async fn get_workbench(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<findb::workbench::WbOut>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let cur = current_period(&state, &user);
     let n = q
         .get("periods")
@@ -3000,6 +3002,7 @@ fn wb_report_domain(
     n: i32,
     out: &mut findb::workbench::WbOut,
 ) -> Result<(), AppError> {
+    // 当期卡片：仍用完整报表（含期初余额、结转损益等），保证数字准确
     let bs_one = |p: Period| -> Result<fincore::report::ReportTable, AppError> {
         statement_table(
             db,
@@ -3050,29 +3053,30 @@ fn wb_report_domain(
     push(out, "revenue", "本期营业收入", g(&is, &["营业收入"]));
     push(out, "profit", "本期净利润", g(&is, &["净利润"]));
 
+    // 趋势图：用专用查询一次性算出 12 期 × 5 个指标，避免 26 次完整报表渲染
+    // 返回 BTreeMap<period_ymm, (assets, liabilities, equity, revenue, net_profit)>
+    let trends = findb::workbench::collect_report_trends(db, &user.user, cur, n)?;
     let ps = findb::workbench::period_series(cur, n);
     let labels = findb::workbench::period_labels(&ps);
     let mut assets_pts = Vec::new();
+    let mut liab_pts = Vec::new();
+    let mut equity_pts = Vec::new();
     let mut inc_pts = Vec::new();
     let mut prof_pts = Vec::new();
     for p in &ps {
-        let b = bs_one(*p)?;
-        assets_pts.push(
-            stmt_val(&b, &["资产合计", "资产总计"])
-                .map(findb::workbench::money_f64)
-                .unwrap_or(0.0),
-        );
-        let i2 = is_one(*p)?;
-        inc_pts.push(
-            stmt_val(&i2, &["营业收入"])
-                .map(findb::workbench::money_f64)
-                .unwrap_or(0.0),
-        );
-        prof_pts.push(
-            stmt_val(&i2, &["净利润"])
-                .map(findb::workbench::money_f64)
-                .unwrap_or(0.0),
-        );
+        if let Some((a, l, e, rev, np)) = trends.get(&p.ymm()) {
+            assets_pts.push(findb::workbench::money_f64(*a));
+            liab_pts.push(findb::workbench::money_f64(*l));
+            equity_pts.push(findb::workbench::money_f64(*e));
+            inc_pts.push(findb::workbench::money_f64(*rev));
+            prof_pts.push(findb::workbench::money_f64(*np));
+        } else {
+            assets_pts.push(0.0);
+            liab_pts.push(0.0);
+            equity_pts.push(0.0);
+            inc_pts.push(0.0);
+            prof_pts.push(0.0);
+        }
     }
     out.trends.push(findb::workbench::WbTrend {
         domain: "报表".into(),
@@ -3083,7 +3087,31 @@ fn wb_report_domain(
         series: vec![findb::workbench::WbSeries {
             name: "资产合计".into(),
             color: "#1976d2".into(),
-            points: assets_pts,
+            points: assets_pts.clone(),
+        }],
+    });
+    out.trends.push(findb::workbench::WbTrend {
+        domain: "报表".into(),
+        key: "report_liab".into(),
+        title: "负债合计走势".into(),
+        unit: "元".into(),
+        periods: labels.clone(),
+        series: vec![findb::workbench::WbSeries {
+            name: "负债合计".into(),
+            color: "#e64a19".into(),
+            points: liab_pts.clone(),
+        }],
+    });
+    out.trends.push(findb::workbench::WbTrend {
+        domain: "报表".into(),
+        key: "report_equity".into(),
+        title: "所有者权益走势".into(),
+        unit: "元".into(),
+        periods: labels.clone(),
+        series: vec![findb::workbench::WbSeries {
+            name: "所有者权益".into(),
+            color: "#6a1b9a".into(),
+            points: equity_pts,
         }],
     });
     out.trends.push(findb::workbench::WbTrend {
@@ -3120,7 +3148,7 @@ async fn quick_search(
     if kw.is_empty() {
         return Ok(Json(json!({ "rows": [] })));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let cur = current_period(&state, &user);
     let like = format!("%{kw}%");
     let mut rows: Vec<serde_json::Value> = Vec::new();
@@ -3268,7 +3296,7 @@ async fn get_overview(
     if !user.user.is_admin() {
         return Err(AppError::forbidden("该入口仅限系统管理员使用"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = period_param(q.get("period"), current_period(&state, &user))?;
     let o = findb::reports::overview(&db, period)?;
     let recent: Vec<VoucherListItem> = o.recent.iter().map(to_item).collect();
@@ -3336,7 +3364,7 @@ async fn get_periods(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let start = db.options().start_period;
     let this_year = Period::default().year();
     let end = Period::new(this_year + 1, 12).unwrap_or_default();
@@ -3349,7 +3377,7 @@ async fn get_periods(
         vec![period_to_str(start)]
     };
     let cur = current_period(&state, &user);
-    let closed = periods::closed_upto(&db)?;
+    let closed = periods::closed_upto(&*db)?;
     Ok(Json(json!({
         "current": period_to_str(cur),
         "closed_upto": closed.map(period_to_str),
@@ -3392,7 +3420,7 @@ async fn period_precheck(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::PeriodClose)?;
     let period = period_checked(ymm)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let issues = periods::precheck(&db, period, true)?;
     let chart = accounts::chart(&db)?;
     // 预检展示与【结转】按钮同口径：结转按含草稿取数（见 period_carry_forward）
@@ -3406,7 +3434,7 @@ async fn period_precheck(
         "issues": issues,
         "pl_count": pl_rows.len(),
         "profit_balance": profit.fmt_money(),
-        "closed_upto": periods::closed_upto(&db)?.map(period_to_str),
+        "closed_upto": periods::closed_upto(&*db)?.map(period_to_str),
     })))
 }
 
@@ -3418,7 +3446,7 @@ async fn period_carry_forward(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CarryForward)?;
     let period = period_checked(ymm)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let chart = accounts::chart(&db)?;
     // 结转是"操作"不是报表：按含未记账（排除作废）取数。结转生成的凭证本身是草稿，
     // 若按已记账口径取数，草稿看不见 → 第二次调用时损益仍未清零 → 重复结转。
@@ -3484,7 +3512,7 @@ async fn period_year_end(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CarryForward)?;
     let period = period_checked(ymm)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let chart = accounts::chart(&db)?;
     // 同 period_carry_forward：含草稿取数，保证第一次生成的结转草稿能清零 4103，
     // 第二次调用（余额 0）才会被拒，否则同一笔利润会被结转两次。
@@ -3528,7 +3556,7 @@ async fn period_close(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::PeriodClose)?;
     let period = period_checked(ymm)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let issues = periods::close(&db, period, user.username(), req.require_carry)?;
     if !issues.is_empty() {
         return Err(AppError::bad_request(issues.join("；")));
@@ -3544,7 +3572,7 @@ async fn period_unclose(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::PeriodClose)?;
     let period = period_checked(ymm)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     periods::unclose(&db, period, user.username())?;
     Ok(Json(
         json!({ "ok": true, "unclosed": period_to_str(period) }),
@@ -3560,8 +3588,8 @@ async fn list_accounts(
     user: CurrentUser,
 ) -> Result<Json<Vec<fincore::Account>>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(accounts::list(&db)?))
+    let db = &user.db;
+    Ok(Json(accounts::list(&*db)?))
 }
 
 /// 补齐内置科目表（旧账套补入新版本新增的科目，仅管理员）
@@ -3572,9 +3600,9 @@ async fn fill_default_accounts(
     if !user.user.is_admin() {
         return Err(AppError::forbidden("该操作仅限系统管理员"));
     }
-    let db = state.db_for(&user.book_key)?;
-    let before = accounts::list(&db)?.len();
-    let inserted = accounts::fill_missing_defaults(&db)?;
+    let db = &user.db;
+    let before = accounts::list(&*db)?.len();
+    let inserted = accounts::fill_missing_defaults(&*db)?;
     if inserted > 0 {
         db.log(
             user.username(),
@@ -3598,7 +3626,7 @@ async fn next_voucher_no(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -3677,7 +3705,7 @@ async fn list_vouchers(
     if !can_view_vouchers(&user) {
         return Err(AppError::forbidden("没有查看凭证的权限"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut query = voucher_query_from(&q, &user);
     // 上限 1000：limit 传负数时 SQLite 视为不限制，会把全库凭证+分录读进内存
     query.limit = q
@@ -3711,7 +3739,7 @@ async fn list_vouchers_page(
     if !can_view_vouchers(&user) {
         return Err(AppError::forbidden("没有查看凭证的权限"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let num = |k: &str, def: i64| -> Result<i64, AppError> {
         match q.get(k).map(|s| s.trim()).filter(|s| !s.is_empty()) {
             None => Ok(def),
@@ -3762,7 +3790,7 @@ async fn get_voucher(
     if !can_view_vouchers(&user) {
         return Err(AppError::forbidden("没有查看凭证的权限"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     // 数据权限：非全量权限用户不得查看自己不可见的凭证
     if !user.user.can_see_voucher(&v) {
@@ -3816,7 +3844,7 @@ async fn save_voucher(
     } else {
         user.require(Perm::VoucherNew)?;
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 期间非法（如 202513）直接 400：静默落到当前期间会把凭证写进错误的账期。
     // 0 保持原语义 = 当前期间（与 renumber / reverse 一致）。
     let period = if req.period > 0 {
@@ -4040,7 +4068,7 @@ async fn voucher_void(
     Json(req): Json<VoidReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权操作该凭证"));
@@ -4067,7 +4095,7 @@ async fn voucher_amend(
     Json(req): Json<AmendReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 权限校验必须在 amend 之前：数据权限不只管「看」，也管「改」
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
@@ -4086,7 +4114,7 @@ async fn voucher_post(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherPost)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权记账该凭证"));
@@ -4114,7 +4142,7 @@ async fn voucher_audit(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherAudit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权审核该凭证"));
@@ -4136,7 +4164,7 @@ async fn voucher_unaudit(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherUnaudit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权反审核该凭证"));
@@ -4155,7 +4183,7 @@ async fn voucher_sign(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权对该凭证签字"));
@@ -4177,7 +4205,7 @@ async fn voucher_unsign(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权对该凭证取消签字"));
@@ -4198,7 +4226,7 @@ async fn voucher_batch_post(
     Json(req): Json<BatchPostReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherPost)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 数据范围过滤：仅记账本人可见的凭证，越权 id 直接拒掉并计数
     let mut allowed: Vec<i64> = Vec::new();
     let mut denied = 0usize;
@@ -4225,7 +4253,7 @@ async fn voucher_unpost(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // 反记账（已记账 → 未记账），修改前需先反记账
     user.require(Perm::VoucherUnpost)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权反记账该凭证"));
@@ -4250,7 +4278,7 @@ async fn voucher_reverse(
     Json(req): Json<ReverseVoucherReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权冲销该凭证"));
@@ -4286,7 +4314,7 @@ async fn voucher_renumber(
     Json(req): Json<RenumberVoucherReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 断号重排会重排该期间全部字号（含他人凭证），数据范围受限的账号不得操作
     let scope = &user.user.data_scope;
     if scope.own_voucher_only
@@ -4316,7 +4344,7 @@ async fn voucher_delete(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 加载后做守卫校验：状态、结账期间、数据权限
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
@@ -4331,7 +4359,7 @@ async fn voucher_delete(
         return Err(AppError::bad_request("已记账凭证不能直接删除，请先反记账"));
     }
     // 期间是否已结账
-    if let Some(closed) = findb::periods::closed_upto(&db)? {
+    if let Some(closed) = findb::periods::closed_upto(&*db)? {
         if v.period <= closed {
             return Err(AppError::bad_request(format!(
                 "{} 及以前期间已结账，不能删除该凭证",
@@ -4368,7 +4396,7 @@ async fn list_voucher_attachments(
     Path(id): Path<i64>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权查看该凭证的附件"));
@@ -4382,39 +4410,68 @@ async fn list_voucher_attachments(
 
 async fn upload_voucher_attachment(
     State(state): State<Arc<WebState>>,
-    user: CurrentUser,
     Path(id): Path<i64>,
-    mut multipart: axum::extract::Multipart,
+    user: CurrentUser,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权为该凭证上传附件"));
     }
+
+    // Extract boundary from Content-Type header
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| AppError::bad_request("缺少 Content-Type 头"))?;
+    
+    let boundary = content_type
+        .split("boundary=")
+        .nth(1)
+        .ok_or_else(|| AppError::bad_request("缺少 multipart boundary"))?
+        .trim();
+
+    let bytes = body.to_vec();
+    if bytes.len() > findb::attach::MAX_FILE_SIZE + 1024 {
+        return Err(AppError::bad_request("请求体过大"));
+    }
+
+    // Use multipart crate to parse
+    let mut multipart = Multipart::with_body(Cursor::new(bytes), boundary);
+    
     let mut name = String::new();
     let mut data: Option<Vec<u8>> = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| AppError::bad_request(format!("上传解析失败：{e}")))?
-    {
-        if field.name() == Some("file") {
-            name = field.file_name().unwrap_or("attachment").to_string();
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::bad_request(format!("读取上传内容失败：{e}")))?;
-            data = Some(bytes.to_vec());
+    
+    loop {
+        let field_opt = multipart.read_entry().map_err(|e| AppError::bad_request(format!("上传解析失败：{}", e)))?;
+        if let Some(mut field) = field_opt {
+            if field.headers.name.as_ref() == "file" {
+                name = field.headers.filename.as_ref().map(|s| s.to_string()).unwrap_or_else(|| "attachment".to_string());
+                let mut bytes = Vec::new();
+                use std::io::Read;
+                field.data.read_to_end(&mut bytes).map_err(|e| AppError::bad_request(format!("读取上传内容失败：{}", e)))?;
+                data = Some(bytes);
+                break;
+            }
+        } else {
             break;
         }
     }
+    
     let data = data.ok_or_else(|| AppError::bad_request("缺少文件字段 file"))?;
     if data.is_empty() {
         return Err(AppError::bad_request("上传文件为空"));
     }
     if data.len() > findb::attach::MAX_FILE_SIZE {
         return Err(AppError::bad_request("文件超过 10MB 上限"));
+    }
+    let db = &user.db;
+    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    if !user.user.can_see_voucher(&v) {
+        return Err(AppError::forbidden("无权为该凭证上传附件"));
     }
     let aid = findb::attach::add(&db, id, &name, &data, user.username())?;
     db.log(
@@ -4432,7 +4489,7 @@ async fn download_attachment(
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let a =
         findb::attach::get(&db, id)?.ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
     let v = vouchers::get(&db, a.voucher_id)?
@@ -4472,7 +4529,7 @@ async fn delete_attachment(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let a =
         findb::attach::get(&db, id)?.ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
     let v = vouchers::get(&db, a.voucher_id)?
@@ -4552,7 +4609,7 @@ async fn list_invoices(
     Query(q): Query<InvoiceListQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 上限 500 条（与凭证报表列表同口径）：limit=None 等于不限，把全库发票一次性
     // 读进内存并整包序列化。超限时按开票日期倒序截断，truncated 回报给调用方，
     // 让它收窄筛选条件而不是误以为"就这么多"。
@@ -4592,8 +4649,8 @@ async fn invoice_summary(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
-    let sum = findb::invoices::summary(&db)?;
+    let db = &user.db;
+    let sum = findb::invoices::summary(&*db)?;
     let by_kind: serde_json::Map<String, serde_json::Value> = sum
         .into_iter()
         .map(|(k, tax_total, tax_amt, n)| {
@@ -4623,7 +4680,7 @@ async fn invoice_from_po(
     Json(req): Json<InvoiceFromPo>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let id = findb::invoices::push_from_po(&db, req.po_id, user.username())?;
     db.log(
         user.username(),
@@ -4641,7 +4698,7 @@ async fn invoice_from_so(
     Json(req): Json<InvoiceFromSo>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let id = findb::invoices::push_from_so(&db, req.so_id, user.username())?;
     db.log(
         user.username(),
@@ -4658,7 +4715,7 @@ async fn create_invoice(
     Json(req): Json<InvoiceReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let inv = invoice_from_req(&req)?;
     let id = findb::invoices::insert(&db, &inv, user.username())?;
     Ok(Json(json!({ "id": id })))
@@ -4671,7 +4728,7 @@ async fn update_invoice(
     Json(req): Json<InvoiceReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 归属校验 + 保留服务端字段：普通用户不能改他人发票，
     // 且表单未提交的 attach_id/created_by/status 不能被覆盖清零
     let existing =
@@ -4699,7 +4756,7 @@ async fn delete_invoice(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let existing =
         findb::invoices::get(&db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
     if existing.created_by != user.username() && !user.user.is_admin() {
@@ -4717,7 +4774,7 @@ async fn invoice_set_status(
     Json(req): Json<InvoiceStatusReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 归属校验：状态机接口同样不得改他人录入的发票（否则绕过 update_invoice 的守卫）
     let existing =
         findb::invoices::get(&db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
@@ -4789,7 +4846,7 @@ async fn list_arap_opening(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let kind = q.get("kind").map(String::as_str).filter(|k| !k.is_empty());
     let rows = findb::settle::arap_opening_list(&db, kind)?;
     // 合计按 kind 显式分列：原来的 `if ar {…} else {ap += …}` 会把空串、大小写笔误
@@ -4821,7 +4878,7 @@ async fn delete_arap_opening(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::settle::arap_opening_delete(&db, id)?;
     db.log(user.username(), "档案", "删除往来期初", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -4841,7 +4898,7 @@ async fn list_customers(
     // 要能核销，但不该能改客户档案。`Report` 在 Role::Cashier 的权限位里，
     // `aux_edit` 不在 —— 这正是设计 §4 要的分界。
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let per = period_from_query(&state, &user, q.get("period"));
     let keyword = q.get("q").map(String::as_str).unwrap_or("");
     let only_open = matches!(q.get("only_open").map(String::as_str), Some("1" | "true"));
@@ -4865,7 +4922,7 @@ async fn get_customer(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let per = period_from_query(&state, &user, q.get("period"));
     let code = code.trim().to_string();
     // 编码空的处理：返回 400 而不是「查不到」。
@@ -4899,7 +4956,7 @@ async fn get_customer_aging(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let per = period_from_query(&state, &user, q.get("period"));
     let code = code.trim().to_string();
     if code.is_empty() {
@@ -4959,7 +5016,7 @@ async fn get_customer_trade(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let code = code.trim().to_string();
     if code.is_empty() {
         return Err(AppError::bad_request("缺少客户编码 code"));
@@ -5008,7 +5065,7 @@ async fn get_customer_dunning(
     Path(code): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let code = code.trim().to_string();
     if code.is_empty() {
         return Err(AppError::bad_request("缺少客户编码 code"));
@@ -5061,9 +5118,9 @@ async fn items_master(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     Ok(Json(
-        json!({ "rows": findb::inventory2::item_master(&db)? }),
+        json!({ "rows": findb::inventory2::item_master(&*db)? }),
     ))
 }
 
@@ -5423,11 +5480,11 @@ async fn import_run(
 // ---------------------------------------------------------------------------
 
 /// 账簿查询参数（明细/总账/日记账共用）
-fn ledger_query_from(
+fn ledger_query_from<'a>(
     state: &WebState,
-    user: &CurrentUser,
+    user: &'a CurrentUser,
     q: &HashMap<String, String>,
-) -> Result<(findb::Db, fincore::Chart, LedgerQuery), AppError> {
+) -> Result<(&'a findb::Db, fincore::Chart, LedgerQuery), AppError> {
     let code = q.get("code").cloned().unwrap_or_default();
     if code.is_empty() {
         return Err(AppError::bad_request("缺少科目编码参数 code"));
@@ -5450,7 +5507,7 @@ fn ledger_query_from(
         .get("posted_only")
         .map(|s| s == "1" || s == "true")
         .unwrap_or(true);
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let chart = accounts::chart(&db)?;
     if !user.user.can_see_account(&code) {
         return Err(AppError::forbidden("无权查看该科目"));
@@ -5512,10 +5569,10 @@ async fn print_voucher_form(
     if !can_view_vouchers(&user) {
         return Err(AppError::forbidden("没有查看凭证的权限"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let company = user.company.clone();
     let chart = accounts::chart(&db)?;
-    let aux_names = findb::auxs::full_name_map(&db)?;
+    let aux_names = findb::auxs::full_name_map(&*db)?;
 
     let mut query = VoucherQuery::default().with_data_scope(&user.user);
     query.asc = true;
@@ -5582,7 +5639,7 @@ async fn print_ledger_form(
     if !user.user.can_see_account(&code) {
         return Err(AppError::forbidden("无权查看该科目"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let company = user.company.clone();
     let chart = accounts::chart(&db)?;
     let from = period_param(q.get("from"), current_period(&state, &user))?;
@@ -5720,7 +5777,7 @@ fn trial_balance_data(
     ),
     AppError,
 > {
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let start = db.options().start_period;
     // 与其它报表同一套校验：区间敲错 / 倒置都返回 400，不静默换一个区间
     // （理由与实测数据见 `state::period_param`）
@@ -5760,7 +5817,7 @@ async fn account_detail_ep(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let account = q
         .get("account")
@@ -5886,7 +5943,7 @@ async fn export_vouchers(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::Export)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut query = VoucherQuery::default().with_data_scope(&user.user);
     if let Some(p) = q.get("period").and_then(|s| parse_period(s)) {
         query.from = Some(p);
@@ -6008,7 +6065,7 @@ async fn export_payroll(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::Export)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = period_param(q.get("period"), current_period(&state, &user))?;
     let list = business::payroll_list(&db, period)?;
     let list = scope_payroll(&user, &list);
@@ -6056,7 +6113,7 @@ async fn export_claims(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::Export)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = period_param(q.get("period"), current_period(&state, &user))?;
     // 空串 = 全部状态：UI 下拉默认值为空，直接 parse 会落到 Draft 只显示草稿
     let status = q
@@ -6241,10 +6298,10 @@ async fn get_tax_vat(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let form = findb::taxdecl::vat_main_form(&db, period)?;
-    let opts = findb::taxdecl::TaxOptions::load(&db)?;
+    let opts = findb::taxdecl::TaxOptions::load(&*db)?;
     let company = db.options().company;
     let tax_no = db.options().tax_no;
     Ok(Json(json!({
@@ -6264,7 +6321,7 @@ async fn get_tax_vat_detail(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let kind = q.get("kind").map(|s| s.trim()).unwrap_or("out");
     if kind != "out" && kind != "in" {
@@ -6288,8 +6345,8 @@ async fn get_tax_options(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!(findb::taxdecl::TaxOptions::load(&db)?)))
+    let db = &user.db;
+    Ok(Json(json!(findb::taxdecl::TaxOptions::load(&*db)?)))
 }
 
 async fn save_tax_options(
@@ -6327,8 +6384,8 @@ async fn save_tax_options(
             "城建税适用地区只能是 city / county / other",
         ));
     }
-    let db = state.db_for(&user.book_key)?;
-    req.save(&db)?;
+    let db = &user.db;
+    req.save(&*db)?;
     db.log(user.username(), "税务", "税务参数", "更新申报表参数")?;
     Ok(Json(json!({ "ok": true, "options": req })))
 }
@@ -6340,7 +6397,7 @@ async fn export_tax_vat(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::Export)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let f = findb::taxdecl::vat_main_form(&db, period)?;
     let company = db.options().company;
@@ -6461,7 +6518,7 @@ async fn get_stock_move(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let m = findb::business::stock_move_get(&db, id)?
         .ok_or_else(|| AppError::not_found(format!("出入库流水不存在：{id}")))?;
     Ok(Json(json!({
@@ -6486,7 +6543,7 @@ async fn get_cost_variance(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let r = findb::stdcost::variance_report(&db, period)?;
     Ok(Json(json!({
@@ -6497,7 +6554,7 @@ async fn get_cost_variance(
         "missing": r.missing,
         "warnings": r.warnings,
         // 「算了但没算的」要能在界面上说清楚，而不是让人以为差异表是完整的
-        "std_items": findb::business::cost_configs(&db)?,
+        "std_items": findb::business::cost_configs(&*db)?,
     })))
 }
 
@@ -6543,7 +6600,7 @@ async fn get_multi_column(
         current_period(&state, &user),
         current_period(&state, &user),
     )?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 数据范围：主科目与各栏目科目均须在可见范围内
     if !user.user.can_see_account(&main) || cols.iter().any(|c| !user.user.can_see_account(c)) {
         return Err(AppError::forbidden("无权查看该科目"));
@@ -6565,7 +6622,7 @@ async fn get_summary_table(
         current_period(&state, &user),
         current_period(&state, &user),
     )?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = advanced::summary_table(&db, from, to, Some(&user.user))?;
     Ok(Json(
         serde_json::json!({ "from": period_to_str(from), "to": period_to_str(to), "rows": rows }),
@@ -6589,7 +6646,7 @@ async fn get_fin_ratios(
             // 默认年初（同一会计年度 1 月）
             fincore::Period::new(period.year(), 1).unwrap_or(period)
         });
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = advanced::fin_ratios(&db, period, from, Some(&user.user))?;
     Ok(Json(
         serde_json::json!({ "period": period_to_str(period), "ratios": rows }),
@@ -6615,7 +6672,7 @@ async fn get_equity_statement(
             period_to_str(period)
         )));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let stmt = findb::reports::equity_statement(&db, from, period, Some(&user.user))?;
     Ok(Json(serde_json::json!({
         "from": period_to_str(from),
@@ -6649,7 +6706,7 @@ async fn get_report_compare(
     } else {
         (cur, prev)
     };
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::reports::report_compare(
         &db,
         &key,
@@ -6682,7 +6739,7 @@ async fn get_account_daily(
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
     let to = q.get("to").and_then(|s| parse_period(s)).unwrap_or(from);
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 数据范围：仅可见科目
     if !user.user.can_see_account(&code) {
         return Err(AppError::forbidden("无权查看该科目"));
@@ -6707,7 +6764,7 @@ async fn get_period_reconcile(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let items = findb::reports::period_reconcile(&db, period)?;
     Ok(Json(
         serde_json::json!({ "period": period_to_str(period), "items": items }),
@@ -6728,7 +6785,7 @@ async fn get_aux_balance(
         return Err(AppError::bad_request("现金流量项目不是余额维度"));
     }
     let (from, to) = report_range(&state, &user, &q)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = balances::aux_balance(&db, kind, from, to, Some(&user.user))?;
     Ok(Json(json!({
         "kind": kind.code(),
@@ -6747,7 +6804,7 @@ async fn get_qty_balance(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let (from, to) = report_range(&state, &user, &q)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = balances::qty_balance_sheet(&db, from, to, Some(&user.user))?;
     Ok(Json(json!({
         "from": period_to_str(from),
@@ -6799,8 +6856,8 @@ async fn list_custom_reports(
     user: CurrentUser,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
-    let rows: Vec<serde_json::Value> = findb::mgmt::custom_list(&db)?
+    let db = &user.db;
+    let rows: Vec<serde_json::Value> = findb::mgmt::custom_list(&*db)?
         .iter()
         .map(custom_json)
         .collect();
@@ -6814,7 +6871,7 @@ async fn get_custom_report(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let r = findb::mgmt::custom_get(&db, &key)?
         .ok_or_else(|| AppError::not_found("自定义报表不存在"))?;
     let period = period_param(q.get("period"), current_period(&state, &user))?;
@@ -6841,12 +6898,12 @@ async fn save_custom_report(
     Json(req): Json<CustomReportReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if req.name.trim().is_empty() {
         return Err(AppError::bad_request("报表名称不能为空"));
     }
     let key = if req.key.trim().is_empty() {
-        findb::mgmt::custom_next_key(&db)?
+        findb::mgmt::custom_next_key(&*db)?
     } else {
         req.key.trim().to_string()
     };
@@ -6885,7 +6942,7 @@ async fn delete_custom_report(
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::mgmt::custom_delete(&db, &key)?;
     db.log(user.username(), "报表", "删除自定义报表", &key)?;
     Ok(Json(json!({ "ok": true })))
@@ -6918,7 +6975,7 @@ async fn stock_adjust_endpoint(
     Json(req): Json<StockAdjustReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if req.item.trim().is_empty() {
         return Err(AppError::bad_request("缺少存货 item"));
     }
@@ -6967,7 +7024,7 @@ async fn serial_in_endpoint(
     Json(req): Json<SerialInReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let date = if req.date.is_empty() {
         period.first_day()
@@ -6991,7 +7048,7 @@ async fn serial_out_endpoint(
     Json(req): Json<SerialOutReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let date = if req.date.is_empty() {
         period.first_day()
@@ -7012,7 +7069,7 @@ async fn list_serial(
     if item.is_empty() {
         return Err(AppError::bad_request("缺少 item"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::inventory2::serial_list(&db, &item)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7024,7 +7081,7 @@ async fn get_unit(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let item = q.get("item").cloned().unwrap_or_default();
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let u = findb::inventory2::unit_get(&db, &item)?;
     Ok(Json(serde_json::json!({ "unit": u })))
 }
@@ -7046,7 +7103,7 @@ async fn set_unit(
     Json(req): Json<UnitReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::inventory2::unit_set(
         &db,
         &findb::inventory2::ItemUnit {
@@ -7064,7 +7121,7 @@ async fn get_inv_aging(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::inventory2::inv_aging(&db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7074,7 +7131,7 @@ async fn get_abc(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::inventory2::abc_analysis(&db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7095,7 +7152,7 @@ async fn assemble_endpoint(
     Json(req): Json<AssembleReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let date = if req.date.is_empty() {
         period.first_day()
@@ -7116,7 +7173,7 @@ async fn disassemble_endpoint(
     Json(req): Json<AssembleReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let date = if req.date.is_empty() {
         period.first_day()
@@ -7141,7 +7198,7 @@ async fn get_warehouse_stock(
     if item.is_empty() {
         return Err(AppError::bad_request("缺少 item"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::inventory2::warehouse_stock(&db, &item)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7151,7 +7208,7 @@ async fn get_transfer_report(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::inventory2::transfer_report(&db, current_period(&state, &user))?;
     let items: Vec<serde_json::Value> = rows
         .iter()
@@ -7177,8 +7234,8 @@ async fn list_warehouses(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::warehouse::list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::warehouse::list(&*db)? })))
 }
 
 /// 新增/修改仓库（写：Warehouse；设默认仓自动清其它默认标记）
@@ -7188,7 +7245,7 @@ async fn save_warehouse(
     Json(w): Json<findb::warehouse::Warehouse>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::warehouse::save(&db, &w)?;
     db.log(
         user.username(),
@@ -7206,7 +7263,7 @@ async fn delete_warehouse(
     Path(code): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::warehouse::delete(&db, &code)?;
     db.log(user.username(), "库存", "删除仓库", &code)?;
     Ok(Json(json!({ "ok": true })))
@@ -7230,7 +7287,7 @@ async fn add_estimate(
     Json(req): Json<EstimateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -7277,7 +7334,7 @@ async fn estimate_status(
     if po_id == 0 {
         return Err(AppError::bad_request("缺少 po_id"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::scm2::estimate_status_by_line(&db, po_id)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7295,7 +7352,7 @@ async fn list_estimates(
     if po_id == 0 {
         return Err(AppError::bad_request("缺少 po_id"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::scm2::po_estimate_list(&db, po_id)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7307,7 +7364,7 @@ async fn settle_estimate(
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let today = chrono::Local::now().date_naive();
     let date = if body.is_empty() {
         today
@@ -7338,7 +7395,7 @@ async fn get_po_reconcile(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::scm2::po_reconcile(&db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7348,7 +7405,7 @@ async fn get_so_reconcile(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::scm2::so_reconcile(&db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7359,7 +7416,7 @@ async fn get_quota(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let supplier = q.get("supplier").cloned().unwrap_or_default();
     let item = q.get("item").cloned().unwrap_or_default();
@@ -7383,7 +7440,7 @@ async fn set_quota(
     Json(req): Json<QuotaReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -7405,7 +7462,7 @@ async fn get_change_log(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let order_type = q.get("type").cloned().unwrap_or_else(|| "po".to_string());
     let order_id = q.get("id").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
     let rows = findb::scm2::change_log_list(&db, &order_type, order_id)?;
@@ -7420,7 +7477,7 @@ async fn list_purchase_req(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -7435,7 +7492,7 @@ async fn save_purchase_req(
     Json(mut req): Json<findb::procurement::PurchaseReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if req.no.is_empty() {
         req.no = findb::procurement::pr_next_no(&db, req.period)?;
     }
@@ -7452,7 +7509,7 @@ async fn approve_purchase_req(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 工作流拦截：有已发布流程 → 先走节点链，终态才执行原审批
     match findb::workflow::intercept(
         &db,
@@ -7508,7 +7565,7 @@ async fn add_po_receipt(
     Json(req): Json<ReceiptReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -7552,7 +7609,7 @@ async fn add_po_return(
     Json(req): Json<ReceiptReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -7594,7 +7651,7 @@ async fn add_po_payment(
     Json(req): Json<PaymentReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -7665,7 +7722,7 @@ async fn get_price_history(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let item = q.get("item").cloned().unwrap_or_default();
     let rows = findb::procurement::price_history(&db, &item)?;
     let rows: Vec<serde_json::Value> = rows
@@ -7680,7 +7737,7 @@ async fn get_po_track(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::procurement::po_execution_track(&db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7690,7 +7747,7 @@ async fn get_purchase_stats(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::procurement::purchase_stats(&db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -7701,7 +7758,7 @@ async fn list_quotation(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -7716,7 +7773,7 @@ async fn save_quotation(
     Json(mut req): Json<findb::sales::Quotation>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if req.no.is_empty() {
         req.no = findb::sales::quo_next_no(&db, req.period)?;
     }
@@ -7733,7 +7790,7 @@ async fn approve_quotation(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 工作流拦截：有已发布流程 → 先走节点链（Pending 只推进不批单；终态才执行原审批）
     match findb::workflow::intercept(
         &db,
@@ -7782,7 +7839,7 @@ async fn add_so_shipment(
     Json(req): Json<ShipmentReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -7836,7 +7893,7 @@ async fn add_so_return(
     Json(req): Json<ShipmentReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -7900,7 +7957,7 @@ async fn add_so_payment(
     Json(req): Json<SoPaymentReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -7960,8 +8017,8 @@ async fn list_workflows(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::workflow::flow_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::workflow::flow_list(&*db)? })))
 }
 
 #[derive(Deserialize)]
@@ -7977,9 +8034,9 @@ async fn list_wf_templates(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 带上「该单据是否已有流程」，前端好提示是新建还是会被替换
-    let existing = findb::workflow::flow_list(&db)?;
+    let existing = findb::workflow::flow_list(&*db)?;
     let rows: Vec<serde_json::Value> = findb::workflow::templates()
         .into_iter()
         .map(|t| {
@@ -8018,7 +8075,7 @@ async fn apply_wf_template(
     Json(req): Json<WfTemplateApplyReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let f = findb::workflow::apply_template(&db, &req.key, &req.biz_type, user.username())?;
     db.log(
         user.username(),
@@ -8035,7 +8092,7 @@ async fn save_workflow(
     Json(f): Json<findb::workflow::WfFlowInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let id = findb::workflow::flow_save(&db, &f, user.username())?;
     db.log(
         user.username(),
@@ -8057,7 +8114,7 @@ async fn publish_workflow(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::workflow::flow_set_status(&db, id, true, user.username())?;
     db.log(user.username(), "工作流", "发布流程", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -8069,7 +8126,7 @@ async fn unpublish_workflow(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::workflow::flow_set_status(&db, id, false, user.username())?;
     db.log(user.username(), "工作流", "撤回发布", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -8081,7 +8138,7 @@ async fn delete_workflow(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::workflow::flow_delete(&db, id)?;
     db.log(user.username(), "工作流", "删除流程", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -8093,8 +8150,8 @@ async fn list_wf_instances(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::workflow::instances(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::workflow::instances(&*db)? })))
 }
 
 // ---------------- 单据套打（订单 / 收付款单）：字段白名单 + 批量紧凑分页 ----------------
@@ -8230,7 +8287,7 @@ async fn print_so_form(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let company = user.company.clone();
     let ids = print_ids(&q);
     let mut orders = Vec::new();
@@ -8278,7 +8335,7 @@ async fn print_po_form(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let company = user.company.clone();
     let ids = print_ids(&q);
     let mut orders = Vec::new();
@@ -8326,11 +8383,11 @@ async fn print_receipt_form(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let company = user.company.clone();
     let ids = print_ids(&q);
     let period = q.get("period").and_then(|s| parse_period(s));
-    let all = findb::receipt::receipt_list(&db)?;
+    let all = findb::receipt::receipt_list(&*db)?;
     let mut prints = Vec::new();
     for d in all.into_iter() {
         if !ids.is_empty() {
@@ -8362,7 +8419,7 @@ async fn convert_quotation(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let so_id = findb::sales::quo_to_order(&db, id, user.username())?;
     db.log(
         user.username(),
@@ -8543,7 +8600,7 @@ async fn list_so(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -8582,7 +8639,7 @@ async fn create_notice(
     Json(req): Json<NoticeReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = if req.date.trim().is_empty() {
         chrono::Local::now().date_naive()
     } else {
@@ -8606,8 +8663,8 @@ async fn list_notices(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::sales::notice_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::sales::notice_list(&*db)? })))
 }
 
 /// 保存销售订单：服务端计算行金额（数量×单价）与税额（金额×税率）；
@@ -8618,7 +8675,7 @@ async fn save_so(
     Json(req): Json<SoInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -8731,7 +8788,7 @@ async fn transition_so(
     Json(req): Json<OrderTransitionReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let to = so_status_parse(&req.status)?;
     // 工作流拦截：**只在「确认」这一个动作上**拦。
     // 「确认」是订单的审批动作（签出即对外承诺）；partialShip / completed /
@@ -8763,7 +8820,7 @@ async fn delete_so(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::scm::so_delete(&db, id)?;
     db.log(user.username(), "销售", "删除销售订单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -8775,7 +8832,7 @@ async fn list_po(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -8804,7 +8861,7 @@ async fn save_po(
     Json(req): Json<PoInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -8932,7 +8989,7 @@ async fn transition_po(
     Json(req): Json<OrderTransitionReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let to = po_status_parse(&req.status)?;
     // 同 transition_so：只在「确认」这个审批动作上走工作流
     if to == findb::scm::PoStatus::Confirmed {
@@ -8968,7 +9025,7 @@ async fn delete_po(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::scm::po_delete(&db, id)?;
     db.log(user.username(), "采购", "删除采购订单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -8980,7 +9037,7 @@ async fn get_credit_check(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let customer = q.get("customer").cloned().unwrap_or_default();
     let (receivable, limit, over) =
         findb::sales::credit_check(&db, &customer, current_period(&state, &user))?;
@@ -8996,7 +9053,7 @@ async fn get_so_track(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::sales::so_execution_track(&db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -9006,7 +9063,7 @@ async fn get_sales_stats(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::sales::sales_stats(&db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -9019,7 +9076,7 @@ async fn get_budget_alerts(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -9042,7 +9099,7 @@ async fn bad_debt_provision_endpoint(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let date = chrono::Local::now().date_naive();
     match findb::settle::bad_debt_provision_voucher(&db, period, date, user.username())? {
@@ -9086,7 +9143,7 @@ async fn get_routing(
     Path(item): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let ops = advanced::routing_list(&db, &item)?;
     Ok(Json(serde_json::json!({ "item_code": item, "ops": ops })))
 }
@@ -9098,7 +9155,7 @@ async fn post_routing(
     Json(req): Json<Vec<RoutingOpDto>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut ops: Vec<advanced::RoutingOp> = Vec::with_capacity(req.len());
     for d in req {
         ops.push(advanced::RoutingOp {
@@ -9124,7 +9181,7 @@ async fn delete_routing(
     Path(item): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     advanced::routing_delete(&db, &item)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -9134,7 +9191,7 @@ async fn list_prod_orders(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let orders = findb::scm::prod_list(&db, period, None)?;
     let items: Vec<serde_json::Value> = orders
@@ -9176,7 +9233,7 @@ async fn get_prod_ops(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let ops = advanced::prod_op_list(&db, id)?;
     Ok(Json(serde_json::json!({ "po_id": id, "ops": ops })))
 }
@@ -9196,7 +9253,7 @@ async fn report_prod_op(
     Json(req): Json<OpReportReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     advanced::prod_op_report(
         &db,
         req.op_id,
@@ -9217,7 +9274,7 @@ async fn finish_prod_op(
     Json(req): Json<OpFinishReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     advanced::prod_op_finish(&db, req.op_id)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -9229,8 +9286,8 @@ async fn get_mrp_latest(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
-    let rows = advanced::mrp_latest(&db)?;
+    let db = &user.db;
+    let rows = advanced::mrp_latest(&*db)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -9258,7 +9315,7 @@ async fn run_mrp(
     Json(req): Json<MrpRunReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut demands: Vec<(String, Money, String)> = Vec::with_capacity(req.demands.len());
     for d in req.demands {
         demands.push((d.item_code, parse_money_checked(&d.qty)?, d.source));
@@ -9283,7 +9340,7 @@ async fn mrp_to_req_ep(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if findb::advanced::mrp_get(&db, id)?.is_none() {
         return Err(AppError::not_found("MRP 结果行不存在"));
     }
@@ -9317,7 +9374,7 @@ async fn form_convert_ep(
     Json(req): Json<FormConvertReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let date = if req.date.trim().is_empty() {
         chrono::Local::now().date_naive()
@@ -9365,7 +9422,7 @@ async fn qc_order_ep(
     Json(req): Json<QcReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = if req.date.trim().is_empty() {
         chrono::Local::now().date_naive()
     } else {
@@ -9419,8 +9476,8 @@ async fn below_safety_ep(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
-    let rows = findb::inventory2::below_safety(&db)?;
+    let db = &user.db;
+    let rows = findb::inventory2::below_safety(&*db)?;
     Ok(Json(json!({
         "rows": rows
             .iter()
@@ -9438,7 +9495,7 @@ async fn push_req_po(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let (po_id, po_no) = findb::docflow::req_push_po(&db, id, period, user.username())?;
     db.log(
@@ -9457,7 +9514,7 @@ async fn get_doc_links(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let kind = q.get("kind").cloned().unwrap_or_default();
     if !matches!(kind.as_str(), "req" | "po" | "so" | "invoice" | "receipt") {
         return Err(AppError::bad_request(
@@ -9479,7 +9536,7 @@ async fn price_history_ep(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let item = q.get("item").map(|s| s.trim()).unwrap_or("");
     if item.is_empty() {
         return Err(AppError::bad_request("缺少 item"));
@@ -9511,7 +9568,7 @@ async fn outsource_fee_ep(
     Json(req): Json<OutsourceFeeReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = prod_act_date(&req.date);
     let amount = parse_money_checked(&req.amount)?;
     let vid = findb::manufacturing::outsource_fee(&db, id, amount, date, user.username())?;
@@ -9568,7 +9625,7 @@ async fn run_mps(
     Json(req): Json<MpsRunReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut extra: Vec<(String, Money, String)> = Vec::with_capacity(req.demands.len());
     for d in &req.demands {
         extra.push((
@@ -9597,7 +9654,7 @@ async fn run_mps(
     };
     // 销售需求已在 handler 合并，findb 侧不再取（sales_period=0）
     let run_at = advanced::mps_run(&db, &extra, Period::from_ymm(0), &due)?;
-    let rows = advanced::mps_latest(&db)?;
+    let rows = advanced::mps_latest(&*db)?;
     db.log(
         user.username(),
         "生产",
@@ -9615,8 +9672,8 @@ async fn get_mps_latest(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": advanced::mps_latest(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": advanced::mps_latest(&*db)? })))
 }
 
 #[derive(Deserialize)]
@@ -9634,7 +9691,7 @@ async fn convert_mps(
     Json(req): Json<MpsConvertReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let q = if req.qty.trim().is_empty() {
         None
     } else {
@@ -9667,7 +9724,7 @@ async fn rough_mps(
     Json(req): Json<RoughReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -9708,7 +9765,7 @@ async fn schedule_prod(
     if req.items.is_empty() {
         return Err(AppError::bad_request("排产清单为空"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let items: Vec<(i64, String, String)> = req
         .items
         .into_iter()
@@ -9732,7 +9789,7 @@ async fn create_prod_ep(
     Json(req): Json<ProdCreateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let code = req.item_code.trim();
     if code.is_empty() {
         return Err(AppError::bad_request("缺少存货编码 item_code"));
@@ -9790,7 +9847,7 @@ async fn prod_release_ep(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 先过工作流：未到终态时只推进流程，不改订单状态
     match workflow_gate(
         &db,
@@ -9815,7 +9872,7 @@ async fn prod_start_ep(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::manufacturing::prod_start(&db, id)?;
     db.log(user.username(), "生产", "开工", &format!("PO#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -9843,7 +9900,7 @@ async fn update_prod_ep(
     Json(req): Json<ProdUpdateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if findb::manufacturing::get_prod_order(&db, id)?.is_none() {
         return Err(AppError::not_found("生产订单不存在"));
     }
@@ -9872,7 +9929,7 @@ async fn cancel_prod_ep(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if findb::manufacturing::get_prod_order(&db, id)?.is_none() {
         return Err(AppError::not_found("生产订单不存在"));
     }
@@ -9888,7 +9945,7 @@ async fn list_prod_changes(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows: Vec<serde_json::Value> = findb::scm2::change_log_list(&db, "prod", id)?
         .iter()
         .map(|(field, old_v, new_v, by, at)| {
@@ -9922,7 +9979,7 @@ async fn prod_qc_ep(
     Json(req): Json<ProdQcReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if findb::manufacturing::get_prod_order(&db, id)?.is_none() {
         return Err(AppError::not_found("生产订单不存在"));
     }
@@ -9965,7 +10022,7 @@ async fn list_prod_qc(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     Ok(Json(
         json!({ "rows": findb::manufacturing::prod_qc_list(&db, id)? }),
     ))
@@ -9989,7 +10046,7 @@ async fn prod_issue_ep(
     Json(req): Json<ProdActReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let order = findb::manufacturing::get_prod_order(&db, id)?
         .ok_or_else(|| AppError::bad_request("生产订单不存在"))?;
     if !matches!(
@@ -10037,7 +10094,7 @@ async fn prod_complete_ep(
     Json(req): Json<ProdActReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let order = findb::manufacturing::get_prod_order(&db, id)?
         .ok_or_else(|| AppError::bad_request("生产订单不存在"))?;
     // 完工数量必须落在 [1, 未完工数量] 区间：prod_complete 把 completed_qty 直接覆盖写，
@@ -10100,7 +10157,7 @@ async fn get_bom_ep(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let parent = q.get("parent").map(|s| s.trim()).unwrap_or("");
     if parent.is_empty() {
         return Err(AppError::bad_request("缺少 parent（父件编码）"));
@@ -10125,7 +10182,7 @@ async fn save_bom_ep(
     Json(req): Json<BomReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let parent = req.parent.trim();
     if parent.is_empty() {
         return Err(AppError::bad_request("缺少父件编码"));
@@ -10167,9 +10224,9 @@ async fn list_budget_versions(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
-    let versions = advanced::bversion_list(&db)?;
-    let current = advanced::bversion_current(&db)?;
+    let db = &user.db;
+    let versions = advanced::bversion_list(&*db)?;
+    let current = advanced::bversion_current(&*db)?;
     Ok(Json(
         serde_json::json!({ "versions": versions, "current": current }),
     ))
@@ -10194,7 +10251,7 @@ async fn save_budget_version(
     Json(req): Json<BVersionReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     advanced::bversion_save(
         &db,
         &advanced::BudgetVersion {
@@ -10214,7 +10271,7 @@ async fn delete_budget_version(
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     advanced::bversion_delete(&db, &key)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -10225,8 +10282,8 @@ async fn activate_budget_version(
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
-    let mut v = advanced::bversion_list(&db)?
+    let db = &user.db;
+    let mut v = advanced::bversion_list(&*db)?
         .into_iter()
         .find(|v| v.key == key)
         .ok_or_else(|| AppError::NotFound(format!("预算版本 {key} 不存在")))?;
@@ -10247,7 +10304,7 @@ async fn copy_budget_version(
     Json(req): Json<BCopyReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let n = advanced::bversion_copy(&db, &req.from, &req.to)?;
     Ok(Json(serde_json::json!({ "ok": true, "copied": n })))
 }
@@ -10259,7 +10316,7 @@ async fn list_approvals(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = advanced::approval_list(&db, 100)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -10269,7 +10326,7 @@ async fn list_approval_todo(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = advanced::approval_todo(&db, user.username())?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -10280,7 +10337,7 @@ async fn get_approval(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let ap = advanced::approval_get(&db, id)?
         .ok_or_else(|| AppError::NotFound("审批流不存在".to_string()))?;
     Ok(Json(serde_json::json!({ "approval": ap })))
@@ -10302,7 +10359,7 @@ async fn start_approval(
     Json(req): Json<ApprovalStartReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let id = advanced::approval_start(
         &db,
         &req.biz_kind,
@@ -10328,7 +10385,7 @@ async fn act_approval(
     Json(req): Json<ApprovalActReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let ap = advanced::approval_act(&db, id, user.username(), req.approve, &req.comment)?;
     Ok(Json(serde_json::json!({ "approval": ap })))
 }
@@ -10339,7 +10396,7 @@ async fn cancel_approval(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     advanced::approval_cancel(&db, id, user.username())?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -10360,7 +10417,7 @@ async fn list_notes(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = advanced::note_list(&db, &report_key, period)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -10385,7 +10442,7 @@ async fn save_note(
     Json(req): Json<NoteReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut n = advanced::ReportNote {
         id: req.id,
         report_key: req.report_key,
@@ -10406,7 +10463,7 @@ async fn delete_note(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     advanced::note_delete(&db, id)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -10425,7 +10482,7 @@ async fn list_archives(
         .unwrap_or_else(|| current_period(&state, &user));
     // 空串表示"全部"：UI 下拉默认值为空，不能当成具体类型去过滤
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = advanced::archive_list(&db, period, kind)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
@@ -10447,7 +10504,7 @@ async fn create_archive(
     Json(req): Json<ArchiveReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = period_checked(req.period)?;
     let file_no = if req.file_no.trim().is_empty() {
         advanced::archive_next_no(&db, period, &req.kind)?
@@ -10474,7 +10531,7 @@ async fn get_archive(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let a = advanced::archive_get(&db, id)?
         .ok_or_else(|| AppError::NotFound("档案不存在".to_string()))?;
     Ok(Json(serde_json::json!({ "archive": a })))
@@ -10486,7 +10543,7 @@ async fn verify_archive(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let a = advanced::archive_get(&db, id)?
         .ok_or_else(|| AppError::NotFound("档案不存在".to_string()))?;
     let ok = advanced::archive_verify(&a);
@@ -10532,7 +10589,7 @@ async fn list_bills(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 空串表示"全部"：UI 下拉默认值为空，不能当成具体类型去过滤
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
     let rows = findb::funds::bill_list(&db, kind)?;
@@ -10545,7 +10602,7 @@ async fn save_bill(
     Json(req): Json<BillReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let parse_date = |s: &str| {
         chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))
@@ -10588,7 +10645,7 @@ async fn bill_transition(
     Json(req): Json<BillTransitionReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = chrono::NaiveDate::parse_from_str(&req.date, "%Y-%m-%d")
         .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?;
     let to = findb::funds::BillStatus::parse(&req.status);
@@ -10614,7 +10671,7 @@ async fn delete_bill(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::funds::bill_delete(&db, id)?;
     db.log(user.username(), "资金", "删除票据", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -10646,7 +10703,7 @@ async fn list_loans(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 空串表示"全部"：UI 下拉默认值为空，不能当成具体类型去过滤
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
     let rows = findb::funds::loan_list(&db, kind)?;
@@ -10659,7 +10716,7 @@ async fn save_loan(
     Json(req): Json<LoanReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let parse_date = |s: &str| {
         chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))
@@ -10709,7 +10766,7 @@ async fn loan_settle(
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let today = chrono::Local::now().date_naive();
     let date = if body.is_empty() {
         today
@@ -10742,7 +10799,7 @@ async fn bill_voucher(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let vid = findb::funds::bill_voucher(&db, id, user.username())?;
     db.log(
         user.username(),
@@ -10760,7 +10817,7 @@ async fn loan_voucher(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let vid = findb::funds::loan_voucher(&db, id, user.username())?;
     db.log(
         user.username(),
@@ -10790,9 +10847,9 @@ async fn list_cash_counts(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     Ok(Json(
-        serde_json::json!({ "rows": findb::funds::cash_count_list(&db)? }),
+        serde_json::json!({ "rows": findb::funds::cash_count_list(&*db)? }),
     ))
 }
 
@@ -10803,7 +10860,7 @@ async fn save_cash_count(
     Json(req): Json<CashCountReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = if req.date.is_empty() {
         chrono::Local::now().date_naive()
     } else {
@@ -10856,7 +10913,7 @@ async fn delete_cash_count(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::funds::cash_count_delete(&db, id)?;
     db.log(user.username(), "资金", "删除盘点记录", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -10869,7 +10926,7 @@ async fn cash_count_voucher(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let vid = findb::funds::cash_count_voucher(&db, id, user.username())?;
     db.log(
         user.username(),
@@ -10907,7 +10964,7 @@ async fn list_cash_shifts(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let limit = q
         .get("limit")
         .and_then(|s| s.parse::<usize>().ok())
@@ -10924,7 +10981,7 @@ async fn create_cash_shift(
     Json(req): Json<CashShiftReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = if req.date.trim().is_empty() {
         chrono::Local::now().date_naive()
     } else {
@@ -10964,7 +11021,7 @@ async fn confirm_cash_shift(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::funds::cash_shift_confirm(&db, id, user.username())?;
     db.log(user.username(), "资金", "交接班确认", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -10977,7 +11034,7 @@ async fn cancel_cash_shift(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::funds::cash_shift_cancel(&db, id)?;
     db.log(user.username(), "资金", "交接班取消", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -10990,7 +11047,7 @@ async fn list_day_clear(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let account = q
         .get("account")
         .cloned()
@@ -11019,7 +11076,7 @@ async fn set_day_clear(
     Json(req): Json<DayClearReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let account = if req.account_code.trim().is_empty() {
         "1001".to_string()
     } else {
@@ -11066,8 +11123,8 @@ async fn list_checks(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::funds::check_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::funds::check_list(&*db)? })))
 }
 
 /// 支票登记簿新增/修改（备查簿，不入账）
@@ -11077,7 +11134,7 @@ async fn save_check(
     Json(req): Json<CheckReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if req.no.trim().is_empty() {
         return Err(AppError::bad_request("支票号必填"));
     }
@@ -11122,7 +11179,7 @@ async fn check_status(
     Json(req): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let status = req["status"].as_str().unwrap_or("");
     findb::funds::check_set_status(&db, id, status)?;
     db.log(
@@ -11140,7 +11197,7 @@ async fn delete_check(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::funds::check_delete(&db, id)?;
     db.log(user.username(), "资金", "删除支票", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -11173,8 +11230,8 @@ async fn list_advances(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::funds::advance_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::funds::advance_list(&*db)? })))
 }
 
 /// 新增/修改借支单（建单即 approved；支付/核销走独立端点）
@@ -11184,7 +11241,7 @@ async fn save_advance(
     Json(req): Json<AdvanceReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = if req.date.is_empty() {
         chrono::Local::now().date_naive()
     } else {
@@ -11271,7 +11328,7 @@ async fn pay_advance(
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = opt_body_date(&body)?.unwrap_or_else(|| chrono::Local::now().date_naive());
     let vid = findb::funds::advance_pay(&db, id, date, user.username())?;
     db.log(
@@ -11294,7 +11351,7 @@ async fn settle_advance(
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if body.is_empty() {
         return Err(AppError::bad_request(
             "请求体应为 {\"expense_account\":\"660201\",\"expense_amount\":\"1500\",\"date\":\"YYYY-MM-DD\"?}",
@@ -11333,7 +11390,7 @@ async fn delete_advance(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::funds::advance_delete(&db, id)?;
     db.log(user.username(), "资金", "删除借支单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -11360,8 +11417,8 @@ async fn list_receipts(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::receipt::receipt_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::receipt::receipt_list(&*db)? })))
 }
 
 /// 新增收付款单：同事务生成资金凭证 + FIFO 自动核销（对标金蝶收款单/付款单）
@@ -11371,7 +11428,7 @@ async fn create_receipt(
     Json(req): Json<ReceiptCreateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = if req.date.is_empty() {
         chrono::Local::now().date_naive()
     } else {
@@ -11418,7 +11475,7 @@ async fn delete_receipt(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::receipt::receipt_delete(&db, id)?;
     db.log(user.username(), "资金", "删除收付款单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -11462,7 +11519,7 @@ async fn audit_receipt(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 工作流优先：有流程 → 参与人/审核权由拦截器判定，终态才出凭证；
     // 无流程（默认流）→ 维持原审核权 VoucherAudit（出纳录单、审核人把关）
     match findb::workflow::intercept(&db, findb::workflow::BIZ_RECEIPT, id, &user.user, true, "")? {
@@ -11502,7 +11559,7 @@ async fn unaudit_receipt(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::receipt::receipt_unaudit(&db, id)?;
     db.log(
         user.username(),
@@ -11531,9 +11588,9 @@ async fn list_transfers(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     Ok(Json(
-        json!({ "rows": findb::transfer::transfer_list(&db)? }),
+        json!({ "rows": findb::transfer::transfer_list(&*db)? }),
     ))
 }
 
@@ -11544,7 +11601,7 @@ async fn create_transfer(
     Json(req): Json<TransferCreateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = if req.date.is_empty() {
         chrono::Local::now().date_naive()
     } else {
@@ -11583,7 +11640,7 @@ async fn audit_transfer(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let vid = findb::transfer::transfer_audit(&db, id, user.username())?;
     db.log(
         user.username(),
@@ -11601,7 +11658,7 @@ async fn unaudit_transfer(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::transfer::transfer_unaudit(&db, id)?;
     db.log(
         user.username(),
@@ -11618,7 +11675,7 @@ async fn delete_transfer(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::transfer::transfer_delete(&db, id)?;
     db.log(user.username(), "资金", "删除资金调拨单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -11656,8 +11713,8 @@ async fn list_counts(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::stocktake::count_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::stocktake::count_list(&*db)? })))
 }
 
 /// 新建盘点单：服务端按仓库快照账面数量（Warehouse = 仓管作业）
@@ -11667,7 +11724,7 @@ async fn create_count(
     Json(req): Json<CountReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -11716,7 +11773,7 @@ async fn apply_count(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (rid, vid, value) = findb::stocktake::count_apply(&db, id, user.username())?;
     db.log(
         user.username(),
@@ -11744,7 +11801,7 @@ async fn delete_count(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::stocktake::count_delete(&db, id)?;
     db.log(user.username(), "库存", "删除盘点单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -11779,7 +11836,7 @@ async fn register_batch(
     Json(req): Json<BatchRegisterReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let direction = if req.direction == "out" { "out" } else { "in" };
     // 期间取**账套当前期间**，与 stock_adjust / 盘点 / 采购到货同一口径。
     // 曾经传的是 batch_register 内部自己算的「真实当天」，于是账套停在 2026-01
@@ -11841,7 +11898,7 @@ async fn do_transfer(
     Json(req): Json<TransferReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -11905,7 +11962,7 @@ async fn batch_cost(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let to = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -11923,7 +11980,7 @@ async fn list_batches(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let item = q.get("item").cloned().unwrap_or_default();
     Ok(Json(
         json!({ "rows": findb::batch::batch_list(&db, &item)? }),
@@ -11945,7 +12002,7 @@ async fn fefo_batches(
     Json(req): Json<FefoReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if req.item.trim().is_empty() {
         return Err(AppError::bad_request("缺少存货编码 item"));
     }
@@ -11966,7 +12023,7 @@ async fn expiring_batches_ep(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let days = q
         .get("days")
         .and_then(|s| s.parse::<i64>().ok())
@@ -11993,8 +12050,8 @@ async fn list_locations(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::batch::location_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::batch::location_list(&*db)? })))
 }
 
 async fn save_location(
@@ -12003,7 +12060,7 @@ async fn save_location(
     Json(req): Json<LocationReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let kind = if req.kind.is_empty() {
         "storage"
     } else {
@@ -12025,7 +12082,7 @@ async fn delete_location(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::batch::location_delete(&db, id)?;
     db.log(user.username(), "库存", "删除库位", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -12037,7 +12094,7 @@ async fn delete_loan(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::funds::loan_delete(&db, id)?;
     // 融资记录挂着结算凭证与还款凭证，是资金模块里审计最敏感的一类，
     // 删除必须留痕（与 save_loan / delete_bill / delete_advance / delete_receipt 同口径）。
@@ -12054,7 +12111,7 @@ async fn get_funds_budget(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -12070,7 +12127,7 @@ async fn get_funds_daily_date(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = match q.get("date") {
         Some(s) => chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?,
@@ -12088,7 +12145,7 @@ async fn get_funds_daily(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let rows = findb::funds::funds_daily(&db, period)?;
     Ok(Json(
@@ -12101,7 +12158,7 @@ async fn get_funds_forecast(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = current_period(&state, &user);
     let fc = findb::funds::funds_forecast(&db, period)?;
     Ok(Json(
@@ -12116,7 +12173,7 @@ async fn funds_forecast_rolling_ep(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let from = q
         .get("from")
         .and_then(|s| parse_period(s))
@@ -12141,7 +12198,7 @@ async fn get_budget_analysis(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let year = q
         .get("year")
         .and_then(|s| s.parse::<i32>().ok())
@@ -12173,8 +12230,8 @@ async fn list_cost_configs(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
-    let rows = findb::business::cost_configs(&db)?;
+    let db = &user.db;
+    let rows = findb::business::cost_configs(&*db)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -12184,7 +12241,7 @@ async fn save_cost_method(
     Json(req): Json<CostMethodReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let sc = parse_money_checked(&req.standard_cost)?;
     findb::business::item_cost_method_set(&db, &req.item, Some(&req.method), sc)?;
     db.log(
@@ -12202,7 +12259,7 @@ async fn clear_cost_method(
     Path(item): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::business::item_cost_method_clear(&db, &item)?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -12216,7 +12273,7 @@ async fn get_notices(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let cur = current_period(&state, &user);
     let todos = findb::workbench::collect_todos(&db, &user.user, cur)?;
     let see_all = user.can(Perm::AuditLog);
@@ -12269,7 +12326,7 @@ async fn get_wf_instance_for(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let biz_type = q.get("biz_type").map(String::as_str).unwrap_or("");
     if !matches!(biz_type, "quotation" | "purchase_req" | "claim" | "receipt") {
         return Err(AppError::bad_request(
@@ -12297,7 +12354,7 @@ async fn gl_reconcile_ep(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = match q
         .get("period")
         .map(|s| s.trim().to_string())
@@ -12339,7 +12396,7 @@ async fn sales_cost_ep(
     Json(req): Json<SalesCostReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = if req.period > 0 {
         period_checked(req.period)?
     } else {
@@ -12390,7 +12447,7 @@ async fn run_period_end_cost(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -12530,12 +12587,12 @@ async fn list_assets(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let cards: Vec<serde_json::Value> = findb::assets::list(&db)?.iter().map(asset_json).collect();
+    let cards: Vec<serde_json::Value> = findb::assets::list(&*db)?.iter().map(asset_json).collect();
     let ledger: Vec<serde_json::Value> = findb::assets::ledger(&db, period)?
         .iter()
         .map(|r| {
@@ -12582,7 +12639,7 @@ async fn create_asset(
     Json(req): Json<AssetReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let a = asset_from_req(&req)?;
     if findb::assets::get_by_code(&db, &a.code)?.is_some() {
         return Err(AppError::bad_request("资产编码已存在"));
@@ -12604,7 +12661,7 @@ async fn update_asset(
     Json(req): Json<AssetReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let existing =
         findb::assets::get(&db, id)?.ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
     if existing.status == findb::assets::AssetStatus::Disposed {
@@ -12645,7 +12702,7 @@ async fn delete_asset(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let a = findb::assets::get(&db, id)?.ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
     findb::assets::delete(&db, id)?;
     db.log(
@@ -12663,7 +12720,7 @@ async fn list_asset_deps(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows: Vec<serde_json::Value> = findb::assets::dep_list(&db, id)?
         .iter()
         .map(|d| {
@@ -12686,7 +12743,7 @@ async fn list_asset_changes(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     Ok(Json(json!({ "rows": findb::assets::changes(&db, id)? })))
 }
 
@@ -12697,7 +12754,7 @@ async fn asset_gl_reconcile(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = q
         .get("period")
         .and_then(|s| parse_period(s))
@@ -12732,7 +12789,7 @@ async fn impair_asset(
     Json(req): Json<AssetImpairReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if findb::assets::get(&db, id)?.is_none() {
         return Err(AppError::not_found("资产卡片不存在"));
     }
@@ -12780,7 +12837,7 @@ async fn save_asset_count(
     Json(req): Json<AssetCountReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if req.lines.is_empty() {
         return Err(AppError::bad_request("盘点明细不能为空"));
     }
@@ -12832,7 +12889,7 @@ async fn post_asset_count(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let n = findb::assets::ac_post(&db, id)?;
     db.log(
         user.username(),
@@ -12849,8 +12906,8 @@ async fn list_asset_counts(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::assets::ac_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::assets::ac_list(&*db)? })))
 }
 
 async fn dispose_asset(
@@ -12860,7 +12917,7 @@ async fn dispose_asset(
     Json(req): Json<AssetDisposeReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = period_checked(req.ymm)?;
     let amount = if req.amount.trim().is_empty() {
         Money::ZERO
@@ -12887,7 +12944,7 @@ async fn depreciate_assets(
     Json(req): Json<PeriodReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = period_checked(req.ymm)?;
     let res = findb::assets::depreciate_period(&db, period, user.username())?;
     Ok(Json(json!({
@@ -12905,7 +12962,7 @@ async fn delete_asset_deps_period(
     Json(req): Json<PeriodReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = period_checked(req.ymm)?;
     let removed = findb::assets::dep_delete_period(&db, period)?;
     db.log(
@@ -13013,7 +13070,7 @@ async fn gen_bank_vouchers(
     if account.is_empty() {
         return Err(AppError::bad_request("缺少银行科目 account"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let r = findb::bank::gen_vouchers(&db, period, &account, user.username())?;
     db.log(
         user.username(),
@@ -13055,10 +13112,10 @@ async fn get_bank(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let db = state.db_for(&user.book_key)?;
-    let statements = findb::bank::list(&db, period, account.trim())?;
-    let book = findb::bank::book_side(&db, period, account.trim())?;
-    let recon = findb::bank::reconcile(&db, period, account.trim())?;
+    let db = &user.db;
+    let statements = findb::bank::list(&*db, period, account.trim())?;
+    let book = findb::bank::book_side(&*db, period, account.trim())?;
+    let recon = findb::bank::reconcile(&*db, period, account.trim())?;
     Ok(Json(json!({
         "period": period_to_str(period),
         "account": account.trim(),
@@ -13079,7 +13136,7 @@ async fn import_bank(
     if account.is_empty() {
         return Err(AppError::bad_request("缺少银行科目 account"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (n, warnings) = findb::bank::import_csv(&db, period, &account, &req.text)?;
     db.log(
         user.username(),
@@ -13101,7 +13158,7 @@ async fn auto_match_bank(
     if account.is_empty() {
         return Err(AppError::bad_request("缺少银行科目 account"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let r = findb::bank::auto_match(&db, period, &account, req.tolerance, user.username())?;
     db.log(
         user.username(),
@@ -13124,8 +13181,8 @@ async fn link_bank(
     Json(req): Json<BankLinkReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
-    findb::bank::link(&db, req.stmt_id, req.entry_id, user.username())?;
+    let db = &user.db;
+    findb::bank::link(&*db, req.stmt_id, req.entry_id, user.username())?;
     db.log(
         user.username(),
         "银行对账",
@@ -13141,7 +13198,7 @@ async fn unlink_bank(
     Json(req): Json<BankStmtIdReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::bank::unlink(&db, req.stmt_id)?;
     db.log(
         user.username(),
@@ -13163,7 +13220,7 @@ async fn clear_bank(
     if account.is_empty() {
         return Err(AppError::bad_request("缺少银行科目 account"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let n = findb::bank::clear(&db, period, &account)?;
     db.log(
         user.username(),
@@ -13266,7 +13323,7 @@ async fn get_settle_open(
         .get("draft")
         .map(|s| s == "1" || s == "true")
         .unwrap_or(false);
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut rows =
         findb::settle::open_entries_with(&db, account.trim(), upto, include_all, !include_draft)?;
     if !include_all {
@@ -13302,7 +13359,7 @@ async fn auto_settle_endpoint(
     } else {
         parse_money_checked(&req.tolerance)?
     };
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let r = findb::settle::auto_settle(&db, &account, upto, tolerance, user.username())?;
     db.log(
         user.username(),
@@ -13330,7 +13387,7 @@ async fn manual_settle_endpoint(
     } else {
         parse_money_checked(&req.diff)?
     };
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 差异为 0 时 settle_with_diff 内部退化成普通核销，不必分支
     let r = findb::settle::settle_with_diff(
         &db,
@@ -13389,7 +13446,7 @@ async fn cross_settle_endpoint(
         chrono::NaiveDate::parse_from_str(req.date.trim(), "%Y-%m-%d")
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
     };
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let r = findb::settle::settle_cross(
         &db,
         req.debit_entry,
@@ -13438,8 +13495,8 @@ async fn list_offsets(
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(json!({ "rows": findb::offset::offset_list(&db)? })))
+    let db = &user.db;
+    Ok(Json(json!({ "rows": findb::offset::offset_list(&*db)? })))
 }
 
 /// 新增往来对冲单：只落草稿单据；凭证与两端 FIFO 核销在「审核」时生成
@@ -13449,7 +13506,7 @@ async fn create_offset(
     Json(req): Json<OffsetCreateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = if req.date.is_empty() {
         chrono::Local::now().date_naive()
     } else {
@@ -13490,7 +13547,7 @@ async fn audit_offset(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (vid, n) = findb::offset::offset_audit(&db, id, user.username())?;
     db.log(
         user.username(),
@@ -13508,7 +13565,7 @@ async fn unaudit_offset(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::offset::offset_unaudit(&db, id)?;
     db.log(
         user.username(),
@@ -13525,7 +13582,7 @@ async fn delete_offset(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::offset::offset_delete(&db, id)?;
     db.log(user.username(), "往来", "删除往来对冲单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
@@ -13541,7 +13598,7 @@ async fn list_settle_records(
     if account.trim().is_empty() {
         return Err(AppError::bad_request("缺少往来科目 account"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows: Vec<serde_json::Value> = findb::settle::list(&db, account.trim())?
         .iter()
         .map(|r| {
@@ -13561,7 +13618,7 @@ async fn unsettle_endpoint(
     Json(req): Json<UnsettleReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::settle::unsettle(&db, req.id)?;
     db.log(
         user.username(),
@@ -13596,7 +13653,7 @@ async fn get_settle_aging(
     } else {
         fincore::engine::aging::buckets_by_days()
     };
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let lines = findb::settle::aging(&db, account.trim(), upto, as_of, &buckets)?;
     let labels: Vec<&str> = buckets.iter().map(|b| b.label).collect();
     // key 是**裸编码**（`C01`），名称另查 —— 页面上显示 `customer=C01` 是内部存储格式，
@@ -13698,7 +13755,7 @@ async fn list_statements(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
     let rows = findb::statement::list(&db, kind)?;
     Ok(Json(json!({
@@ -13713,7 +13770,7 @@ async fn create_statement(
     Json(req): Json<StatementReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let from = period_checked(req.from)?;
     let to = period_checked(req.to)?;
     let s = findb::statement::create(
@@ -13750,7 +13807,7 @@ async fn statement_status_ep(
     Json(req): Json<StatementStatusReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 回签确认必须留痕是谁确认的（客户签字 or 代签人），不能空着
     let who = if req.status == "confirmed" {
         let c = req.confirmed_by.trim();
@@ -13806,7 +13863,7 @@ async fn list_dunnings(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let rows = findb::settle::dunning_list(&db, q.get("kind").map(String::as_str))?;
     Ok(Json(json!({ "rows": rows })))
 }
@@ -13818,7 +13875,7 @@ async fn create_dunning(
     Json(req): Json<DunningReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let date = if req.date.trim().is_empty() {
         chrono::Local::now().date_naive()
     } else {
@@ -13863,7 +13920,7 @@ async fn dunning_status_ep(
     Json(req): Json<DunningStatusReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if findb::settle::dunning_get(&db, id)?.is_none() {
         return Err(AppError::not_found("催款单不存在"));
     }
@@ -13976,7 +14033,7 @@ async fn get_balance_sheet(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let t = statement_table(
         &db,
@@ -14000,7 +14057,7 @@ async fn print_balance_sheet(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let t = statement_table(
         &db,
@@ -14031,7 +14088,7 @@ async fn get_income_statement(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let t = statement_table(
         &db,
@@ -14052,7 +14109,7 @@ async fn print_income_statement(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let t = statement_table(
         &db,
@@ -14072,7 +14129,7 @@ async fn get_cash_flow(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let cf = findb::reports::cash_flow_statement(&db, from, to, Some(&user.user))?;
     let line = |l: &fincore::report::cashflow::CashFlowLine| json!({ "code": l.code, "name": l.name, "inflow": l.inflow.fmt_money(), "outflow": l.outflow.fmt_money(), "net": l.net.fmt_money() });
@@ -14098,7 +14155,7 @@ async fn print_cash_flow(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let cf = findb::reports::cash_flow_statement(&db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
@@ -14112,7 +14169,7 @@ async fn print_equity_statement(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::FinReport)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let stmt = findb::reports::equity_statement(&db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
@@ -14133,7 +14190,7 @@ async fn create_account(
     user.require(Perm::AccountEdit)?;
     let mut acc = req.account;
     acc.aux = build_aux_mask(&req.aux_kinds);
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if accounts::get(&db, &acc.code)?.is_some() {
         return Err(AppError::bad_request("科目已存在"));
     }
@@ -14155,7 +14212,7 @@ async fn update_account(
     user.require(Perm::AccountEdit)?;
     let mut acc = req.account;
     acc.aux = build_aux_mask(&req.aux_kinds);
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if accounts::get(&db, &acc.code)?.is_none() {
         return Err(AppError::not_found("科目不存在"));
     }
@@ -14175,7 +14232,7 @@ async fn delete_account(
     Path(code): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if accounts::get(&db, &code)?.is_none() {
         return Err(AppError::not_found("科目不存在"));
     }
@@ -14228,9 +14285,9 @@ async fn list_begin(
     user: CurrentUser,
 ) -> Result<Json<Vec<BeginRow>>, AppError> {
     user.require(Perm::Opening)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 数据范围：科目区间外的期初不可见（与账簿/报表同口径）
-    let rows = balances::list_begin(&db)?
+    let rows = balances::list_begin(&*db)?
         .into_iter()
         .filter(|r| user.user.can_see_account(&r.account_code))
         .collect::<Vec<_>>();
@@ -14294,7 +14351,7 @@ struct BeginBatchRow {
 fn chart_ctx(
     db: &findb::Db,
 ) -> Result<(std::collections::HashMap<String, String>, Vec<String>), findb::DbError> {
-    let chart = findb::accounts::chart(db)?;
+    let chart = findb::accounts::chart(&db)?;
     let all = chart.all(); // Vec<&Account>
     let dirs: std::collections::HashMap<String, String> = all
         .iter()
@@ -14323,8 +14380,8 @@ async fn parse_begin_batch(
     Json(req): Json<BeginBatchParseReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
-    let (dirs, leaves) = chart_ctx(&db)?;
+    let db = &user.db;
+    let (dirs, leaves) = chart_ctx(&*db)?;
     let dir_of = |code: &str| -> Option<Direction> {
         match dirs.get(code).map(|s| s.as_str()) {
             Some("debit") => Some(Direction::Debit),
@@ -14333,7 +14390,7 @@ async fn parse_begin_batch(
         }
     };
     // 库里已有期初数的编码 —— 别覆盖用户填过的
-    let existing: Vec<String> = balances::list_begin(&db)?
+    let existing: Vec<String> = balances::list_begin(&*db)?
         .into_iter()
         .map(|r| r.account_code)
         .collect();
@@ -14386,8 +14443,8 @@ async fn import_begin_batch(
     Json(req): Json<BeginBatchImportReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Opening)?;
-    let db = state.db_for(&user.book_key)?;
-    let (dirs, leaves) = chart_ctx(&db)?;
+    let db = &user.db;
+    let (dirs, leaves) = chart_ctx(&*db)?;
     let mut seen: Vec<String> = Vec::new();
     let mut to_save: Vec<BeginRow> = Vec::new();
     let mut skipped: Vec<serde_json::Value> = Vec::new();
@@ -14461,7 +14518,7 @@ async fn save_begin(
     Json(req): Json<BeginSaveReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Opening)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (rows, delete_ids) = match req {
         BeginSaveReq::Wrapped { rows, delete_ids } => (rows, delete_ids),
         BeginSaveReq::Rows(rows) => (rows, Vec::new()),
@@ -14571,7 +14628,7 @@ async fn list_logs(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<fincore::user::AuditLog>>, AppError> {
     user.require(Perm::AuditLog)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let limit: i64 = q
         .get("limit")
         .and_then(|s| s.parse().ok())
@@ -14737,8 +14794,8 @@ async fn list_templates(
     user: CurrentUser,
 ) -> Result<Json<Vec<template::Template>>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
-    Ok(Json(template::list(&db)?))
+    let db = &user.db;
+    Ok(Json(template::list(&*db)?))
 }
 
 async fn create_template(
@@ -14747,7 +14804,7 @@ async fn create_template(
     Json(t): Json<template::Template>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let id = template::insert(&db, &t)?;
     db.log(user.username(), "凭证模板", "新建模板", &t.name)?;
     Ok(Json(json!({"id": id})))
@@ -14760,7 +14817,7 @@ async fn update_template(
     Json(t): Json<template::Template>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut t = t;
     t.id = id;
     template::update(&db, &t)?;
@@ -14774,7 +14831,7 @@ async fn delete_template(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     template::delete(&db, id)?;
     db.log(user.username(), "凭证模板", "删除模板", &id.to_string())?;
     Ok(Json(json!({"ok": true})))
@@ -14798,7 +14855,7 @@ async fn generate_template(
     Json(req): Json<TemplateGenerateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let t = template::get(&db, id)?.ok_or_else(|| AppError::not_found("模板不存在"))?;
     let period = match req.period.filter(|ym| *ym > 0) {
         Some(ym) => period_checked(ym)?,
@@ -14825,7 +14882,7 @@ async fn due_templates(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<template::Template>>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = match q.get("period").and_then(|s| s.parse::<i32>().ok()) {
         Some(ym) => period_checked(ym)?,
         None => db.options().start_period,
@@ -14842,7 +14899,7 @@ async fn list_aux(
     // 档案列表是**只读参照**（凭证/收付款单都要选客户、供应商、职员……），
     // 任何可记账角色都需要；增删改仍由 AuxEdit 把关。
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let kind = q
         .get("kind")
         .and_then(|s| AuxKind::from_code(s))
@@ -14878,7 +14935,7 @@ async fn get_item_plan(
     if code.is_empty() {
         return Err(AppError::bad_request("缺少 item 存货编码"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let p = findb::advanced::item_plan_get(&db, &code)?;
     Ok(Json(json!({
         "plan": p.as_ref().map(|p| json!({
@@ -14900,7 +14957,7 @@ async fn save_item_plan(
     if code.is_empty() {
         return Err(AppError::bad_request("缺少 item_code"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     findb::advanced::item_plan_upsert(
         &db,
         &findb::advanced::ItemPlan {
@@ -14928,7 +14985,7 @@ async fn create_aux(
     Json(e): Json<AuxEntity>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AuxEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let id = auxs::insert(&db, &e)?;
     db.log(
         user.username(),
@@ -14989,7 +15046,7 @@ async fn preset_aux(
     Json(q): Json<KindReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AuxEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let (n, skipped) = auxs::insert_presets(&db, q.kind)?;
     db.log(
         user.username(),
@@ -15043,7 +15100,7 @@ async fn parse_aux_batch(
     Json(req): Json<AuxBatchParseReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 库里已有的编码 —— 用来标「这个编码已经有了」，避免用户以为导进去了
     let existing = auxs::codes(&db, req.kind)?;
     let parsed = fincore::batch::aux::parse(&req.text, req.kind, &existing);
@@ -15073,7 +15130,7 @@ async fn import_aux_batch(
     Json(req): Json<AuxBatchImportReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AuxEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 再查一遍已存在的编码：解析到导入之间可能有人新增了档案。
     // insert_many_skip_existing 本身也会跳过，但那份结果只给「跳过了哪些」，
     // 不给「有多少行本该导入却没进」—— 前端就报不出「你以为导了 10 条，
@@ -15137,7 +15194,7 @@ async fn update_aux(
     Json(e): Json<AuxEntity>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AuxEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut e = e;
     e.id = id;
     auxs::update(&db, &e)?;
@@ -15151,7 +15208,7 @@ async fn delete_aux(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AuxEdit)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     auxs::delete(&db, id)?;
     db.log(user.username(), "档案", "删除档案", &id.to_string())?;
     Ok(Json(json!({"ok": true})))
@@ -15217,7 +15274,7 @@ async fn list_payroll(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<business::Payroll>>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let rows = business::payroll_list(&db, period)?;
     let rows: Vec<business::Payroll> = scope_payroll(&user, &rows).into_iter().cloned().collect();
@@ -15240,7 +15297,7 @@ async fn export_payroll_bank_file(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     user.require(Perm::Export)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let rows = business::payroll_list(&db, period)?;
     let rows = scope_payroll(&user, &rows);
@@ -15292,7 +15349,7 @@ async fn get_payroll_slip(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let employee = q.get("employee").map(String::as_str).unwrap_or("").trim();
     if employee.is_empty() {
@@ -15330,7 +15387,7 @@ async fn get_payroll_tax_report(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let rows = business::payroll_list(&db, period)?;
     // 数据范围：受限账号只出自己（或本部门）的工资行，与列表口径一致
@@ -15369,7 +15426,7 @@ async fn save_payroll(
     if !doc_in_scope(&user, employee) {
         return Err(AppError::forbidden("数据范围受限，不能录入他人的工资行"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let p = business::payroll_calc(
         &db,
@@ -15417,7 +15474,7 @@ async fn generate_payroll(
     Json(req): Json<GeneratePayrollReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     if user.user.data_scope.own_doc_only {
         return Err(AppError::forbidden("数据范围受限的账号不能批量生成工资表"));
     }
@@ -15472,7 +15529,7 @@ async fn delete_payroll(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     // 删除前拦截已生成凭证的工资行
     let p =
         business::payroll_get_by_id(&db, id)?.ok_or_else(|| AppError::not_found("工资行不存在"))?;
@@ -15493,7 +15550,7 @@ async fn payroll_ytd(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<business::YtdPayroll>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let employee = q.get("employee").cloned().unwrap_or_default();
     if employee.trim().is_empty() {
@@ -15525,7 +15582,7 @@ async fn payroll_accrue(
     Json(r): Json<PayrollAccrueReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let date = req_date(&r.date, period.last_day())?;
     let id = business::payroll_accrue_voucher(
@@ -15565,7 +15622,7 @@ async fn payroll_social_pay(
     Json(r): Json<PayrollSocialReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let date = req_date(&r.date, period.last_day())?;
     let id = business::payroll_social_voucher(
@@ -15605,7 +15662,7 @@ async fn payroll_pay(
     Json(r): Json<PayrollPayReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let date = req_date(&r.date, period.last_day())?;
     let id = business::payroll_pay_voucher(
@@ -15673,7 +15730,7 @@ async fn list_claims(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<business::Claim>>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     // 空串 = 全部状态：UI 下拉默认值为空，直接 parse 会落到 Draft 只显示草稿
     let status = q
@@ -15698,7 +15755,7 @@ async fn next_claim_no(
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = query_period(&state, &user, &q);
     let no = business::claim_next_no(&db, period)?;
     Ok(Json(json!({ "no": no })))
@@ -15717,7 +15774,7 @@ async fn create_claim(
     if !doc_in_scope(&user, applicant) {
         return Err(AppError::forbidden("数据范围受限，不能为他人填报销单"));
     }
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let period = match r.period.filter(|ym| *ym > 0) {
         Some(ym) => period_checked(ym)?,
         None => current_period(&state, &user),
@@ -15758,7 +15815,7 @@ async fn update_claim(
     Json(r): Json<ClaimInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let mut c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !doc_in_scope(&user, &c.applicant) {
         return Err(AppError::forbidden("数据范围受限，不能修改他人的报销单"));
@@ -15795,7 +15852,7 @@ async fn delete_claim(
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !doc_in_scope(&user, &c.applicant) {
         return Err(AppError::forbidden("数据范围受限，不能删除他人的报销单"));
@@ -15823,7 +15880,7 @@ async fn claim_transition(
     Json(r): Json<ClaimTransitionReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let to = business::ClaimStatus::parse(&r.status);
     let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !doc_in_scope(&user, &c.applicant) {
@@ -15873,7 +15930,7 @@ async fn claim_voucher(
     Json(r): Json<ClaimVoucherReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
-    let db = state.db_for(&user.book_key)?;
+    let db = &user.db;
     let pay = r.pay_account.trim();
     if pay.is_empty() {
         return Err(AppError::bad_request("请填写支付科目"));

@@ -18,6 +18,7 @@ fn main() {
         tax_no: "91110000123456789X".into(),
         enable_qty: false,
         enable_foreign: false,
+        enable_production: false,
         enable_audit: false,
         require_cashier: false,
         biz_accounts: Default::default(),

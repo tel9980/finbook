@@ -1211,10 +1211,10 @@ const NAV_ITEMS = [
   { id: "bank", label: "银行对账", perm: "voucher_new", group: "期末" },
   { id: "settle", label: "往来核销", perm: "voucher_new", group: "期末" },
   { id: "reconcile", label: "期末对账", perm: "fin_report", group: "期末" },
-  { id: "mrp", label: "MRP 运算", perm: "production_ops", group: "生产制造" },
-  { id: "mps", label: "MPS 排产", perm: "production_ops", group: "生产制造" },
-  { id: "routing", label: "工艺路线", perm: "production_ops", group: "生产制造" },
-  { id: "work-report", label: "工序报工", perm: "production_ops", group: "生产制造" },
+  { id: "mrp", label: "MRP 运算", perm: "production_ops", production: true, group: "生产制造" },
+  { id: "mps", label: "MPS 排产", perm: "production_ops", production: true, group: "生产制造" },
+  { id: "routing", label: "工艺路线", perm: "production_ops", production: true, group: "生产制造" },
+  { id: "work-report", label: "工序报工", perm: "production_ops", production: true, group: "生产制造" },
   { id: "funds", label: "资金管理", perm: "fin_report", group: "资金" },
   { id: "budget-versions", label: "预算版本", perm: "fin_report", group: "管理会计" },
   { id: "budget-alerts", label: "预算预警", perm: "fin_report", group: "管理会计" },
@@ -1600,6 +1600,7 @@ function isNavVisible(n) {
   if (n.perm && !can(n.perm)) return false;
   if (n.admin && !(session.user && session.user.is_admin)) return false;
   if (n.platform && !pa) return false;
+  if (n.production && !(state.bookOptions && state.bookOptions.enable_production)) return false;
   return true;
 }
 
@@ -3074,6 +3075,7 @@ function accountListSorted() {
   });
 }
 // 科目选择器：🔍 过滤（编码/名称包含）+ 最近使用记录（原生 select 保留 → 兼容 selectOption 与既有 onchange）
+// 关键：过滤**不触发 change 事件**，只更新 <option> 列表；change 仅在用户显式选中（或 Enter/↓）时发生。
 document.addEventListener("input", (e) => {
   const q = e.target.closest && e.target.closest(".acct-q");
   if (!q) return;
@@ -3086,8 +3088,12 @@ document.addEventListener("input", (e) => {
   sel.innerHTML = list.length
     ? list.map((a) => `<option value="${esc(a.code)}">${esc(a.code)} ${esc(a.name)}</option>`).join("")
     : `<option value="">无匹配</option>`;
-  if (list.some((a) => a.code === cur)) sel.value = cur;
-  else if (list.length) { sel.value = list[0].code; sel.dispatchEvent(new Event("change", { bubbles: true })); }
+  if (list.some((a) => a.code === cur)) {
+    sel.value = cur;
+  } else if (list.length) {
+    // 过滤后列表不含当前值：只置首项，**不 dispatch change** —— 避免触发 renderRows 导致焦点丢失
+    sel.value = list[0].code;
+  }
 });
 document.addEventListener("keydown", (e) => {
   const q = e.target.closest && e.target.closest(".acct-q");
@@ -3429,6 +3435,9 @@ async function openVoucherEditor(id, seedEntries) {
 
   const tbody = $("#v-entries tbody", mask);
   let expanded = -1;
+  // 行 DOM 缓存：index → { tr, detailTr, select, sumInp, debitInp, creditInp, auxBtn, delBtn }
+  const rowCache = new Map();
+
   function acctOf(code) { return (state.accounts || []).find((a) => a.code === code); }
   function auxMissing(e) {
     const a = acctOf(e.account_code);
@@ -3462,38 +3471,187 @@ async function openVoucherEditor(id, seedEntries) {
     if (!parts.length) parts.push(`<span class="muted">该科目无需辅助核算/数量</span>`);
     return `<div class="muted" style="padding:6px 2px"><span style="font-size:12px">${parts.join(" ")}</span>${editable ? ` <button class="btn ghost sm" id="v-aux-close">收起</button>` : ""}</div>`;
   }
+
+  // —— 增量渲染 —— 只在首次/加行/删行时 rebuild 结构；其余只改单行
   function renderRows() {
-    tbody.innerHTML = v.entries.map((e, i) => {
-      const miss = auxMissing(e);
-      const hasAux = (e.aux && Object.keys(e.aux).some((k) => e.aux[k])) || e.qty || e.cf;
-      const detail = expanded === i ? `<tr><td colspan="7" style="background:rgba(0,0,0,0.03)">${auxDetailHtml(e, i)}</td></tr>` : "";
-      return `<tr>
-      <td>${e.line}</td>
+    const oldSize = rowCache.size;
+    const newSize = v.entries.length;
+
+    if (oldSize === 0) {
+      // 首次：全量建行
+      v.entries.forEach((e, i) => buildRow(i));
+    } else if (newSize > oldSize) {
+      // 只加了行：为新行建 DOM
+      for (let i = oldSize; i < newSize; i++) buildRow(i);
+    } else if (newSize < oldSize) {
+      // 删了行：移除多余行的 DOM，重新编号剩余行
+      for (let i = newSize; i < oldSize; i++) {
+        const rc = rowCache.get(i);
+        if (rc) { rc.tr.remove(); if (rc.detailTr) rc.detailTr.remove(); rowCache.delete(i); }
+      }
+      // 重新编号剩余行的行号列
+      for (let i = 0; i < newSize; i++) {
+        const rc = rowCache.get(i);
+        if (rc) rc.tr.cells[0].textContent = i + 1;
+      }
+    }
+    // 无论增删，都要同步每行的数据到 DOM（科目/摘要/金额/辅助按钮文案）
+    v.entries.forEach((e, i) => syncRow(i));
+    recalc();
+  }
+
+  // 为 index 创建一行 <tr> + 可选的详情行，并绑定事件
+  function buildRow(i) {
+    const e = v.entries[i];
+    const miss = auxMissing(e);
+    const hasAux = (e.aux && Object.keys(e.aux).some((k) => e.aux[k])) || e.qty || e.cf;
+    const detailHtml = expanded === i ? auxDetailHtml(e, i) : "";
+
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${i + 1}</td>
       <td>${accountOptions()}</td>
       <td><input class="e-sum" value="${esc(e.summary)}" style="width:100%" ${editable ? "" : "disabled"} /></td>
       <td class="num"><input class="e-d num" value="${esc(e.debit)}" style="width:110px;text-align:right" ${editable ? "" : "disabled"} /></td>
       <td class="num"><input class="e-c num" value="${esc(e.credit)}" style="width:110px;text-align:right" ${editable ? "" : "disabled"} /></td>
       <td><button class="btn ghost sm e-aux" title="辅助核算/数量/现金流量" ${editable ? "" : "disabled"} style="${miss ? "color:var(--err)" : ""}">${miss ? "补录!" : (hasAux ? "已填" : "⋯")}</button></td>
       <td>${editable ? `<button class="btn ghost sm e-del">×</button>` : ""}</td>
-    </tr>${detail}`;
-    }).join("");
-    $all("select.acct-sel", tbody).forEach((sel, i) => { sel.value = v.entries[i].account_code; sel.onchange = () => { v.entries[i].account_code = sel.value; renderRows(); }; });
-    $all(".e-sum", tbody).forEach((inp, i) => inp.oninput = () => v.entries[i].summary = inp.value);
-    $all(".e-d", tbody).forEach((inp, i) => inp.oninput = () => { v.entries[i].debit = inp.value; recalc(); });
-    $all(".e-c", tbody).forEach((inp, i) => inp.oninput = () => { v.entries[i].credit = inp.value; recalc(); });
-    $all(".e-del", tbody).forEach((b, i) => b.onclick = () => { v.entries.splice(i, 1); v.entries.forEach((e, k) => e.line = k + 1); expanded = -1; renderRows(); recalc(); });
-    $all(".e-aux", tbody).forEach((b, i) => b.onclick = () => { expanded = (expanded === i ? -1 : i); renderRows(); });
+    `;
+    tbody.appendChild(tr);
+
+    let detailTr = null;
+    if (detailHtml) {
+      detailTr = document.createElement("tr");
+      detailTr.innerHTML = `<td colspan="7" style="background:rgba(0,0,0,0.03)">${detailHtml}</td>`;
+      tbody.appendChild(detailTr);
+    }
+
+    const select = tr.querySelector("select.acct-sel");
+    const sumInp = tr.querySelector(".e-sum");
+    const debitInp = tr.querySelector(".e-d");
+    const creditInp = tr.querySelector(".e-c");
+    const auxBtn = tr.querySelector(".e-aux");
+    const delBtn = tr.querySelector(".e-del");
+
+    rowCache.set(i, { tr, detailTr, select, sumInp, debitInp, creditInp, auxBtn, delBtn });
+
+    // 绑定事件（只绑一次，行复用时保留）
+    if (select) {
+      select.value = e.account_code;
+      select.onchange = () => {
+        v.entries[i].account_code = select.value;
+        // 只同步该行，不整表重绘
+        syncRow(i);
+      };
+    }
+    if (sumInp) sumInp.oninput = () => { v.entries[i].summary = sumInp.value; };
+    if (debitInp) debitInp.oninput = () => { v.entries[i].debit = debitInp.value; recalc(); autoClearCredit(i); };
+    if (creditInp) creditInp.oninput = () => { v.entries[i].credit = creditInp.value; recalc(); autoClearDebit(i); };
+    if (delBtn) delBtn.onclick = () => {
+      v.entries.splice(i, 1);
+      v.entries.forEach((ee, k) => ee.line = k + 1);
+      expanded = -1;
+      renderRows();
+    };
+    if (auxBtn) auxBtn.onclick = () => {
+      expanded = (expanded === i ? -1 : i);
+      // 只切换详情行显隐
+      const rc = rowCache.get(i);
+      if (rc) {
+        if (expanded === i) {
+          // 展开：若详情行不存在则建，存在则显示
+          if (!rc.detailTr) {
+            rc.detailTr = document.createElement("tr");
+            rc.detailTr.innerHTML = `<td colspan="7" style="background:rgba(0,0,0,0.03)">${auxDetailHtml(v.entries[i], i)}</td>`;
+            rc.tr.after(rc.detailTr);
+            bindAuxInputs(i);
+            const closeAux = $("#v-aux-close", rc.detailTr);
+            if (closeAux) closeAux.onclick = () => { expanded = -1; renderRows(); };
+          } else {
+            rc.detailTr.style.display = "";
+          }
+        } else {
+          // 收起：隐藏详情行
+          if (rc.detailTr) rc.detailTr.style.display = "none";
+        }
+      }
+    };
+  }
+
+  // 将 model 第 i 行同步到 DOM（不重建行结构，只改值/文案/选中态）
+  function syncRow(i) {
+    const e = v.entries[i];
+    const rc = rowCache.get(i);
+    if (!rc) return;
+
+    // 科目 select：更新选中值，并同步 <option> 列表（保持当前过滤关键词）
+    if (rc.select) {
+      const kw = rc.select.previousElementSibling?.value?.trim?.().toLowerCase?.() || "";
+      const list = (state.accounts || []).filter((a) => !kw || a.code.toLowerCase().includes(kw) || (a.name || "").toLowerCase().includes(kw));
+      const cur = rc.select.value;
+      rc.select.innerHTML = list.length
+        ? list.map((a) => `<option value="${esc(a.code)}">${esc(a.code)} ${esc(a.name)}</option>`).join("")
+        : `<option value="">无匹配</option>`;
+      if (list.some((a) => a.code === cur)) rc.select.value = cur;
+      else if (list.length) rc.select.value = list[0].code;
+      // 同步 model（onchange 已绑定，这里不再触发 change）
+    }
+
+    // 摘要/借/贷输入框
+    if (rc.sumInp && rc.sumInp.value !== e.summary) rc.sumInp.value = e.summary;
+    if (rc.debitInp && rc.debitInp.value !== e.debit) rc.debitInp.value = e.debit;
+    if (rc.creditInp && rc.creditInp.value !== e.credit) rc.creditInp.value = e.credit;
+
+    // 辅助按钮文案/颜色
+    const miss = auxMissing(e);
+    const hasAux = (e.aux && Object.keys(e.aux).some((k) => e.aux[k])) || e.qty || e.cf;
+    if (rc.auxBtn) {
+      rc.auxBtn.textContent = miss ? "补录!" : (hasAux ? "已填" : "⋯");
+      rc.auxBtn.style.color = miss ? "var(--err)" : "";
+    }
+
+    // 详情行若展开着，同步其输入框值
+    if (expanded === i && rc.detailTr) {
+      const newDetail = auxDetailHtml(e, i);
+      if (rc.detailTr.innerHTML !== newDetail) rc.detailTr.innerHTML = `<td colspan="7" style="background:rgba(0,0,0,0.03)">${newDetail}</td>`;
+      bindAuxInputs(i);
+      const closeAux = $("#v-aux-close", rc.detailTr);
+      if (closeAux) closeAux.onclick = () => { expanded = -1; renderRows(); };
+    }
+  }
+
+  // 辅助核算详情行的输入框绑定（每次展开/同步时重新绑）
+  function bindAuxInputs(i) {
+    const e = v.entries[i];
     $all(".aux-in", tbody).forEach((inp) => {
+      if (parseInt(inp.dataset.i, 10) !== i) return;
       inp.oninput = () => {
-        const i = parseInt(inp.dataset.i, 10), k = inp.dataset.k;
-        const e = v.entries[i];
+        const k = inp.dataset.k;
         if (k === "qty" || k === "price" || k === "cf" || k === "currency" || k === "rate" || k === "amount_for") { e[k] = inp.value; }
         else { e.aux = e.aux || {}; e.aux[k] = inp.value; }
+        syncRow(i); // 同步辅助按钮文案
       };
     });
-    const closeAux = $("#v-aux-close", tbody);
-    if (closeAux) closeAux.onclick = () => { expanded = -1; renderRows(); };
-    recalc();
+  }
+
+  // 借方输入 > 0 时自动清零贷方（反之亦然），避免手动清空
+  function autoClearCredit(i) {
+    const e = v.entries[i];
+    const d = parseFloat(e.debit) || 0;
+    if (d > 0 && (parseFloat(e.credit) || 0) > 0) {
+      e.credit = "0";
+      const rc = rowCache.get(i);
+      if (rc && rc.creditInp) rc.creditInp.value = "0";
+    }
+  }
+  function autoClearDebit(i) {
+    const e = v.entries[i];
+    const c = parseFloat(e.credit) || 0;
+    if (c > 0 && (parseFloat(e.debit) || 0) > 0) {
+      e.debit = "0";
+      const rc = rowCache.get(i);
+      if (rc && rc.debitInp) rc.debitInp.value = "0";
+    }
   }
   function recalc() {
     const sum = (arr, k) => arr.reduce((a, e) => a + (parseFloat(e[k]) || 0), 0);
@@ -11245,6 +11403,7 @@ async function viewOptions(main) {
         <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-qty" ${o.enable_qty ? "checked" : ""} />启用数量核算</label>
         <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-foreign" ${o.enable_foreign ? "checked" : ""} />启用外币核算</label>
         <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-cashier" ${o.require_cashier ? "checked" : ""} />出纳签字（涉及现金/银行的凭证记账前须签字）</label>
+        <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-production" ${o.enable_production ? "checked" : ""} />启用生产制造（MRP / 排产 / 工序报工）</label>
         <label>预算控制 <select id="op-budget"><option value="" ${!o.budget_control ? "selected" : ""}>关闭</option><option value="warn" ${o.budget_control === "warn" ? "selected" : ""}>超预算提醒（放行）</option><option value="strong" ${o.budget_control === "strong" ? "selected" : ""}>超预算强控（拒绝保存）</option></select></label>
         <label>单据前缀 <input id="op-pfx-po" value="${esc(((o.doc_prefixes || {}).po) || "")}" placeholder="CG" title="采购订单" style="width:56px" /> <input id="op-pfx-so" value="${esc(((o.doc_prefixes || {}).so) || "")}" placeholder="XS" title="销售订单" style="width:56px" /> <input id="op-pfx-req" value="${esc(((o.doc_prefixes || {}).req) || "")}" placeholder="QG" title="请购单" style="width:56px" /> <input id="op-pfx-quo" value="${esc(((o.doc_prefixes || {}).quo) || "")}" placeholder="BJ" title="报价单" style="width:56px" /> <input id="op-pfx-prod" value="${esc(((o.doc_prefixes || {}).prod) || "")}" placeholder="SC" title="生产订单" style="width:56px" /></label>
       </div>
@@ -11266,6 +11425,7 @@ async function viewOptions(main) {
       enable_audit: $("#op-audit").checked,
       enable_qty: $("#op-qty").checked,
       enable_foreign: $("#op-foreign").checked,
+      enable_production: $("#op-production").checked,
       require_cashier: $("#op-cashier").checked,
       budget_control: $("#op-budget").value,
       doc_prefixes: {

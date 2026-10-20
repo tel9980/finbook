@@ -762,6 +762,8 @@ pub struct CurrentUser {
     pub book_key: String,
     /// 当前账套的公司名（多账套下每套不同）
     pub company: String,
+    /// 复用的数据库连接（避免 extractor 和 handler 各开一个）
+    pub db: Db,
 }
 
 impl CurrentUser {
@@ -876,13 +878,13 @@ impl FromRequestParts<Arc<WebState>> for CurrentUser {
             }
         }
         let company = db.options().company;
-        drop(db);
         state.sessions.touch(&token);
         Ok(CurrentUser {
             user,
             token,
             book_key,
             company,
+            db,
         })
     }
 }

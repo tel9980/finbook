@@ -436,6 +436,14 @@ impl Db {
     }
 }
 
+impl std::ops::Deref for Db {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.conn
+    }
+}
+
 fn map_log(r: &rusqlite::Row) -> rusqlite::Result<AuditLog> {
     Ok(AuditLog {
         id: r.get(0)?,

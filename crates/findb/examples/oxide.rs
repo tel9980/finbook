@@ -89,6 +89,7 @@ pub fn build(path: &Path) {
         tax_no: "91330100MAOXIDE66".into(),
         enable_qty: true,
         enable_foreign: false,
+        enable_production: false,
         enable_audit: false,
         require_cashier: false,
         biz_accounts: Default::default(),
