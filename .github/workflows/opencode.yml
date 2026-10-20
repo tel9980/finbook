@@ -1,0 +1,71 @@
+# OpenCode GitHub 机器人：在 issue / PR 评论里输入 /oc 或 /opencode 即可触发
+#
+# 前置条件（三件事，缺一不可）：
+#   1. 安装 GitHub App：https://github.com/apps/opencode-agent
+#      —— 必须授权到本仓库（App 模式靠 OIDC 换取 installation token，见下方 id-token）
+#   2. 在仓库 Settings → Secrets and variables → Actions 添加：
+#        Secret:  OPENROUTER_API_KEY   （本文件默认使用 OpenRouter）
+#      如需换模型，再添加仓库变量（Variables，非 Secret）：
+#        Variable: OPENCODE_MODEL      （例如 openrouter/deepseek/deepseek-v4.1-flash-1017）
+#   3. 本文件提交到默认分支 main 后才会生效。
+#
+# 说明：GitHub Action（anomalyco/opencode/github）目前仍基于 OpenCode V1 的
+#      `opencode github run`，与本地安装的 V2 CLI 是两条独立链路，互不影响。
+#      该 Action 内部会安装仓库的最新 release（当前为 v1.19.3）。
+
+name: opencode
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+# App 模式：id-token 用于向 api.opencode.ai 换取安装令牌；
+# 其余权限给 OpenCode 创建分支 / 提交 PR / 回复 issue 用。
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  opencode:
+    # 只响应包含触发词的评论，避免每条评论都烧一次 token
+    if: |
+      contains(github.event.comment.body, '/oc') ||
+      contains(github.event.comment.body, '/opencode')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run OpenCode
+        uses: anomalyco/opencode/github@latest
+        env:
+          # 默认走 OpenRouter：一个 Key 可用多家模型，换模型只改变量、不换 Key
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          #
+          # ── 直连其它厂商时，改成对应 Key（三选一，注释掉其它）──────────────
+          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+          # DEEPSEEK_API_KEY:  ${{ secrets.DEEPSEEK_API_KEY }}
+          #
+          # ── 不想安装 GitHub App？改用仓库自带的 GITHUB_TOKEN ────────────────
+          # 把下面这行取消注释，并在 with 里加 `use_github_token: true`；
+          # 此时上面的 id-token: write 可以去掉。
+          # GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # 必填。变量未设置时回退到 Claude Sonnet 5.5
+          model: ${{ vars.OPENCODE_MODEL || 'openrouter/anthropic/claude-sonnet-5.5' }}
+          # 可选：换成更便宜的模型跑日常问答，例如
+          #   openrouter/deepseek/deepseek-v4.1-flash-1017
+          # 可选：自定义触发词，默认就是 /opencode,/oc
+          # mentions: '/oc'
+          # 可选：自定义提示词（覆盖默认行为）
+          # prompt: |
+          #   你是本仓库的维护者……
