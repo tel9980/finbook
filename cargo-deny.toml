@@ -1,0 +1,45 @@
+# cargo-deny 配置（CI `cargo deny check` 读取）
+#
+# 与 `.cargo/audit.toml` 互补：cargo-audit 只看 RUSTSEC 漏洞；
+# cargo-deny 覆盖 license 合规、未知来源、yanked 版本。
+
+# ── 许可证白名单（FinBook 面向国内财务场景，依赖以 MIT/Apache/BSD 为主） ──
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unlicense",
+    "Zlib",
+    "0BSD",
+]
+deny = [
+    "GPL-2.0-only",
+    "GPL-2.0-or-later",
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "AGPL-2.1-only",
+    "AGPL-2.1-or-later",
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+    "LGPL-2.0-only",
+    "LGPL-2.0-or-later",
+    "LGPL-2.1-only",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0-only",
+    "LGPL-3.0-or-later",
+]
+
+# ── 来源与版本安全 ──
+[bans]
+# 禁止 crates.io 以外且无可追溯来源的 crate
+unknown-sources = "deny"
+# 禁止已被 yanked 的版本
+yanked = "deny"
+
+# ── 漏洞（cargo-audit 已覆盖 RUSTSEC，这里保持宽松，避免重复误报） ──
+[advisories]
+ignore = []
+unmaintained = "warn"
