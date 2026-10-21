@@ -8,8 +8,6 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
-use std::io::Cursor;
-use multipart::server::Multipart;
 use chrono::{Datelike, NaiveDate};
 use fincore::user::Perm;
 use fincore::{
@@ -4409,58 +4407,49 @@ async fn list_voucher_attachments(
 }
 
 async fn upload_voucher_attachment(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     Path(id): Path<i64>,
     user: CurrentUser,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
+    mut multipart: axum::extract::Multipart,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherEdit)?;
-    let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
-    if !user.user.can_see_voucher(&v) {
-        return Err(AppError::forbidden("无权为该凭证上传附件"));
-    }
+    // 注意：`&findb::Db` 持有的是 !Sync 的连接引用，**不能跨 await 持有**，
+    // 否则整个 future 变成 !Send，Handler 不成立（路由注册处会报 trait 未实现）。
+    // 所以先在块内做完「这张凭证能不能动」的校验，再解析上传体，最后落库。
+    let voucher_no = {
+        let db = &user.db;
+        let v = vouchers::get(&db, id)?
+            .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+        if !user.user.can_see_voucher(&v) {
+            return Err(AppError::forbidden("无权为该凭证上传附件"));
+        }
+        v.voucher_no().to_string()
+    };
 
-    // Extract boundary from Content-Type header
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AppError::bad_request("缺少 Content-Type 头"))?;
-    
-    let boundary = content_type
-        .split("boundary=")
-        .nth(1)
-        .ok_or_else(|| AppError::bad_request("缺少 multipart boundary"))?
-        .trim();
-
-    let bytes = body.to_vec();
-    if bytes.len() > findb::attach::MAX_FILE_SIZE + 1024 {
-        return Err(AppError::bad_request("请求体过大"));
-    }
-
-    // Use multipart crate to parse
-    let mut multipart = Multipart::with_body(Cursor::new(bytes), boundary);
-    
+    // 用 axum 自带的 multipart 提取器（背后是 multer）：边界解析、分片、
+    // Content-Disposition 都按 RFC 处理，且不引入任何新依赖
+    // （旧的 multipart 0.18 会拖进 hyper 0.10/iron/time 0.1 等 4 个 RUSTSEC 漏洞）。
+    // 体大小已由路由层的 DefaultBodyLimit（12 MB）兜底。
     let mut name = String::new();
     let mut data: Option<Vec<u8>> = None;
-    
-    loop {
-        let field_opt = multipart.read_entry().map_err(|e| AppError::bad_request(format!("上传解析失败：{}", e)))?;
-        if let Some(mut field) = field_opt {
-            if field.headers.name.as_ref() == "file" {
-                name = field.headers.filename.as_ref().map(|s| s.to_string()).unwrap_or_else(|| "attachment".to_string());
-                let mut bytes = Vec::new();
-                use std::io::Read;
-                field.data.read_to_end(&mut bytes).map_err(|e| AppError::bad_request(format!("读取上传内容失败：{}", e)))?;
-                data = Some(bytes);
-                break;
-            }
-        } else {
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::bad_request(format!("上传解析失败：{e}")))?
+    {
+        if field.name() == Some("file") {
+            name = field
+                .file_name()
+                .unwrap_or("attachment")
+                .to_string();
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::bad_request(format!("读取上传内容失败：{e}")))?;
+            data = Some(bytes.to_vec());
             break;
         }
     }
-    
     let data = data.ok_or_else(|| AppError::bad_request("缺少文件字段 file"))?;
     if data.is_empty() {
         return Err(AppError::bad_request("上传文件为空"));
@@ -4469,16 +4458,12 @@ async fn upload_voucher_attachment(
         return Err(AppError::bad_request("文件超过 10MB 上限"));
     }
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
-    if !user.user.can_see_voucher(&v) {
-        return Err(AppError::forbidden("无权为该凭证上传附件"));
-    }
     let aid = findb::attach::add(&db, id, &name, &data, user.username())?;
     db.log(
         user.username(),
         "凭证",
         "上传附件",
-        &format!("{} 附件#{} {}", v.voucher_no(), aid, name),
+        &format!("{} 附件#{} {}", voucher_no, aid, name),
     )?;
     Ok(Json(json!({ "id": aid })))
 }

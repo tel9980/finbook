@@ -54,9 +54,9 @@ const MUT = [
     name: "⑤ 读放宽时把写权限检查也一起删掉（读放宽≠写放宽）",
     file: "crates/finweb/src/handlers.rs",
     from:
-      ') -> Result<Json<serde_json::Value>, AppError> {\n    user.require(Perm::SysOption)?;\n    let db = state.db_for(&user.book_key)?;\n    // 落库前校验',
+      ') -> Result<Json<serde_json::Value>, AppError> {\n    user.require(Perm::SysOption)?;\n    let db = &user.db;\n    // 落库前校验',
     to:
-      ') -> Result<Json<serde_json::Value>, AppError> {\n    let db = state.db_for(&user.book_key)?;\n    // 落库前校验',
+      ') -> Result<Json<serde_json::Value>, AppError> {\n    let db = &user.db;\n    // 落库前校验',
     cmd: API("accountant_can_read_book_options_to_see_audit_flag"),
   },
   {
@@ -100,8 +100,8 @@ const MUT = [
     // 只放开"审"不放开"撤审" → 会计能审却撤不回来
     name: "⑨ 撤审仍用旧判据（能审不能撤）",
     file: "crates/finweb/src/handlers.rs",
-    from: "    require_fund_doc_gate(&user)?;\n    let db = state.db_for(&user.book_key)?;\n    findb::receipt::receipt_unaudit(&db, id)?;",
-    to: "    user.require(Perm::VoucherAudit)?;\n    let db = state.db_for(&user.book_key)?;\n    findb::receipt::receipt_unaudit(&db, id)?;",
+    from: "    require_fund_doc_gate(&user)?;\n    let db = &user.db;\n    findb::receipt::receipt_unaudit(&db, id)?;",
+    to: "    user.require(Perm::VoucherAudit)?;\n    let db = &user.db;\n    findb::receipt::receipt_unaudit(&db, id)?;",
     cmd: API("receipt_audit_gates_on_audit_or_post_permission"),
   },
   {
