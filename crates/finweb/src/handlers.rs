@@ -1,8 +1,11 @@
 //! HTTP 请求处理函数
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io;
 use std::sync::Arc;
 
+use axum::body::Body;
 use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -18,6 +21,8 @@ use findb::accounts;
 use findb::advanced;
 use findb::balances::{self, BalanceQuery, BalanceSnapshot, BeginRow, LedgerQuery};
 use findb::periods;
+use zip::{CompressionMethod, ZipWriter};
+use zip::write::{FileOptions, FileOptionExtension};
 use findb::security;
 use findb::users;
 use findb::vouchers::{self, VoucherQuery};
@@ -766,6 +771,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/logs", get(list_logs))
         .route("/api/backups", get(list_backups).post(create_backup))
         .route("/api/restore", post(restore_backup))
+        .route("/api/backup/download", get(download_backup))
         .route("/api/templates", get(list_templates).post(create_template))
         .route("/api/templates/due", get(due_templates))
         .route(
@@ -14771,6 +14777,75 @@ async fn restore_backup(
     .await
     .map_err(|e| AppError::Internal(format!("恢复任务失败：{e}")))??;
     Ok(Json(json!({"ok": true})))
+}
+
+/// 下载账套备份包：把 .fbk 主文件与 .attachments/ 附件目录打成一个 zip，
+/// 一次下载完整账套，避免只备份主库而漏掉附件。
+async fn download_backup(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    user.require(Perm::Backup)?;
+    let key = user.book_key.clone();
+    let src = state.books_dir.join(format!("{key}.fbk"));
+    if !src.exists() {
+        return Err(AppError::not_found("账套文件不存在"));
+    }
+    let attach_dir = src.parent().unwrap().join(".attachments");
+
+    // checkpoint 把 WAL 合并回主文件，保证打包的 .fbk 是完整一致快照
+    let db = state.db_for(&key)?;
+    checkpoint_wal(&db)?;
+    drop(db);
+
+    let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let zip_name = format!("{key}_backup_{stamp}.zip");
+
+    let buf = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
+        let mut buf = Vec::new();
+        let mut zip = ZipWriter::new(io::Cursor::new(&mut buf));
+        let options: FileOptions<'_, ()> = FileOptions::default()
+            .compression_method(CompressionMethod::Deflated);
+        let zerr = |e| AppError::Internal(format!("zip: {e}"));
+
+        // .fbk 主文件
+        zip.start_file(format!("{key}.fbk"), options).map_err(&zerr)?;
+        let mut f = File::open(&src)?;
+        io::copy(&mut f, &mut zip)?;
+
+        // .attachments/ 下的附件文件
+        if attach_dir.exists() {
+            for entry in std::fs::read_dir(&attach_dir)? {
+                let e = entry?;
+                let path = e.path();
+                if path.is_file() {
+                    let name = format!(
+                        ".attachments/{}",
+                        e.file_name().to_string_lossy()
+                    );
+                    zip.start_file(name, options).map_err(&zerr)?;
+                    let mut f = File::open(&path)?;
+                    io::copy(&mut f, &mut zip)?;
+                }
+            }
+        }
+
+        zip.finish().map_err(&zerr)?;
+        Ok(buf)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("打包备份失败：{e}")))?; // -> Result<Vec<u8>, AppError>
+    let buf = buf?; // -> Vec<u8> // buf: Vec<u8>
+
+    let body = Body::from(buf);
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/zip")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{zip_name}\""),
+        )
+        .body(body)
+        .map_err(|e| AppError::Internal(format!("构建响应失败：{e}")))?)
 }
 
 // ---------------- 凭证模板 ----------------

@@ -28,6 +28,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 printpdf = "0.7"
 rusqlite = { version = "0.32", features = ["bundled", "chrono", "serde_json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 # 集成测试用：tower util（oneshot 发请求）+ tempfile（临时账套目录）

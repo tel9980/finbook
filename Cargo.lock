@@ -1799,6 +1799,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "zip 2.4.2",
 ]
 
 [[package]]
