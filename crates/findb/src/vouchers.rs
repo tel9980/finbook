@@ -40,6 +40,9 @@ pub struct VoucherQuery {
     pub scope_account_to: String,
     /// 排序：true 为按日期+凭证号升序（默认），false 为降序
     pub asc: bool,
+    /// 键集分页游标：只返回 id 大于此值的行，配合 ORDER BY id ASC。
+    /// 替代 OFFSET 分页，避免深度分页扫描前面所有行。
+    pub last_id: Option<i64>,
 }
 
 impl VoucherQuery {
@@ -285,6 +288,45 @@ pub fn list_page(
         .query_map(refs2.as_slice(), map_voucher)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok((rows, total))
+}
+
+/// 键集分页列表（替代 OFFSET 分页）。
+///
+/// 用 `WHERE id > ? ORDER BY id ASC LIMIT ?`，深度分页不再扫描前面已跳过的行。
+/// 多取一行用于判断 `has_more`，返回的 `next_id` 即下一页的 `last_id`。
+/// 排序以 `id`（录入先后）为准，与 `list_page` 的 `(date, word, no)` 不同，
+/// 调用方需知悉两者顺序可能不同，但均为确定性顺序。
+pub fn list_page_keyset(
+    db: &Db,
+    q: &VoucherQuery,
+    limit: i64,
+) -> DbResult<(Vec<Voucher>, Option<i64>, bool)> {
+    let (whered, mut params) = build_where(q)?;
+    if let Some(last_id) = q.last_id {
+        params.push(Box::new(last_id));
+    }
+    let id_param_idx = params.len(); // v.id > ? 的参数位置（若 last_id 存在则已 push）
+
+    let mut sql = format!(
+        "SELECT {VOUCHER_COLS} FROM voucher v WHERE 1=1{whered}",
+    );
+    if q.last_id.is_some() {
+        sql.push_str(&format!(" AND v.id > ?{}", id_param_idx + 1));
+    }
+    sql.push_str(" ORDER BY v.id ASC LIMIT ?");
+    params.push(Box::new(limit + 1)); // 多取一行探测 has_more
+
+    let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+    let mut stmt = db.conn().prepare(&sql)?;
+    let rows = stmt
+        .query_map(refs.as_slice(), map_voucher)?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let has_more = rows.len() > limit as usize;
+    let rows = if has_more { rows.into_iter().take(limit as usize).collect() } else { rows };
+    let next_id = rows.last().map(|v| v.id);
+
+    Ok((rows, next_id, has_more))
 }
 
 /// 构造 `list` 与 `list_page` 共用的 WHERE 片段（**唯一的一份条件**）。
