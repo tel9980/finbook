@@ -31,12 +31,13 @@ pub fn report_table_html(table: &ReportTable, company: &str, unit: &str) -> Stri
             LineStyle::Normal => "",
         };
         let mut cells = String::new();
-        for (i, v) in r.values.iter().enumerate() {
-            let text = if v.is_zero() && r.style == LineStyle::Normal {
-                String::new()
-            } else {
-                v.fmt_money()
-            };
+        for v in &r.values {
+            // 零值也印 0.00，不再留空。
+            //
+            // 财务惯例的「零不印」只在纸面上成立；到了屏幕上，一片空白会被当成
+            // 「金额列没取到数 / 接口返回缺列」——用户实际就是这么报障的。
+            // 网页端（app.js）与接口（`table_json`）一直是 `0.00`，打印页原来
+            // 单独留空，属于同一张表两套口径。这里统一成 0.00。
             cells.push_str(&format!(
                 "<td class='r'{}>{}</td>",
                 if v.is_negative() && r.show_negative_red {
@@ -44,9 +45,8 @@ pub fn report_table_html(table: &ReportTable, company: &str, unit: &str) -> Stri
                 } else {
                     ""
                 },
-                text
+                v.fmt_money()
             ));
-            let _ = i;
         }
         body.push_str(&format!(
             "<tr{style}><td class='c'>{}</td><td>{}{}</td>{cells}</tr>",
@@ -194,4 +194,75 @@ fn shell(title: &str, company: &str, subtitle: &str, unit: &str, table: &str) ->
         chrono::Local::now().format("%Y-%m-%d %H:%M"),
         table,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fincore::report::ReportRow;
+
+    fn table(style: LineStyle, values: Vec<fincore::Money>) -> ReportTable {
+        ReportTable {
+            title: "利润表".to_string(),
+            subtitle: "2026年11月 至 2026年11月".to_string(),
+            company: "测试公司".to_string(),
+            columns: vec!["本期金额".to_string(), "本年累计金额".to_string()],
+            rows: vec![ReportRow {
+                no: "1".to_string(),
+                name: "一、营业收入".to_string(),
+                indent: 0,
+                style,
+                values,
+                show_negative_red: true,
+            }],
+        }
+    }
+
+    /// 回归：普通行零值必须印 `0.00`，不能留空。
+    ///
+    /// 旧实现按「财务惯例」把 `LineStyle::Normal` 的 0 打成空字符串，
+    /// 打印预览整列空白，用户据此报「利润表金额列丢了」。
+    #[test]
+    fn print_zero_normal_row_shows_money() {
+        let html = report_table_html(
+            &table(LineStyle::Normal, vec![fincore::Money::ZERO]),
+            "测试公司",
+            "元",
+        );
+        assert!(
+            html.contains("<td class='r'>0.00</td>"),
+            "普通行零值应显示 0.00，实际 HTML：{html}"
+        );
+    }
+
+    /// 负数的红字样式不能被这次改动顺带弄丢。
+    #[test]
+    fn print_negative_keeps_red_style() {
+        let html = report_table_html(
+            &table(LineStyle::Normal, vec![fincore::Money::from_cents(-123456)]),
+            "测试公司",
+            "元",
+        );
+        assert!(
+            html.contains("<td class='r' style='color:#c00'>-1,234.56</td>"),
+            "负数应保留红字样式，实际 HTML：{html}"
+        );
+    }
+
+    /// 零值/负值都要经过千分位格式化，且两列表头都在。
+    #[test]
+    fn print_table_has_header_and_two_value_columns() {
+        let html = report_table_html(
+            &table(
+                LineStyle::Total,
+                vec![fincore::Money::ZERO, fincore::Money::from_cents(100000)],
+            ),
+            "测试公司",
+            "元",
+        );
+        assert!(html.contains("<th class='r'>本期金额</th>"), "{html}");
+        assert!(html.contains("<th class='r'>本年累计金额</th>"), "{html}");
+        assert!(html.contains("<td class='r'>0.00</td>"), "{html}");
+        assert!(html.contains("<td class='r'>1,000.00</td>"), "{html}");
+    }
 }

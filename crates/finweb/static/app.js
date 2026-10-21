@@ -5177,6 +5177,25 @@ function statementTableHtml(t) {
   return `<table class="grid"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
+// 报表口径行：把服务端**实际**采用的期间回显出来。
+// 前端填的期间与后端解析结果可能不一致（留空走默认、手输错误被 400 拦下），
+// 只显示输入框的值时，「金额全是 0」到底是没数据还是期间没生效就分不清。
+function statementMetaHtml(r, label) {
+  const t = (r && r.table) || {};
+  const sub = label == null ? (t.subtitle || "") : label;
+  const from = (r && r.from) || "?", to = (r && r.to) || "?";
+  return `<div class="muted" style="margin-bottom:8px">${esc(sub)}
+    <span title="服务端实际取数期间；若与你填的不一致，说明期间没传到后端">（服务端取数：${esc(from)} ~ ${esc(to)}）</span>
+  </div>`;
+}
+
+// 整张表所有单元格都是 0 —— 用于利润表空态提示。
+// 只在「全零」时提示，有任何非零就不出现，避免误导。
+function tableAllZero(t) {
+  const rows = (t && t.rows) || [];
+  return rows.length > 0 && rows.every((r) => (r.values || []).every((v) => moneyNum(v) === 0));
+}
+
 async function viewBalanceSheet(main) {
   main.innerHTML = `<h2>资产负债表</h2>
     <div class="toolbar">
@@ -5190,7 +5209,7 @@ async function viewBalanceSheet(main) {
     const f = $("#bs-from").value.trim(), t = $("#bs-to").value.trim();
     try {
       const r = await api(`/reports/balance-sheet?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`);
-      $("#bs-result").innerHTML = `<div class="muted" style="margin-bottom:8px">${esc(r.table.subtitle)}</div>${statementTableHtml(r.table)}`;
+      $("#bs-result").innerHTML = statementMetaHtml(r) + statementTableHtml(r.table);
     } catch (e) { toast(e.message, "err"); }
   };
   $("#bs-run").addEventListener("click", load);
@@ -5211,7 +5230,16 @@ async function viewIncomeStatement(main) {
     const f = $("#is-from").value.trim(), t = $("#is-to").value.trim();
     try {
       const r = await api(`/reports/income-statement?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`);
-      $("#is-result").innerHTML = `<div class="muted" style="margin-bottom:8px">${esc(r.table.subtitle)}</div>${statementTableHtml(r.table)}`;
+      // 全零不等于「坏了」：利润表只统计已记账凭证，且剔除结转损益凭证。
+      // 不解释清楚，用户只能对着 0.00 猜，之前就是因此报「利润表不正常」。
+      const zero = tableAllZero(r.table)
+        ? `<div class="banner unset" style="margin-bottom:8px">
+             <b>本期各项目都是 0.00</b>：该期间没有<b>已记账</b>的损益发生额。
+             利润表只统计已记账凭证（草稿 / 已审核未记账都不算），并剔除系统生成的结转损益凭证。
+             请先确认左上角账套与期间，再到「凭证」查看本期 6xxx 损益科目是否已记账。
+           </div>`
+        : "";
+      $("#is-result").innerHTML = statementMetaHtml(r) + zero + statementTableHtml(r.table);
     } catch (e) { toast(e.message, "err"); }
   };
   $("#is-run").addEventListener("click", load);
@@ -5241,7 +5269,7 @@ async function viewCashFlow(main) {
         <tr><td colspan="2">加：期初现金及现金等价物余额</td><td class="num">${esc(r.begin_cash)}</td></tr>
         <tr style="font-weight:700;background:#fafafa"><td colspan="2">期末现金及现金等价物余额</td><td class="num">${esc(r.end_cash)}</td></tr>
         <tr><td colspan="3" class="muted">${r.ties ? "✔ 净增加额与货币资金变动勾稽一致" : "✖ 勾稽不符"}</td></tr>`;
-      $("#cf-result").innerHTML = `<div class="muted" style="margin-bottom:8px">${esc(r.from)} 至 ${esc(r.to)}</div>
+      $("#cf-result").innerHTML = statementMetaHtml(r, `${r.from} 至 ${r.to}`) + `
         <table class="grid"><thead><tr>${head}</tr></thead><tbody>
         ${section("经营活动产生的现金流量", r.operating, r.operating_net)}
         ${section("投资活动产生的现金流量", r.investing, r.investing_net)}
