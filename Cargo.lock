@@ -1707,7 +1707,7 @@ dependencies = [
 
 [[package]]
 name = "finbook"
-version = "1.8.1"
+version = "1.8.2"
 dependencies = [
  "chrono",
  "eframe",
@@ -1720,7 +1720,7 @@ dependencies = [
 
 [[package]]
 name = "fincore"
-version = "1.8.1"
+version = "1.8.2"
 dependencies = [
  "argon2",
  "chrono",
@@ -1739,7 +1739,7 @@ checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "findb"
-version = "1.8.1"
+version = "1.8.2"
 dependencies = [
  "calamine",
  "chrono",
@@ -1756,7 +1756,7 @@ dependencies = [
 
 [[package]]
 name = "finui"
-version = "1.8.1"
+version = "1.8.2"
 dependencies = [
  "chrono",
  "csv",
@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "finweb"
-version = "1.8.1"
+version = "1.8.2"
 dependencies = [
  "axum",
  "axum-extra",
