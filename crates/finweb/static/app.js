@@ -4836,6 +4836,9 @@ async function viewImports(main) {
 // 明细账
 // ===========================================================================
 let ledgerTab = "detail";
+// 最近一次查询的完整结果（打印用）。虚拟滚动只把可视行放进 DOM，
+// 直接打印 #l-table 会只印出屏幕上的十几行，所以按这份全量数据重拼。
+let lastLedger = null;
 async function viewLedger(main) {
   await ensureAccounts();
   main.innerHTML = `
@@ -4865,8 +4868,7 @@ async function viewLedger(main) {
   $all("[data-ltab]", main).forEach((b) => b.onclick = () => { setTab(b.dataset.ltab); loadLedger(); });
   $("#l-go").addEventListener("click", loadLedger);
   $("#l-print").addEventListener("click", () => {
-    const el = $("#l-table").querySelector("table");
-    printPreview(({ detail: "明细账", general: "总账", journal: "日记账" })[ledgerTab] || "账簿", el);
+    printPreview(({ detail: "明细账", general: "总账", journal: "日记账" })[ledgerTab] || "账簿", ledgerPrintTable());
   });
   $("#l-printform").addEventListener("click", () => {
     const code = $("#l-code").value.trim();
@@ -4881,54 +4883,84 @@ async function viewLedger(main) {
     downloadUrl(`/api/export/ledger?${q}`);
   };
 }
-async function loadLedger() {
-  const code = $("#l-code").value.trim();
+// 明细账虚拟滚动容器：只建一次，之后复用；切到总账/日记账或空态时拆掉。
+//
+// 顺序不能反：必须先把 wrap 放到表格原位，再把表格搬进 wrap。
+// 先 `content.appendChild(tbl)` 再 `parent.replaceChild(wrap, tbl)` 时，
+// 表格已经不在原父节点下，replaceChild 抛 NotFoundError —— 查询中断、
+// 表格从页面消失（E2E 的「账簿查询」就是被这个卡红的）。
+function ensureLedgerVScroll(tbl) {
+  let wrap = tbl.closest(".ledger-vscroll");
+  if (!wrap) {
+    wrap = document.createElement("div");
+    wrap.className = "ledger-vscroll";
+    wrap.style.maxHeight = "56vh";
+    wrap.style.overflow = "auto";
+    wrap.style.position = "relative";
+    tbl.parentNode.replaceChild(wrap, tbl);
+    const placeholder = document.createElement("div");
+    placeholder.dataset.vsRole = "placeholder";
+    wrap.appendChild(placeholder);
+    const content = document.createElement("div");
+    content.dataset.vsRole = "content";
+    content.style.position = "absolute";
+    content.style.top = "0";
+    content.style.left = "0";
+    content.style.right = "0";
+    wrap.appendChild(content);
+    content.appendChild(tbl);
+    tbl.style.width = "100%";
+  }
+  return {
+    wrap,
+    placeholder: wrap.querySelector('[data-vs-role="placeholder"]'),
+    content: wrap.querySelector('[data-vs-role="content"]'),
+  };
+}
+
+// 拆掉虚拟滚动容器，把表格放回原位（总账/日记账/空态用普通渲染）
+function unwrapLedgerVScroll(tbl) {
+  const wrap = tbl.closest(".ledger-vscroll");
+  if (!wrap || !wrap.parentNode) return;
+  wrap.parentNode.replaceChild(tbl, wrap);
+  tbl.style.width = "";
+}
+
+async function loadLedger() {  const code = $("#l-code").value.trim();
   if (!code) { toast("请先输入科目编码", "err"); return; }
   const qs = `code=${encodeURIComponent(code)}&from=${encodeURIComponent($("#l-from").value)}&to=${encodeURIComponent($("#l-to").value)}&include_children=${$("#l-children").checked ? 1 : 0}&posted_only=${$("#l-posted").checked ? 1 : 0}`;
   const url = ledgerTab === "general" ? `/ledger/general?${qs}` : ledgerTab === "journal" ? `/ledger/journal?${qs}` : `/ledger?${qs}`;
   const tbl = $("#l-table");
   const message = (text, isErr) => {
+    unwrapLedgerVScroll(tbl);
     tbl.innerHTML = `<tbody><tr><td colspan="8" ${isErr ? 'style="color:var(--err)"' : 'class="muted"'}>${esc(text)}</td></tr></tbody>`;
   };
   let rows;
   try { rows = await api(url); } catch (e) { message(e.message, true); return; }
   if (!rows.length) { message("该科目在所选期间无记录", false); return; }
+  lastLedger = { tab: ledgerTab, rows, hasQty: false };
   if (ledgerTab === "general") {
+    unwrapLedgerVScroll(tbl);
     tbl.innerHTML = `<thead><tr><th>期间</th><th>摘要</th><th class="num">借方</th><th class="num">贷方</th><th>方向</th><th class="num">余额</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r.period)}</td><td>${esc(r.summary)}</td><td class="num">${esc(r.debit)}</td><td class="num">${esc(r.credit)}</td><td>${esc(r.dir === "debit" ? "借" : "贷")}</td><td class="num">${esc(r.balance)}</td></tr>`).join("")}</tbody>`;
     return;
   }
   if (ledgerTab === "journal") {
+    unwrapLedgerVScroll(tbl);
     tbl.innerHTML = `<thead><tr><th>日期</th><th>凭证号</th><th>摘要</th><th>对方科目</th><th class="num">借方</th><th class="num">贷方</th><th>方向</th><th>出纳</th><th class="num">余额</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r.date)}</td><td>${esc(r.voucher_no)}</td><td>${esc(r.summary)}</td><td>${esc(r.opposite_accounts || "")}</td><td class="num">${esc(r.debit)}</td><td class="num">${esc(r.credit)}</td><td>${esc(r.dir === "debit" ? "借" : "贷")}</td><td>${esc(r.cashier || "")}</td><td class="num">${esc(r.balance)}</td></tr>`).join("")}</tbody>`;
     return;
   }
   const hasQty = rows.some((r) => r.qty_balance != null);
+  lastLedger.hasQty = hasQty;
   const head = `<tr><th>日期</th><th>凭证号</th><th>摘要</th><th class="num">借方</th><th class="num">贷方</th><th>方向</th><th class="num">余额</th>${hasQty ? '<th class="num">数量余额</th>' : ""}</tr>`;
 
   // --- 虚拟滚动（明细账）：只渲染可视行，滚动时增量更新 ---
   // 大账套单科目明细可达数万行，全量 innerHTML 会卡死界面；这里只把
   // 可视区域（＋1 行缓冲）渲染进 DOM，滚动时用 transform 位移内容块。
   const ROW_HEIGHT = 44;
-  tbl.innerHTML = "";
-  const parent = tbl.parentNode;
-  const wrap = document.createElement("div");
-  wrap.style.maxHeight = "56vh";
-  wrap.style.overflow = "auto";
-  wrap.style.position = "relative";
-
-  const placeholder = document.createElement("div");
+  const vs = ensureLedgerVScroll(tbl);
+  const { wrap, placeholder, content } = vs;
   placeholder.style.height = rows.length * ROW_HEIGHT + "px";
-  wrap.appendChild(placeholder);
-
-  const content = document.createElement("div");
-  content.style.position = "absolute";
-  content.style.top = "0";
-  content.style.left = "0";
-  content.style.right = "0";
-  wrap.appendChild(content);
-
-  content.appendChild(tbl);
-  parent.replaceChild(wrap, tbl);
-  tbl.style.width = "100%";
+  tbl.innerHTML = "";
 
   const thead = tbl.createTHead();
   thead.innerHTML = `<tr>${head}</tr>`;
@@ -4944,7 +4976,8 @@ async function loadLedger() {
 
   function renderVisible() {
     const st = wrap.scrollTop;
-    const vh = wrap.clientHeight;
+    // 刚插入 DOM 时 clientHeight 可能还是 0；至少按 8 行渲染，避免只显示一行。
+    const vh = Math.max(wrap.clientHeight, ROW_HEIGHT * 8);
     const s = Math.max(0, Math.floor(st / ROW_HEIGHT));
     const e = Math.min(rows.length, Math.ceil((st + vh) / ROW_HEIGHT) + 1);
     if (s === vsRange.s && e === vsRange.e) return;
@@ -4960,8 +4993,28 @@ async function loadLedger() {
     `).join("");
   }
 
-  wrap.addEventListener("scroll", renderVisible, { passive: true });
+  // 每次查询都换掉 onscroll（而不是 addEventListener），否则上一次查询的
+  // 闭包会留着旧 rows，滚动时把新数据覆盖回旧内容。
+  wrap.onscroll = renderVisible;
   renderVisible();
+  // 布局稳定后再算一次可视区，修正首帧 clientHeight 为 0 的情况。
+  requestAnimationFrame(renderVisible);
+}
+
+// 用全量 rows 拼一张打印用的表：虚拟滚动只渲染可视行，
+// 直接打印 #l-table 会把屏幕外的行全丢掉。
+function ledgerPrintTable() {
+  const t = lastLedger;
+  if (!t) return $("#l-table");
+  const tbl = document.createElement("table");
+  if (t.tab === "general") {
+    tbl.innerHTML = `<thead><tr><th>期间</th><th>摘要</th><th class="num">借方</th><th class="num">贷方</th><th>方向</th><th class="num">余额</th></tr></thead><tbody>${t.rows.map((r) => `<tr><td>${esc(r.period)}</td><td>${esc(r.summary)}</td><td class="num">${esc(r.debit)}</td><td class="num">${esc(r.credit)}</td><td>${esc(r.dir === "debit" ? "借" : "贷")}</td><td class="num">${esc(r.balance)}</td></tr>`).join("")}</tbody>`;
+  } else if (t.tab === "journal") {
+    tbl.innerHTML = `<thead><tr><th>日期</th><th>凭证号</th><th>摘要</th><th>对方科目</th><th class="num">借方</th><th class="num">贷方</th><th>方向</th><th>出纳</th><th class="num">余额</th></tr></thead><tbody>${t.rows.map((r) => `<tr><td>${esc(r.date)}</td><td>${esc(r.voucher_no)}</td><td>${esc(r.summary)}</td><td>${esc(r.opposite_accounts || "")}</td><td class="num">${esc(r.debit)}</td><td class="num">${esc(r.credit)}</td><td>${esc(r.dir === "debit" ? "借" : "贷")}</td><td>${esc(r.cashier || "")}</td><td class="num">${esc(r.balance)}</td></tr>`).join("")}</tbody>`;
+  } else {
+    tbl.innerHTML = `<thead><tr><th>日期</th><th>凭证号</th><th>摘要</th><th class="num">借方</th><th class="num">贷方</th><th>方向</th><th class="num">余额</th>${t.hasQty ? '<th class="num">数量余额</th>' : ""}</tr></thead><tbody>${t.rows.map((r) => `<tr><td>${esc(r.date)}</td><td>${esc(r.voucher_no)}</td><td>${esc(r.summary)}</td><td class="num">${esc(r.debit)}</td><td class="num">${esc(r.credit)}</td><td>${esc(r.dir === "debit" ? "借" : "贷")}</td><td class="num">${esc(r.balance)}</td>${t.hasQty ? `<td class="num">${r.qty_balance != null ? esc(fmt(r.qty_balance)) : ""}</td>` : ""}</tr>`).join("")}</tbody>`;
+  }
+  return tbl;
 }
 
 // ===========================================================================
