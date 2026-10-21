@@ -1605,6 +1605,8 @@ function isNavVisible(n) {
 
 // 侧栏搜索关键词（不持久化：刷新后回到全量展示，符合 E2E 与直觉）
 let navQuery = "";
+// 搜索输入防抖定时器：避免每次按键都重渲染全量 69 项导航
+let navSearchTimer = null;
 function navMatches(n, q) {
   if (!q) return true;
   if (n.label.indexOf(q) >= 0) return true;
@@ -1703,9 +1705,14 @@ function renderSidebar() {
     qi.addEventListener("input", () => {
       navQuery = qi.value;
       const pos = qi.selectionStart;
-      renderSidebar();
-      const again = document.getElementById("nav-q");
-      if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
+      // 防抖：连续输入时只在停止 150ms 后重渲染一次侧栏
+      if (navSearchTimer) clearTimeout(navSearchTimer);
+      navSearchTimer = setTimeout(() => {
+        navSearchTimer = null;
+        renderSidebar();
+        const again = document.getElementById("nav-q");
+        if (again) { again.focus(); try { again.setSelectionRange(pos, pos); } catch (e) {} }
+      }, 150);
     });
     // Ctrl+K / Ctrl+F 之外的入口：在侧栏里按 / 直接聚焦搜索
     qi.addEventListener("keydown", (e) => {
