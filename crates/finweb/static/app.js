@@ -1247,6 +1247,7 @@ const NAV_ITEMS = [
   { id: "platform-users", label: "账号管理", platform: true, group: "系统管理" },
   { id: "platform-books", label: "全部账套", platform: true, group: "系统管理" },
   { id: "audit-log", label: "操作日志", perm: "audit_log", platform: true, group: "系统管理" },
+  { id: "backup", label: "备份管理", perm: "backup", platform: true, group: "系统管理" },
   { id: "consolidate", label: "合并报表", platform: true, group: "系统管理" },
   { id: "dashboard", label: "工作台", perm: null, group: "开始" },
   { id: "accounts", label: "会计科目", perm: "account_edit", group: "基础资料" },
@@ -1324,6 +1325,7 @@ const VIEWS = {
   "platform-users": viewPlatformUsers,
   "platform-books": viewPlatformBooks,
   "audit-log": viewAuditLog,
+  "backup": viewBackup,
   "consolidate": viewConsolidate,
   "dashboard": viewDashboard,
   "vouchers": viewVouchers,
@@ -6051,6 +6053,70 @@ async function viewAuditLog(main) {
   await load();
   btn.onclick = () => { location.hash = `#/audit-log?q=${encodeURIComponent(searchInput.value.trim())}`; };
   searchInput.onkeydown = (e) => { if (e.key === "Enter") btn.onclick(); };
+}
+
+// ===========================================================================
+// 备份管理：列出历史备份、立即打包下载当前账套(.fbk + .attachments/)、恢复
+// ===========================================================================
+async function viewBackup(main) {
+  main.innerHTML = `
+    <h2>备份管理</h2>
+    <div class="toolbar">
+      <button class="btn primary" id="bk-download">立即备份并下载打包</button>
+      <span class="muted">把当前账套主文件 + 附件目录打成 zip，含最新数据</span>
+      <div class="spacer"></div>
+      <button class="btn ghost sm" id="bk-refresh">刷新列表</button>
+    </div>
+    <div id="bk-list"><div class="muted">加载中…</div></div>
+    <div id="bk-msg"></div>
+  `;
+  const listEl = document.getElementById("bk-list");
+  const msgEl = document.getElementById("bk-msg");
+
+  const load = async () => {
+    let data;
+    try { data = await api("/api/backups"); } catch (e) {
+      listEl.innerHTML = `<div class="muted" style="color:var(--err)">加载失败：${esc(e.message)}</div>`;
+      return;
+    }
+    const items = data.items || [];
+    if (!items.length) { listEl.innerHTML = `<div class="muted">暂无备份</div>`; return; }
+    const rows = items.map((it) => `
+      <tr>
+        <td>${esc(it.name)}</td>
+        <td class="num">${(it.size / 1024 / 1024).toFixed(2)} MB</td>
+        <td>${esc(it.mtime || "")}</td>
+        <td class="row-actions"><button class="btn ghost sm" data-bk-restore="${esc(it.name)}">恢复</button></td>
+      </tr>
+    `).join("");
+    listEl.innerHTML = `
+      <table class="grid">
+        <thead><tr><th>备份文件</th><th class="num">大小</th><th>修改时间</th><th>操作</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    $all("[data-bk-restore]", listEl).forEach((b) => {
+      b.onclick = async () => {
+        const name = b.dataset.bkRestore;
+        if (!(await confirmDialog(`将当前账套恢复为备份「${name}」？当前账套数据会被覆盖，且无法撤销。`, true))) return;
+        try {
+          await api("/api/restore", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ file: name }),
+          });
+          toast("已恢复，请刷新页面查看", "ok");
+        } catch (e) { toast(e.message, "err"); }
+      };
+    });
+  };
+
+  document.getElementById("bk-download").onclick = () => {
+    location.href = "/api/backup/download";
+  };
+  document.getElementById("bk-refresh").onclick = load;
+
+  await load();
 }
 
 // ===========================================================================
