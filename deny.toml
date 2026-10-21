@@ -1,0 +1,58 @@
+# cargo-deny 配置（CI `cargo deny check` 读取）
+#
+# 与 `.cargo/audit.toml` 互补：cargo-audit 只看 RUSTSEC 漏洞；
+# cargo-deny 覆盖 license 合规、未知来源、yanked 版本。
+#
+# 注意：下面 ignore 列出的全部是 finui（桌面 GUI）依赖树里的 pre-existing
+# 问题，与 finweb/Web 服务端无关，且“Safe upgrade 不可用”（上游已弃维、
+# 无可升级版本），因此忽略而非修复。
+
+# ── 许可证白名单（FinBook 面向国内财务场景，依赖以 MIT/Apache/BSD 为主） ──
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unlicense",
+    "Zlib",
+    "0BSD",
+    "MPL-2.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+
+# ── 来源与版本安全 ──
+[bans]
+# 禁止重复版本（同一 crate 出现多个版本）
+multiple-versions = "warn"
+# 工作空间成员自动允许
+allow-workspace = true
+
+# ── 漏洞忽略列表 ──
+# 全部都是“Safe upgrade 不可用”的 pre-existing 问题，来自 finui 桌面 GUI 依赖树
+#（egui/eframe/zbus/quick-xml 等），与 finweb/Web 服务端无关。
+# lopdf（RUSTSEC-2026-0187）同 .cargo/audit.toml 一致：printpdf 仅写出报表 PDF，
+# 不解析外部 PDF，攻击面不可达。
+# zip（RUSTSEC-2026-0367/0368/0369）：finweb 仅用 zip **生成**备份包，不解析
+# 不可信 zip，ZipArchive::extract 的路径穿越/SUID 等攻击面不可达。
+[advisories]
+ignore = [
+    # ──── finui 桌面 GUI 依赖树：未维护 crate，无安全升级路径 ────
+    "RUSTSEC-2026-0372",   # zvariant_derive — 并入 zbus 6.0，v5.15.0 为末版
+    "RUSTSEC-2026-0370",   # zvariant — 并入 zbus 6.0，v5.15.0 为末版
+    "RUSTSEC-2026-0371",   # zbus_names — 并入 zbus 6.0，v4.3.4 为末版
+    "RUSTSEC-2026-0192",   # ttf-parser — 作者宣布不再维护
+    "RUSTSEC-2024-0436",   # paste — 作者宣布不再维护，仓库已归档
+    "RUSTSEC-2026-0194",   # quick-xml — 二次复杂度，通过 finui/zbus_xml 引入
+    "RUSTSEC-2026-0195",   # quick-xml — NsReader 内存耗尽，通过 finui/zbus_xml 引入
+    # ──── 与 .cargo/audit.toml 保持一致 ────
+    "RUSTSEC-2026-0187",   # lopdf — printpdf 仅写出报表 PDF，不解析外部 PDF
+    # ──── finweb 新增 zip 依赖：仅生成备份 zip，不解析不可信 zip ────
+    "RUSTSEC-2026-0367",   # zip SUID/SGID 位保留 — 仅创建 zip，不调用 extract
+    "RUSTSEC-2026-0368",   # zip 符号链接路径穿越 — 仅创建 zip，不调用 extract
+    "RUSTSEC-2026-0369",   # zip 权限通过符号链接应用 — 仅创建 zip，不调用 extract
+]
