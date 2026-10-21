@@ -2097,6 +2097,8 @@ pub fn apply_pragmas(conn: &Connection) -> Result<(), DbError> {
          PRAGMA foreign_keys = ON;
          PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
+         -- 每 1000 个页面自动做一次检查点，防止 WAL 文件无限增长
+         PRAGMA wal_autocheckpoint = 1000;
          -- 缓存 32 MB（默认 2 MB），大幅降低全表扫描的磁盘 I/O
          PRAGMA cache_size = -32000;
          -- 启用 mmap I/O（256 MB），减少系统调用与页缓存拷贝

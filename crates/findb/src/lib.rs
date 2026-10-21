@@ -144,6 +144,16 @@ impl Db {
         Ok(Self { conn, path })
     }
 
+    /// 把 WAL 中的已提交页写回主数据库文件并截断 WAL。
+    ///
+    /// 调用时机：账套备份前、账套注销前、服务器停止前。配合
+    /// `apply_pragmas` 里的 `wal_autocheckpoint`，可保证长期运行下
+    /// WAL 文件不会无限膨胀，备份体积更小、恢复更快。
+    pub fn checkpoint_wal(&self) -> DbResult<()> {
+        self.conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+        Ok(())
+    }
+
     /// 新建账套。若文件已存在则报错，避免误覆盖。
     pub fn create<P: AsRef<Path>>(path: P, opts: &BookOptions) -> DbResult<Self> {
         Self::create_with(path, opts, true)
@@ -203,6 +213,7 @@ impl Db {
     ///
     /// `seed_admin=false` 时跳过内置管理员账号，留给上层走「首次登录即管理员」流程。
     fn seed_builtin(&self, opts: &BookOptions, seed_admin: bool) -> DbResult<()> {
+
         for a in default_accounts() {
             accounts::insert(self, &a)?;
         }
