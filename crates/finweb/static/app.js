@@ -150,6 +150,71 @@ async function api(path, opts = {}) {
 }
 
 
+// ===========================================================================
+// 虚拟滚动列表：只在可视区域渲染行，滚动时增量更新
+// 适用于大数据量列表（明细账、往来明细等），避免一次性渲染数千行 DOM
+// ---------------------------------------------------------------------------
+// 用法：
+//   const vs = createVirtualScroll(container, {
+//     rowHeight: 44,
+//     data: rows,
+//     render: (index, item) => `<tr>...</tr>`,
+//     height: "56vh",
+//   });
+//   vs.update(newData);   // 换数据重绘
+//   vs.destroy();         // 卸载
+// ===========================================================================
+function createVirtualScroll(container, { rowHeight, data, render, height }) {
+  container.innerHTML = "";
+
+  const viewport = document.createElement("div");
+  viewport.style.overflow = "auto";
+  viewport.style.height = height;
+  viewport.style.position = "relative";
+  container.appendChild(viewport);
+
+  const placeholder = document.createElement("div");
+  placeholder.style.height = data.length * rowHeight + "px";
+  viewport.appendChild(placeholder);
+
+  const content = document.createElement("div");
+  content.style.position = "absolute";
+  content.style.top = "0";
+  content.style.left = "0";
+  content.style.right = "0";
+  viewport.appendChild(content);
+
+  let range = { s: -1, e: -1 };
+
+  function renderVisible() {
+    const st = viewport.scrollTop;
+    const vh = viewport.clientHeight;
+    const s = Math.max(0, Math.floor(st / rowHeight));
+    const e = Math.min(data.length, Math.ceil((st + vh) / rowHeight) + 1);
+    if (s === range.s && e === range.e) return;
+    range = { s, e };
+    content.style.transform = `translateY(${s * rowHeight}px)`;
+    content.innerHTML = data.slice(s, e).map((item, i) => render(s + i, item)).join("");
+  }
+
+  viewport.addEventListener("scroll", renderVisible, { passive: true });
+  renderVisible();
+
+  return {
+    update(newData) {
+      data.length = 0;
+      data.push(...newData);
+      placeholder.style.height = data.length * rowHeight + "px";
+      range = { s: -1, e: -1 };
+      renderVisible();
+    },
+    destroy() {
+      viewport.removeEventListener("scroll", renderVisible);
+      container.innerHTML = "";
+    }
+  };
+}
+
 const MAX_TOASTS = 5;
 function toast(msg, kind) {
   const wrap = document.getElementById("toast");
@@ -4814,13 +4879,65 @@ async function loadLedger() {
   }
   const hasQty = rows.some((r) => r.qty_balance != null);
   const head = `<tr><th>日期</th><th>凭证号</th><th>摘要</th><th class="num">借方</th><th class="num">贷方</th><th>方向</th><th class="num">余额</th>${hasQty ? '<th class="num">数量余额</th>' : ""}</tr>`;
-  const body = rows.map((r) => `<tr>
-    <td>${esc(r.date)}</td><td>${esc(r.voucher_no)}</td><td>${esc(r.summary)}</td>
-    <td class="num">${esc(r.debit)}</td><td class="num">${esc(r.credit)}</td>
-    <td>${esc(r.dir === "debit" ? "借" : "贷")}</td><td class="num">${esc(r.balance)}</td>
-    ${hasQty ? `<td class="num" style="color:var(--err,#c62828)">${r.qty_balance != null ? esc(fmt(r.qty_balance)) : ""}</td>` : ""}
-  </tr>`).join("");
-  tbl.innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`;
+
+  // --- 虚拟滚动（明细账）：只渲染可视行，滚动时增量更新 ---
+  // 大账套单科目明细可达数万行，全量 innerHTML 会卡死界面；这里只把
+  // 可视区域（＋1 行缓冲）渲染进 DOM，滚动时用 transform 位移内容块。
+  const ROW_HEIGHT = 44;
+  tbl.innerHTML = "";
+  const parent = tbl.parentNode;
+  const wrap = document.createElement("div");
+  wrap.style.maxHeight = "56vh";
+  wrap.style.overflow = "auto";
+  wrap.style.position = "relative";
+
+  const placeholder = document.createElement("div");
+  placeholder.style.height = rows.length * ROW_HEIGHT + "px";
+  wrap.appendChild(placeholder);
+
+  const content = document.createElement("div");
+  content.style.position = "absolute";
+  content.style.top = "0";
+  content.style.left = "0";
+  content.style.right = "0";
+  wrap.appendChild(content);
+
+  content.appendChild(tbl);
+  parent.replaceChild(wrap, tbl);
+  tbl.style.width = "100%";
+
+  const thead = tbl.createTHead();
+  thead.innerHTML = `<tr>${head}</tr>`;
+  $all("th", thead).forEach((th) => {
+    th.style.position = "sticky";
+    th.style.top = "0";
+    th.style.background = "var(--panel)";
+    th.style.zIndex = "4";
+  });
+
+  const tbody = tbl.createTBody();
+  let vsRange = { s: -1, e: -1 };
+
+  function renderVisible() {
+    const st = wrap.scrollTop;
+    const vh = wrap.clientHeight;
+    const s = Math.max(0, Math.floor(st / ROW_HEIGHT));
+    const e = Math.min(rows.length, Math.ceil((st + vh) / ROW_HEIGHT) + 1);
+    if (s === vsRange.s && e === vsRange.e) return;
+    vsRange = { s, e };
+    content.style.transform = `translateY(${s * ROW_HEIGHT}px)`;
+    tbody.innerHTML = rows.slice(s, e).map((r, i) => `
+      <tr>
+        <td>${esc(r.date)}</td><td>${esc(r.voucher_no)}</td><td>${esc(r.summary)}</td>
+        <td class="num">${esc(r.debit)}</td><td class="num">${esc(r.credit)}</td>
+        <td>${esc(r.dir === "debit" ? "借" : "贷")}</td><td class="num">${esc(r.balance)}</td>
+        ${hasQty ? `<td class="num" style="color:var(--err,#c62828)">${r.qty_balance != null ? esc(fmt(r.qty_balance)) : ""}</td>` : ""}
+      </tr>
+    `).join("");
+  }
+
+  wrap.addEventListener("scroll", renderVisible, { passive: true });
+  renderVisible();
 }
 
 // ===========================================================================
