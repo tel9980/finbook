@@ -21,3 +21,7 @@ Thumbs.db
 /e2e/node_modules/
 /e2e/test-results/
 /e2e/playwright-report/
+
+# 运行时数据与本地启动脚本
+/data/
+run-web.sh
