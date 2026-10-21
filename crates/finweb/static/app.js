@@ -4585,6 +4585,7 @@ async function viewImports(main) {
         <textarea id="imp-text" rows="8"></textarea>
       </div>
       <div id="imp-result" class="muted" style="margin-top:10px;min-height:20px;white-space:pre-wrap;font-size:13px"></div>
+      <div id="imp-goto" style="margin-top:10px;display:none"></div>
       <div id="imp-issues" style="margin-top:8px;display:none"></div>
     </div>
     <div class="panel" id="imp-mapping-wrap" style="display:none">
@@ -4654,6 +4655,18 @@ async function viewImports(main) {
     }
     $("#imp-text").placeholder = `或直接粘贴 CSV 内容…\n列：${TPL_COLS[k] || ""}\n（或点「下载模板」拿标准模板填）`;
     $("#imp-analyze").textContent = k === "begin" || k === "voucher" ? "预检科目" : "预检";
+    // 切换导入类型时重置已选文件、粘贴内容、科目映射，避免用「上一种类型的文件」
+    // 去预检/导入「这个类型」——科目编码体系不同，映射也会错位。
+    fileB64 = "";
+    mapping = {};
+    $("#imp-file").value = "";
+    $("#imp-text").value = "";
+    $("#imp-result").textContent = "";
+    $("#imp-issues").style.display = "none";
+    $("#imp-issues").innerHTML = "";
+    $("#imp-mapping-wrap").style.display = "none";
+    $("#imp-run").disabled = false;
+    $("#imp-run").title = "";
   };
   kindSel.addEventListener("change", syncKind);
   syncKind();
@@ -4764,6 +4777,15 @@ async function viewImports(main) {
       }
       $("#imp-result").textContent = lines.join("\n");
       toast(`已导入 ${r.ok} 条`, "ok");
+      // 导入凭证后给一个直达入口：凭证是草稿，还要审核→记账，提醒用户去看
+      if (kind === "voucher" && r.ok > 0) {
+        const goto = $("#imp-goto");
+        goto.style.display = "";
+        goto.innerHTML = `<button class="btn primary sm" id="imp-goto-vouchers">查看导入的凭证</button>`;
+        $("#imp-goto-vouchers").onclick = () => { location.hash = "#/vouchers"; };
+      } else {
+        $("#imp-goto").style.display = "none";
+      }
       // 不要自动跳走：结果和「接下来」都在这一屏上，跳走等于把刚说的话藏起来
     } catch (e) { $("#imp-result").textContent = "导入失败：" + e.message; }
   });
