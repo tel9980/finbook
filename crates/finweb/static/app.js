@@ -1181,6 +1181,7 @@ const NAV_ITEMS = [
   { id: "overview", label: "账目总览", admin: true, group: "管理员" },
   { id: "platform-users", label: "账号管理", platform: true, group: "系统管理" },
   { id: "platform-books", label: "全部账套", platform: true, group: "系统管理" },
+  { id: "audit-log", label: "操作日志", perm: "audit_log", platform: true, group: "系统管理" },
   { id: "consolidate", label: "合并报表", platform: true, group: "系统管理" },
   { id: "dashboard", label: "工作台", perm: null, group: "开始" },
   { id: "accounts", label: "会计科目", perm: "account_edit", group: "基础资料" },
@@ -1257,6 +1258,7 @@ const VIEWS = {
   "overview": viewOverview,
   "platform-users": viewPlatformUsers,
   "platform-books": viewPlatformBooks,
+  "audit-log": viewAuditLog,
   "consolidate": viewConsolidate,
   "dashboard": viewDashboard,
   "vouchers": viewVouchers,
@@ -5891,6 +5893,47 @@ function openChangePwd(forced, onDone) {
       if (typeof onDone === "function") onDone();
     } catch (e) { toast(e.message, "err"); }
   };
+}
+
+// ===========================================================================
+// 操作日志：GET /api/logs（后端已做权限 Perm::AuditLog + 搜索 + limit）
+// ===========================================================================
+async function viewAuditLog(main) {
+  const qp = new URLSearchParams(location.hash.slice(1).split("?")[1] || "");
+  const kw = qp.get("q") || "";
+  const limit = qp.get("limit") || "200";
+  main.innerHTML = `
+    <h2>操作日志</h2>
+    <div class="toolbar">
+      <label>搜索 <input id="al-q" value="${esc(kw)}" placeholder="用户/模块/动作/详情" style="width:260px" /></label>
+      <button class="btn primary" id="al-search">查询</button>
+      <a class="btn ghost" href="#/audit-log">重置</a>
+    </div>
+    <div id="al-list"><div class="muted">加载中…</div></div>
+  `;
+  const listEl = document.getElementById("al-list");
+  const searchInput = document.getElementById("al-q");
+  const btn = document.getElementById("al-search");
+  const load = async () => {
+    const k = searchInput.value.trim();
+    const url = "/api/logs" + (k ? `?q=${encodeURIComponent(k)}&limit=${limit}` : `?limit=${limit}`);
+    let rows;
+    try { rows = await api(url); } catch (e) { listEl.innerHTML = `<div class="muted" style="color:var(--err)">加载失败：${esc(e.message)}</div>`; return; }
+    if (!rows || rows.length === 0) { listEl.innerHTML = `<div class="muted">暂无操作日志</div>`; return; }
+    const th = `<tr><th>时间</th><th>用户</th><th>模块</th><th>动作</th><th>详情</th></tr>`;
+    const trs = rows.map(l => `
+      <tr>
+        <td>${esc(l.ts || "")}</td>
+        <td>${esc(l.user || "")}</td>
+        <td>${esc(l.module || "")}</td>
+        <td>${esc(l.action || "")}</td>
+        <td class="nowrap">${esc(l.detail || "")}</td>
+      </tr>`).join("");
+    listEl.innerHTML = `<table class="data"><thead>${th}</thead><tbody>${trs}</tbody></table>`;
+  };
+  await load();
+  btn.onclick = () => { location.hash = `#/audit-log?q=${encodeURIComponent(searchInput.value.trim())}`; };
+  searchInput.onkeydown = (e) => { if (e.key === "Enter") btn.onclick(); };
 }
 
 // ===========================================================================
