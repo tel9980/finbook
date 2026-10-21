@@ -1600,7 +1600,6 @@ function isNavVisible(n) {
   if (n.perm && !can(n.perm)) return false;
   if (n.admin && !(session.user && session.user.is_admin)) return false;
   if (n.platform && !pa) return false;
-  if (n.production && !(state.bookOptions && state.bookOptions.enable_production)) return false;
   return true;
 }
 
