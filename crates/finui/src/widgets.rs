@@ -26,6 +26,30 @@ pub fn amount_label(ui: &mut Ui, v: Money) {
     });
 }
 
+/// 报表金额：零值也显示 `0.00`。
+///
+/// 与 [`amount_label`] 的分工：
+/// - `amount_label` 零值留白，用于凭证分录、明细账这类「半列本来就该空」的表格，
+///   免得整屏 `0.00` 掩盖真正的数字；
+/// - 三大报表（资产负债 / 利润 / 现金流量 / 权益变动 / 对比）每一列都是结论，
+///   留白会被当成「没取到数 / 这一列没渲染」——用户实际就是据此报障的。
+///
+/// 所以报表一律显式写 `0.00`，与 Web 端、接口口径保持一致。
+pub fn report_amount(ui: &mut Ui, v: Money, strong: bool) {
+    let mut txt = RichText::new(v.fmt_money());
+    if strong {
+        txt = txt.strong();
+    }
+    let txt = if v.is_zero() {
+        txt.weak()
+    } else {
+        txt.color(crate::theme::amount_color(v))
+    };
+    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        ui.label(txt);
+    });
+}
+
 /// 带借贷方向的金额显示，如 `借 1,000.00`
 pub fn dir_amount_label(ui: &mut Ui, dir: Direction, v: Money) {
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

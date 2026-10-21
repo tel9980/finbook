@@ -269,6 +269,20 @@ impl ReportsView {
             }
             _ => {
                 if let Some(t) = &self.table {
+                    // 桌面版也给利润表全零一个解释：0.00 是结果，不是故障。
+                    // 与 Web 端同一套说法，避免两端口径不一致。
+                    if self.tab == Tab::Income && statement_all_zero(t) {
+                        ui.label(
+                            RichText::new(
+                                "本期各项目均为 0.00：该期间没有已记账的损益发生额。\
+                                 利润表只统计已记账凭证（草稿 / 已审核未记账都不算），\
+                                 并剔除系统生成的结转损益凭证。请确认账套与期间，\
+                                 再到「凭证」检查本期 6xxx 损益科目是否已记账。",
+                            )
+                            .weak(),
+                        );
+                        ui.add_space(4.0);
+                    }
                     report_table(ui, t);
                 }
             }
@@ -388,6 +402,14 @@ fn to_ytd(k: AmountKind) -> AmountKind {
 }
 
 /// 报表表格渲染
+/// 整张报表是否全为 0（利润表空态提示用）。
+///
+/// 判据是「所有行的所有金额列都是 0」；空白行 / 表头行没有数值列，
+/// `all` 对空集合为真，不影响结论。有任何非零就不提示，避免误导。
+fn statement_all_zero(t: &ReportTable) -> bool {
+    !t.rows.is_empty() && t.rows.iter().all(|r| r.values.iter().all(|v| v.is_zero()))
+}
+
 pub fn report_table(ui: &mut Ui, t: &ReportTable) {
     ui.vertical_centered(|ui| {
         ui.label(RichText::new(&t.title).size(19.0).strong());
@@ -459,14 +481,17 @@ pub fn report_table(ui: &mut Ui, t: &ReportTable) {
                         if r.style == LineStyle::Blank || r.style == LineStyle::Header {
                             return;
                         }
+                        // 报表每一列都是结论数字：零值也写 0.00。
+                        // 留白会被读成「没取到数 / 这一列没渲染」——桌面版用户
+                        // 就是据此报「利润表金额列全空」的。
+                        let red = v.is_negative() && r.show_negative_red;
+                        let mut txt = RichText::new(v.fmt_money());
+                        if strong {
+                            txt = txt.strong();
+                        }
                         if v.is_zero() {
-                            ui.label(RichText::new("").weak());
+                            ui.label(txt.weak());
                         } else {
-                            let red = v.is_negative() && r.show_negative_red;
-                            let mut txt = RichText::new(v.fmt_money());
-                            if strong {
-                                txt = txt.strong();
-                            }
                             ui.label(txt.color(if red {
                                 palette::CREDIT
                             } else {
@@ -523,19 +548,13 @@ pub fn equity_table(
                 ui.label(txt);
             }
             1 => {
-                crate::widgets::amount_label(ui, l.begin);
+                crate::widgets::report_amount(ui, l.begin, strong);
             }
             2 => {
-                crate::widgets::amount_label(ui, l.change);
+                crate::widgets::report_amount(ui, l.change, strong);
             }
             3 => {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let mut txt = RichText::new(l.end.fmt_money());
-                    if strong {
-                        txt = txt.strong();
-                    }
-                    ui.label(txt);
-                });
+                crate::widgets::report_amount(ui, l.end, strong);
             }
             _ => {}
         }
@@ -591,13 +610,13 @@ pub fn compare_table(
                 ui.label(txt);
             }
             1 => {
-                crate::widgets::amount_label(ui, r.current);
+                crate::widgets::report_amount(ui, r.current, false);
             }
             2 => {
-                crate::widgets::amount_label(ui, r.previous);
+                crate::widgets::report_amount(ui, r.previous, false);
             }
             3 => {
-                crate::widgets::amount_label(ui, r.diff);
+                crate::widgets::report_amount(ui, r.diff, false);
             }
             4 => {
                 let v = r.rate;
@@ -768,10 +787,10 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
                 ui.label(RichText::new(format!("{}", i + 1)).weak());
             }
             2 => {
-                crate::widgets::amount_label(ui, l.inflow);
+                crate::widgets::report_amount(ui, l.inflow, l.strong);
             }
             3 => {
-                crate::widgets::amount_label(ui, l.outflow);
+                crate::widgets::report_amount(ui, l.outflow, l.strong);
             }
             4 => {
                 let v = l.net;
