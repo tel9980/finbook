@@ -245,10 +245,12 @@ impl BalanceTableView {
                     0 => {
                         ui.label(&r.key);
                     }
-                    1 => widgets::amount_label(ui, r.begin),
-                    2 => widgets::amount_label(ui, r.debit),
-                    3 => widgets::amount_label(ui, r.credit),
-                    4 => widgets::amount_label(ui, r.end),
+                    // 辅助核算余额是报表口径（带符号四列），零值统一显示 0.00；
+                    // 主表按借贷方向拆列，仍保留空值以免同一行两侧都出现 0.00。
+                    1 => widgets::report_amount(ui, r.begin, false),
+                    2 => widgets::report_amount(ui, r.debit, false),
+                    3 => widgets::report_amount(ui, r.credit, false),
+                    4 => widgets::report_amount(ui, r.end, false),
                     _ => {}
                 }
             });
