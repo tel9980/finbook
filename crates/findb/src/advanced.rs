@@ -1924,12 +1924,21 @@ pub fn financial_totals(
     }
     let snap = BalanceSnapshot::load(db, &bq)?;
     let b = |code: &str| snap.for_account(code, None).end();
+
+    // 损益取数必须排除结转损益凭证（source='carry_forward'），否则结完账后
+    // 收入/成本/净利润会被结转分录冲成 0。资产负债表侧仍用含结转的快照：
+    // 结转只影响损益与权益科目，不影响资产/负债合计。
+    let mut pl_bq = BalanceQuery::range(from, period).with_exclude_carry(true);
+    if let Some(u) = scope {
+        pl_bq = pl_bq.with_user_scope(u);
+    }
+    let pl_snap = BalanceSnapshot::load(db, &pl_bq)?;
     let occ = |code: &str| {
-        let r = snap.for_account(code, None);
+        let r = pl_snap.for_account(code, None);
         r.credit - r.debit // 收入类贷方正
     };
     let exp = |code: &str| {
-        let r = snap.for_account(code, None);
+        let r = pl_snap.for_account(code, None);
         r.debit - r.credit // 费用类借方正
     };
     // 流动资产 ≈ 货币资金 + 交易性金融资产 + 应收 + 预付 + 其他应收 + 存货
@@ -1971,11 +1980,13 @@ pub fn financial_totals(
     let equity = total_asset - total_liab;
     let revenue = occ("6001") + occ("6051");
     let cost = exp("6401") + exp("6402");
-    let net_profit =
-        revenue - cost - exp("6403") - exp("6601") - exp("6602") - exp("6603") - exp("6701")
-            + occ("6301")
-            - exp("6711")
-            - exp("6801");
+    let net_profit = revenue - cost - exp("6403") - exp("6601") - exp("6602") - exp("6603")
+        - exp("6701")
+        + occ("6101") // 公允价值变动收益
+        + occ("6111") // 投资收益
+        + occ("6301")
+        - exp("6711")
+        - exp("6801");
     // 速动资产 = 流动资产 − 存货（1403 原材料 / 1405 库存商品 / 1406 发出商品 / 1411 周转材料）
     let quick_asset = cur_asset - b("1403") - b("1405") - b("1406") - b("1411");
     Ok(FinTotals {
@@ -2245,8 +2256,9 @@ pub fn financial_analysis(
 
     // ---- 内因构成（本月 vs 上月，环比展示变化） ----
     let prev = period.prev();
-    let mut bq_cur = BalanceQuery::period(period);
-    let mut bq_prev = BalanceQuery::period(prev);
+    // 内因构成也是利润表口径：结转损益凭证不能把本月收入/成本冲成 0。
+    let mut bq_cur = BalanceQuery::period(period).with_exclude_carry(true);
+    let mut bq_prev = BalanceQuery::period(prev).with_exclude_carry(true);
     if let Some(u) = scope {
         bq_cur = bq_cur.with_user_scope(u);
         bq_prev = bq_prev.with_user_scope(u);
@@ -2309,6 +2321,8 @@ pub fn financial_analysis(
         ("6602", "管理费用", -1i8),
         ("6603", "财务费用", -1i8),
         ("6701", "资产减值损失", -1i8),
+        ("6101", "公允价值变动收益", 1i8),
+        ("6111", "投资收益", 1i8),
         ("6301", "营业外收入", 1i8),
         ("6711", "营业外支出", -1i8),
         ("6801", "所得税费用", -1i8),
@@ -2891,6 +2905,62 @@ mod tests {
         let gm = ratios.iter().find(|r| r.key == "gross_margin").unwrap();
         // 毛利率 = (100000-60000)/100000 = 40%
         assert_eq!(gm.value, m("0.4"));
+    }
+
+    /// H2/H3：损益取数要剔除结转凭证，且净利润要包含 6101/6111。
+    #[test]
+    fn financial_totals_excludes_carry_and_counts_investment_income() {
+        let db = tmpdb("fin_totals_h2h3");
+        let p = Period::new(2026, 1).unwrap();
+        post(&db, p, 1, &[("1001", "1000", "0"), ("600101", "0", "1000")]);
+        post(&db, p, 2, &[("6401", "400", "0"), ("1001", "0", "400")]);
+        post(&db, p, 3, &[("1001", "50", "0"), ("6101", "0", "50")]);
+        post(&db, p, 4, &[("1001", "100", "0"), ("6111", "0", "100")]);
+        post(&db, p, 5, &[("6403", "20", "0"), ("1001", "0", "20")]);
+
+        let before = financial_totals(&db, p, p, None).unwrap();
+        assert_eq!(before.revenue, m("1000"));
+        assert_eq!(before.cost, m("400"));
+        // 1000 - 400 - 20 + 50（公允价值变动）+ 100（投资收益）= 730
+        assert_eq!(before.net_profit, m("730"));
+
+        // 结转损益：把收入/成本/费用/公允价值变动/投资收益全部转入本年利润
+        let date = p.last_day();
+        let mut v = Voucher::new(p, date, "记", 99);
+        v.source = fincore::VoucherSource::CarryForward;
+        for (i, (acc, d, c)) in [
+            ("600101", "1000", "0"),
+            ("6101", "50", "0"),
+            ("6111", "100", "0"),
+            ("6401", "0", "400"),
+            ("6403", "0", "20"),
+            ("4103", "0", "730"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            v.push_entry(Entry {
+                debit: m(d),
+                credit: m(c),
+                ..Entry::new(i as i32 + 1, *acc, "结转损益")
+            });
+        }
+        let id = crate::vouchers::save(&db, &mut v).unwrap();
+        crate::vouchers::post(&db, id, "p").unwrap();
+
+        let after = financial_totals(&db, p, p, None).unwrap();
+        assert_eq!(after.revenue, m("1000"), "结转后收入不得被冲成 0");
+        assert_eq!(after.cost, m("400"), "结转后成本不得被冲成 0");
+        assert_eq!(after.net_profit, m("730"), "结转后净利润不得被冲成 0");
+
+        // 利润构成同样要剔除结转，且包含 6101/6111
+        let a = financial_analysis(&db, p, None).unwrap();
+        let inv = a
+            .profit_drivers
+            .iter()
+            .find(|d| d.code == "6111")
+            .expect("利润构成应包含投资收益");
+        assert_eq!(inv.amount, m("100"));
     }
 
     #[test]

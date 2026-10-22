@@ -160,6 +160,15 @@ impl BalanceSnapshot {
     /// 加载快照
     pub fn load(db: &Db, q: &BalanceQuery) -> DbResult<Self> {
         let start = db.options().start_period;
+        // 本年累计只在「报告期与建账期同一年」时才包含建账前的累计发生额。
+        // 跨年后，begin_balance 里的 debit_accum/credit_accum 属于上一年，
+        // 不能再算进本年的 YTD，否则“本年累计”会从 1 月起就带着上年数。
+        let same_year = q.to.year() == start.year();
+        let ytd_from = if same_year {
+            start.ymm()
+        } else {
+            q.to.year() * 100 + 1
+        };
         let mut rows: BTreeMap<Key, BalanceRow> = BTreeMap::new();
         let mut qtys: BTreeMap<Key, QtyRow> = BTreeMap::new();
 
@@ -205,8 +214,10 @@ impl BalanceSnapshot {
                 });
                 // 期初 = 年初 + 累计借 - 累计贷
                 e.begin = yb + ad - ac;
-                e.ytd_debit = ad;
-                e.ytd_credit = ac;
+                if same_year {
+                    e.ytd_debit = ad;
+                    e.ytd_credit = ac;
+                }
                 if !qb.is_zero() {
                     qtys.insert(
                         key,
@@ -221,11 +232,6 @@ impl BalanceSnapshot {
 
         // 2) 已记账凭证：一次扫描，同时算出期初、本期发生额、本年累计
         {
-            let ytd_from = if q.to.year() == start.year() {
-                start.ymm()
-            } else {
-                q.to.year() * 100 + 1
-            };
             let status_filter = if q.posted_only {
                 "v.status = 'posted'"
             } else {
@@ -1944,6 +1950,57 @@ mod tests {
             begin_trial(&db).unwrap(),
             (Money::parse("4000").unwrap(), Money::ZERO)
         );
+    }
+
+    /// H5：跨年后本年累计必须从 0 重新起算，不能带上建账前的累计发生额。
+    #[test]
+    fn ytd_resets_across_year_boundary() {
+        let mut opts = crate::tests::test_opts();
+        opts.start_period = Period::new(2025, 7).unwrap();
+        let db = Db::in_memory(&opts).unwrap();
+        upsert_begin(
+            &db,
+            &BeginRow {
+                id: 0,
+                account_code: "1001".into(),
+                aux: AuxRef::default(),
+                year_begin: Money::parse("1000").unwrap(),
+                debit_accum: Money::parse("200").unwrap(),
+                credit_accum: Money::parse("50").unwrap(),
+                qty_begin: None,
+            },
+        )
+        .unwrap();
+        // 2025 年 12 月借 100；2026 年 1 月借 300
+        post_voucher(
+            &db,
+            Period::new(2025, 12).unwrap(),
+            5,
+            vec![("1001", "借", "100"), ("600101", "贷", "100")],
+        );
+        post_voucher(
+            &db,
+            Period::new(2026, 1).unwrap(),
+            5,
+            vec![("1001", "借", "300"), ("600101", "贷", "300")],
+        );
+
+        let p25 = Period::new(2025, 12).unwrap();
+        let s25 = BalanceSnapshot::load(&db, &BalanceQuery::period(p25)).unwrap();
+        let r25 = s25.for_account("1001", None);
+        // 建账前累计 200 + 2025-12 发生 100 = 300
+        assert_eq!(r25.ytd_debit, Money::parse("300").unwrap());
+        assert_eq!(r25.begin, Money::parse("1150").unwrap());
+
+        let p26 = Period::new(2026, 1).unwrap();
+        let s26 = BalanceSnapshot::load(&db, &BalanceQuery::period(p26)).unwrap();
+        let r26 = s26.for_account("1001", None);
+        // 2026 年只算 1 月的 300，不能把 2025 的 200+100 再带上
+        assert_eq!(r26.ytd_debit, Money::parse("300").unwrap());
+        assert_eq!(r26.ytd_credit, Money::ZERO);
+        // 期初 = 1000 + 200 - 50 + 100 = 1250；期末 = 1550
+        assert_eq!(r26.begin, Money::parse("1250").unwrap());
+        assert_eq!(r26.end(), Money::parse("1550").unwrap());
     }
 
     #[test]

@@ -6749,6 +6749,8 @@ async fn get_equity_statement(
     Ok(Json(serde_json::json!({
         "from": period_to_str(from),
         "to": period_to_str(period),
+        // 前端要显示勾稽结果；ties() 是方法，不会随 stmt 一起序列化。
+        "ties": stmt.ties(),
         "statement": stmt,
     })))
 }
@@ -15802,8 +15804,10 @@ async fn delete_payroll(
     if !doc_in_scope(&user, &p.employee) {
         return Err(AppError::forbidden("无权操作他人的工资行"));
     }
-    if p.voucher_id.is_some() {
-        return Err(AppError::bad_request("该工资行已生成凭证，不能删除"));
+    if p.voucher_id.is_some() || p.social_voucher_id.is_some() || p.paid_voucher_id.is_some() {
+        return Err(AppError::bad_request(
+            "该工资行已生成凭证，不能删除（请先删除/反记账相关凭证）",
+        ));
     }
     business::payroll_delete(&db, id)?;
     db.log(user.username(), "工资", "删除工资行", &id.to_string())?;

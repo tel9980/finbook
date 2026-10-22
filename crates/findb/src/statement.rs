@@ -219,6 +219,19 @@ pub fn create(
     // include_all=true 才会带上已核销的行。
     let all = crate::settle::open_entries_with(db, account, to, true, true)?;
 
+    // 站在「对方欠我」的角度统一看：
+    // - ar：借方=债权增加
+    // - ap：贷方=债务增加（负债类科目，必须用 credit - debit）
+    // 期初和本期必须用同一个方向，否则应付对账单的期初会变成负数，
+    // 而本期仍按贷方为正，整张表的滚动余额自相矛盾。
+    let signed = |e: &crate::settle::OpenEntry| {
+        if kind == "ar" {
+            e.signed()
+        } else {
+            e.credit - e.debit
+        }
+    };
+
     let mut begin = Money::ZERO;
     let mut lines: Vec<StatementLine> = Vec::new();
 
@@ -230,7 +243,7 @@ pub fn create(
         if party_of(kind, &e.aux_key).as_deref() != Some(party) {
             continue;
         }
-        begin += e.signed();
+        begin += signed(e);
     }
     // 往来期初影子挂账（导入 / 手工登记的期初往来）
     for o in crate::settle::arap_opening_list(db, Some(kind))? {
@@ -266,21 +279,16 @@ pub fn create(
         if party_of(kind, &e.aux_key).as_deref() != Some(party) {
             continue;
         }
-        // ar：借方=债权增加；ap：贷方=债务增加。站在「对方欠我」这个角度统一看
-        let signed = if kind == "ar" {
-            e.signed()
-        } else {
-            e.credit - e.debit
-        };
-        if signed.is_zero() {
+        let amount = signed(e);
+        if amount.is_zero() {
             continue;
         }
-        let (increase, decrease) = if signed.is_positive() {
-            (signed, Money::ZERO)
+        let (increase, decrease) = if amount.is_positive() {
+            (amount, Money::ZERO)
         } else {
-            (Money::ZERO, signed.abs())
+            (Money::ZERO, amount.abs())
         };
-        run += signed;
+        run += amount;
         inc += increase;
         dec += decrease;
         lines.push(StatementLine {
@@ -455,6 +463,50 @@ mod tests {
             crate::vouchers::post(db, vid, "u").unwrap();
         }
         crate::vouchers::entries_of(db, vid).unwrap()[0].id
+    }
+
+    /// 造一张 ap 凭证：贷 220201（供应商），借对方科目。
+    fn ap(db: &Db, p: Period, day: u32, no: i32, amt: &str, post_it: bool) -> i64 {
+        ensure_counter(db);
+        let d = chrono::NaiveDate::from_ymd_opt(p.year(), p.month(), day).unwrap();
+        let mut v = Voucher::new(p, d, "记", no);
+        v.prepared_by = "u".into();
+        let a = m_(amt);
+        v.push_entry(Entry {
+            credit: a,
+            aux: AuxRef {
+                supplier: Some("S01".into()),
+                ..Default::default()
+            },
+            ..Entry::new(1, "220201", "采购应付")
+        });
+        v.push_entry(Entry {
+            debit: a,
+            ..Entry::new(2, "600199", "采购")
+        });
+        let vid = crate::vouchers::save(db, &mut v).unwrap();
+        if post_it {
+            crate::vouchers::post(db, vid, "u").unwrap();
+        }
+        crate::vouchers::entries_of(db, vid).unwrap()[0].id
+    }
+
+    /// 应付对账单的期初必须与本期同向：贷方余额为正，不能出现负的期初。
+    #[test]
+    fn ap_statement_begin_is_credit_positive() {
+        let db = mem();
+        let p1 = Period::new(2026, 1).unwrap();
+        let p2 = Period::new(2026, 2).unwrap();
+        ap(&db, p1, 10, 1, "1000", true); // 1 月形成 1000 应付
+        ap(&db, p2, 10, 2, "500", true); //  2 月再增 500
+
+        let s = create(&db, "ap", "220201", "S01", "供应商甲", p2, p2, "", "u").unwrap();
+        assert_eq!(s.begin_balance, m_("1000"), "期初应付应为正数");
+        assert_eq!(s.period_increase, m_("500"));
+        assert_eq!(s.period_decrease, m_("0"));
+        assert_eq!(s.end_balance, m_("1500"));
+        let rows: Vec<Money> = s.lines.iter().map(|l| l.balance).collect();
+        assert_eq!(rows, vec![m_("1000"), m_("1500")]);
     }
 
     /// 对账单的期初/本期/期末与逐行滚动余额必须自洽

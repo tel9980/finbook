@@ -14,7 +14,8 @@ use crate::money::Money;
 pub const CAPITAL: &str = "4001"; // 实收资本
 pub const RESERVE: &str = "4002"; // 资本公积
 pub const SURPLUS: &str = "4101"; // 盈余公积
-pub const UNDISTRIBUTED: &str = "410401"; // 未分配利润
+pub const CURRENT_PROFIT: &str = "4103"; // 本年利润
+pub const UNDISTRIBUTED: &str = "4104"; // 利润分配（含 410401 未分配利润明细）
 
 /// 一行权益变动
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

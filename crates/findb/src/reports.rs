@@ -6,8 +6,10 @@ use fincore::report::cashflow::{
     build_cash_flow, default_cash_flow_items, CashFlowDirection, CashFlowGroup, CashFlowItem,
     CashFlowStatement, ItemAmounts,
 };
-use fincore::report::equity::{EquityStatement, CAPITAL, RESERVE, SURPLUS, UNDISTRIBUTED};
-use fincore::report::{balance_sheet, income, ReportDef};
+use fincore::report::equity::{
+    EquityStatement, CAPITAL, CURRENT_PROFIT, RESERVE, SURPLUS, UNDISTRIBUTED,
+};
+use fincore::report::{balance_sheet, income, AmountKind, ReportDef};
 use fincore::Money;
 
 use rusqlite::OptionalExtension;
@@ -284,19 +286,35 @@ pub fn equity_statement(
         bq = bq.with_user_scope(u);
     }
     let snap = BalanceSnapshot::load(db, &bq)?;
-    let names = [
-        ("实收资本", CAPITAL),
-        ("资本公积", RESERVE),
-        ("盈余公积", SURPLUS),
-        ("未分配利润", UNDISTRIBUTED),
+
+    // 与资产负债表“未分配利润”同一口径：4103 本年利润 + 4104 利润分配，
+    // 再加上尚未结转的损益净额。只取 410401 会漏掉 4103 和 4104 的其它明细，
+    // 年中未结转时权益合计也会比资产负债表少一块。
+    let names: [(&str, &[&str]); 4] = [
+        ("实收资本", &[CAPITAL]),
+        ("资本公积", &[RESERVE]),
+        ("盈余公积", &[SURPLUS]),
+        ("未分配利润", &[CURRENT_PROFIT, UNDISTRIBUTED]),
     ];
     let mut inputs = Vec::with_capacity(4);
-    for (name, code) in names {
-        let r = snap.for_account(code, None);
-        // 权益类贷方正：年初 = -期初（带符号期初为贷负），本年增减 = 累计贷 - 累计借
-        let begin = r.begin.negated();
-        let change = r.ytd_credit - r.ytd_debit;
-        let end = begin + change;
+    for (name, codes) in names {
+        let (mut begin, mut change, mut end) =
+            (Money::ZERO, Money::ZERO, Money::ZERO);
+        for code in codes {
+            let r = snap.for_account(code, None);
+            // 权益类贷方正：年初/年末 = -余额（带符号余额为借正贷负）
+            begin += r.begin.negated();
+            change += r.credit - r.debit;
+            end += r.end().negated();
+        }
+        if name == "未分配利润" {
+            let pl_begin = snap.profit_loss_net(AmountKind::Begin);
+            let pl_end = snap.profit_loss_net(AmountKind::End);
+            // 资产负债表把未结转损益并入未分配利润：正=净亏损，所以取负。
+            begin += pl_begin.negated();
+            end += pl_end.negated();
+            change += pl_begin - pl_end;
+        }
         inputs.push((name.to_string(), begin, change, end));
     }
     Ok(EquityStatement::build(&inputs))
@@ -880,6 +898,62 @@ mod tests {
         assert_eq!(capital.change, Money::parse("1000000").unwrap());
         assert_eq!(capital.end, Money::parse("1000000").unwrap());
         assert!(stmt.ties());
+    }
+
+    /// H4：权益表的未分配利润要与资产负债表同口径 —— 4103 + 4104 + 未结转损益。
+    #[test]
+    fn equity_statement_matches_balance_sheet_equity() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        // 实收资本 100 万
+        cash_voucher(
+            &db,
+            p,
+            1,
+            vec![("1001", "借", "1000000", None), ("4001", "贷", "1000000", None)],
+        );
+        // 收入 500、税金 200 → 未结转净利 300
+        cash_voucher(
+            &db,
+            p,
+            2,
+            vec![("1001", "借", "500", None), ("600101", "贷", "500", None)],
+        );
+        cash_voucher(
+            &db,
+            p,
+            3,
+            vec![("6403", "借", "200", None), ("1001", "贷", "200", None)],
+        );
+        // 本年利润 700、利润分配-未分配利润 100
+        cash_voucher(
+            &db,
+            p,
+            4,
+            vec![("1001", "借", "700", None), ("4103", "贷", "700", None)],
+        );
+        cash_voucher(
+            &db,
+            p,
+            5,
+            vec![("1001", "借", "100", None), ("410401", "贷", "100", None)],
+        );
+
+        let stmt = equity_statement(&db, p, p, None).unwrap();
+        let na = stmt
+            .lines
+            .iter()
+            .find(|l| l.name == "未分配利润")
+            .unwrap();
+        // 300（未结转）+ 700（4103）+ 100（4104）= 1100
+        assert_eq!(na.end, Money::parse("1100").unwrap());
+        assert!(stmt.ties());
+
+        let t = crate::advanced::financial_totals(&db, p, p, None).unwrap();
+        assert_eq!(
+            stmt.total.end, t.equity,
+            "权益表合计必须等于资产负债表权益（资产-负债）"
+        );
     }
 
     #[test]

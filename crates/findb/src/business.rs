@@ -928,11 +928,25 @@ pub fn payroll_get(db: &Db, period: Period, employee: &str) -> DbResult<Option<P
 
 /// 新增或覆盖某员工某期工资（UNIQUE(period,employee)）
 pub fn payroll_upsert(db: &Db, p: &Payroll) -> DbResult<i64> {
-    payroll_upsert_on(db.conn(), p)
+    // 结账检查与写入放在同一事务里，避免“查完未结账、写入前刚被结账”的窗口。
+    let tx = db.write_tx()?;
+    let id = payroll_upsert_on(&tx, p)?;
+    tx.commit()?;
+    Ok(id)
 }
 
 /// 同 `payroll_upsert`，但只依赖连接，可在调用方的事务内执行（批量生成整体原子）
 pub fn payroll_upsert_on(conn: &rusqlite::Connection, p: &Payroll) -> DbResult<i64> {
+    // 工资表是结账期间的一部分：已结账月份不能再改，否则报表与凭证会脱节。
+    if let Some(upto) = crate::periods::closed_upto_of(conn)? {
+        if p.period <= upto {
+            return Err(fincore::FinError::state(format!(
+                "{} 及以前期间已结账，不能修改工资表",
+                upto.label()
+            ))
+            .into());
+        }
+    }
     conn.execute(
         "INSERT INTO payroll(period,employee,dept,gross,social,housing,deduction,additional,
              tax_base,tax,net,social_co,housing_co,voucher_id,memo)
@@ -942,7 +956,12 @@ pub fn payroll_upsert_on(conn: &rusqlite::Connection, p: &Payroll) -> DbResult<i
             housing=excluded.housing, deduction=excluded.deduction,
             additional=excluded.additional, tax_base=excluded.tax_base, tax=excluded.tax,
             net=excluded.net, social_co=excluded.social_co, housing_co=excluded.housing_co,
-            voucher_id=excluded.voucher_id, memo=excluded.memo",
+            -- 工资计算/重新生成时 voucher_id 为 NULL，不能把已经回写的凭证链接冲掉。
+            -- 保留链接，删除/重复生成守卫才仍然有效。
+            voucher_id=COALESCE(excluded.voucher_id, payroll.voucher_id),
+            paid_voucher_id=COALESCE(excluded.paid_voucher_id, payroll.paid_voucher_id),
+            social_voucher_id=COALESCE(excluded.social_voucher_id, payroll.social_voucher_id),
+            memo=excluded.memo",
         rusqlite::params![
             p.period.ymm(),
             p.employee,
@@ -971,8 +990,37 @@ pub fn payroll_upsert_on(conn: &rusqlite::Connection, p: &Payroll) -> DbResult<i
 }
 
 pub fn payroll_delete(db: &Db, id: i64) -> DbResult<()> {
-    db.conn()
-        .execute("DELETE FROM payroll WHERE id=?1", rusqlite::params![id])?;
+    let tx = db.write_tx()?;
+    let row: Option<(i32, Option<i64>, Option<i64>, Option<i64>)> = tx
+        .query_row(
+            "SELECT period, voucher_id, social_voucher_id, paid_voucher_id
+             FROM payroll WHERE id=?1",
+            rusqlite::params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    let Some((ymm, v, sv, pv)) = row else {
+        return Ok(());
+    };
+    let period = Period::from_ymm(ymm);
+    if let Some(upto) = crate::periods::closed_upto_of(&tx)? {
+        if period <= upto {
+            return Err(fincore::FinError::state(format!(
+                "{} 及以前期间已结账，不能删除工资行",
+                upto.label()
+            ))
+            .into());
+        }
+    }
+    // 任意一张工资凭证（计提/社保/发放）回写过链接，都不能删行。
+    if v.is_some() || sv.is_some() || pv.is_some() {
+        return Err(fincore::FinError::state(
+            "该工资行已生成凭证，不能删除（请先删除/反记账相关凭证）",
+        )
+        .into());
+    }
+    tx.execute("DELETE FROM payroll WHERE id=?1", rusqlite::params![id])?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -2119,6 +2167,120 @@ mod tests {
         let vb = crate::vouchers::get(&db, b).unwrap().unwrap();
         assert!(vb.balanced());
         assert_eq!(vb.debit_total(), m("10000")); // 净 + 税 + 社保个人 = 应发全额
+    }
+
+    /// H6：编辑工资行不能冲掉已回写的凭证链接；已结账期间不能改/删工资表。
+    #[test]
+    fn payroll_edit_keeps_voucher_link_and_closed_period_is_locked() {
+        let db = tmpdb("payh6");
+        let p = Period::new(2026, 1).unwrap();
+        let rows: Vec<(
+            String,
+            String,
+            Money,
+            Money,
+            Money,
+            Money,
+            Money,
+            Money,
+            Money,
+        )> = vec![(
+            "E01".into(),
+            "D01".into(),
+            m("10000"),
+            m("1000"),
+            m("500"),
+            m("0"),
+            m("0"),
+            m("2000"),
+            m("500"),
+        )];
+        payroll_generate(&db, p, &rows).unwrap();
+        let vid = payroll_accrue_voucher(
+            &db,
+            p,
+            d(2026, 1, 31),
+            "660201",
+            "221101",
+            "221103",
+            "221104",
+            "u",
+        )
+        .unwrap()
+        .unwrap();
+        let before = payroll_get(&db, p, "E01").unwrap().unwrap();
+        assert_eq!(before.voucher_id, Some(vid));
+
+        // 模拟编辑：payroll_calc 返回的 voucher_id 恒为 None，upsert 不得把它写成 NULL。
+        let edited = payroll_calc(
+            &db,
+            p,
+            "E01",
+            "D01",
+            m("11000"),
+            m("1000"),
+            m("500"),
+            m("0"),
+            m("0"),
+            m("2000"),
+            m("500"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(edited.voucher_id, None);
+        payroll_upsert(&db, &edited).unwrap();
+        let after = payroll_get(&db, p, "E01").unwrap().unwrap();
+        assert_eq!(
+            after.voucher_id,
+            Some(vid),
+            "编辑工资行不得清空已生成的凭证链接"
+        );
+
+        // 有凭证链接时，业务层直接删也应被拦住（桌面版没有 web 的前置检查）。
+        assert!(
+            payroll_delete(&db, after.id)
+                .unwrap_err()
+                .to_string()
+                .contains("已生成凭证"),
+            "已生成凭证的工资行不能删除"
+        );
+
+        // 结账后工资表整体锁定（直接写结账标记，避免依赖结转检查）。
+        db.conn()
+            .execute(
+                "INSERT INTO period_state(period, closed) VALUES(?1, 1)",
+                rusqlite::params![p.ymm()],
+            )
+            .unwrap();
+        let locked = payroll_calc(
+            &db,
+            p,
+            "E01",
+            "D01",
+            m("12000"),
+            m("1000"),
+            m("500"),
+            m("0"),
+            m("0"),
+            m("2000"),
+            m("500"),
+            "",
+        )
+        .unwrap();
+        assert!(
+            payroll_upsert(&db, &locked)
+                .unwrap_err()
+                .to_string()
+                .contains("已结账"),
+            "已结账期间不能再改工资表"
+        );
+        assert!(
+            payroll_delete(&db, after.id)
+                .unwrap_err()
+                .to_string()
+                .contains("已结账"),
+            "已结账期间不能再删工资行"
+        );
     }
 
     #[test]
