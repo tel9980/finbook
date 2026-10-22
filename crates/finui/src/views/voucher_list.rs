@@ -30,6 +30,8 @@ pub struct VoucherList {
     /// 批量导入窗口
     pub import: super::voucher_import::Ui,
     key: String,
+    /// 上次自动跟随的全局期间；用于区分“还在跟随”与“用户手工改过”
+    last_period: String,
 }
 
 const STATUS_OPTS: [&str; 4] = ["全部", "未记账", "已记账", "已作废"];
@@ -49,6 +51,7 @@ impl Default for VoucherList {
             dirty: true,
             import: Default::default(),
             key: String::new(),
+            last_period: String::new(),
         }
     }
 }
@@ -60,13 +63,8 @@ impl VoucherList {
 
     /// 进入界面时把默认期间同步为当前业务期间
     pub fn enter(&mut self, ctx: &mut AppCtx<'_>) {
-        let p = ctx.period();
-        if self.from.is_empty() {
-            self.from = p.code();
-        }
-        if self.to.is_empty() {
-            self.to = p.code();
-        }
+        let p = ctx.period().code();
+        super::sync_followed_period(&mut self.from, &mut self.to, &mut self.last_period, &p);
         self.dirty = true;
     }
 
