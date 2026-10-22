@@ -1007,6 +1007,19 @@ pub fn qty_balance_sheet(
     Ok(map.into_values().collect())
 }
 
+/// 期初一旦有期间结账就锁定：期初参与其后所有期间余额/报表，事后改动会让
+/// 已结账月份的历史数字全部变化，和“结账后不能删该期凭证”的口径冲突。
+fn ensure_begin_editable(conn: &rusqlite::Connection) -> DbResult<()> {
+    if let Some(upto) = crate::periods::closed_upto_of(conn)? {
+        return Err(fincore::FinError::state(format!(
+            "{} 及以前期间已结账，不能再修改期初余额；请先反结账",
+            upto.label()
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 /// 写入 / 更新一条期初余额（按 科目+辅助核算 唯一）
 pub fn upsert_begin(db: &Db, r: &BeginRow) -> DbResult<()> {
     upsert_begin_on(db.conn(), r)
@@ -1014,6 +1027,7 @@ pub fn upsert_begin(db: &Db, r: &BeginRow) -> DbResult<()> {
 
 /// 同 `upsert_begin`，但只依赖连接，可在调用方的事务内执行（导入整体原子化）
 pub fn upsert_begin_on(conn: &rusqlite::Connection, r: &BeginRow) -> DbResult<()> {
+    ensure_begin_editable(conn)?;
     conn.execute(
         "INSERT INTO begin_balance(account_code,aux_key,aux_json,year_begin,debit_accum,credit_accum,qty_begin)
          VALUES(?1,?2,?3,?4,?5,?6,?7)
@@ -1034,6 +1048,7 @@ pub fn upsert_begin_on(conn: &rusqlite::Connection, r: &BeginRow) -> DbResult<()
 }
 
 pub fn delete_begin(db: &Db, id: i64) -> DbResult<()> {
+    ensure_begin_editable(db.conn())?;
     db.conn().execute(
         "DELETE FROM begin_balance WHERE id=?1",
         rusqlite::params![id],
@@ -1047,6 +1062,7 @@ pub fn delete_begin(db: &Db, id: i64) -> DbResult<()> {
 /// 并保证整体原子。原来只有非事务版，删除与写入无法绑在一个事务里 ——
 /// 删成功但后续写入失败，就会留下「界面以为删了、库里没删」或反之的半截状态。
 pub fn delete_begin_on(conn: &rusqlite::Connection, id: i64) -> DbResult<()> {
+    ensure_begin_editable(conn)?;
     conn.execute(
         "DELETE FROM begin_balance WHERE id=?1",
         rusqlite::params![id],
@@ -2331,5 +2347,27 @@ mod drill_tests {
             "库存侧金额必须精确求和（回归前 REAL + 4 位格式化会截成 3.0001）"
         );
         assert_eq!(r.stock_total, Money::parse("3.00015").unwrap());
+    }
+
+    #[test]
+    fn begin_balance_locked_after_close() {
+        let db = mem();
+        db.conn()
+            .execute(
+                "INSERT INTO period_state(period, closed) VALUES(202601, 1)",
+                [],
+            )
+            .unwrap();
+        let r = BeginRow {
+            id: 0,
+            account_code: "1001".into(),
+            aux: AuxRef::default(),
+            year_begin: Money::parse("100").unwrap(),
+            debit_accum: Money::ZERO,
+            credit_accum: Money::ZERO,
+            qty_begin: None,
+        };
+        let err = upsert_begin(&db, &r).unwrap_err().to_string();
+        assert!(err.contains("已结账"), "{err}");
     }
 }
