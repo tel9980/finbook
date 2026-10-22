@@ -173,10 +173,22 @@ try {
       bad++;
     }
   }
-  for (const name of parsed) {
-    if (name === "mutation") continue;
-    if (parsed.includes("mutation") && !fs.existsSync("tools/mutate-rust.js")) {
+  // 光有文件不够：mutation job 必须真的执行它。删掉那一步后 CI 仍会绿，
+  // 变异测试就从门禁里消失了。
+  const mutation = doc.jobs && doc.jobs.mutation;
+  if (!mutation) {
+    console.log("FAIL ci.yml 没有 mutation job —— 变异测试已不在门禁里");
+    bad++;
+  } else {
+    if (!fs.existsSync("tools/mutate-rust.js")) {
       console.log("FAIL 有 mutation job 但 tools/mutate-rust.js 不存在");
+      bad++;
+    }
+    const mutationRuns = (mutation.steps || [])
+      .map((s) => String((s && s.run) || ""))
+      .join("\n");
+    if (!mutationRuns.includes("node tools/mutate-rust.js")) {
+      console.log("FAIL mutation job 没有执行 node tools/mutate-rust.js");
       bad++;
     }
   }
@@ -375,11 +387,12 @@ for (const m of rustList.cases) {
     );
     bad++;
   }
-  // 指向的测试必须真的存在，否则跑出来是「0 passed」并被读成 PASS
-  const cmd = m.cmd.join(" ");
-  const testName = /"([a-z0-9_]{8,})"\s*\]?\s*$/.exec(cmd);
-  if (testName && !testSrc.includes(testName[1])) {
-    console.log(`FAIL mutate-rust 指向的测试 ${testName[1]} 已不存在（${m.name}）`);
+  // 指向的测试必须真的存在，否则跑出来是「0 passed」并被读成 PASS。
+  // 直接取命令数组最后一项；旧正则要求命令里有引号，而 join(" ") 后永远没有引号，
+  // 于是这条检查从未生效。以 `::` 结尾的是模块前缀（如 user::tests::），跳过。
+  const testName = m.cmd[m.cmd.length - 1];
+  if (testName && !testName.endsWith("::") && !testSrc.includes(testName)) {
+    console.log(`FAIL mutate-rust 指向的测试 ${testName} 已不存在（${m.name}）`);
     bad++;
   }
 }
