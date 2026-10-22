@@ -18,6 +18,18 @@ const NAV_ITEMS_SRC = grab(/const NAV_ITEMS = \[[\s\S]*?\n\];/, "NAV_ITEMS");
 const SIMPLE_NAV_SRC = grab(/const SIMPLE_NAV = \[[\s\S]*?\];/, "SIMPLE_NAV");
 const LISTED_SRC = grab(/const listed = [\s\S]*?;/, "listed");
 const REST_SRC = grab(/const rest = [\s\S]*?;/, "rest");
+// 这三段是真正的可见性/搜索逻辑。旧脚本用 `isNavVisible(){return true}` 和
+// `q(){return false}` 代替，后面的断言必然成立，等于没测。
+const CAN_SRC = grab(/function can\(p\) \{[^\n]*\}/, "can");
+const NAV_MATCHES_SRC = grab(/function navMatches\(n, q\) \{[\s\S]*?\n\}/, "navMatches");
+const IS_NAV_VISIBLE_SRC = grab(
+  /function isNavVisible\(n\) \{[\s\S]*?\n\}/,
+  "isNavVisible"
+);
+const NAV_API_SRC = `${CAN_SRC}\n${NAV_MATCHES_SRC}\n${IS_NAV_VISIBLE_SRC}\nreturn { can, isNavVisible, navMatches };`;
+function navApi(s = session) {
+  return new Function("session", NAV_API_SRC)(s);
+}
 
 // ---- 最小运行时 ----
 const store = {};
@@ -28,19 +40,22 @@ global.localStorage = {
 };
 const esc = (s) => String(s);
 const icon = () => "";
-let session = { user: { username: "admin" } };
+let session = { platformAdmin: true, user: { username: "admin", is_admin: true, perms: [] } };
 const state = { view: "dashboard" };
 
 const NAV_ITEMS = eval(NAV_ITEMS_SRC.replace("const NAV_ITEMS = ", "").replace(/;$/, ""));
 const SIMPLE_NAV = eval(SIMPLE_NAV_SRC.replace("const SIMPLE_NAV = ", "").replace(/;$/, ""));
+// 管理员 = 全部权限，保证默认侧栏测试覆盖全量导航。
+session.user.perms = [...new Set(NAV_ITEMS.map((n) => n.perm).filter(Boolean))];
 
 function lsGet(k, d) { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }
 function lsSet(k, v) { localStorage.setItem(k, JSON.stringify(v)); }
 function acctKey(base) {
   return base + "@" + ((session.user && session.user.username) || "_anon");
 }
-// admin = Perm::all()，什么都可见
-function isNavVisible() { return true; }
+// 用 app.js 的真实函数判断可见性，而不是固定返回 true。
+function isNavVisible(n) { return navApi().isNavVisible(n); }
+function navMatches(n, q) { return navApi().navMatches(n, q); }
 const NAV_INDEX = {}; NAV_ITEMS.forEach(n => { NAV_INDEX[n.id] = n; });
 function simpleNav() {
   const v = lsGet(acctKey("nav_simple"), null);
@@ -90,10 +105,23 @@ if (laid.length <= 20) ok(`默认铺 ${laid.length} 项（<=20）`);
 else fail(`默认铺了 ${laid.length} 项，太多了`);
 
 // ---- 2. 搜索结果始终全量（不变量①的逻辑依据）----
-const hitAll = NAV_ITEMS.filter(n => !q(n));
-function q() { return false; } // 空查询 = 全命中
-if (hitAll.length === NAV_ITEMS.length) ok(`搜索数据源是全量 ${hitAll.length} 项（不受精简影响）`);
-else fail("搜索数据源被精简影响了");
+const hitAll = NAV_ITEMS.filter((n) => navMatches(n, ""));
+if (hitAll.length === NAV_ITEMS.length) ok(`空查询命中全量 ${hitAll.length} 项`);
+else fail(`空查询应命中全量，实际 ${hitAll.length}/${NAV_ITEMS.length}`);
+// 精简模式藏起来的 MRP 仍必须能被搜索命中（用真实 navMatches）。
+if (NAV_ITEMS.filter((n) => navMatches(n, "MRP")).some((n) => n.id === "mrp"))
+  ok("MRP 虽默认隐藏，仍能被搜索命中");
+else fail("MRP 搜不到 —— 精简模式变成了功能阉割");
+// 真实的可见性函数确实会按权限/平台身份过滤，而不是恒真。
+{
+  const saved = session;
+  session = { platformAdmin: false, user: { username: "cashier", perms: [] } };
+  if (isNavVisible(NAV_INDEX["platform-users"])) fail("非平台管理员仍能看到平台账号管理");
+  else ok("真实 isNavVisible 会挡住平台项");
+  if (!isNavVisible(NAV_INDEX["dashboard"])) fail("无权限要求的 dashboard 被误挡");
+  else ok("真实 isNavVisible 放行无权限项");
+  session = saved;
+}
 
 // ---- 3. 关掉 → 全量 ----
 lsSet("nav_simple@admin", false);
