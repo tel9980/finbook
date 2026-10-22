@@ -24,6 +24,10 @@ pub struct LoginView {
     pub new_scheme: String,
     /// 建账时预置常用档案（部门 / 银行账户）。默认开。
     pub new_preset: bool,
+    /// 启用审核留痕。默认开，和 Web 建账口径一致。
+    pub new_audit: bool,
+    /// 出纳复核。默认开；关闭后可由用户在「系统设置」自行调整。
+    pub new_cashier: bool,
 
     pub err: String,
     /// 已载入用户列表的账套（切换账套后要重新拉用户）
@@ -43,6 +47,8 @@ impl Default for LoginView {
             new_start: Period::default().code(),
             new_scheme: "4-2-2-2".to_string(),
             new_preset: true,
+            new_audit: true,
+            new_cashier: true,
             err: String::new(),
             loaded_book: None,
         }
@@ -323,6 +329,19 @@ impl LoginView {
                                 .weak(),
                             );
                         });
+                        ui.add_space(6.0);
+                        ui.checkbox(&mut self.new_audit, "启用审核留痕");
+                        ui.label(
+                            RichText::new("记录制单/审核/记账人；建账后可在「系统设置」调整。")
+                                .weak()
+                                .size(12.0),
+                        );
+                        ui.checkbox(&mut self.new_cashier, "启用出纳复核");
+                        ui.label(
+                            RichText::new("收付款凭证需要出纳确认；建账后可在「系统设置」调整。")
+                                .weak()
+                                .size(12.0),
+                        );
                     });
 
                 ui.add_space(14.0);
@@ -532,8 +551,8 @@ impl LoginView {
             enable_qty: false,
             enable_foreign: false,
             enable_production: false,
-            enable_audit: false,
-            require_cashier: false,
+            enable_audit: self.new_audit,
+            require_cashier: self.new_cashier,
             biz_accounts: Default::default(),
             budget_control: String::new(),
             doc_prefixes: Default::default(),
@@ -711,5 +730,13 @@ mod preset_ui_tests {
             LoginView::default().new_preset,
             "默认必须勾上 —— 默认科目表里 100201~100207 全部核算银行账户"
         );
+    }
+
+    /// 建账向导不能把审核/出纳写死为关：文档默认是开，关掉是用户的显式选择。
+    #[test]
+    fn 默认启用审核与出纳复核() {
+        let v = LoginView::default();
+        assert!(v.new_audit);
+        assert!(v.new_cashier);
     }
 }
