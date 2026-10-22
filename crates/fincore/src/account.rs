@@ -566,6 +566,21 @@ impl Chart {
 
     /// 新增科目，返回校验问题
     pub fn validate_new(&self, a: &Account) -> Issues {
+        let mut iss = self.validate_fields(a);
+        iss.check(
+            !self.contains(&a.code),
+            format!("科目编码 {} 已存在", a.code),
+        );
+        iss
+    }
+
+    /// 校验一条**已存在**科目的修改（编码不变，因此不查重）。
+    pub fn validate_edit(&self, a: &Account) -> Issues {
+        self.validate_fields(a)
+    }
+
+    /// 新增/修改共用的字段校验：编码格式、名称、上级科目存在性。
+    fn validate_fields(&self, a: &Account) -> Issues {
         let mut iss = Issues::new();
         iss.check(!a.code.is_empty(), "科目编码不能为空");
         iss.check(!a.name.trim().is_empty(), "科目名称不能为空");
@@ -585,10 +600,6 @@ impl Chart {
                     .collect::<Vec<_>>()
                     .join("/")
             ),
-        );
-        iss.check(
-            !self.contains(&a.code),
-            format!("科目编码 {} 已存在", a.code),
         );
         if let Some(p) = self.parent_code(&a.code) {
             match self.get(&p) {
@@ -796,6 +807,28 @@ mod tests {
         c.insert(Account::new("100202", "建行一般户", AcctCategory::Asset));
         c.insert(Account::new("6001", "主营业务收入", AcctCategory::Income));
         c
+    }
+
+    #[test]
+    fn validate_edit_accepts_existing_code_but_checks_shape() {
+        let c = demo_chart();
+        let mut a = Account::new("100201", "工行基本户", AcctCategory::Asset);
+        // 已存在的编码：新增要报重复，修改不报
+        assert!(!c.validate_new(&a).is_empty());
+        assert!(c.validate_edit(&a).is_empty());
+
+        a.name = "   ".into();
+        assert!(!c.validate_edit(&a).is_empty());
+        a.name = "工行基本户".into();
+
+        a.code = "科目".into();
+        assert!(
+            !c.validate_edit(&a).is_empty(),
+            "非数字编码必须被拒，否则后续前缀聚合会 panic"
+        );
+
+        a.code = "999901".into();
+        assert!(!c.validate_edit(&a).is_empty(), "上级 9999 不存在，应报错");
     }
 
     #[test]

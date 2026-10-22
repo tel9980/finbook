@@ -2300,6 +2300,12 @@ async fn delete_book(
     if !user.is_admin && book.owner_username != user.username {
         return Err(AppError::forbidden("无权删除该账套"));
     }
+    // 删除前先记下本套引用的大附件；共享目录按内容寻址，不能整目录删。
+    let own_attach = state
+        .db_for(&key)
+        .ok()
+        .and_then(|db| book_attachment_paths(&db).ok())
+        .unwrap_or_default();
     // 顺序要点：先摘运行期注册（否则后续请求会把已删文件重新打开成空库），
     // 再清会话、删目录记录，最后落盘删除文件。
     state.books.unregister(&key);
@@ -2312,6 +2318,81 @@ async fn delete_book(
         }
         let _ = std::fs::remove_file(format!("{}-wal", p.display()));
         let _ = std::fs::remove_file(format!("{}-shm", p.display()));
+    }
+
+    // 删除该账套的手工/自动备份：否则同名 key 被重新创建后，新租户能在
+    // 备份列表里看到并恢复上一个租户的数据。
+    let backup_dir = state.books_dir.join("backups");
+    if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if backup_belongs_to(&name, &key) {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+
+    // 清理仅属于该账套的大附件。附件是跨账套共享的内容寻址目录，
+    // 必须确认其他账套没引用同一个文件；有任何一个账套扫不开就整体放弃，
+    // 宁可留下孤儿文件，也不能删掉别的租户还在用的附件。
+    if !own_attach.is_empty() {
+        let mut used_elsewhere = std::collections::HashSet::new();
+        let mut scan_complete = true;
+        match std::fs::read_dir(&state.books_dir) {
+            Ok(entries) => {
+                for e in entries.flatten() {
+                    let p = e.path();
+                    if p.extension().and_then(|s| s.to_str()) != Some("fbk") {
+                        continue;
+                    }
+                    if p.file_stem().and_then(|s| s.to_str()) == Some(key.as_str()) {
+                        continue;
+                    }
+                    let conn = match rusqlite::Connection::open_with_flags(
+                        &p,
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                    ) {
+                        Ok(c) => c,
+                        Err(_) => {
+                            scan_complete = false;
+                            break;
+                        }
+                    };
+                    let mut stmt = match conn.prepare(
+                        "SELECT DISTINCT path FROM attachment \
+                         WHERE inline=0 AND path IS NOT NULL AND path <> ''",
+                    ) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            scan_complete = false;
+                            break;
+                        }
+                    };
+                    let rows = match stmt.query_map([], |r| r.get::<_, String>(0)) {
+                        Ok(r) => r,
+                        Err(_) => {
+                            scan_complete = false;
+                            break;
+                        }
+                    };
+                    for row in rows.flatten() {
+                        used_elsewhere.insert(row);
+                    }
+                }
+            }
+            Err(_) => scan_complete = false,
+        }
+        if scan_complete {
+            let attach_dir = state.books_dir.join(".attachments");
+            for rel in own_attach {
+                if rel.contains("..") || rel.contains('/') || rel.contains('\\') {
+                    continue;
+                }
+                if !used_elsewhere.contains(&rel) {
+                    let _ = std::fs::remove_file(attach_dir.join(&rel));
+                }
+            }
+        }
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -5902,17 +5983,32 @@ async fn export_trial_balance_pdf(
 // 数据导出（CSV，需 Export 权限；带 BOM 便于 Excel 直接打开中文）
 // ---------------------------------------------------------------------------
 
-fn csv_response(filename: &str, rows: Vec<Vec<String>>) -> Response {
-    fn esc(s: &str) -> String {
-        if s.contains([',', '"', '\n', '\r']) {
-            format!("\"{}\"", s.replace('"', "\"\""))
-        } else {
-            s.to_string()
-        }
+/// CSV 单元格转义：除了引号/逗号/换行，还要防 Excel 公式注入。
+///
+/// 用户可控文本（摘要、客户名、科目名）以 `= + @` 开头时，Excel 会当公式执行；
+/// `-` 只有后面不是合法数字时才危险（负数金额必须保持数字形态，不能变成文本）。
+fn csv_escape(s: &str) -> String {
+    let dangerous = match s.chars().next() {
+        Some('=') | Some('+') | Some('@') | Some('\t') | Some('\r') => true,
+        Some('-') => s.replace(',', "").parse::<f64>().is_err(),
+        _ => false,
+    };
+    let s = if dangerous {
+        format!("'{s}")
+    } else {
+        s.to_string()
+    };
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s
     }
+}
+
+fn csv_response(filename: &str, rows: Vec<Vec<String>>) -> Response {
     let mut out = String::from("\u{feff}");
     for r in &rows {
-        out.push_str(&r.iter().map(|c| esc(c)).collect::<Vec<_>>().join(","));
+        out.push_str(&r.iter().map(|c| csv_escape(c)).collect::<Vec<_>>().join(","));
         out.push_str("\r\n");
     }
     let mut resp = out.into_response();
@@ -6251,21 +6347,6 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
-}
-
-fn csv_escape(s: &str) -> String {
-    // 防公式注入：以 = + - @ 开头的单元格在 Excel 里会被当公式执行
-    let guarded =
-        if s.starts_with('=') || s.starts_with('+') || s.starts_with('-') || s.starts_with('@') {
-            format!("'{s}")
-        } else {
-            s.to_string()
-        };
-    if guarded.contains(',') || guarded.contains('"') || guarded.contains('\n') {
-        format!("\"{}\"", guarded.replace('"', "\"\""))
-    } else {
-        guarded
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -14185,6 +14266,10 @@ async fn create_account(
     if accounts::get(&db, &acc.code)?.is_some() {
         return Err(AppError::bad_request("科目已存在"));
     }
+    // 与桌面端同一套校验：编码必须是数字且符合级长方案、名称非空、上级存在。
+    // 少了这一层，非数字编码会写进库，后续 BalanceSnapshot 的前缀聚合按字节
+    // 切片时会 panic，整个账套的报表都打不开。
+    accounts::chart(&db)?.validate_new(&acc).into_result()?;
     accounts::insert(&db, &acc)?;
     db.log(
         user.username(),
@@ -14207,6 +14292,7 @@ async fn update_account(
     if accounts::get(&db, &acc.code)?.is_none() {
         return Err(AppError::not_found("科目不存在"));
     }
+    accounts::chart(&db)?.validate_edit(&acc).into_result()?;
     accounts::update(&db, &acc)?;
     db.log(
         user.username(),
@@ -14652,22 +14738,67 @@ fn checkpoint_wal(db: &findb::Db) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 当前账套引用的大附件文件（相对 `.attachments/` 的文件名）。
+fn book_attachment_paths(db: &Db) -> Result<Vec<String>, AppError> {
+    let mut stmt = db
+        .conn()
+        .prepare(
+            "SELECT DISTINCT path FROM attachment \
+             WHERE inline=0 AND path IS NOT NULL AND path <> ''",
+        )
+        .map_err(|e| AppError::Internal(format!("读取附件清单失败：{e}")))?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(|e| AppError::Internal(format!("读取附件清单失败：{e}")))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::Internal(format!("读取附件清单失败：{e}")))
+}
+
+/// 备份文件名是否属于 `key` 账套。
+///
+/// 文件名格式由 `create_backup` / `restore_backup` 生成：
+/// - `YYYYMMDD_HHMMSS_<key>.fbk`
+/// - `auto_YYYYMMDD_HHMMSS_<key>.fbk`
+///
+/// 关键是**先剥掉固定宽度的时间戳前缀，再比较剩余部分是否与 key 完全相等**。
+/// 原先的 `ends_with("_{key}.fbk")` 会把 key 当成后缀匹配：`alice_202610.fbk`
+/// 会被 key=`202610` 的账套认领。
+fn backup_belongs_to(name: &str, key: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".fbk") else {
+        return false;
+    };
+    let stem = stem.strip_prefix("auto_").unwrap_or(stem);
+    // 固定前缀：8 位日期 + '_' + 6 位时间 + '_'
+    let bytes = stem.as_bytes();
+    if bytes.len() < 16 {
+        return false;
+    }
+    let digits = |s: &[u8]| s.iter().all(|b| b.is_ascii_digit());
+    if !(digits(&bytes[..8]) && bytes[8] == b'_' && digits(&bytes[9..15]) && bytes[15] == b'_') {
+        return false;
+    }
+    // 前缀全是 ASCII，按字节切一定落在字符边界上。
+    &stem[16..] == key
+}
+
 async fn list_backups(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Backup)?;
     let dir = state.books_dir.join("backups");
-    // 备份目录是全局共享的，只能列出属于当前账套的备份（文件名后缀 _<key>.fbk），
-    // 否则租户 A 能枚举甚至恢复租户 B 的全套账。
-    let suffix = format!("_{}.fbk", user.book_key);
+    // 备份目录是全局共享的，只能列出属于当前账套的备份。
+    //
+    // 不能用 `name.ends_with("_{key}.fbk")`：key 允许下划线，`alice_202610` 的
+    // 备份会被 key=`202610` 的账套命中（后缀碰撞 → 跨租户读/恢复）。这里按
+    // 固定时间戳前缀解析出真正的 key，再逐字符比较。
     let mut items = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
             let p = e.path();
             if p.extension().and_then(|s| s.to_str()) == Some("fbk") {
                 let name = e.file_name().to_string_lossy().to_string();
-                if !name.ends_with(&suffix) {
+                if !backup_belongs_to(&name, &user.book_key) {
                     continue;
                 }
                 if let Ok(meta) = std::fs::metadata(&p) {
@@ -14723,7 +14854,8 @@ async fn restore_backup(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Backup)?;
     // 路径安全：仅允许 backups 目录下的纯文件名，禁止任何路径穿越；
-    // 且只接受属于当前账套的备份（后缀 _<key>.fbk），防止跨租户恢复。
+    // 且只接受属于当前账套的备份（按固定时间戳前缀解析 key，见 backup_belongs_to），
+    // 防止跨租户恢复。
     let file_name = match std::path::Path::new(&req.file)
         .file_name()
         .and_then(|s| s.to_str())
@@ -14731,7 +14863,7 @@ async fn restore_backup(
         Some(n) if !n.contains("..") && !n.contains('/') && !n.contains('\\') => n.to_string(),
         _ => return Err(AppError::bad_request("非法的备份文件名")),
     };
-    if !file_name.ends_with(&format!("_{}.fbk", user.book_key)) {
+    if !backup_belongs_to(&file_name, &user.book_key) {
         return Err(AppError::bad_request("该备份不属于当前账套"));
     }
     let src = state.books_dir.join("backups").join(&file_name);
@@ -14743,25 +14875,96 @@ async fn restore_backup(
     let state2 = state.clone();
     // 覆盖主库 + 删 WAL + 重注册账套都是阻塞操作，放阻塞池
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
+        // 先验证备份文件本身可读、结构完整，避免把坏文件覆盖到当前库上。
+        {
+            let conn = rusqlite::Connection::open_with_flags(
+                &src,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .map_err(|e| AppError::bad_request(format!("备份文件无法打开：{e}")))?;
+            let integrity: String = conn
+                .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+                .map_err(|e| AppError::bad_request(format!("备份文件校验失败：{e}")))?;
+            if integrity != "ok" {
+                return Err(AppError::bad_request(format!(
+                    "备份文件已损坏，未恢复：{integrity}"
+                )));
+            }
+            let has_voucher: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='voucher'",
+                    [],
+                    |r| r.get(0),
+                )
+                .map_err(|e| AppError::bad_request(format!("备份文件校验失败：{e}")))?;
+            if has_voucher == 0 {
+                return Err(AppError::bad_request("该文件不是 FinBook 账套备份"));
+            }
+        }
+
         let dst = state2.books_dir.join(format!("{key}.fbk"));
-        // 恢复前先 checkpoint 当前账套并自动备份一次，避免覆盖无法回退
-        let _ = std::fs::create_dir_all(state2.books_dir.join("backups"));
+        let backups_dir = state2.books_dir.join("backups");
+        std::fs::create_dir_all(&backups_dir)
+            .map_err(|e| AppError::Internal(format!("创建备份目录失败：{e}")))?;
+        // 恢复前先 checkpoint 并自动备份一次，避免覆盖无法回退。
+        // 自动备份失败必须中止 —— 否则用户以为有退路，实际没有。
         let db = state2.db_for(&key)?;
         checkpoint_wal(&db)?;
         drop(db);
         let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
         let auto_name = format!("auto_{}_{}.fbk", stamp, key);
-        let _ = std::fs::copy(&dst, state2.books_dir.join("backups").join(&auto_name));
-        std::fs::copy(&src, &dst)?;
+        let auto_path = backups_dir.join(&auto_name);
+        std::fs::copy(&dst, &auto_path).map_err(|e| {
+            AppError::Internal(format!("恢复前自动备份失败，已中止（当前账套未被改动）：{e}"))
+        })?;
+
+        // 先复制到临时文件，成功后再替换主库：copy 中途失败不会留下半个 .fbk。
+        let tmp = state2.books_dir.join(format!("{key}.fbk.restore.tmp"));
+        std::fs::copy(&src, &tmp)
+            .map_err(|e| AppError::Internal(format!("写入恢复临时文件失败：{e}")))?;
+        state2.books.unregister(&key);
         for ext in ["-wal", "-shm"] {
             let _ = std::fs::remove_file(state2.books_dir.join(format!("{key}.fbk{ext}")));
         }
+        if let Err(e) = std::fs::rename(&tmp, &dst) {
+            let _ = std::fs::remove_file(&tmp);
+            if let Ok(path) = std::fs::canonicalize(&dst) {
+                state2.books.register(&path, 16);
+            }
+            return Err(AppError::Internal(format!("替换账套文件失败：{e}")));
+        }
         // 重新注册账套，使后续请求以新文件重新打开
         if let Ok(path) = std::fs::canonicalize(&dst) {
-            state2.books.unregister(&key);
             state2.books.register(&path, 16);
         }
-        let db = state2.db_for(&key)?;
+        let db = match state2.db_for(&key) {
+            Ok(db) => db,
+            Err(e) => {
+                // 新库打不开：用刚生成的自动备份回滚，保证用户至少回到恢复前状态。
+                let rolled = (|| -> std::io::Result<()> {
+                    std::fs::copy(&auto_path, &dst)?;
+                    let _ = std::fs::remove_file(
+                        state2.books_dir.join(format!("{key}.fbk-wal")),
+                    );
+                    let _ = std::fs::remove_file(
+                        state2.books_dir.join(format!("{key}.fbk-shm")),
+                    );
+                    Ok(())
+                })();
+                if let Ok(path) = std::fs::canonicalize(&dst) {
+                    state2.books.unregister(&key);
+                    state2.books.register(&path, 16);
+                }
+                if let Err(re) = rolled {
+                    return Err(AppError::Internal(format!(
+                        "恢复后账套无法打开（{e}），且回滚失败（{re}），请用 {auto_name} 手工恢复"
+                    )));
+                }
+                return Err(AppError::Internal(format!(
+                    "恢复后账套无法打开，已回滚到恢复前状态：{e}"
+                )));
+            }
+        };
         // 账套文件已被覆盖，恢复已完成；此处日志失败不能把请求打成 500，
         // 否则客户端看到失败会重试恢复，重复覆盖刚恢复好的库。
         if let Err(e) = db.log(
@@ -14796,6 +14999,10 @@ async fn download_backup(
     // checkpoint 把 WAL 合并回主文件，保证打包的 .fbk 是完整一致快照
     let db = state.db_for(&key)?;
     checkpoint_wal(&db)?;
+    // 只打包**当前账套引用**的大附件。`.attachments` 是所有账套共享的
+    // 内容寻址目录（sha256 前缀命名），整目录打包会把其他租户的附件一起拖走。
+    // 小附件（inline=1）本来就在 .fbk 里，不需要单独打包。
+    let attach_paths = book_attachment_paths(&db)?;
     drop(db);
 
     let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
@@ -14813,21 +15020,20 @@ async fn download_backup(
         let mut f = File::open(&src)?;
         io::copy(&mut f, &mut zip)?;
 
-        // .attachments/ 下的附件文件
-        if attach_dir.exists() {
-            for entry in std::fs::read_dir(&attach_dir)? {
-                let e = entry?;
-                let path = e.path();
-                if path.is_file() {
-                    let name = format!(
-                        ".attachments/{}",
-                        e.file_name().to_string_lossy()
-                    );
-                    zip.start_file(name, options).map_err(&zerr)?;
-                    let mut f = File::open(&path)?;
-                    io::copy(&mut f, &mut zip)?;
-                }
+        // 当前账套引用的大附件（路径是 attach.rs 生成的扁平 sha 文件名）。
+        for rel in attach_paths {
+            if rel.contains("..") || rel.contains('/') || rel.contains('\\') {
+                continue;
             }
+            let p = attach_dir.join(&rel);
+            if !p.is_file() {
+                // 数据库有记录但磁盘文件缺失：不阻断整包下载，跳过即可。
+                continue;
+            }
+            let name = format!(".attachments/{rel}");
+            zip.start_file(name, options).map_err(&zerr)?;
+            let mut f = File::open(&p)?;
+            io::copy(&mut f, &mut zip)?;
         }
 
         zip.finish().map_err(&zerr)?;
@@ -16014,4 +16220,48 @@ async fn claim_voucher(
         &format!("#{id} 凭证 #{vid}"),
     )?;
     Ok(Json(json!({ "id": vid })))
+}
+
+#[cfg(test)]
+mod security_regression_tests {
+    use super::{backup_belongs_to, csv_escape};
+
+    #[test]
+    fn backup_name_must_match_key_exactly() {
+        assert!(backup_belongs_to(
+            "20261022_120000_alice_202610.fbk",
+            "alice_202610"
+        ));
+        assert!(backup_belongs_to(
+            "auto_20261022_120000_alice_202610.fbk",
+            "alice_202610"
+        ));
+        assert!(backup_belongs_to("20261022_120000_202610.fbk", "202610"));
+        // 旧实现的后缀碰撞：key=202610 不能认领 alice_202610 的备份
+        assert!(!backup_belongs_to(
+            "20261022_120000_alice_202610.fbk",
+            "202610"
+        ));
+        assert!(!backup_belongs_to(
+            "auto_20261022_120000_alice_202610.fbk",
+            "202610"
+        ));
+        // 形状不符或非 .fbk 一律不认
+        assert!(!backup_belongs_to("20261022_120000_alice.fbk2", "alice"));
+        assert!(!backup_belongs_to("2026102_120000_alice.fbk", "alice"));
+        assert!(!backup_belongs_to("not-a-backup.fbk", "alice"));
+    }
+
+    #[test]
+    fn csv_escape_neutralizes_formula_injection() {
+        assert!(csv_escape("=1+1").starts_with('\''));
+        assert!(csv_escape("+1+1").starts_with('\''));
+        assert!(csv_escape("@SUM(A1)").starts_with('\''));
+        assert!(csv_escape("-1+2").starts_with('\''));
+        // 负数金额必须保持数字形态
+        assert_eq!(csv_escape("-123.45"), "-123.45");
+        assert_eq!(csv_escape("-1,234.56"), "\"-1,234.56\"");
+        assert_eq!(csv_escape("a,b"), "\"a,b\"");
+        assert_eq!(csv_escape("a\"b"), "\"a\"\"b\"");
+    }
 }

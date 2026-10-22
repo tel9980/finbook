@@ -351,18 +351,6 @@ impl BalanceSnapshot {
             }
         }
 
-        // 辅助函数：在 by_code 的键中找 code 的最长真前缀
-        fn find_parent_code(code: &str, map: &BTreeMap<String, BalanceRow>) -> Option<String> {
-            // 从长到短尝试前缀
-            for len in (1..code.len()).rev() {
-                let prefix = &code[..len];
-                if map.contains_key(prefix) {
-                    return Some(prefix.to_string());
-                }
-            }
-            None
-        }
-
         Ok(Self {
             from: q.from,
             to: q.to,
@@ -1475,12 +1463,42 @@ pub fn multi_column(
     Ok(out)
 }
 
+/// 在已聚合的科目行中找 `code` 的最长真前缀。
+///
+/// 必须按**字符边界**切：科目编码正常是 ASCII 数字，但历史库/导入可能混进
+/// 非 ASCII 编码；按字节 `&code[..len]` 会切在 UTF-8 字符中间直接 panic，
+/// 而且这个 panic 发生在每次报表取数时，等于账套被一条坏数据打崩。
+fn find_parent_code(code: &str, map: &BTreeMap<String, BalanceRow>) -> Option<String> {
+    for (idx, _) in code.char_indices().rev() {
+        if idx == 0 {
+            continue;
+        }
+        let prefix = &code[..idx];
+        if map.contains_key(prefix) {
+            return Some(prefix.to_string());
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::mem;
     use crate::vouchers;
     use fincore::{AcctCategory, AuxKind, AuxMask, Entry, Voucher};
+
+    #[test]
+    fn find_parent_code_never_splits_utf8() {
+        let mut map = BTreeMap::new();
+        for code in ["1", "1002", "科目"] {
+            map.insert(code.to_string(), BalanceRow::default());
+        }
+        assert_eq!(find_parent_code("100201", &map).as_deref(), Some("1002"));
+        assert_eq!(find_parent_code("科目编码", &map).as_deref(), Some("科目"));
+        // 真前缀不包含自身
+        assert_eq!(find_parent_code("科目", &map), None);
+    }
 
     /// 按科目表要求补齐辅助核算与数量，让测试用的凭证符合落库校验。
     ///

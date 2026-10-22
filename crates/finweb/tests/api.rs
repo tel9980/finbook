@@ -1217,6 +1217,31 @@ async fn accounts_crud_usage_guard_and_begin() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "重复科目应拒绝");
 
+    // 非数字编码 / 上级不存在 → 400（否则报表前缀聚合会 panic）
+    let mut bad = acc("坏编码");
+    bad["account"]["code"] = serde_json::json!("科目");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post("/api/accounts", &sid, bad))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "非数字科目编码应被服务端拒绝"
+    );
+
+    let mut orphan = acc("无上级");
+    orphan["account"]["code"] = serde_json::json!("999901");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post("/api/accounts", &sid, orphan))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "上级科目不存在的编码应被拒绝"
+    );
+
     // 列表包含新科目，掩码 = item(32) | supplier(2) = 34
     let resp = handlers::router(state.clone())
         .oneshot(authed_get("/api/accounts", &sid))
@@ -20874,4 +20899,167 @@ async fn web_settle_cross_flow() {
         0,
         "应付 S02 应全额冲销"
     );
+}
+
+/// 显式指定 key 建套（管理员），返回实际 key。
+async fn create_book_with_key(state: &Arc<WebState>, sid: &str, key: &str) -> String {
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/books",
+            sid,
+            serde_json::json!({ "key": key, "company": key, "start_period": 202601 }),
+        ))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = body_string(resp).await;
+    assert_eq!(status, StatusCode::OK, "建套 {key} 应成功：{body}");
+    serde_json::from_str::<serde_json::Value>(&body).unwrap()["key"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// 备份后缀碰撞：key=`202610` 不能认领 `alice_202610` 的备份。
+#[tokio::test]
+async fn backup_suffix_collision_cannot_cross_books() {
+    let (state, _bd, _dir) = test_state();
+    let (_, admin_sid) = login(&state, "boss", "Admin!2026").await;
+
+    let a = create_book_with_key(&state, &admin_sid, "alice_202610").await;
+    assert_eq!(select_book(&state, &admin_sid, &a).await, StatusCode::OK);
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/backups",
+            &admin_sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let name = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // 这个 key 是上一个账套 key 的后缀，旧实现会在这里命中 alice 的备份。
+    let b = create_book_with_key(&state, &admin_sid, "202610").await;
+    assert_eq!(select_book(&state, &admin_sid, &b).await, StatusCode::OK);
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/backups", &admin_sid))
+        .await
+        .unwrap();
+    let list = body_string(resp).await;
+    assert!(
+        !list.contains(&name),
+        "key=202610 不应看到 alice_202610 的备份：{list}"
+    );
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/restore",
+            &admin_sid,
+            serde_json::json!({ "file": name }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "后缀碰撞不能跨账套恢复"
+    );
+}
+
+/// 备份下载只打包当前账套引用的大附件，不能把共享 `.attachments/` 整目录拖走。
+#[tokio::test]
+async fn backup_download_excludes_other_books_attachments() {
+    let (state, _bd, _dir) = test_state();
+    let (_, admin_sid) = login(&state, "boss", "Admin!2026").await;
+
+    let a_key = create_book_with_key(&state, &admin_sid, "attach_a").await;
+    let b_key = create_book_with_key(&state, &admin_sid, "attach_b").await;
+
+    // 两个账套各传一个 >256KB 的附件（小附件是 inline，不进 .attachments/）。
+    let a_data = format!("A{}", "a".repeat(300 * 1024));
+    let b_data = format!("B{}", "b".repeat(300 * 1024));
+
+    for (key, data, file) in [
+        (&a_key, a_data.as_str(), "a.txt"),
+        (&b_key, b_data.as_str(), "b.txt"),
+    ] {
+        assert_eq!(select_book(&state, &admin_sid, key).await, StatusCode::OK);
+        // 先建一张平衡凭证，附件挂在凭证上
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/vouchers",
+                &admin_sid,
+                serde_json::json!({
+                    "id": 0, "period": 202601, "date": "2026-01-08", "word": "记",
+                    "no": 1, "attachments": 0, "memo": "附件隔离测试",
+                    "entries": [
+                        { "line": 1, "account_code": "1001", "summary": "收", "debit": "50", "credit": "0" },
+                        { "line": 2, "account_code": "2001", "summary": "借", "debit": "0", "credit": "50" }
+                    ]
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "建凭证应成功");
+        let vid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+            .as_i64()
+            .unwrap();
+
+        let boundary = "----finbookatt";
+        let mut payload = Vec::new();
+        payload.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file}\"\r\nContent-Type: text/plain\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        payload.extend_from_slice(data.as_bytes());
+        payload.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/api/vouchers/{vid}/attachments"))
+            .header(
+                header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .header(header::COOKIE, &admin_sid)
+            .body(Body::from(payload))
+            .unwrap();
+        let resp = handlers::router(state.clone()).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "上传大附件应成功");
+    }
+
+    // 回到 A 下载打包，只应看到 A 的附件
+    assert_eq!(select_book(&state, &admin_sid, &a_key).await, StatusCode::OK);
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/backup/download", &admin_sid))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 32 * 1024 * 1024)
+        .await
+        .unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut attachments: Vec<Vec<u8>> = Vec::new();
+    for i in 0..zip.len() {
+        let mut f = zip.by_index(i).unwrap();
+        if f.name().starts_with(".attachments/") {
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
+            attachments.push(buf);
+        }
+    }
+    assert_eq!(
+        attachments.len(),
+        1,
+        "只能打包当前账套的 1 个附件，实际 {} 个",
+        attachments.len()
+    );
+    assert_eq!(attachments[0], a_data.as_bytes());
+    assert_ne!(attachments[0], b_data.as_bytes());
 }
