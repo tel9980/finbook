@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: 校验 tag 与 Cargo.toml 版本一致
         run: |
           V="${GITHUB_REF_NAME#v}"
@@ -26,6 +29,50 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME 与 Cargo.toml 版本 $W 不一致，拒绝发布"
             exit 1
           fi
+      - name: 校验 tag 指向 main 上的提交
+        run: |
+          git fetch --no-tags origin main
+          echo "COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::tag $GITHUB_REF_NAME 的提交 $(git rev-parse --short HEAD) 不在 main 上，拒绝发布"
+            exit 1
+          fi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 前端与 CI 配置自检
+        run: |
+          node tools/check-js.js
+          node tools/check-ci.js
+      # 发布不能只看 cargo test：E2E、变异测试、check-js 都在 ci.yml。
+      # 等待该提交的完整 CI 变绿；失败/取消立即拒绝，超时也拒绝。
+      - name: 等待该提交的 CI 全绿
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 80); do
+            run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${COMMIT_SHA}&per_page=1")
+            count=$(echo "$run" | jq '.workflow_runs | length')
+            if [ "$count" -eq 0 ]; then
+              echo "尚未找到 CI run（${i}/80），等待…"
+              sleep 30
+              continue
+            fi
+            status=$(echo "$run" | jq -r '.workflow_runs[0].status')
+            conclusion=$(echo "$run" | jq -r '.workflow_runs[0].conclusion // ""')
+            echo "CI status=$status conclusion=$conclusion（${i}/80）"
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "该提交的 CI 已全绿"
+                exit 0
+              fi
+              echo "::error::该提交的 CI 未通过（$conclusion），拒绝发布"
+              exit 1
+            fi
+            sleep 30
+          done
+          echo "::error::等待 CI 超时，拒绝发布"
+          exit 1
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: 全量测试（发布门禁）
