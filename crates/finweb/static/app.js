@@ -1247,7 +1247,6 @@ const NAV_ITEMS = [
   { id: "platform-users", label: "账号管理", platform: true, group: "系统管理" },
   { id: "platform-books", label: "全部账套", platform: true, group: "系统管理" },
   { id: "audit-log", label: "操作日志", perm: "audit_log", platform: true, group: "系统管理" },
-  { id: "backup", label: "备份管理", perm: "backup", platform: true, group: "系统管理" },
   { id: "consolidate", label: "合并报表", platform: true, group: "系统管理" },
   { id: "dashboard", label: "工作台", perm: null, group: "开始" },
   { id: "accounts", label: "会计科目", perm: "account_edit", group: "基础资料" },
@@ -6138,7 +6137,8 @@ async function viewAuditLog(main) {
   const btn = document.getElementById("al-search");
   const load = async () => {
     const k = searchInput.value.trim();
-    const url = "/api/logs" + (k ? `?q=${encodeURIComponent(k)}&limit=${limit}` : `?limit=${limit}`);
+    // api() 已统一补 /api 前缀；这里再写 /api 会请求成 /api/api/logs。
+    const url = "/logs" + (k ? `?q=${encodeURIComponent(k)}&limit=${limit}` : `?limit=${limit}`);
     let rows;
     try { rows = await api(url); } catch (e) { listEl.innerHTML = `<div class="muted" style="color:var(--err)">加载失败：${esc(e.message)}</div>`; return; }
     if (!rows || rows.length === 0) { listEl.innerHTML = `<div class="muted">暂无操作日志</div>`; return; }
@@ -6159,70 +6159,6 @@ async function viewAuditLog(main) {
 }
 
 // ===========================================================================
-// 备份管理：列出历史备份、立即打包下载当前账套(.fbk + .attachments/)、恢复
-// ===========================================================================
-async function viewBackup(main) {
-  main.innerHTML = `
-    <h2>备份管理</h2>
-    <div class="toolbar">
-      <button class="btn primary" id="bk-download">立即备份并下载打包</button>
-      <span class="muted">把当前账套主文件 + 附件目录打成 zip，含最新数据</span>
-      <div class="spacer"></div>
-      <button class="btn ghost sm" id="bk-refresh">刷新列表</button>
-    </div>
-    <div id="bk-list"><div class="muted">加载中…</div></div>
-    <div id="bk-msg"></div>
-  `;
-  const listEl = document.getElementById("bk-list");
-  const msgEl = document.getElementById("bk-msg");
-
-  const load = async () => {
-    let data;
-    try { data = await api("/api/backups"); } catch (e) {
-      listEl.innerHTML = `<div class="muted" style="color:var(--err)">加载失败：${esc(e.message)}</div>`;
-      return;
-    }
-    const items = data.items || [];
-    if (!items.length) { listEl.innerHTML = `<div class="muted">暂无备份</div>`; return; }
-    const rows = items.map((it) => `
-      <tr>
-        <td>${esc(it.name)}</td>
-        <td class="num">${(it.size / 1024 / 1024).toFixed(2)} MB</td>
-        <td>${esc(it.mtime || "")}</td>
-        <td class="row-actions"><button class="btn ghost sm" data-bk-restore="${esc(it.name)}">恢复</button></td>
-      </tr>
-    `).join("");
-    listEl.innerHTML = `
-      <table class="grid">
-        <thead><tr><th>备份文件</th><th class="num">大小</th><th>修改时间</th><th>操作</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    `;
-    $all("[data-bk-restore]", listEl).forEach((b) => {
-      b.onclick = async () => {
-        const name = b.dataset.bkRestore;
-        if (!(await confirmDialog(`将当前账套恢复为备份「${name}」？当前账套数据会被覆盖，且无法撤销。`, true))) return;
-        try {
-          await api("/api/restore", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ file: name }),
-          });
-          toast("已恢复，请刷新页面查看", "ok");
-        } catch (e) { toast(e.message, "err"); }
-      };
-    });
-  };
-
-  document.getElementById("bk-download").onclick = () => {
-    location.href = "/api/backup/download";
-  };
-  document.getElementById("bk-refresh").onclick = load;
-
-  await load();
-}
-
-// ===========================================================================
 // 多栏账
 // ===========================================================================
 async function viewMultiColumn(main) {
@@ -6235,8 +6171,8 @@ async function viewMultiColumn(main) {
       <button class="btn ghost sm" id="mc-run-print">打印预览</button>
     </div>
     <div id="mc-result" class="muted">填写条件后点击查询</div>`;
-  $("#mc-run").addEventListener("click", async () => {
   $("#mc-run-print").addEventListener("click", () => { const el = $("#mc-result").querySelector("table"); printPreview("多栏账", el); });
+  $("#mc-run").addEventListener("click", async () => {
     const mainCode = $("#mc-main").value.trim();
     const cols = $("#mc-cols").value.split(",").map((s) => s.trim()).filter(Boolean);
     const p = $("#mc-period").value.trim();
@@ -6264,8 +6200,8 @@ async function viewSummaryTable(main) {
       <button class="btn ghost sm" id="st-run-print">打印预览</button>
     </div>
     <div id="st-result" class="muted">填写期间后点击查询</div>`;
-  $("#st-run").addEventListener("click", async () => {
   $("#st-run-print").addEventListener("click", () => { const el = $("#st-result").querySelector("table"); printPreview("摘要汇总表", el); });
+  $("#st-run").addEventListener("click", async () => {
     const p = $("#st-period").value.trim();
     try {
       const r = await api(`/reports/summary-table?from=${encodeURIComponent(p)}&to=${encodeURIComponent(p)}`);
@@ -6287,8 +6223,8 @@ async function viewRatios(main) {
       <button class="btn ghost sm" id="rt-run-print">打印预览</button>
     </div>
     <div id="rt-result" class="muted">填写期间后点击查询</div>`;
-  $("#rt-run").addEventListener("click", async () => {
   $("#rt-run-print").addEventListener("click", () => { const el = $("#rt-result").querySelector("table"); printPreview("财务指标分析", el); });
+  $("#rt-run").addEventListener("click", async () => {
     const p = $("#rt-period").value.trim();
     try {
       const r = await api(`/reports/ratios?period=${encodeURIComponent(p)}`);
@@ -6947,8 +6883,8 @@ async function viewEquity(main) {
     <button class="btn primary" id="eq-run">查询</button>
       <button class="btn ghost sm" id="eq-run-print">打印预览</button></div>
     <div id="eq-result" class="muted">填写期间后点击查询</div>`;
-  $("#eq-run").addEventListener("click", async () => {
   $("#eq-run-print").addEventListener("click", () => { const el = $("#eq-result").querySelector("table"); printPreview("所有者权益变动表", el); });
+  $("#eq-run").addEventListener("click", async () => {
     const p = $("#eq-period").value.trim();
     try {
       const r = await api(`/reports/equity?period=${encodeURIComponent(p)}`);
@@ -6975,8 +6911,8 @@ async function viewCompare(main) {
     <div id="cp-result" class="muted">填写期间后点击对比</div>`;
   const p = $("#cp-cur").value.trim();
   try { $("#cp-prev").value = prevPeriod(p); } catch (e) {}
-  $("#cp-run").addEventListener("click", async () => {
   $("#cp-run-print").addEventListener("click", () => { const el = $("#cp-result").querySelector("table"); printPreview("报表对比分析", el); });
+  $("#cp-run").addEventListener("click", async () => {
     const key = $("#cp-key").value, cur = $("#cp-cur").value.trim(), prev = $("#cp-prev").value.trim();
     try {
       const r = await api(`/reports/compare?key=${encodeURIComponent(key)}&period=${encodeURIComponent(cur)}&prev=${encodeURIComponent(prev)}`);
@@ -7011,8 +6947,8 @@ async function viewDaily(main) {
       <button class="btn primary" id="dl-run">查询</button>
       <button class="btn ghost sm" id="dl-run-print">打印预览</button></div>
     <div id="dl-result" class="muted">填写科目与期间后点击查询</div>`;
-  $("#dl-run").addEventListener("click", async () => {
   $("#dl-run-print").addEventListener("click", () => { const el = $("#dl-result").querySelector("table"); printPreview("科目日报表", el); });
+  $("#dl-run").addEventListener("click", async () => {
     const code = $("#dl-code").value.trim();
     if (!code) { toast("请输入科目编码", "err"); return; }
     const from = $("#dl-from").value.trim();
@@ -7034,8 +6970,8 @@ async function viewReconcile(main) {
     <button class="btn primary" id="rc-run">对账</button>
       <button class="btn ghost sm" id="rc-run-print">打印预览</button></div>
     <div id="rc-result" class="muted">填写期间后点击对账</div>`;
-  $("#rc-run").addEventListener("click", async () => {
   $("#rc-run-print").addEventListener("click", () => { const el = $("#rc-result").querySelector("table"); printPreview("期末对账", el); });
+  $("#rc-run").addEventListener("click", async () => {
     const p = $("#rc-period").value.trim();
     try {
       const r = await api(`/reports/reconcile?period=${encodeURIComponent(p)}`);
@@ -7304,8 +7240,8 @@ async function viewBudgetAlerts(main) {
       <button class="btn primary" id="ba-run">查询</button>
       <button class="btn ghost sm" id="ba-run-print">打印预览</button></div>
     <div id="ba-result" class="muted">填写期间后点击查询</div>`;
-  $("#ba-run").addEventListener("click", async () => {
   $("#ba-run-print").addEventListener("click", () => { const el = $("#ba-result").querySelector("table"); printPreview("预算预警", el); });
+  $("#ba-run").addEventListener("click", async () => {
     const p = $("#ba-period").value.trim(), thr = $("#ba-thr").value.trim() || "90";
     try {
       const r = await api(`/budget/alerts?period=${encodeURIComponent(p)}&threshold=${encodeURIComponent(thr)}`);
@@ -7821,8 +7757,10 @@ async function viewSettle(main) {
       <button class="btn sm ${selTo === r.entry_id ? "primary" : "ghost"}" data-to="${r.entry_id}">收/付</button>`}</td></tr>`;
     };
     $("#st-table", main).innerHTML = `<table class="grid"><thead><tr><th>日期</th><th>凭证号</th><th>往来对象</th><th>摘要</th><th>方向</th><th class="num">发生额</th><th class="num">已核销</th><th class="num">未核销</th><th>选择</th></tr></thead><tbody>${rows.length ? rows.map(rowHtml).join("") : `<tr><td colspan="9" class="muted" style="text-align:center;padding:16px">没有未核销分录</td></tr>`}</tbody></table>`;
-    $all("[data-from]", main).forEach((b) => b.onclick = () => { selFrom = parseInt(b.dataset.from, 10); render(); });
-    $all("[data-to]", main).forEach((b) => b.onclick = () => { selTo = parseInt(b.dataset.to, 10); render(); });
+    // 页面里还有催款单/对账函等按钮也用 data-to（值是 sent/settled 等状态），
+    // 不能在全页范围按 data-to 绑定，否则会把它们的点击劫持成核销选择。
+    $all("#st-table [data-from]", main).forEach((b) => b.onclick = () => { selFrom = parseInt(b.dataset.from, 10); render(); });
+    $all("#st-table [data-to]", main).forEach((b) => b.onclick = () => { selTo = parseInt(b.dataset.to, 10); render(); });
   }
 
   async function load() {
@@ -11825,7 +11763,8 @@ async function viewBackup(main) {
     <div class="toolbar">
       <span class="muted">备份当前账套到服务器 backups 目录；恢复会先自动备份一次当前数据。</span>
       <div class="spacer"></div>
-      ${can("backup") ? `<button class="btn primary" id="bk-new">立即备份</button>` : ""}
+      ${can("backup") ? `<button class="btn primary" id="bk-new">立即备份</button>
+      <button class="btn ghost" id="bk-download">备份并下载打包</button>` : ""}
     </div>
     <div class="panel" style="padding:0;overflow:auto">
       <table class="grid"><thead><tr><th>备份文件</th><th class="num">大小</th><th>时间</th><th></th></tr></thead>
@@ -11858,6 +11797,8 @@ async function viewBackup(main) {
     try { const r = await api("/backups", { method: "POST" }); toast(`已备份：${r.name}`, "ok"); load(); }
     catch (e) { toast(e.message, "err"); }
   });
+  const dl = $("#bk-download");
+  if (dl) dl.addEventListener("click", () => { location.href = "/api/backup/download"; });
   try { await load(); } catch (e) { $("#bk-rows").innerHTML = `<tr><td colspan="4" style="color:var(--err);text-align:center;padding:18px">${esc(e.message)}</td></tr>`; }
 }
 
