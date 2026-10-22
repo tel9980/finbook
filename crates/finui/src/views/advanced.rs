@@ -284,10 +284,10 @@ impl SummaryTableView {
                     ui.label(r.voucher_count.to_string());
                 }
                 2 => {
-                    widgets::amount_label(ui, r.debit);
+                    widgets::report_amount(ui, r.debit, false);
                 }
                 3 => {
-                    widgets::amount_label(ui, r.credit);
+                    widgets::report_amount(ui, r.credit, false);
                 }
                 _ => {}
             }
