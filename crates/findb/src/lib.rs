@@ -436,8 +436,26 @@ impl Db {
     /// 清空全部业务数据，保留基础资料（用于重新建账 / 演示重置）
     pub fn clear_vouchers(&self) -> DbResult<()> {
         let tx = self.write_tx()?;
+        // 业务单据里的 voucher_id 是普通整数列（没有外键级联），删凭证不会自动清理。
+        // 不置空的话，清空业务数据后工资、报销、盘点、票据、借款等仍指向不存在的
+        // 凭证号；之后再新建凭证复用该 id 时，这些单据会“认错”新凭证。
+        // landed_cost.voucher_id 是 NOT NULL DEFAULT 0，用 0 表示未挂凭证。
         tx.execute_batch(
-            "DELETE FROM voucher_entry;
+            "UPDATE fixed_asset       SET voucher_id=NULL;
+             UPDATE asset_depreciation SET voucher_id=NULL;
+             UPDATE stock_move        SET voucher_id=NULL;
+             UPDATE payroll           SET voucher_id=NULL, paid_voucher_id=NULL, social_voucher_id=NULL;
+             UPDATE expense_claim     SET voucher_id=NULL;
+             UPDATE landed_cost       SET voucher_id=0;
+             UPDATE cash_count        SET voucher_id=NULL;
+             UPDATE advance           SET paid_voucher_id=NULL, settle_voucher_id=NULL;
+             UPDATE receipt_doc       SET voucher_id=NULL;
+             UPDATE fund_transfer     SET voucher_id=NULL;
+             UPDATE arap_offset       SET voucher_id=NULL;
+             UPDATE inv_count         SET voucher_id=NULL;
+             UPDATE bill              SET voucher_id=NULL;
+             UPDATE loan              SET voucher_id=NULL, settle_voucher_id=NULL;
+             DELETE FROM voucher_entry;
              DELETE FROM voucher;
              DELETE FROM begin_balance;
              DELETE FROM period_state;",
@@ -917,5 +935,45 @@ mod tests {
             "手工备份不应被轮转删除"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn clear_vouchers_clears_dangling_business_links() {
+        let db = mem();
+        db.conn()
+            .execute(
+                "INSERT INTO payroll(period, employee, voucher_id, paid_voucher_id, social_voucher_id)
+                 VALUES(202601, 'E001', 11, 12, 13)",
+                [],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO advance(period, date, paid_voucher_id, settle_voucher_id)
+                 VALUES(202601, '2026-01-05', 21, 22)",
+                [],
+            )
+            .unwrap();
+
+        db.clear_vouchers().unwrap();
+
+        let (v, paid, social): (Option<i64>, Option<i64>, Option<i64>) = db
+            .conn()
+            .query_row(
+                "SELECT voucher_id, paid_voucher_id, social_voucher_id FROM payroll",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((v, paid, social), (None, None, None));
+        let (paid, settle): (Option<i64>, Option<i64>) = db
+            .conn()
+            .query_row(
+                "SELECT paid_voucher_id, settle_voucher_id FROM advance",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((paid, settle), (None, None));
     }
 }
