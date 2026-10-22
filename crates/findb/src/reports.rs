@@ -388,7 +388,9 @@ pub fn report_compare(
         let rate = if prev.is_zero() {
             Money::ZERO
         } else {
-            (diff.abs() * Money::from_i64(100))
+            // 分母取绝对值只用于统一比例基准；分子必须保留方向，否则收入下降
+            // 会被显示成“+20%”，和差额的负号自相矛盾。
+            (diff * Money::from_i64(100))
                 .checked_div(prev.abs().inner())
                 .expect("prev 已判非零")
                 .round2()
@@ -1013,6 +1015,36 @@ mod tests {
         assert_eq!(rev.current, Money::parse("3000").unwrap());
         assert_eq!(rev.previous, Money::parse("1000").unwrap());
         assert_eq!(rev.diff, Money::parse("2000").unwrap());
+        assert_eq!(rev.rate, Money::parse("200").unwrap());
+    }
+
+    #[test]
+    fn report_compare_rate_keeps_negative_sign() {
+        let db = mem();
+        let p1 = Period::new(2026, 1).unwrap();
+        let p2 = Period::new(2026, 2).unwrap();
+        cash_voucher(
+            &db,
+            p1,
+            5,
+            vec![
+                ("1001", "借", "1000", Some("0101")),
+                ("600101", "贷", "1000", None),
+            ],
+        );
+        cash_voucher(
+            &db,
+            p2,
+            5,
+            vec![
+                ("1001", "借", "800", Some("0101")),
+                ("600101", "贷", "800", None),
+            ],
+        );
+        let rows = report_compare(&db, "income_statement", p2, p2, p1, p1, None).unwrap();
+        let rev = rows.iter().find(|r| r.no == "1").unwrap();
+        assert_eq!(rev.diff, Money::parse("-200").unwrap());
+        assert_eq!(rev.rate, Money::parse("-20").unwrap());
     }
 
     #[test]
