@@ -247,18 +247,6 @@ pub struct ReportRow {
     pub show_negative_red: bool,
 }
 
-impl ReportRow {
-    /// 表格单元格文本：零值显示为空白（财务报表惯例）
-    pub fn cell(&self, col: usize) -> String {
-        let v = self.values.get(col).copied().unwrap_or(Money::ZERO);
-        if v.is_zero() && self.style == LineStyle::Normal {
-            String::new()
-        } else {
-            v.fmt_money()
-        }
-    }
-}
-
 /// 计算出的报表
 #[derive(Clone, Debug)]
 pub struct ReportTable {
