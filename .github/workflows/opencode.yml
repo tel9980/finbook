@@ -31,10 +31,17 @@ permissions:
 
 jobs:
   opencode:
-    # 只响应包含触发词的评论，避免每条评论都烧一次 token
+    # 只响应包含触发词的评论，避免每条评论都烧一次 token。
+    #
+    # 必须同时限定评论者身份：这个 job 持有 contents/pull-requests/issues 写权限，
+    # 若允许任意评论者触发，公开仓库里任何人都能对 Agent 下指令（提示词注入），
+    # 借写权限改代码/开 PR。只允许仓库所有者、成员、协作者。
     if: |
-      contains(github.event.comment.body, '/oc') ||
-      contains(github.event.comment.body, '/opencode')
+      (github.event.comment.author_association == 'OWNER' ||
+       github.event.comment.author_association == 'MEMBER' ||
+       github.event.comment.author_association == 'COLLABORATOR') &&
+      (contains(github.event.comment.body, '/oc') ||
+       contains(github.event.comment.body, '/opencode'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -45,7 +52,10 @@ jobs:
           persist-credentials: false
 
       - name: Run OpenCode
-        uses: anomalyco/opencode/github@latest
+        # 固定到 commit，不用 @latest：这是持有写权限的第三方 Action，
+        # 上游一次静默推送就能改变本仓库 CI 的行为。升级时显式改这里的 SHA。
+        # 解析日期：2026-10-22（main HEAD）。
+        uses: anomalyco/opencode/github@248bfbe1117da1e7cc23bd41273188318afec3a5
         env:
           # 默认走 OpenRouter：一个 Key 可用多家模型，换模型只改变量、不换 Key
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
