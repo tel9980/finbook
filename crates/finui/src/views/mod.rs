@@ -43,6 +43,26 @@ pub mod voucher_list;
 
 use crate::state::{AppCtx, DataKind, NavItem};
 
+/// 让报表/账簿/凭证列表的期间默认跟随顶栏全局期间，同时尊重用户手工改过的期间。
+///
+/// 旧实现只在 `from/to` 为空时初始化，之后切全局期间页面不动，用户看到的还是旧数。
+/// `last` 记录上次跟随到的全局期间：只要输入框仍等于 `last`，就认为用户没有手工改过，
+/// 继续跟随；一旦用户改了，后续切全局期间就保留用户选择。
+pub(crate) fn sync_followed_period(
+    from: &mut String,
+    to: &mut String,
+    last: &mut String,
+    current: &str,
+) {
+    if from.is_empty() || from == last {
+        *from = current.to_string();
+    }
+    if to.is_empty() || to == last {
+        *to = current.to_string();
+    }
+    *last = current.to_string();
+}
+
 #[derive(Default)]
 pub struct Views {
     pub dashboard: dashboard::Dashboard,
@@ -298,5 +318,30 @@ impl Views {
             NavItem::Help => self.help.show(ctx, ui),
             NavItem::About => self.about.show(ctx, ui),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sync_followed_period;
+
+    #[test]
+    fn followed_period_updates_until_user_overrides() {
+        let mut from = String::new();
+        let mut to = String::new();
+        let mut last = String::new();
+
+        sync_followed_period(&mut from, &mut to, &mut last, "2026-01");
+        assert_eq!((from.as_str(), to.as_str()), ("2026-01", "2026-01"));
+
+        // 没有手工改过，继续跟随顶栏。
+        sync_followed_period(&mut from, &mut to, &mut last, "2026-02");
+        assert_eq!((from.as_str(), to.as_str()), ("2026-02", "2026-02"));
+
+        // 用户手工把起始期间改成 2025-12，之后不再覆盖。
+        from = "2025-12".to_string();
+        sync_followed_period(&mut from, &mut to, &mut last, "2026-03");
+        assert_eq!(from, "2025-12");
+        assert_eq!(to, "2026-03");
     }
 }
