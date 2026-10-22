@@ -15,8 +15,9 @@ module.exports = defineConfig({
   // ③ 全套件共用一个 admin 账号和一个数据目录，并行本就存在状态互相踩踏。
   // 代价是墙钟时间（约 +30%），换来的是失败信号可信——这正是本套件最需要的。
   workers: 1,
-  // CI 偶发（浏览器调度/计时）容忍一次，避免整条流水线因单个抖动重跑
-  retries: 1,
+  // CI 必须暴露真实失败：重跑一次会把竞态/时序 bug 吞掉。本地保留 1 次，
+  // 方便调试偶发抖动；CI 上首次失败就是失败。
+  retries: process.env.CI ? 0 : 1,
   reporter: [["list"]],
   use: {
     baseURL: process.env.E2E_BASE_URL || "http://127.0.0.1:18080",
