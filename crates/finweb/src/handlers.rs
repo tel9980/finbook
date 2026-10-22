@@ -3537,6 +3537,11 @@ async fn period_carry_forward(
     // 若按已记账口径取数，草稿看不见 → 第二次调用时损益仍未清零 → 重复结转。
     // 结账前 checklist 要求全部记账，届时两种口径结果相同（H-3 定案的已记账口径
     // 用于余额表/报表/账簿，不用于本操作的幂等判定）。
+    // 取数、幂等判断、取号、落库必须同事务：原实现先读余额再单独 save，
+    // 两个并发请求都能读到“有损益”，各自生成一张结转凭证；等第二张提交时，
+    // 损益已经被第一张清零，账上就多了一笔重复结转。BEGIN IMMEDIATE 让后来者
+    // 等前者提交后再取数，第二次看到的净额已是 0。
+    let tx = db.write_tx()?;
     let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
     let rows = snap.profit_loss_rows(&chart);
     if rows.is_empty() {
@@ -3568,7 +3573,7 @@ async fn period_carry_forward(
         .first()
         .cloned()
         .unwrap_or_else(|| "记".to_string());
-    let no = vouchers::next_no(&db, period, &word)?;
+    let no = vouchers::next_no_of(&tx, period, &word)?;
     let mut v = fincore::engine::period_end::generate_carry_forward(
         period,
         date,
@@ -3579,7 +3584,8 @@ async fn period_carry_forward(
         fincore::engine::period_end::PROFIT_ACCOUNT,
         user.username(),
     )?;
-    let id = vouchers::save(&db, &mut v)?;
+    let id = vouchers::save_in(&tx, &mut v)?;
+    tx.commit().map_err(findb::DbError::from)?;
     db.log(
         user.username(),
         "期末",
@@ -3601,6 +3607,8 @@ async fn period_year_end(
     let chart = accounts::chart(&db)?;
     // 同 period_carry_forward：含草稿取数，保证第一次生成的结转草稿能清零 4103，
     // 第二次调用（余额 0）才会被拒，否则同一笔利润会被结转两次。
+    // 取数与落库放同一事务，避免并发请求都读到结转前余额。
+    let tx = db.write_tx()?;
     let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
     let profit = snap
         .for_account(fincore::engine::period_end::PROFIT_ACCOUNT, None)
@@ -3611,7 +3619,7 @@ async fn period_year_end(
         .first()
         .cloned()
         .unwrap_or_else(|| "记".to_string());
-    let no = vouchers::next_no(&db, period, &word)?;
+    let no = vouchers::next_no_of(&tx, period, &word)?;
     let mut v = fincore::engine::period_end::generate_year_end_carry(
         period,
         date,
@@ -3622,7 +3630,8 @@ async fn period_year_end(
         &chart,
         user.username(),
     )?;
-    let id = vouchers::save(&db, &mut v)?;
+    let id = vouchers::save_in(&tx, &mut v)?;
+    tx.commit().map_err(findb::DbError::from)?;
     db.log(
         user.username(),
         "期末",
@@ -14765,22 +14774,40 @@ fn book_attachment_paths(db: &Db) -> Result<Vec<String>, AppError> {
 /// 关键是**先剥掉固定宽度的时间戳前缀，再比较剩余部分是否与 key 完全相等**。
 /// 原先的 `ends_with("_{key}.fbk")` 会把 key 当成后缀匹配：`alice_202610.fbk`
 /// 会被 key=`202610` 的账套认领。
+/// 备份文件名时间戳：精确到毫秒，避免同一秒连续点击互相覆盖。
+/// 格式 `YYYYMMDD_HHMMSSmmm`（9 位时间），旧备份仍是 6 位，解析两种都兼容。
+fn backup_stamp() -> String {
+    let now = chrono::Local::now();
+    format!(
+        "{}{:03}",
+        now.format("%Y%m%d_%H%M%S"),
+        now.timestamp_subsec_millis()
+    )
+}
+
 fn backup_belongs_to(name: &str, key: &str) -> bool {
     let Some(stem) = name.strip_suffix(".fbk") else {
         return false;
     };
     let stem = stem.strip_prefix("auto_").unwrap_or(stem);
-    // 固定前缀：8 位日期 + '_' + 6 位时间 + '_'
+    // 固定前缀：8 位日期 + '_' + 6 或 9 位时间 + '_' + key。
     let bytes = stem.as_bytes();
     if bytes.len() < 16 {
         return false;
     }
     let digits = |s: &[u8]| s.iter().all(|b| b.is_ascii_digit());
-    if !(digits(&bytes[..8]) && bytes[8] == b'_' && digits(&bytes[9..15]) && bytes[15] == b'_') {
+    if !(digits(&bytes[..8]) && bytes[8] == b'_') {
         return false;
     }
-    // 前缀全是 ASCII，按字节切一定落在字符边界上。
-    &stem[16..] == key
+    let rest = &stem[9..];
+    let Some(pos) = rest.find('_') else {
+        return false;
+    };
+    let time = &rest[..pos];
+    if !(time.len() == 6 || time.len() == 9) || !digits(time.as_bytes()) {
+        return false;
+    }
+    &rest[pos + 1..] == key
 }
 
 async fn list_backups(
@@ -14837,7 +14864,7 @@ async fn create_backup(
         let db = state2.db_for(&key)?;
         checkpoint_wal(&db)?;
         drop(db);
-        let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let stamp = backup_stamp();
         let dst_name = format!("{}_{}.fbk", stamp, key);
         std::fs::copy(&src, dir.join(&dst_name))?;
         let db = state2.db_for(&key)?;
@@ -14913,7 +14940,7 @@ async fn restore_backup(
         let db = state2.db_for(&key)?;
         checkpoint_wal(&db)?;
         drop(db);
-        let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+        let stamp = backup_stamp();
         let auto_name = format!("auto_{}_{}.fbk", stamp, key);
         let auto_path = backups_dir.join(&auto_name);
         std::fs::copy(&dst, &auto_path).map_err(|e| {
@@ -15007,7 +15034,7 @@ async fn download_backup(
     let attach_paths = book_attachment_paths(&db)?;
     drop(db);
 
-    let stamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let stamp = backup_stamp();
     let zip_name = format!("{key}_backup_{stamp}.zip");
 
     let buf = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
@@ -15124,17 +15151,34 @@ async fn generate_template(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let t = template::get(&db, id)?.ok_or_else(|| AppError::not_found("模板不存在"))?;
     let period = match req.period.filter(|ym| *ym > 0) {
         Some(ym) => period_checked(ym)?,
         None => current_period(&state, &user),
     };
     let date = req_date(&req.date, period.last_day())?;
     let word = "记";
-    let no = vouchers::next_no(&db, period, word)?;
+    // 生成凭证 + 回写 last_period 必须原子；同时把“本期已生成”判断放进
+    // BEGIN IMMEDIATE，避免双击/并发各生成一张。手工模板允许多次调用，
+    // 只有周期性模板才按 last_period 拒绝重复。
+    let tx = db.write_tx()?;
+    let t = template::get(&db, id)?.ok_or_else(|| AppError::not_found("模板不存在"))?;
+    if t.freq != template::Freq::Manual {
+        if let Some(last) = t.last_period {
+            if period.ymm() <= last.ymm() {
+                return Err(AppError::bad_request(format!(
+                    "模板「{}」在 {} 已生成过（上次 {}），无需重复生成",
+                    t.name,
+                    period.label(),
+                    last.label()
+                )));
+            }
+        }
+    }
+    let no = vouchers::next_no_of(&tx, period, word)?;
     let mut v = t.to_voucher(period, date, word, no as i64, user.username())?;
-    let vid = vouchers::save(&db, &mut v)?;
-    template::mark_generated(&db, id, period)?;
+    let vid = vouchers::save_in(&tx, &mut v)?;
+    template::mark_generated_on(&tx, id, period)?;
+    tx.commit().map_err(findb::DbError::from)?;
     db.log(
         user.username(),
         "凭证模板",
@@ -16241,6 +16285,19 @@ mod security_regression_tests {
             "alice_202610"
         ));
         assert!(backup_belongs_to("20261022_120000_202610.fbk", "202610"));
+        // 毫秒级时间戳（v1.8.7 起）也必须能识别，且不能和 6 位时间的旧备份混淆。
+        assert!(backup_belongs_to(
+            "20261022_120000123_alice_202610.fbk",
+            "alice_202610"
+        ));
+        assert!(backup_belongs_to(
+            "auto_20261022_120000123_alice_202610.fbk",
+            "alice_202610"
+        ));
+        assert!(!backup_belongs_to(
+            "20261022_120000123_alice_202610.fbk",
+            "202610"
+        ));
         // 旧实现的后缀碰撞：key=202610 不能认领 alice_202610 的备份
         assert!(!backup_belongs_to(
             "20261022_120000_alice_202610.fbk",
