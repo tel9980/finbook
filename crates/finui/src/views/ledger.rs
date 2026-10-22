@@ -36,6 +36,8 @@ pub struct LedgerView {
     pub scope_blocked: bool,
     pub dirty: bool,
     key: String,
+    /// 上次自动跟随的全局期间；用于区分“还在跟随”与“用户手工改过”
+    last_period: String,
 }
 
 impl Default for LedgerView {
@@ -57,6 +59,7 @@ impl Default for LedgerView {
             scope_blocked: false,
             dirty: true,
             key: String::new(),
+            last_period: String::new(),
         }
     }
 }
@@ -67,13 +70,8 @@ impl LedgerView {
     }
 
     pub fn enter(&mut self, ctx: &mut AppCtx<'_>, code: Option<String>) {
-        let p = ctx.period();
-        if self.from.is_empty() {
-            self.from = p.code();
-        }
-        if self.to.is_empty() {
-            self.to = p.code();
-        }
+        let p = ctx.period().code();
+        super::sync_followed_period(&mut self.from, &mut self.to, &mut self.last_period, &p);
         if let Some(c) = code {
             self.code = c;
         }
