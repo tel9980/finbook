@@ -291,7 +291,13 @@ pub fn delete(db: &Db, id: i64) -> DbResult<()> {
 
 /// 标记某期间已经生成过（防止重复出凭证）
 pub fn mark_generated(db: &Db, id: i64, p: Period) -> DbResult<()> {
-    db.conn().execute(
+    mark_generated_on(db.conn(), id, p)
+}
+
+/// 在调用方事务内回写 `last_period`：生成凭证与推进模板必须同一提交，
+/// 否则凭证已落库、标记失败时下次还会再生成一张。
+pub fn mark_generated_on(conn: &rusqlite::Connection, id: i64, p: Period) -> DbResult<()> {
+    conn.execute(
         "UPDATE voucher_template SET last_period=?2 WHERE id=?1",
         rusqlite::params![id, p.ymm()],
     )?;
