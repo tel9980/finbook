@@ -32,6 +32,8 @@ pub struct ReportsView {
     pub err: Option<String>,
     pub dirty: bool,
     key: String,
+    /// 上次自动跟随的全局期间；用于区分“还在跟随”与“用户手工改过”
+    last_period: String,
 }
 
 impl Default for ReportsView {
@@ -47,6 +49,7 @@ impl Default for ReportsView {
             err: None,
             dirty: true,
             key: String::new(),
+            last_period: String::new(),
         }
     }
 }
@@ -57,13 +60,8 @@ impl ReportsView {
     }
 
     pub fn enter(&mut self, ctx: &mut AppCtx<'_>) {
-        let p = ctx.period();
-        if self.from.is_empty() {
-            self.from = p.code();
-        }
-        if self.to.is_empty() {
-            self.to = p.code();
-        }
+        let p = ctx.period().code();
+        super::sync_followed_period(&mut self.from, &mut self.to, &mut self.last_period, &p);
         self.dirty = true;
     }
 
