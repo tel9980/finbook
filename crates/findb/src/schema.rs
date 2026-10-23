@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 36;
+pub const SCHEMA_VERSION: i64 = 38;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1305,6 +1305,9 @@ CREATE TABLE IF NOT EXISTS receipt_doc (
     kind         TEXT NOT NULL DEFAULT 'receipt', -- receipt=收款 / payment=付款
     fund_account TEXT NOT NULL DEFAULT '100201',
     party        TEXT NOT NULL DEFAULT '',       -- 往来单位辅助编码
+    bank         TEXT NOT NULL DEFAULT '',       -- 资金账户辅助：银行编码 B01/B02 或 WECHAT
+    cross_party  TEXT NOT NULL DEFAULT '',       -- 跨方对冲单位（收款=供应商、付款=客户）
+    cross_amount TEXT NOT NULL DEFAULT '0',      -- 跨方对冲金额
     amount       TEXT NOT NULL DEFAULT '0',
     memo         TEXT NOT NULL DEFAULT '',
     voucher_id   INTEGER,
@@ -1323,6 +1326,7 @@ CREATE TABLE IF NOT EXISTS fund_transfer (
     date         TEXT NOT NULL,
     from_account TEXT NOT NULL DEFAULT '',      -- 转出资金账户（末级，如 100201）
     to_account   TEXT NOT NULL DEFAULT '',      -- 转入资金账户（末级，如 1001）
+    bank         TEXT NOT NULL DEFAULT '',      -- 资金账户辅助：银行编码 B01/B02 或 WECHAT
     amount       TEXT NOT NULL DEFAULT '0',
     memo         TEXT NOT NULL DEFAULT '',
     voucher_id   INTEGER,
@@ -1633,6 +1637,20 @@ const MIGRATE_V35: &[(&str, &str, &str)] = &[
 /// 这些索引对应的列大多是早已存在的（如 po_id/so_id/batch_no 等），
 /// 只需在旧账套上补建索引即可；不新增列，故清单为空。
 const MIGRATE_V36: &[(&str, &str, &str)] = &[];
+
+/// V37：资金账户辅助编码（bank=B01/B02/WECHAT 等），给 receipt_doc/fund_transfer
+/// 加 bank 列，以支持多银行+微信作为现金。
+const MIGRATE_V37: &[(&str, &str, &str)] = &[
+    ("receipt_doc", "bank", "TEXT NOT NULL DEFAULT ''"),
+    ("fund_transfer", "bank", "TEXT NOT NULL DEFAULT ''"),
+];
+
+/// V38：收付款单跨方对冲（cross_party/cross_amount），给 receipt_doc
+/// 加跨方往来单位与金额列，以支持客户付款/付供应商不一一对应、对冲相抵。
+const MIGRATE_V38: &[(&str, &str, &str)] = &[
+    ("receipt_doc", "cross_party", "TEXT NOT NULL DEFAULT ''"),
+    ("receipt_doc", "cross_amount", "TEXT NOT NULL DEFAULT '0'"),
+];
 
 /// v5 → v6：供应链深化（采购订单 / 销售订单 / BOM / 生产订单）
 const MIGRATE_V6: &[(&str, &str, &str)] = &[
@@ -2157,6 +2175,10 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_generic(conn, MIGRATE_V35)?;
             // v36 只补索引（不加列），紧跟在 v35 之后即可
             migrate_generic(conn, MIGRATE_V36)?;
+            // v37：补 bank 列到 receipt_doc/fund_transfer（多银行+微信）
+            migrate_generic(conn, MIGRATE_V37)?;
+            // v38：补 cross_party/cross_amount 列到 receipt_doc（跨方对冲）
+            migrate_generic(conn, MIGRATE_V38)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：

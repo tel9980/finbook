@@ -42,12 +42,16 @@ pub struct FundsView {
     pub rc_kind: String,
     pub rc_fund: String,
     pub rc_party: String,
+    pub rc_bank: String,
+    pub rc_cross_party: String,
+    pub rc_cross_amount: String,
     pub rc_amount: String,
     pub rc_memo: String,
     // 资金调拨录入（日期 / 转出账户 / 转入账户 / 金额 / 备注）
     pub tf_date: String,
     pub tf_from: String,
     pub tf_to: String,
+    pub tf_bank: String,
     pub tf_amount: String,
     pub tf_memo: String,
     // 出纳日记账（科目 + 日清日期）
@@ -97,11 +101,15 @@ impl Default for FundsView {
             rc_kind: "receipt".to_string(),
             rc_fund: String::new(),
             rc_party: String::new(),
+            rc_bank: String::new(),
+            rc_cross_party: String::new(),
+            rc_cross_amount: String::new(),
             rc_amount: String::new(),
             rc_memo: String::new(),
             tf_date: String::new(),
             tf_from: "100201".to_string(),
             tf_to: "1001".to_string(),
+            tf_bank: String::new(),
             tf_amount: String::new(),
             tf_memo: String::new(),
         }
@@ -1609,6 +1617,21 @@ impl FundsView {
                 [110.0, 22.0],
                 egui::TextEdit::singleline(&mut self.rc_party).hint_text("辅助编码 C01/S01"),
             );
+            ui.label("银行/微信");
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.rc_bank).hint_text("B01/B02/WECHAT"),
+            );
+            ui.label("跨方单位");
+            ui.add_sized(
+                [110.0, 22.0],
+                egui::TextEdit::singleline(&mut self.rc_cross_party).hint_text("S01/C01"),
+            );
+            ui.label("跨方金额");
+            ui.add_sized(
+                [100.0, 22.0],
+                egui::TextEdit::singleline(&mut self.rc_cross_amount).hint_text("0.00"),
+            );
             ui.label("金额");
             ui.add_sized(
                 [100.0, 22.0],
@@ -1627,6 +1650,9 @@ impl FundsView {
                             date,
                             &self.rc_fund,
                             &self.rc_party,
+                            &self.rc_bank,
+                            &self.rc_cross_party,
+                            Money::parse_or_zero(&self.rc_cross_amount),
                             amount,
                             &self.rc_memo,
                             &who,
@@ -1834,6 +1860,11 @@ impl FundsView {
                 [90.0, 22.0],
                 egui::TextEdit::singleline(&mut self.tf_to).hint_text("1001"),
             );
+            ui.label("银行/微信");
+            ui.add_sized(
+                [90.0, 22.0],
+                egui::TextEdit::singleline(&mut self.tf_bank).hint_text("B01/B02/WECHAT"),
+            );
             ui.label("金额");
             ui.add_sized(
                 [100.0, 22.0],
@@ -1851,6 +1882,7 @@ impl FundsView {
                             date,
                             &self.tf_from,
                             &self.tf_to,
+                            &self.tf_bank,
                             amount,
                             &self.tf_memo,
                             &who,

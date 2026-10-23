@@ -32,6 +32,12 @@ pub struct ReceiptDoc {
     pub fund_account: String,
     /// 往来单位（辅助编码：收款=客户、付款=供应商；决定与谁核销）
     pub party: String,
+    /// 资金账户辅助编码（银行 B01/B02 或微信 WECHAT，空则按 fund_account 推断默认 B01）
+    pub bank: String,
+    /// 跨方对冲往来单位（收款=供应商、付款=客户；空则不做跨方对冲）
+    pub cross_party: String,
+    /// 跨方对冲金额（0 表示不跨方）
+    pub cross_amount: Money,
     pub amount: Money,
     pub memo: String,
     /// 生成的记账凭证（草稿阶段为 None，审核时生成）
@@ -55,17 +61,20 @@ fn map_doc(r: &rusqlite::Row) -> rusqlite::Result<ReceiptDoc> {
         kind: r.get(4)?,
         fund_account: r.get(5)?,
         party: r.get(6)?,
-        amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
-        memo: r.get(8)?,
-        voucher_id: r.get(9)?,
-        created_by: r.get(10)?,
-        created_at: r.get(11)?,
-        status: r.get(12)?,
+        bank: r.get(7)?,
+        cross_party: r.get(8)?,
+        cross_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
+        amount: Money::parse_or_zero(&r.get::<_, String>(10)?),
+        memo: r.get(11)?,
+        voucher_id: r.get(12)?,
+        created_by: r.get(13)?,
+        created_at: r.get(14)?,
+        status: r.get(15)?,
     })
 }
 
 const R_COLS: &str =
-    "id,no,period,date,kind,fund_account,party,amount,memo,voucher_id,created_by,created_at,status";
+    "id,no,period,date,kind,fund_account,party,bank,cross_party,cross_amount,amount,memo,voucher_id,created_by,created_at,status";
 
 pub fn receipt_list(db: &Db) -> DbResult<Vec<ReceiptDoc>> {
     let mut st = db.conn().prepare(&format!(
@@ -95,6 +104,9 @@ pub fn receipt_create(
     date: NaiveDate,
     fund_account: &str,
     party: &str,
+    bank: &str,
+    cross_party: &str,
+    cross_amount: Money,
     amount: Money,
     memo: &str,
     who: &str,
@@ -127,8 +139,8 @@ pub fn receipt_create(
         chrono::Local::now().format("%y%m%d%H%M%S")
     );
     tx.execute(
-        "INSERT INTO receipt_doc(no,period,date,kind,fund_account,party,amount,memo,created_by,created_at,status)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'draft')",
+        "INSERT INTO receipt_doc(no,period,date,kind,fund_account,party,bank,cross_party,cross_amount,amount,memo,created_by,created_at,status)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'draft')",
         rusqlite::params![
             doc_no,
             period.ymm(),
@@ -136,6 +148,9 @@ pub fn receipt_create(
             kind,
             fund,
             party,
+            bank,
+            cross_party,
+            crate::money_param(cross_amount),
             crate::money_param(amount),
             memo,
             who,
@@ -169,6 +184,11 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
     if party.is_empty() {
         return Err(fincore::FinError::validate("往来单位为空，无法核销").into());
     }
+    let bank = if d.bank.trim().is_empty() {
+        None
+    } else {
+        Some(d.bank.trim())
+    };
     let amount = d.amount;
     let date = d.date;
     let memo = d.memo.as_str();
@@ -178,7 +198,7 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
         d.fund_account.clone()
     };
     let biz = db.options().biz_accounts.clone();
-    let party_base = if receipt { biz.ar } else { biz.ap };
+    let party_base = if receipt { biz.ar.clone() } else { biz.ap.clone() };
     // 一级科目根：覆盖该往来科目的全部下级叶子（按账套编码方案第一级长度截断）
     let scheme = db.options().code_scheme.clone();
     let root_len = scheme.first().map(|s| *s as usize).unwrap_or(4);
@@ -217,11 +237,11 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
         }
     });
 
-    // FIFO 分摊：按日期顺序逐笔吃掉挂账，分组到各往来叶子科目。
-    // 分组键必须是「科目 + 挂账分录的完整辅助核算」：多维往来科目（客户+部门等）
-    // 若只按科目分组、辅助核算沿用收款单自己的（只有客户），生成的核销分录会因
-    // 「核算部门，必须填写部门」被校验挡下，整笔收款审核失败。
-    let mut remaining = amount;
+    // 同方 FIFO 分摊：按日期顺序逐笔吃掉挂账，金额 = 总额 - 跨方金额
+    let cross_party = d.cross_party.trim();
+    let cross_amount = d.cross_amount;
+    let same_party_amount = amount - cross_amount;
+    let mut remaining = same_party_amount;
     let mut leg_alloc: std::collections::BTreeMap<String, (Money, AuxRef)> =
         std::collections::BTreeMap::new();
     let mut allocs: Vec<(i64, String, Money)> = Vec::new(); // (挂账分录 id, 科目, 金额)
@@ -240,11 +260,67 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
             remaining -= take;
         }
     }
-    // 多余/无挂账 → 落账套默认往来科目（预收/预付性质），辅助核算用收款单自己的
+    // 同方多余/无挂账 → 落账套默认往来科目（预收/预付性质），辅助核算用收款单自己的
     if remaining.is_positive() || leg_alloc.is_empty() {
         let pk = format!("{}\u{1f}{}", party_base, aux.key());
         let slot = leg_alloc.entry(pk).or_insert((Money::ZERO, aux.clone()));
         slot.0 += remaining;
+    }
+
+    // 跨方 FIFO 分摊：针对另一往来单位，使用相反科目与相反辅助维度
+    if cross_amount.is_positive() && !cross_party.is_empty() {
+        let cross_account = if receipt { biz.ap } else { biz.ar }; // 收款→应付，付款→应收
+        let cross_root = if cross_account.len() >= root_len {
+            cross_account[..root_len].to_string()
+        } else {
+            cross_account.clone()
+        };
+        let cross_aux = if receipt {
+            AuxRef {
+                supplier: Some(cross_party.to_string()),
+                ..Default::default()
+            }
+        } else {
+            AuxRef {
+                customer: Some(cross_party.to_string()),
+                ..Default::default()
+            }
+        };
+        let cross_aux_key = cross_aux.key();
+
+        // 未清挂账：跨方单位，相反科目
+        let mut cross_open = crate::settle::open_entries(db, &cross_root, period, false)?;
+        cross_open.retain(|e| AuxRef::key_contains(&e.aux_key, &cross_aux_key));
+        let cross_want_debit_side = !receipt; // 收款冲贷方应付；付款冲借方应收
+        cross_open.retain(|e| {
+            if cross_want_debit_side {
+                e.debit > Money::ZERO
+            } else {
+                e.credit > Money::ZERO
+            }
+        });
+
+        let mut cross_remaining = cross_amount;
+        for e in &cross_open {
+            if cross_remaining.is_zero() {
+                break;
+            }
+            let take = cross_remaining.min(e.open());
+            if take.is_positive() {
+                allocs.push((e.entry_id, e.account_code.clone(), take));
+                let ek = format!("{}\u{1f}{}", e.account_code, e.aux_key);
+                let ea = AuxRef::from_key(&e.aux_key);
+                let slot = leg_alloc.entry(ek).or_insert((Money::ZERO, ea));
+                slot.0 += take;
+                cross_remaining -= take;
+            }
+        }
+        // 跨方多余 → 落账跨方默认科目（预收/预付性质）
+        if cross_remaining.is_positive() {
+            let pk = format!("{}\u{1f}{}", cross_account, cross_aux.key());
+            let slot = leg_alloc.entry(pk).or_insert((Money::ZERO, cross_aux.clone()));
+            slot.0 += cross_remaining;
+        }
     }
 
     let tx = db.write_tx()?;
@@ -263,7 +339,7 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
     };
     let summary = v.memo.clone();
     // 资金腿辅助核算统一取一处（收付款/调拨共用），见 funds::fund_account_aux
-    let fund_aux = crate::funds::fund_account_aux(&fund);
+    let fund_aux = crate::funds::fund_account_aux(&fund, bank.as_deref());
     let mut line: i32 = 1;
     if receipt {
         v.push_entry(Entry {
@@ -489,6 +565,9 @@ mod tests {
             d(2026, 1, 10),
             "100201",
             "C01",
+            "",
+            "",
+            Money::ZERO,
             m("600"),
             "",
             "u",
@@ -520,6 +599,9 @@ mod tests {
             d(2026, 1, 10),
             "100201",
             "C01",
+            "",
+            "",
+            Money::ZERO,
             m("600"),
             "",
             "u",
@@ -567,6 +649,9 @@ mod tests {
             d(2026, 1, 12),
             "100201",
             "S01",
+            "",
+            "",
+            Money::ZERO,
             m("400"),
             "付货款",
             "u",
@@ -585,6 +670,9 @@ mod tests {
             d(2026, 1, 15),
             "1001",
             "C77",
+            "",
+            "",
+            Money::ZERO,
             m("88"),
             "",
             "u",
@@ -610,7 +698,20 @@ mod tests {
 
         // 守卫：空往来单位 / 零金额（建单即拦）
         assert!(
-            receipt_create(&db, "receipt", d(2026, 1, 16), "1001", "", m("1"), "", "u").is_err()
+            receipt_create(
+                &db,
+                "receipt",
+                d(2026, 1, 16),
+                "1001",
+                "",
+                "",
+                "",
+                Money::ZERO,
+                m("1"),
+                "",
+                "u"
+            )
+            .is_err()
         );
         assert!(receipt_create(
             &db,
@@ -618,6 +719,9 @@ mod tests {
             d(2026, 1, 16),
             "1001",
             "C01",
+            "",
+            "",
+            Money::ZERO,
             Money::ZERO,
             "",
             "u"

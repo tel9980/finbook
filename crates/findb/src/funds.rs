@@ -18,20 +18,35 @@ fn m(s: &str) -> Money {
     Money::parse_or_zero(s)
 }
 
-/// 资金账户分录腿的辅助核算：1002 系银行账户挂 `bank=B01`，其余（现金等）不挂。
+/// 资金账户分录腿的辅助核算：1002 系银行账户挂 `bank=<bank_code>`，其余（现金等）不挂。
+///
+/// `bank` 可为具体银行编码（如 "B01""B02""B03"）、微信（“WECHAT”）、
+/// 或 `None`（则 1002 系回退默认 "B01"，保持向后兼容）。
 ///
 /// 收付款单（receipt.rs）与资金调拨（transfer.rs）**共用这一处** —— 若各写一遍，
 /// 迟早分叉成「收款挂银行辅助、调拨忘了挂」，而那种漏检不会报错，只会让
 /// 银行对账 / 资金日报少掉调拨腿，余额调节表对不平且很难定位。
-pub fn fund_account_aux(account: &str) -> AuxRef {
-    if account.trim().starts_with("1002") {
+pub fn fund_account_aux(account: &str, bank: Option<&str>) -> AuxRef {
+    let acct = account.trim();
+    if acct.starts_with("1002") {
+        let b = bank.filter(|b| !b.is_empty()).unwrap_or("B01");
         AuxRef {
-            bank: Some("B01".to_string()),
+            bank: Some(b.to_string()),
             ..Default::default()
         }
     } else {
         AuxRef::default()
     }
+}
+
+/// 判断辅助核算键是否标记为微信支付（bank=WECHAT）。
+pub fn aux_is_wechat(aux: &AuxRef) -> bool {
+    aux.bank.as_deref() == Some("WECHAT")
+}
+
+/// 判断辅助核算键是否标记为某银行（bank 字段非空且非 WECHAT）。
+pub fn aux_is_bank(aux: &AuxRef) -> bool {
+    aux.bank.is_some() && aux.bank.as_deref() != Some("WECHAT")
 }
 
 // ===========================================================================
@@ -258,12 +273,20 @@ fn bill_cash_state(to: BillStatus) -> bool {
 /// 口径：贴现/兑付按面值全额入银行（贴现利息不分拆，可在生成的草稿里手工调整）；
 /// 应收背书抵付应付账款、应付背书转为应付账款；承兑叶子默认「银行承兑汇票」，
 /// 商业承兑可在生成的草稿中改科目。任一状态返回 None = 无需出凭证。
+///
+/// `bank` 取自 Bill.bank（票据主表的银行/微信编码），替代早前硬编码的 B01。
 fn bill_entries(
     b: &Bill,
     to: BillStatus,
 ) -> Option<(&'static str, AuxRef, &'static str, AuxRef, &'static str)> {
     let bank_aux = || AuxRef {
-        bank: Some("B01".into()),
+        bank: Some(
+            if b.bank.trim().is_empty() {
+                "B01".to_string()
+            } else {
+                b.bank.trim().to_string()
+            },
+        ),
         ..Default::default()
     };
     let sup_aux = || AuxRef {
@@ -561,7 +584,13 @@ fn loan_voucher_in(
     who: &str,
 ) -> Result<i64, DbError> {
     let bank_aux = AuxRef {
-        bank: Some("B01".into()),
+        bank: Some(
+            if l.bank.trim().is_empty() {
+                "B01".to_string()
+            } else {
+                l.bank.trim().to_string()
+            },
+        ),
         ..Default::default()
     };
     // 放款/收回的对方（借款人）没有独立字段，用机构字段占位作员工辅助（仅查非空）

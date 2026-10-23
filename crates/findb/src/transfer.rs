@@ -35,6 +35,8 @@ pub struct FundTransfer {
     pub from_account: String,
     /// 转入资金账户（末级，如 1001）
     pub to_account: String,
+    /// 资金账户辅助编码（银行 B01/B02 或微信 WECHAT，空则按账户推断默认 B01）
+    pub bank: String,
     pub amount: Money,
     pub memo: String,
     /// 生成的记账凭证（草稿阶段为 None，审核时生成）
@@ -57,16 +59,17 @@ fn map_doc(r: &rusqlite::Row) -> rusqlite::Result<FundTransfer> {
             .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1977, 1, 1).unwrap()),
         from_account: r.get(4)?,
         to_account: r.get(5)?,
-        amount: Money::parse_or_zero(&r.get::<_, String>(6)?),
-        memo: r.get(7)?,
-        voucher_id: r.get(8)?,
-        created_by: r.get(9)?,
-        created_at: r.get(10)?,
-        status: r.get(11)?,
+        bank: r.get(6)?,
+        amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
+        memo: r.get(8)?,
+        voucher_id: r.get(9)?,
+        created_by: r.get(10)?,
+        created_at: r.get(11)?,
+        status: r.get(12)?,
     })
 }
 
-const T_COLS: &str = "id,no,period,date,from_account,to_account,amount,memo,\
+const T_COLS: &str = "id,no,period,date,from_account,to_account,bank,amount,memo,\
      voucher_id,created_by,created_at,status";
 
 pub fn transfer_list(db: &Db) -> DbResult<Vec<FundTransfer>> {
@@ -124,6 +127,7 @@ pub fn transfer_create(
     date: NaiveDate,
     from_account: &str,
     to_account: &str,
+    bank: &str,
     amount: Money,
     memo: &str,
     who: &str,
@@ -142,14 +146,15 @@ pub fn transfer_create(
     let tx = db.write_tx()?;
     let doc_no = format!("DB{}", chrono::Local::now().format("%y%m%d%H%M%S"));
     tx.execute(
-        "INSERT INTO fund_transfer(no,period,date,from_account,to_account,amount,memo,created_by,created_at,status)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'draft')",
+        "INSERT INTO fund_transfer(no,period,date,from_account,to_account,bank,amount,memo,created_by,created_at,status)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'draft')",
         rusqlite::params![
             doc_no,
             period.ymm(),
             date.format("%Y-%m-%d").to_string(),
             from,
             to,
+            bank,
             crate::money_param(amount),
             memo,
             who,
@@ -175,6 +180,11 @@ pub fn transfer_audit(db: &Db, id: i64, who: &str) -> DbResult<i64> {
     }
     let from = d.from_account.clone();
     let to = d.to_account.clone();
+    let bank = if d.bank.trim().is_empty() {
+        None
+    } else {
+        Some(d.bank.trim())
+    };
     let amount = d.amount;
     let date = d.date;
     let period = d.period;
@@ -194,12 +204,12 @@ pub fn transfer_audit(db: &Db, id: i64, who: &str) -> DbResult<i64> {
     // 借 转入账户 / 贷 转出账户：钱从 from 流向 to，两腿金额相等
     v.push_entry(Entry {
         debit: amount,
-        aux: crate::funds::fund_account_aux(&to),
+        aux: crate::funds::fund_account_aux(&to, bank.as_deref()),
         ..Entry::new(1, to.as_str(), summary.as_str())
     });
     v.push_entry(Entry {
         credit: amount,
-        aux: crate::funds::fund_account_aux(&from),
+        aux: crate::funds::fund_account_aux(&from, bank.as_deref()),
         ..Entry::new(2, from.as_str(), summary.as_str())
     });
     let vid = crate::vouchers::save_in(&tx, &mut v)?;
@@ -287,6 +297,7 @@ mod tests {
             d(2026, 1, 5),
             "100201",
             "1001",
+            "",
             m("500"),
             "提现备用",
             "u",
@@ -324,22 +335,22 @@ mod tests {
         let db = mem();
         let day = d(2026, 1, 5);
         // 转出=转入
-        assert!(transfer_create(&db, day, "100201", "100201", m("1"), "", "u").is_err());
+        assert!(transfer_create(&db, day, "100201", "100201", "", m("1"), "", "u").is_err());
         // 零金额
-        assert!(transfer_create(&db, day, "100201", "1001", Money::ZERO, "", "u").is_err());
+        assert!(transfer_create(&db, day, "100201", "1001", "", Money::ZERO, "", "u").is_err());
         // 转入不是资金科目（6602 管理费用）
-        assert!(transfer_create(&db, day, "100201", "6602", m("1"), "", "u").is_err());
+        assert!(transfer_create(&db, day, "100201", "6602", "", m("1"), "", "u").is_err());
         // 科目不存在
-        assert!(transfer_create(&db, day, "999999", "1001", m("1"), "", "u").is_err());
+        assert!(transfer_create(&db, day, "999999", "1001", "", m("1"), "", "u").is_err());
         // 空
-        assert!(transfer_create(&db, day, "", "1001", m("1"), "", "u").is_err());
+        assert!(transfer_create(&db, day, "", "1001", "", m("1"), "", "u").is_err());
     }
 
     /// 撤审 / 删除链：已审核有凭证 → 拒删；撤审删凭证回草稿 → 可删；已记账凭证撤审被拒。
     #[test]
     fn transfer_unaudit_and_delete_chain() {
         let db = mem();
-        let id = transfer_create(&db, d(2026, 1, 5), "100201", "1001", m("300"), "", "u").unwrap();
+        let id = transfer_create(&db, d(2026, 1, 5), "100201", "1001", "", m("300"), "", "u").unwrap();
         let vid = transfer_audit(&db, id, "u").unwrap();
         assert!(transfer_delete(&db, id).is_err(), "凭证存在时不能删单");
 

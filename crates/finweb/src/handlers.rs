@@ -7806,6 +7806,9 @@ async fn add_po_payment(
         date,
         "",
         &po.supplier_code,
+        "",
+        "",
+        fincore::Money::ZERO,
         amount,
         &req.memo,
         user.username(),
@@ -8099,6 +8102,9 @@ async fn add_so_payment(
         date,
         "",
         &so.customer_code,
+        "",
+        "",
+        fincore::Money::ZERO,
         amount,
         &req.memo,
         user.username(),
@@ -11521,6 +11527,12 @@ struct ReceiptCreateReq {
     #[serde(default)]
     party: String,
     #[serde(default)]
+    bank: String,
+    #[serde(default)]
+    cross_party: String,
+    #[serde(default)]
+    cross_amount: String,
+    #[serde(default)]
     amount: String,
     #[serde(default)]
     memo: String,
@@ -11562,6 +11574,9 @@ async fn create_receipt(
         date,
         &req.fund_account,
         &req.party,
+        &req.bank,
+        &req.cross_party,
+        parse_money_checked(&req.cross_amount)?,
         amount,
         &req.memo,
         user.username(),
@@ -11692,6 +11707,8 @@ struct TransferCreateReq {
     date: String,
     pub from_account: String,
     pub to_account: String,
+    #[serde(default)]
+    pub bank: String,
     pub amount: String,
     #[serde(default)]
     pub memo: String,
@@ -11728,6 +11745,7 @@ async fn create_transfer(
         date,
         &req.from_account,
         &req.to_account,
+        &req.bank,
         amount,
         &req.memo,
         user.username(),
