@@ -18,7 +18,7 @@
 //!   进行反核销」也是同一个道理：已确认的单据不能被后台操作改掉）。
 //! - 往来期初（`arap_opening` 影子挂账）计入期初余额，口径与催款单一致。
 
-use fincore::{Money, Period};
+use fincore::{AuxKind, Money, Period};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
@@ -123,23 +123,47 @@ pub fn get(db: &Db, id: i64) -> DbResult<Option<Statement>> {
         .map_err(Into::into)
 }
 
-pub fn list(db: &Db, kind: Option<&str>) -> DbResult<Vec<Statement>> {
+/// 对账单列表（可按 kind='ar'/'ap' 与 party_code 过滤）
+pub fn list(
+    db: &Db,
+    kind: Option<&str>,
+    party_code: Option<&str>,
+) -> DbResult<Vec<Statement>> {
     let mut out = Vec::new();
+    let party = party_code.filter(|s| !s.trim().is_empty());
     match kind.filter(|k| !k.trim().is_empty()) {
         Some(k) => {
-            let mut st = db.conn().prepare(&format!(
-                "SELECT {ST_COLS} FROM ar_statement WHERE kind=?1 ORDER BY period_to DESC, id DESC"
-            ))?;
-            for r in st.query_map(rusqlite::params![k], map)? {
-                out.push(r?);
+            if let Some(p) = party {
+                let mut st = db.conn().prepare(&format!(
+                    "SELECT {ST_COLS} FROM ar_statement WHERE kind=?1 AND party_code=?2 ORDER BY period_to DESC, id DESC"
+                ))?;
+                for r in st.query_map(rusqlite::params![k, p], map)? {
+                    out.push(r?);
+                }
+            } else {
+                let mut st = db.conn().prepare(&format!(
+                    "SELECT {ST_COLS} FROM ar_statement WHERE kind=?1 ORDER BY period_to DESC, id DESC"
+                ))?;
+                for r in st.query_map(rusqlite::params![k], map)? {
+                    out.push(r?);
+                }
             }
         }
         None => {
-            let mut st = db.conn().prepare(&format!(
-                "SELECT {ST_COLS} FROM ar_statement ORDER BY period_to DESC, id DESC"
-            ))?;
-            for r in st.query_map([], map)? {
-                out.push(r?);
+            if let Some(p) = party {
+                let mut st = db.conn().prepare(&format!(
+                    "SELECT {ST_COLS} FROM ar_statement WHERE party_code=?1 ORDER BY period_to DESC, id DESC"
+                ))?;
+                for r in st.query_map(rusqlite::params![p], map)? {
+                    out.push(r?);
+                }
+            } else {
+                let mut st = db.conn().prepare(&format!(
+                    "SELECT {ST_COLS} FROM ar_statement ORDER BY period_to DESC, id DESC"
+                ))?;
+                for r in st.query_map([], map)? {
+                    out.push(r?);
+                }
             }
         }
     }
@@ -217,7 +241,13 @@ pub fn create(
 
     // 取该科目下全部**已记账**分录（含已核销——对账单要对全流水），再按期间切分。
     // include_all=true 才会带上已核销的行。
-    let all = crate::settle::open_entries_with(db, account, to, true, true)?;
+    // 在 SQL 层面按往来单位过滤（customer=C01 / supplier=S01），避免全量取回再 filter。
+    let aux_frag = crate::balances::aux_key_frag(party, if kind == "ar" {
+        AuxKind::Customer
+    } else {
+        AuxKind::Supplier
+    });
+    let all = crate::settle::open_entries_with(db, account, to, true, true, Some(&aux_frag))?;
 
     // 站在「对方欠我」的角度统一看：
     // - ar：借方=债权增加

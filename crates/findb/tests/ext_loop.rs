@@ -268,7 +268,7 @@ fn t92_settle_and_aging_loop() {
 
     // 账龄：以 2026-01-31 为基准，销售单 12/1 起账龄 61 天 → 61-90 桶
     let buckets = fincore::engine::aging::buckets_by_days();
-    let lines = settle::aging(&db, "1122", p, d(2026, 1, 31), &buckets).unwrap();
+    let lines = settle::aging(&db, "1122", p, d(2026, 1, 31), &buckets, None).unwrap();
     assert!(!lines.is_empty());
     let l = lines.iter().find(|l| l.key.contains("C01")).unwrap();
     assert_eq!(l.total, m("400"));

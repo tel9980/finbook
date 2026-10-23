@@ -419,6 +419,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/export/ledger", get(export_ledger))
         .route("/api/export/payroll", get(export_payroll))
         .route("/api/export/claims", get(export_claims))
+        .route("/api/export/dunning", get(export_dunning))
         .route(
             "/api/export/schedules",
             get(list_export_schedules).post(save_export_schedule),
@@ -4983,13 +4984,18 @@ async fn list_customers(
     let per = period_from_query(&state, &user, q.get("period"));
     let keyword = q.get("q").map(String::as_str).unwrap_or("");
     let only_open = matches!(q.get("only_open").map(String::as_str), Some("1" | "true"));
-    let rows = findb::customers::list(&db, per, keyword, only_open)?;
+    let page = q.get("page").and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
+    let page_size = q.get("page_size").and_then(|s| s.parse::<usize>().ok()).unwrap_or(50);
+    let result = findb::customers::list(&db, per, keyword, only_open, page, page_size)?;
     Ok(Json(json!({
-        "rows": rows,
+        "rows": result.rows,
         "period": per.ymm(),
-        "total": rows.len(),
-        "open_count": rows.iter().filter(|r| !r.open_amount.is_zero()).count(),
-        "open_sum": rows
+        "total": result.total,
+        "page": result.page,
+        "page_size": result.page_size,
+        "open_count": result.rows.iter().filter(|r| !r.open_amount.is_zero()).count(),
+        "open_sum": result
+            .rows
             .iter()
             .fold(fincore::Money::ZERO, |a, r| a + r.open_amount)
             .fmt_money(),
@@ -6257,6 +6263,31 @@ async fn export_claims(
     )?;
     Ok(csv_response("claims.csv", rows))
 }
+
+
+async fn export_dunning(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    let db = &user.db;
+    let period = period_param(q.get("period"), current_period(&state, &user))?;
+    let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty()).unwrap_or("ar");
+    if kind != "ar" && kind != "ap" {
+        return Err(AppError::bad_request("kind 必须是 ar 或 ap"));
+    }
+    let csv = findb::exports::build_csv(&db, &format!("dunning_{}", kind), period)?;
+    let (_, rows) = csv;
+    db.log(
+        user.username(),
+        "导出",
+        "导出催款记录",
+        &format!("{} {} 行", period.label(), rows.len().saturating_sub(1)),
+    )?;
+    Ok(csv_response(&format!("dunning_{}_{}.csv", kind, period.ymm()), rows))
+}
+
 
 // ---------------------------------------------------------------------------
 // 报表渲染
@@ -13406,9 +13437,11 @@ async fn get_settle_open(
         .get("draft")
         .map(|s| s == "1" || s == "true")
         .unwrap_or(false);
+    // 可选的往来单位过滤（customer=C01 / supplier=S01），推送到 SQL 层面过滤
+    let party_filter = q.get("party").map(|s| s.trim()).filter(|s| !s.is_empty());
     let db = &user.db;
     let mut rows =
-        findb::settle::open_entries_with(&db, account.trim(), upto, include_all, !include_draft)?;
+        findb::settle::open_entries_with(&db, account.trim(), upto, include_all, !include_draft, party_filter.as_deref())?;
     if !include_all {
         rows.retain(|e| e.is_open());
     }
@@ -13737,7 +13770,7 @@ async fn get_settle_aging(
         fincore::engine::aging::buckets_by_days()
     };
     let db = &user.db;
-    let lines = findb::settle::aging(&db, account.trim(), upto, as_of, &buckets)?;
+    let lines = findb::settle::aging(&db, account.trim(), upto, as_of, &buckets, None)?;
     let labels: Vec<&str> = buckets.iter().map(|b| b.label).collect();
     // key 是**裸编码**（`C01`），名称另查 —— 页面上显示 `customer=C01` 是内部存储格式，
     // 对用户没有意义。以前 key 本身就是整条 aux_key，前端想显示名称也做不到。
@@ -13840,7 +13873,7 @@ async fn list_statements(
     user.require(Perm::Report)?;
     let db = &user.db;
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
-    let rows = findb::statement::list(&db, kind)?;
+    let rows = findb::statement::list(&db, kind, None)?;
     Ok(Json(json!({
         "rows": rows.iter().map(statement_json).collect::<Vec<_>>(),
     })))
@@ -13947,7 +13980,7 @@ async fn list_dunnings(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::settle::dunning_list(&db, q.get("kind").map(String::as_str))?;
+    let rows = findb::settle::dunning_list(&db, q.get("kind").map(String::as_str), None)?;
     Ok(Json(json!({ "rows": rows })))
 }
 

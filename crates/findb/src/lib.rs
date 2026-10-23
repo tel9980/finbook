@@ -78,6 +78,8 @@ pub enum DbError {
     Sqlite(#[from] rusqlite::Error),
     #[error("序列化错误：{0}")]
     Json(#[from] serde_json::Error),
+    #[error("Excel 错误：{0}")]
+    Xlsx(#[from] rust_xlsxwriter::XlsxError),
     #[error("{0}")]
     Fin(#[from] FinError),
 }

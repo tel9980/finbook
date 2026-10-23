@@ -74,12 +74,10 @@ pub struct CustomerLine {
 ///
 /// `period` 传 0 表示「到最新」—— 与 settle 侧其他函数的约定一致。
 pub fn open_lines(db: &Db, customer: &str, period: Period) -> DbResult<Vec<OpenEntry>> {
-    let all = settle::open_entries(db, AR_ACCOUNT, period, false)?;
     let want = crate::balances::aux_key_frag(customer, AuxKind::Customer);
-    Ok(all
-        .into_iter()
-        .filter(|e| crate::balances::aux_key_contains(&e.aux_key, &want))
-        .collect())
+    // 在 SQL 层面按 aux_key 过滤（customer=C01），避免取全量应收未核销分录
+    // 到 Rust 侧再 filter。`open_entries_with` 已在内部填充 `settled` 字段。
+    settle::open_entries_with(db, AR_ACCOUNT, period, false, true, Some(&want))
 }
 
 /// 汇总一个客户的余额。只读 [open_lines]，不自己算。
@@ -149,9 +147,30 @@ fn summarize(code: &str, name: &str, lines: &[OpenEntry], opening: Money) -> Cus
 
 /// 客户列表：一行一客户，带余额汇总。
 ///
+//// 分页结果
+#[derive(Debug, serde::Serialize)]
+pub struct CustomerListResult {
+    pub rows: Vec<CustomerSummary>,
+    pub total: usize,
+    pub page: usize,
+    pub page_size: usize,
+}
+
 /// `q` 非空时按编码/名称过滤（大小写不敏感）；`only_open` 为真时
 /// 只返回有未核销余额的客户 —— 催款场景要的就是这张名单。
-pub fn list(db: &Db, period: Period, q: &str, only_open: bool) -> DbResult<Vec<CustomerSummary>> {
+///
+/// `page` 从 1 开始；`page_size` 为 0 时使用默认值 50。
+pub fn list(
+    db: &Db,
+    period: Period,
+    q: &str,
+    only_open: bool,
+    page: usize,
+    page_size: usize,
+) -> DbResult<CustomerListResult> {
+    let page = page.max(1);
+    let page_size = if page_size == 0 { 50 } else { page_size };
+
     // 一次取全量未核销分录，按 aux_key 分组 —— 免得每个客户查一次
     let all = settle::open_entries(db, AR_ACCOUNT, period, false)?;
     let mut grouped: std::collections::BTreeMap<String, Vec<OpenEntry>> =
@@ -166,6 +185,25 @@ pub fn list(db: &Db, period: Period, q: &str, only_open: bool) -> DbResult<Vec<C
         grouped.entry(k).or_default().push(e);
     }
 
+    // 一次性加载所有应收期初挂账，按客户编码聚合，避免在下面循环里
+    // 对每个客户都跑一次 `arap_opening_list`（原代码 N+1：60+ 客户就查 60+ 次）。
+    let openings = settle::arap_opening_list(db, Some("ar"))?;
+    let mut opening_by_party: std::collections::BTreeMap<String, Money> =
+        std::collections::BTreeMap::new();
+    for o in &openings {
+        let code = o.party_code.trim();
+        if code.is_empty() {
+            continue;
+        }
+        let p_of_doc = NaiveDate::parse_from_str(&o.doc_date, "%Y-%m-%d")
+            .map(Period::from_date)
+            .unwrap_or(Period::ZERO);
+        if period != Period::ZERO && p_of_doc > period {
+            continue;
+        }
+        *opening_by_party.entry(code.to_string()).or_default() += o.amount;
+    }
+
     let ents = crate::auxs::list(db, &AuxQuery::kind(AuxKind::Customer))?;
     let kw = q.trim().to_lowercase();
     let mut out = Vec::with_capacity(ents.len());
@@ -178,12 +216,8 @@ pub fn list(db: &Db, period: Period, q: &str, only_open: bool) -> DbResult<Vec<C
         }
         let empty = Vec::new();
         let lines = grouped.get(&ent.code).unwrap_or(&empty);
-        let mut s = summarize(
-            &ent.code,
-            &ent.name,
-            lines,
-            opening_balance(db, &ent.code, period)?,
-        );
+        let opening = opening_by_party.get(&ent.code).copied().unwrap_or(Money::ZERO);
+        let mut s = summarize(&ent.code, &ent.name, lines, opening);
         s.parent_code = ent.parent_code.clone().unwrap_or_default();
         s.disabled = ent.disabled;
         // 「有没有人在追着要钱」不能只看凭证行：期初挂账也是钱。
@@ -205,7 +239,22 @@ pub fn list(db: &Db, period: Period, q: &str, only_open: bool) -> DbResult<Vec<C
             .cmp(&a.open_amount)
             .then_with(|| a.code.cmp(&b.code))
     });
-    Ok(out)
+
+    let total = out.len();
+    let start = (page - 1) * page_size;
+    let end = (start + page_size).min(total);
+    let rows = if start < total {
+        out[start..end].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    Ok(CustomerListResult {
+        rows,
+        total,
+        page,
+        page_size,
+    })
 }
 
 /// 客户详情：汇总 + 全部往来行。
@@ -507,15 +556,12 @@ fn statement_status_label(s: &str) -> &'static str {
 /// 该客户的催款记录：催款单 + 往来对账单，按日期倒序。
 ///
 /// 两者都**复用**各自模块的 list（`settle::dunning_list` / `statement::list`），
-/// 本模块只按客户过滤 —— 不重算金额、不自定义状态。
+/// 现在在 DB 层按 `party_code` 过滤，避免全表取回再 filter。
 pub fn dunning_records(db: &Db, code: &str) -> DbResult<Vec<CustomerDunning>> {
     let code = code.trim();
     let mut out: Vec<CustomerDunning> = Vec::new();
 
-    for d in settle::dunning_list(db, Some("ar"))? {
-        if d.party_code.trim() != code {
-            continue;
-        }
+    for d in settle::dunning_list(db, Some("ar"), Some(code))? {
         out.push(CustomerDunning {
             date: d.date.format("%Y-%m-%d").to_string(),
             kind: "dunning".into(),
@@ -529,10 +575,7 @@ pub fn dunning_records(db: &Db, code: &str) -> DbResult<Vec<CustomerDunning>> {
         });
     }
 
-    for s in crate::statement::list(db, Some("ar"))? {
-        if s.party_code.trim() != code {
-            continue;
-        }
+    for s in crate::statement::list(db, Some("ar"), Some(code))? {
         // 对账单没有单一「单据日期」：用生成时间的前 10 位当日期排序；
         // 展示上「对账期间」比时间戳更有意义，放 summary。
         let date = s.created_at.get(..10).unwrap_or(&s.created_at).to_string();
@@ -595,7 +638,7 @@ pub fn aging_of(
 ) -> DbResult<CustomerAging> {
     let labels: Vec<String> = buckets.iter().map(|b| b.label.to_string()).collect();
     let code = code.trim();
-    let all = settle::aging(db, AR_ACCOUNT, period, as_of, buckets)?;
+    let all = settle::aging(db, AR_ACCOUNT, period, as_of, buckets, Some(code))?;
     match all.iter().find(|l| l.key.trim() == code) {
         Some(l) => Ok(CustomerAging {
             buckets: labels,
@@ -796,14 +839,14 @@ mod tests {
             "乙不能带上甲的"
         );
 
-        let all = list(&db, per, "", false).unwrap();
-        assert_eq!(all.len(), 2);
-        assert_eq!(all[0].code, "C01", "欠款多的排前面");
-        assert_eq!(all[1].code, "C02");
+        let all = list(&db, per, "", false, 1, 100).unwrap();
+        assert_eq!(all.rows.len(), 2);
+        assert_eq!(all.rows[0].code, "C01", "欠款多的排前面");
+        assert_eq!(all.rows[1].code, "C02");
 
-        let q = list(&db, per, "乙", false).unwrap();
-        assert_eq!(q.len(), 1);
-        assert_eq!(q[0].code, "C02");
+        let q = list(&db, per, "乙", false, 1, 100).unwrap();
+        assert_eq!(q.rows.len(), 1);
+        assert_eq!(q.rows[0].code, "C02");
     }
 
     /// 已全部核销的客户不该出现在「只看待催款」名单里。
@@ -823,13 +866,13 @@ mod tests {
         assert_eq!(s.balance, Money::ZERO, "两笔抵平");
         assert_eq!(s.open_amount, Money::ZERO, "全部核销");
 
-        let only = list(&db, per, "", true).unwrap();
+        let only = list(&db, per, "", true, 1, 100).unwrap();
         assert_eq!(
-            only.len(),
+            only.rows.len(),
             1,
             "只剩乙还在待催款；已结清的甲是噪音（只留它会让人以为催款名单没过滤）"
         );
-        assert_eq!(only[0].code, "C02");
+        assert_eq!(only.rows[0].code, "C02");
     }
 
     /// 子科目要一并计入 —— 而且这条测试顺带锁住一个容易搞反的事实。
@@ -919,8 +962,8 @@ mod tests {
             "balance 仍为 0 —— 期初不混进余额（与账龄页口径一致），这是对的"
         );
 
-        let only = list(&db, per, "", true).unwrap();
-        let codes: Vec<&str> = only.iter().map(|r| r.code.as_str()).collect();
+        let only = list(&db, per, "", true, 1, 100).unwrap();
+        let codes: Vec<&str> = only.rows.iter().map(|r| r.code.as_str()).collect();
         assert_eq!(
             codes,
             vec!["C01"],
@@ -963,7 +1006,7 @@ mod tests {
 
         let p = Period::new(2026, 1).unwrap();
         let as_of = d("2026-01-31");
-        let all = settle::aging(&db, AR_ACCOUNT, p, as_of, &day_buckets()).unwrap();
+        let all = settle::aging(&db, AR_ACCOUNT, p, as_of, &day_buckets(), None).unwrap();
         let row = all.iter().find(|l| l.key == "C01").expect("C01 应有一行");
 
         let mine = aging_of(&db, "C01", p, as_of, &day_buckets()).unwrap();

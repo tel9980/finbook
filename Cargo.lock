@@ -1725,6 +1725,7 @@ dependencies = [
  "fincore",
  "rusqlite",
  "rust_decimal",
+ "rust_xlsxwriter 0.15.0",
  "serde",
  "serde_json",
  "sha2",
@@ -1746,7 +1747,7 @@ dependencies = [
  "log",
  "rfd",
  "rust_decimal",
- "rust_xlsxwriter",
+ "rust_xlsxwriter 0.80.0",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -1765,6 +1766,7 @@ dependencies = [
  "rand 0.8.8",
  "rusqlite",
  "rust_decimal",
+ "rust_xlsxwriter 0.15.0",
  "serde",
  "serde_json",
  "sha2",
@@ -3886,6 +3888,19 @@ dependencies = [
 
 [[package]]
 name = "rust_xlsxwriter"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b70e017570d694ddf373202513d552c1cee260ea3d26e77021b7d6242872ce3"
+dependencies = [
+ "chrono",
+ "itertools",
+ "lazy_static",
+ "regex",
+ "zip 0.6.6",
+]
+
+[[package]]
+name = "rust_xlsxwriter"
 version = "0.80.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442eafa04d985ae671e027481e07a5b70fdb1b2cb5e46d9e074b67ca98e01a0a"
@@ -5998,6 +6013,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.4",
+]
+
+[[package]]
+name = "zip"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "760394e246e4c28189f19d488c058bf16f564016aefac5d32bb1f3b51d5e9261"
+dependencies = [
+ "byteorder",
+ "crc32fast",
+ "crossbeam-utils",
+ "flate2",
 ]
 
 [[package]]

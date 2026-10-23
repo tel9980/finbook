@@ -17,6 +17,7 @@ sha2 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled", "chrono", "serde_json"] }
 calamine = "0.36"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+rust_xlsxwriter = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.5"

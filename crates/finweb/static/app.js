@@ -7008,14 +7008,19 @@ async function viewCustomers(main) {
       <span class="muted" style="font-size:12px">余额只算**已记账**凭证；改档案请到「辅助档案」</span>
     </div>
     <div id="cu-sum" class="muted" style="margin-bottom:6px"></div>
-    <div id="cu-list" class="muted">加载中…</div>`;
+    <div id="cu-list" class="muted">加载中…</div>
+    <div id="cu-pager" style="margin-top:8px"></div>`;
+
+  const pager = createPagination($("#cu-pager"), 0, 50, (p, ps) => { state.cuPage = p; state.cuPageSize = ps; load(); });
 
   const load = async () => {
     const per = $("#cu-period").value.trim();
     const q = $("#cu-q").value.trim();
     const only = $("#cu-only-open").checked ? "1" : "";
+    const page = state.cuPage || 1;
+    const pageSize = state.cuPageSize || 50;
     try {
-      const r = await api(`/customers?period=${encodeURIComponent(per)}&q=${encodeURIComponent(q)}&only_open=${only}`);
+      const r = await api(`/customers?period=${encodeURIComponent(per)}&q=${encodeURIComponent(q)}&only_open=${only}&page=${page}&page_size=${pageSize}`);
       const rows = r.rows || [];
       // 顶部汇总用后端给的字段，不在前端重算 —— 前端重算就是第二套口径。
       $("#cu-sum").textContent = rows.length
@@ -7039,6 +7044,8 @@ async function viewCustomers(main) {
             </tr>`;
           }).join("")}</tbody></table>`
         : `<div class="muted">没有符合条件的客户${only ? "（都不欠款，或账上没有应收记录）" : ""}</div>`;
+      // 更新分页器
+      pager.reload(r.total, pageSize);
       $("#cu-list").querySelectorAll("[data-cu-open]").forEach((b) => {
         b.onclick = () => openCustomerDetail(b.dataset.cuOpen, $("#cu-period").value.trim());
       });
@@ -7049,11 +7056,14 @@ async function viewCustomers(main) {
   $("#cu-load").addEventListener("click", load);
   $("#cu-q").addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
   // 期间变化时自动重查：用户改了期间却在看上一期的数字，是最容易犯的错之一。
-  $("#cu-period").addEventListener("change", load);
-  $("#cu-only-open").addEventListener("change", load);
+  $("#cu-period").addEventListener("change", () => { state.cuPage = 1; load(); });
+  $("#cu-only-open").addEventListener("change", () => { state.cuPage = 1; load(); });
   $("#cu-print").addEventListener("click", () => {
     printPreview("客户往来汇总", $("#cu-list").querySelector("table"));
   });
+  // 初始化分页状态
+  state.cuPage = 1;
+  state.cuPageSize = 50;
   await load();
 }
 
@@ -7709,6 +7719,7 @@ async function viewSettle(main) {
         <span class="muted" style="font-size:12px" id="dn-total"></span>
         <button class="btn ghost sm" id="dn-reload">刷新</button>
         ${can("voucher_new") ? `<button class="btn primary sm" id="dn-new">新建催款单</button>` : ""}
+        <button class="btn ghost sm" id="dn-export">导出 CSV</button>
       </div>
       <div id="dn-list" class="muted" style="margin-top:8px">加载中…</div>
     </div>
@@ -7860,6 +7871,22 @@ async function viewSettle(main) {
   };
   loadDunnings();
   if ($("#dn-reload", main)) $("#dn-reload", main).onclick = loadDunnings;
+  if ($("#dn-export", main)) $("#dn-export", main).onclick = async () => {
+    try {
+      const kind = prompt("类型：ar=催款单 / ap=对账函", "ar");
+      if (!kind || !["ar", "ap"].includes(kind.trim())) { toast("类型必须是 ar 或 ap", "err"); return; }
+      const period = $("#st-upto", main).value.trim() || state.current;
+      const r = await api(`/export/dunning?period=${encodeURIComponent(period)}&kind=${encodeURIComponent(kind.trim())}`);
+      const blob = new Blob([r], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `dunning_${kind.trim()}_${period}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast("导出完成", "ok");
+    } catch (e) { toast(e.message, "err"); }
+  };
 
   // ---- 往来对账单（对标金蝶「客户对账单」：期初 + 本期发生 = 期末 + 客户回签）----
   const ymmOf = (s) => parseInt(String(s || "").replace(/-/g, ""), 10) || 0;

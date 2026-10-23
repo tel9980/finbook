@@ -229,7 +229,7 @@ impl SettleView {
 
         if self.tab == SettleTab::Aging {
             let as_of = self.as_of_date(upto);
-            self.lines = findb::settle::aging(ctx.db(), &self.account, upto, as_of, &self.buckets)
+            self.lines = findb::settle::aging(ctx.db(), &self.account, upto, as_of, &self.buckets, None)
                 .unwrap_or_default();
         }
     }

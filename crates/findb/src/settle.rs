@@ -634,7 +634,7 @@ pub fn open_entries(
     upto: Period,
     include_all: bool,
 ) -> DbResult<Vec<OpenEntry>> {
-    open_entries_with(db, account, upto, include_all, true)
+    open_entries_with(db, account, upto, include_all, true, None)
 }
 
 /// 同 [`open_entries`]，但可显式要求**连未记账的一起返回**（`posted_only = false`）。
@@ -644,12 +644,16 @@ pub fn open_entries(
 /// 只是不参与核销——这里复刻的就是那一层。返回行带 [`OpenEntry::posted`] = false，
 /// 前端据此标注「仅供查看」；核销入口（自动核销 / 手工核销）不读这个函数，
 /// 仍走 `open_entries`，所以未记账的行不可能被核销。
+/// 同 [`open_entries_with`]，但可在 SQL 层面按辅助核算键过滤（如 `customer=C01`），
+/// 避免把全量未核销分录取到 Rust 侧再 `filter`。`aux_key_filter` 为 `None` 时退化为
+/// 原行为（不过滤辅助核算，供账龄等全量场景复用）。
 pub fn open_entries_with(
     db: &Db,
     account: &str,
     upto: Period,
     include_all: bool,
     posted_only: bool,
+    aux_key_filter: Option<&str>,
 ) -> DbResult<Vec<OpenEntry>> {
     // 已记账分支固定用字面量 'posted'（走索引），放宽分支才用参数
     let status_clause = if posted_only {
@@ -657,6 +661,8 @@ pub fn open_entries_with(
     } else {
         "!= 'void'"
     };
+    // `?3 IS NULL OR ...`：aux_key_filter 为 None 时绑定 NULL，条件恒真，SQL 与
+    // 原版一致；为 Some 时在 SQL 层面按 aux_key 做 LIKE 过滤，减少 Rust 侧扫描。
     let sql = format!(
         "SELECT e.id, v.id, v.period, v.date, v.word, v.no, e.line, e.summary,
                 e.account_code, e.aux_key, COALESCE(e.settle_no,''), e.debit, e.credit,
@@ -665,11 +671,14 @@ pub fn open_entries_with(
          WHERE (e.account_code = ?1 OR e.account_code LIKE ?1||'%')
            AND v.period <= ?2 AND v.status {status_clause}
            AND (e.debit <> '0' OR e.credit <> '0')
+           AND (?3 IS NULL OR e.aux_key LIKE '%' || ?3 || '%')
          ORDER BY v.date, v.no, e.line"
     );
     let mut st = db.conn().prepare(&sql)?;
     let mut rows = st
-        .query_map(rusqlite::params![account, upto.ymm()], |r| {
+        .query_map(
+            rusqlite::params![account, upto.ymm(), aux_key_filter],
+            |r| {
             let d: String = r.get(3)?;
             let status: String = r.get(13)?;
             Ok(OpenEntry {
@@ -921,13 +930,17 @@ pub fn party_kind_in(db: &Db, account: &str) -> fincore::AuxKind {
         .unwrap_or_else(|_| party_kind(account))
 }
 
-/// 账龄分析
+/// 账龄分析。
+///
+/// `key_filter` 为 `Some(key)` 时只返回该往来单位的账龄行（如查单个客户账龄），
+/// 避免算全量所有客户再在 Rust 侧 `.find()`；为 `None` 时返回全部（供账龄报表复用）。
 pub fn aging(
     db: &Db,
     account: &str,
     upto: Period,
     as_of: NaiveDate,
     buckets: &[AgingBucket],
+    key_filter: Option<&str>,
 ) -> DbResult<Vec<AgingLine>> {
     let entries = open_entries(db, account, upto, false)?;
     // 往来维度按科目的真实辅助核算取（取不到才按首位推），见 party_kind_of。
@@ -982,6 +995,11 @@ pub fn aging(
             doc_no: format!("{}-{}", e.word, e.no),
         })
         .collect();
+    // 按单个往来单位过滤（查单个客户账龄时不算全量所有客户，再在 Rust 侧 .find()）
+    if let Some(key) = key_filter {
+        let k = key.trim();
+        items.retain(|i| i.key.trim() == k);
+    }
     // 往来期初明细（迁移数据，影子行）：按科目方向取对应类型（1开头=应收 / 2开头=应付），
     // 单据日期期间不晚于 upto；**只进账龄展示、不参与 FIFO 核销**（核销 v2，避免伪 entry 外键）。
     if let Some(w) = want {
@@ -1187,25 +1205,51 @@ pub fn dunning_next_no(db: &Db, period: Period) -> DbResult<String> {
     }
 }
 
-pub fn dunning_list(db: &Db, kind: Option<&str>) -> DbResult<Vec<Dunning>> {
+/// 催款单列表（可按 kind='ar'/'ap' 与 party_code 过滤）
+pub fn dunning_list(
+    db: &Db,
+    kind: Option<&str>,
+    party_code: Option<&str>,
+) -> DbResult<Vec<Dunning>> {
     let mut out = Vec::new();
+    let party = party_code.filter(|s| !s.trim().is_empty());
     match kind.filter(|k| !k.trim().is_empty()) {
         Some(k) => {
-            let mut st = db.conn().prepare(&format!(
-                "SELECT {DUN_COLS} FROM dunning WHERE kind=?1 ORDER BY date DESC, id DESC"
-            ))?;
-            let rows = st.query_map(rusqlite::params![k], map_dunning)?;
-            for r in rows {
-                out.push(r?);
+            if let Some(p) = party {
+                let mut st = db.conn().prepare(&format!(
+                    "SELECT {DUN_COLS} FROM dunning WHERE kind=?1 AND party_code=?2 ORDER BY date DESC, id DESC"
+                ))?;
+                let rows = st.query_map(rusqlite::params![k, p], map_dunning)?;
+                for r in rows {
+                    out.push(r?);
+                }
+            } else {
+                let mut st = db.conn().prepare(&format!(
+                    "SELECT {DUN_COLS} FROM dunning WHERE kind=?1 ORDER BY date DESC, id DESC"
+                ))?;
+                let rows = st.query_map(rusqlite::params![k], map_dunning)?;
+                for r in rows {
+                    out.push(r?);
+                }
             }
         }
         None => {
-            let mut st = db.conn().prepare(&format!(
-                "SELECT {DUN_COLS} FROM dunning ORDER BY date DESC, id DESC"
-            ))?;
-            let rows = st.query_map([], map_dunning)?;
-            for r in rows {
-                out.push(r?);
+            if let Some(p) = party {
+                let mut st = db.conn().prepare(&format!(
+                    "SELECT {DUN_COLS} FROM dunning WHERE party_code=?1 ORDER BY date DESC, id DESC"
+                ))?;
+                let rows = st.query_map(rusqlite::params![p], map_dunning)?;
+                for r in rows {
+                    out.push(r?);
+                }
+            } else {
+                let mut st = db.conn().prepare(&format!(
+                    "SELECT {DUN_COLS} FROM dunning ORDER BY date DESC, id DESC"
+                ))?;
+                let rows = st.query_map([], map_dunning)?;
+                for r in rows {
+                    out.push(r?);
+                }
             }
         }
     }
@@ -1379,7 +1423,7 @@ pub fn bad_debt_provision_voucher(
 
     let mut lines = Vec::new();
     for acct in ["1122", "1221"] {
-        lines.extend(aging(db, acct, period, date, &buckets)?);
+        lines.extend(aging(db, acct, period, date, &buckets, None)?);
     }
 
     // ⚠️ key 的契约：`aging()` 返回的 `AgingLine.key` 是**往来维度的裸编码**
@@ -1565,6 +1609,7 @@ mod tests {
             p,
             NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
             &fincore::engine::aging::buckets_by_days(),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1632,6 +1677,7 @@ mod tests {
             p,
             NaiveDate::from_ymd_opt(2026, 11, 30).unwrap(),
             &fincore::engine::aging::buckets_by_days(),
+            None,
         )
         .unwrap();
         assert_eq!(lines.len(), 1, "2203 账龄必须出行");
@@ -1674,6 +1720,7 @@ mod tests {
             p,
             NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
             &fincore::engine::aging::buckets_by_days(),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1750,6 +1797,7 @@ mod tests {
             p,
             NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
             &fincore::engine::aging::buckets_by_days(),
+            None,
         )
         .unwrap();
         assert!(
@@ -1871,7 +1919,7 @@ mod tests {
         assert_eq!(posted[0].open(), Money::parse("1000").unwrap());
 
         // 打开开关：两笔都在，草稿那笔标 posted=false
-        let all = open_entries_with(&db, "112201", p, false, false).unwrap();
+        let all = open_entries_with(&db, "112201", p, false, false, None).unwrap();
         assert_eq!(all.len(), 2, "「含未记账」应能看到草稿行");
         let drafts: Vec<&OpenEntry> = all.iter().filter(|e| !e.posted).collect();
         assert_eq!(drafts.len(), 1);
@@ -2425,7 +2473,7 @@ mod tests {
 
         let as_of = NaiveDate::from_ymd_opt(2026, 3, 31).unwrap();
         let b = fincore::engine::aging::buckets_by_days();
-        let lines = aging(&db, "1122", p, as_of, &b).unwrap();
+        let lines = aging(&db, "1122", p, as_of, &b, None).unwrap();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].total, Money::parse("3000").unwrap());
         assert_eq!(lines[0].amounts[0], Money::parse("1000").unwrap()); // 11 天

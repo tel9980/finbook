@@ -33,7 +33,7 @@ console.log(b.ok ? "OK   当前实现通过" : "FAIL 基线就红：\n" + b.out)
 if (!b.ok) process.exit(1);
 
 // 找一个稳定锚点：open_lines 函数体
-const ANCHOR = "    let all = settle::open_entries(db, AR_ACCOUNT, period, false)?;";
+const ANCHOR = "    settle::open_entries_with(db, AR_ACCOUNT, period, false, true, Some(&want))";
 if (orig.indexOf(ANCHOR) < 0) { console.log("FAIL 锚点找不到"); process.exit(1); }
 
 // 账龄侧的锚点必须**独立校验**。第一版我打算复用上面那个 `orig.replace(ANCHOR, …)`，
@@ -42,7 +42,7 @@ if (orig.indexOf(ANCHOR) < 0) { console.log("FAIL 锚点找不到"); process.exi
 // 「变异生效但检查正确地不报红」，输出会变成一个骗人的 PASS。
 //
 // 这正是之前踩过的「锚点匹配 0 次却 continue」的同款：变异必须落在**它要验证的那段代码**里。
-const ANCHOR_AGING = "    let all = settle::aging(db, AR_ACCOUNT, period, as_of, buckets)?;";
+const ANCHOR_AGING = "    let all = settle::aging(db, AR_ACCOUNT, period, as_of, buckets, Some(code))?;";
 if (orig.indexOf(ANCHOR_AGING) < 0) {
   console.log("FAIL 账龄锚点找不到 —— 探针会变成空变异（空变异 = 永真）");
   process.exit(1);

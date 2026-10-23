@@ -398,7 +398,7 @@ async fn v1_statements(
     let c = ApiCaller::from_headers(&state, &headers)?;
     let db = c.db(&state)?;
     let kind = q.get("kind").map(|s| s.trim()).filter(|s| !s.is_empty());
-    let rows = findb::statement::list(&db, kind)?;
+    let rows = findb::statement::list(&db, kind, None)?;
     Ok(Json(json!({ "items": rows, "count": rows.len() })))
 }
 

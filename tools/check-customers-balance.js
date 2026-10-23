@@ -87,7 +87,7 @@ for (let i = openLinesStart; i < lines.length; i++) {
 }
 if (openLinesEnd < 0) { console.log("FAIL 找不出 open_lines 的结尾"); process.exit(1); }
 const openLinesBody = lines.slice(openLinesStart, openLinesEnd + 1);
-const usesOpen = openLinesBody.some((l) => !inComment(l) && /settle::open_entries\s*\(/.test(l));
+const usesOpen = openLinesBody.some((l) => !inComment(l) && /settle::open_entries(_with)?\s*\(/.test(l));
 if (!usesOpen) {
   console.log(
     "FAIL " + F + " 的 open_lines 里没有 settle::open_entries —— " +

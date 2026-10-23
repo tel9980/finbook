@@ -172,7 +172,7 @@ fn 演示账28张全已记账且试算平衡() {
         },
     ];
     let as_of = chrono::NaiveDate::from_ymd_opt(2026, 11, 30).unwrap();
-    let aging_ar = findb::settle::aging(&db, "112201", p, as_of, &buckets).expect("应收账龄");
+    let aging_ar = findb::settle::aging(&db, "112201", p, as_of, &buckets, None).expect("应收账龄");
     let ar_line = |key: &str| aging_ar.iter().find(|l| l.key == key);
     // C01：期初单据 68000（配不上）躺在账龄里；本月发票全额配平，
     // 两笔收款尾 25300＋40000 躺在预收栏；净额 2700＝余额
@@ -186,7 +186,7 @@ fn 演示账28张全已记账且试算平衡() {
     // C03：本月开票未收，全额在账龄里
     assert_eq!(ar_line("C03").map(|l| l.total), Some(m("39140")));
     // 供应商两家：期初单据＋本月未清＝余额，预收栏为零
-    let aging_ap = findb::settle::aging(&db, "220201", p, as_of, &buckets).expect("应付账龄");
+    let aging_ap = findb::settle::aging(&db, "220201", p, as_of, &buckets, None).expect("应付账龄");
     let ap_line = |key: &str| aging_ap.iter().find(|l| l.key == key);
     assert_eq!(ap_line("S01").map(|l| l.total), Some(m("23800")));
     assert_eq!(ap_line("S02").map(|l| l.total), Some(m("20200")));

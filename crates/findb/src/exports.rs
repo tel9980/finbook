@@ -9,7 +9,12 @@ use rusqlite::OptionalExtension;
 
 use crate::{Db, DbResult};
 
-/// 构建导出 CSV（kind: vouchers / trial / payroll / claims）→ (文件名前缀, 行集)
+/// 获取期间的起止日期（用于按日期过滤没有 period 字段的表，如 dunning）
+fn period_range(p: Period) -> (String, String) {
+    (p.first_day().format("%Y-%m-%d").to_string(), p.last_day().format("%Y-%m-%d").to_string())
+}
+
+/// 构建导出 CSV（kind: vouchers / trial / payroll / claims / dunning_ar / dunning_ap）→ (文件名前缀, 行集)
 pub fn build_csv(db: &Db, kind: &str, period: Period) -> DbResult<(String, Vec<Vec<String>>)> {
     match kind {
         "vouchers" => {
@@ -100,7 +105,32 @@ pub fn build_csv(db: &Db, kind: &str, period: Period) -> DbResult<(String, Vec<V
             }
             Ok((format!("claims_{}", period.ymm()), rows))
         }
-        _ => Err(fincore::FinError::msg("未知导出类型（vouchers/trial/payroll/claims）").into()),
+        k if k.starts_with("dunning_") => {
+            let kind = &k["dunning_".len()..];
+            let mut rows = vec![header(&["催款单号", "日期", "往来单位", "往来单位名称", "金额", "状态", "备注"])];
+            let mut st = db.conn().prepare(
+                "SELECT no, date, party_code, party_name, amount, status, memo FROM dunning
+                 WHERE kind=?1 AND date >= ?2 AND date <= ?3 ORDER BY date DESC, id DESC",
+            )?;
+            let (from, to) = period_range(period);
+            let it = st.query_map(rusqlite::params![kind, from, to], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                ))
+            })?;
+            for r in it {
+                let (no, date, party_code, party_name, amount, status, memo) = r?;
+                rows.push(vec![no, date, party_code, party_name, amount, status, memo]);
+            }
+            Ok((format!("dunning_{}_{}", kind, period.ymm()), rows))
+        }
+        _ => Err(fincore::FinError::msg("未知导出类型（vouchers/trial/payroll/claims/dunning_ar/dunning_ap）").into()),
     }
 }
 
@@ -261,4 +291,183 @@ pub fn sched_run(db: &Db, id: i64, dir: &std::path::Path) -> DbResult<String> {
         rusqlite::params![id, today.format("%Y-%m-%d").to_string()],
     )?;
     Ok(path.to_string_lossy().to_string())
+}
+
+
+/// 导出催款记录为 Excel（多 Sheet：催款单、对账单）
+///
+/// `kind` = "ar" 或 "ap"；`period` 用于按日期过滤。
+/// 返回 (文件名, Excel 二进制数据)。
+pub fn build_dunning_excel(
+    db: &Db,
+    kind: &str,
+    period: Period,
+) -> DbResult<(String, Vec<u8>)> {
+    use rust_xlsxwriter::{Workbook, Format, XlsxAlign, XlsxColor, XlsxBorder, XlsxError};
+
+    if kind != "ar" && kind != "ap" {
+        return Err(fincore::FinError::msg("kind 必须是 ar 或 ap").into());
+    }
+
+    let (from, to) = period_range(period);
+    let (from_date, to_date) = (from.clone(), to.clone());
+
+    // Sheet 1: 催款单
+    let mut dunning_rows = Vec::new();
+    {
+        let mut st = db.conn().prepare(
+            "SELECT no, date, party_code, party_name, amount, status, memo FROM dunning
+             WHERE kind=?1 AND date >= ?2 AND date <= ?3 ORDER BY date DESC, id DESC",
+        )?;
+        let it = st.query_map(rusqlite::params![kind, from_date, to_date], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
+            ))
+        })?;
+        for r in it {
+            let (no, date, party_code, party_name, amount, status, memo) = r?;
+            dunning_rows.push(vec![no, date, party_code, party_name, amount, status, memo]);
+        }
+    }
+
+    // Sheet 2: 对账单
+    let mut statement_rows = Vec::new();
+    {
+        let mut st = db.conn().prepare(
+            "SELECT no, kind, party_code, party_name, period_from, period_to,
+                    begin_balance, period_increase, period_decrease, end_balance,
+                    line_count, status, memo, created_by, created_at, sent_at, confirmed_by, confirmed_at
+             FROM ar_statement WHERE kind=?1 AND period_to >= ?2 AND period_to <= ?3
+             ORDER BY period_to DESC, id DESC",
+        )?;
+        let it = st.query_map(rusqlite::params![kind, from, to], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, i64>(10)?,
+                r.get::<_, String>(11)?,
+                r.get::<_, String>(12)?,
+                r.get::<_, String>(13)?,
+                r.get::<_, String>(15)?,
+                r.get::<_, String>(16)?,
+                r.get::<_, String>(17)?,
+            ))
+        })?;
+        for r in it {
+            let (no, kind_s, party_code, party_name, period_from, period_to,
+                 begin_balance, period_increase, period_decrease, end_balance,
+                 line_count, status, memo, created_by, created_at, sent_at, confirmed_by, confirmed_at) = r?;
+            statement_rows.push(vec![
+                no, kind_s, party_code, party_name,
+                period_from, period_to,
+                begin_balance, period_increase, period_decrease, end_balance,
+                line_count.to_string(), status.to_string(), memo,
+                created_by, created_at, sent_at, confirmed_by, confirmed_at,
+            ]);
+        }
+    }
+
+    let mut workbook = Workbook::new();
+    let header_fmt = Format::new()
+        .set_bold()
+        .set_background_color(XlsxColor::RGB(0x4472C4))
+        .set_font_color(XlsxColor::White)
+        .set_align(XlsxAlign::Center)
+        .set_border(XlsxBorder::Thin);
+
+    let money_fmt = Format::new()
+        .set_num_format("#,##0.00")
+        .set_border(XlsxBorder::Thin)
+        .set_align(XlsxAlign::Right);
+
+    let text_fmt = Format::new()
+        .set_border(XlsxBorder::Thin)
+        .set_align(XlsxAlign::Left);
+
+    // Sheet 1: 催款单
+    let sheet1 = workbook.add_worksheet();
+    sheet1.set_name("催款单")?;
+    let dunning_headers = ["催款单号", "日期", "往来单位", "往来单位名称", "金额", "状态", "备注"];
+    for (col, h) in dunning_headers.iter().enumerate() {
+        sheet1.write_string(0, col as u16, *h, &header_fmt)?;
+    }
+    for (row_idx, row) in dunning_rows.iter().enumerate() {
+        for (col_idx, cell) in row.iter().enumerate() {
+            let fmt = if col_idx == 4 { &money_fmt } else { &text_fmt };
+            if col_idx == 4 {
+                let val = cell.parse::<f64>().unwrap_or(0.0);
+                sheet1.write_number(row_idx as u32 + 1, col_idx as u16, val, &fmt)?;
+            } else {
+                sheet1.write_string(row_idx as u32 + 1, col_idx as u16, cell, &fmt)?;
+            }
+        }
+    }
+    sheet1.set_column_width(0, 18)?;
+    sheet1.set_column_width(1, 12)?;
+    sheet1.set_column_width(2, 15)?;
+    sheet1.set_column_width(3, 20)?;
+    sheet1.set_column_width(4, 14)?;
+    sheet1.set_column_width(5, 10)?;
+    sheet1.set_column_width(6, 25)?;
+
+    // Sheet 2: 对账单
+    let sheet2 = workbook.add_worksheet();
+    sheet2.set_name("对账单")?;
+    let statement_headers = [
+        "单号", "类型", "往来单位", "往来单位名称",
+        "起始期间", "截止期间",
+        "期初余额", "本期增", "本期减", "期末余额",
+        "行数", "状态", "备注",
+        "制单人", "制单时间", "发出时间", "确认人", "确认时间",
+    ];
+    for (col, h) in statement_headers.iter().enumerate() {
+        sheet2.write_string(0, col as u16, *h, &header_fmt)?;
+    }
+    for (row_idx, row) in statement_rows.iter().enumerate() {
+        for (col_idx, cell) in row.iter().enumerate() {
+            let fmt = if matches!(col_idx, 6 | 7 | 8 | 9) { &money_fmt } else { &text_fmt };
+            if matches!(col_idx, 6 | 7 | 8 | 9) {
+                let val = cell.parse::<f64>().unwrap_or(0.0);
+                sheet2.write_number(row_idx as u32 + 1, col_idx as u16, val, &fmt)?;
+            } else {
+                sheet2.write_string(row_idx as u32 + 1, col_idx as u16, cell, &fmt)?;
+            }
+        }
+    }
+    sheet2.set_column_width(0, 18)?;
+    sheet2.set_column_width(1, 10)?;
+    sheet2.set_column_width(2, 15)?;
+    sheet2.set_column_width(3, 20)?;
+    sheet2.set_column_width(4, 12)?;
+    sheet2.set_column_width(5, 12)?;
+    sheet2.set_column_width(6, 14)?;
+    sheet2.set_column_width(7, 14)?;
+    sheet2.set_column_width(8, 14)?;
+    sheet2.set_column_width(9, 14)?;
+    sheet2.set_column_width(10, 8)?;
+    sheet2.set_column_width(11, 10)?;
+    sheet2.set_column_width(12, 25)?;
+    sheet2.set_column_width(13, 15)?;
+    sheet2.set_column_width(14, 20)?;
+    sheet2.set_column_width(15, 15)?;
+    sheet2.set_column_width(16, 20)?;
+
+    let data = workbook.save_to_buffer()?;
+    let fname = format!("dunning_{}_{}.xlsx", kind, period.ymm());
+    Ok((fname, data))
 }
