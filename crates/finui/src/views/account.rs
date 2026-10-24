@@ -436,6 +436,20 @@ impl AccountView {
 
             ui.separator();
             ui.label(RichText::new("辅助核算").strong());
+            // 已有分录的科目不许改辅助核算 —— 先说清楚，别让用户点了保存才看到报错。
+            // 辅助核算决定"这笔钱挂在谁身上"，改掉后旧分录带原辅助、新分录不带，
+            // 按客户/供应商查账时不带辅助的钱会查不到。
+            if !self.editing_new
+                && findb::accounts::usage(ctx.db(), &a.code)
+                    .map(|(n, _)| n > 0)
+                    .unwrap_or(false)
+            {
+                ui.label(
+                    RichText::new("⚠ 这个科目已经有分录，辅助核算不能改（要改请先清理该科目分录）")
+                        .size(11.0)
+                        .color(palette::WARN),
+                );
+            }
             ui.horizontal_wrapped(|ui| {
                 for k in AuxKind::ALL {
                     if *k == AuxKind::CashFlow {

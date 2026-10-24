@@ -117,7 +117,36 @@ pub fn insert(db: &Db, a: &Account) -> DbResult<()> {
     Ok(())
 }
 
+/// 更新科目。
+///
+/// **辅助核算一旦改动，若该科目已有分录就拒绝**（`aux` 变了才检查）。
+///
+/// 为什么必须拦：辅助核算不是显示属性，它决定"这笔钱挂在谁身上"。
+/// 应收账款从「核算客户」改成「不核算」后，历史分录的 `aux_key` 仍然是
+/// `customer=C001`，但新分录不带辅助——同一个科目下并存两种口径，
+/// 余额表拆成两行，**首页按客户查时那些不带辅助的钱会凭空消失**
+/// （实测：应收余额 20,000，首页「别人欠我」只显示 15,000，5,000 再也催不到）。
+///
+/// 要改必须先把这个科目的分录清干净，或者反过来：先确认压根没记过账。
 pub fn update(db: &Db, a: &Account) -> DbResult<()> {
+    // 只有辅助核算真的变了才检查，改名称 / 备注 / 现金流量项目等不受影响
+    if let Some(old) = get(db, &a.code)? {
+        if old.aux != a.aux {
+            let used: i64 = db.conn().query_row(
+                "SELECT COUNT(*) FROM voucher_entry e JOIN voucher v ON v.id=e.voucher_id
+                 WHERE e.account_code = ?1 AND v.status <> 'void'",
+                rusqlite::params![a.code],
+                |r| r.get(0),
+            )?;
+            if used > 0 {
+                return Err(FinError::validate(format!(
+                    "科目 {} 已有 {} 条分录，不能改辅助核算。辅助核算决定这笔钱挂在谁身上，改掉后旧分录仍带原辅助、新分录不带，同一科目会出现两种口径，按客户或供应商查账时不带辅助的钱会查不到。要改请先清理该科目的分录，或改用新科目。",
+                    a.code, used
+                ))
+                .into());
+            }
+        }
+    }
     let n = db.conn().execute(
         "UPDATE account SET name=?2,category=?3,dir=?4,aux_mask=?5,unit=?6,currency=?7,has_qty=?8,
                 is_cash=?9,is_bank=?10,cf_item=?11,bs_item=?12,pl_item=?13,disabled=?14,memo=?15
@@ -339,5 +368,49 @@ mod tests {
         assert_eq!(after, full);
         // 幂等：再次补齐不再新增
         assert_eq!(fill_missing_defaults(&db).unwrap(), 0);
+    }
+
+    /// 有分录后不许改辅助核算：改了会让同一科目并存两种口径，
+    /// 不带辅助的钱在按客户/供应商查账时凭空消失（实测应收 20000 只显示 15000）。
+    #[test]
+    fn cannot_change_aux_when_entries_exist() {
+        use fincore::account::AuxMask;
+        use fincore::{AuxRef, Entry, Money, Period, Voucher};
+        let db = mem();
+        // mem() 已建好默认科目，直接用现成的 112201
+        assert!(get(&db, "112201").unwrap().is_some(), "默认科目里应有 112201");
+
+        // 没有分录时随便改
+        let mut a1 = get(&db, "112201").unwrap().unwrap();
+        a1.aux = AuxMask::NONE;
+        update(&db, &a1).unwrap();
+        let mut a1 = get(&db, "112201").unwrap().unwrap();
+        a1.aux = AuxMask(fincore::AuxKind::Customer.bit());
+        update(&db, &a1).unwrap();
+
+        // 记一张挂客户的分录
+        let p = Period::new(2026, 11).unwrap();
+        let mut v = Voucher::new(p, chrono::NaiveDate::from_ymd_opt(2026, 11, 10).unwrap(), "记", 1);
+        v.memo = "测试".into();
+        let mut e1 = Entry::new(1, "112201", "测试");
+        e1.debit = Money::parse("100").unwrap();
+        e1.aux = AuxRef { customer: Some("C001".into()), ..Default::default() };
+        let mut e2 = Entry::new(2, "600101", "测试");
+        e2.credit = Money::parse("100").unwrap();
+        v.entries.push(e1);
+        v.entries.push(e2);
+        let vid = crate::vouchers::save(&db, &mut v).unwrap();
+        crate::vouchers::post(&db, vid, "admin").unwrap();
+
+        // 现在改辅助必须被拦
+        let mut a2 = get(&db, "112201").unwrap().unwrap();
+        a2.aux = AuxMask::NONE;
+        let err = update(&db, &a2).expect_err("有分录时不改辅助核算");
+        assert!(err.to_string().contains("不能改辅助核算"), "错误信息要讲清楚：{err}");
+
+        // 但改名称仍然允许
+        let mut a3 = get(&db, "112201").unwrap().unwrap();
+        a3.name = "应收账款".into();
+        update(&db, &a3).unwrap();
     }
 }

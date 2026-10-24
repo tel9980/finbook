@@ -52,7 +52,7 @@ const REFS = [
   { file: "crates/findb/src/settle.rs", line: 665, re: /account_code LIKE/, why: "传一级科目即含子科目" },
   { file: "crates/findb/src/settle.rs", line: 890, re: /^pub fn party_kind\b/, why: "往来维度按科目真实辅助核算取（取不到才按首位推）" },
   { file: "crates/findb/src/settle.rs", line: 925, re: /^pub fn aging\b/, why: "账龄桶" },
-  { file: "crates/findb/src/auxs.rs", line: 188, re: /^pub fn check_parent\b/, why: "档案分级环校验" },
+  { file: "crates/findb/src/auxs.rs", line: 225, re: /^pub fn check_parent\b/, why: "档案分级环校验" },
 ];
 
 for (const r of REFS) {
