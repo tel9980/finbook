@@ -2181,6 +2181,52 @@ pub struct PartyMoney {
     pub amount: Money,
     /// 最老一笔的天数（0 表示刚发生）
     pub max_days: i64,
+    /// 该单位同时也是另一种身份时，另一方向的金额（轧差用）
+    ///
+    /// 例：宏源既是外发加工商（我欠他 28,000）又拿货来加工（他欠我 15,000）。
+    /// 显示为「我欠宏源 28,000」，`also: 15,000`，`also_is_receivable: true`，
+    /// 老板一眼看到净欠 13,000 —— 而不是自己去两张表里心算。
+    pub also: Money,
+    /// `also` 的方向：true 表示"他欠我"，false 表示"我欠他"
+    pub also_is_receivable: bool,
+}
+
+impl PartyMoney {
+    /// 与该单位的净额，**永远是正数**；方向看 [`PartyMoney::net_is_receivable`]。
+    ///
+    /// `amount` 是"本行方向上我方的未结金额"，`also` 是"另一个方向上对方的金额"，
+    /// 两者方向相反，所以相减取绝对差。
+    ///
+    /// 为什么不带符号：界面上一行写成「净我欠他 -13,000」是双重否定，
+    /// 老板会读错。金额只表态"多少钱"，方向单独用一句话说清楚。
+    pub fn net_with(&self) -> Money {
+        if self.also.is_zero() {
+            return self.amount;
+        }
+        (self.amount - self.also).round2().abs()
+    }
+
+    /// 净额的方向是否为"他欠我"。
+    ///
+    /// 方向要看**本行自己**是哪个方向，再由 `amount` 与 `also` 谁大决定是否翻转：
+    /// - 客户行：`amount` 是"他欠我"。`amount >= also` → 他仍净欠我；
+    ///   否则我净欠他（他预付得更多）。
+    /// - 供应商行：`amount` 是"我欠他"。`amount >= also` → 我仍净欠他；
+    ///   否则他净欠我（我预付得更多）。
+    ///
+    /// `also_is_receivable` 记录的是"另一方向是不是他欠我"，等价于
+    /// "本行是供应商行"（来自供应商侧匹配时 also 是客户金额）。
+    pub fn net_is_receivable(&self) -> bool {
+        // 本行是客户行 ⇔ 另方向（also）不是我欠他，即 also_is_receivable == false
+        let this_row_is_customer = !self.also_is_receivable;
+        if this_row_is_customer {
+            // 他欠我 amount，我欠他 also
+            self.amount >= self.also
+        } else {
+            // 我欠他 amount，他欠我 also
+            self.amount < self.also
+        }
+    }
 }
 
 /// 首页「钱在哪」：应收应付合到一起看
@@ -2703,6 +2749,9 @@ pub fn money_position(
     };
 
     for (code, (amt, _)) in cust_map.iter() {
+        // 只列"他欠我"的（正数）。贷方余额的客户是**预收**，跟供应商那侧的
+        // 欠款其实是同一件事的两面，由下面的双向身份匹配去对上。
+        // 这里仍要跳过，否则"欠我最多的客户"会混进一堆预付款的负数列。
         if !amt.is_positive() {
             continue;
         }
@@ -2724,6 +2773,8 @@ pub fn money_position(
             name,
             amount: *amt,
             max_days: days,
+            also: Money::ZERO,
+            also_is_receivable: false,
         });
     }
     // 同一客户可能挂在多个应收科目下，合并后再排序
@@ -2773,11 +2824,66 @@ pub fn money_position(
             name,
             amount: *amt,
             max_days: days,
+            also: Money::ZERO,
+            also_is_receivable: false,
         });
     }
     top_suppliers.sort_by(|a, b| b.amount.to_f64().partial_cmp(&a.amount.to_f64()).unwrap_or(std::cmp::Ordering::Equal));
     top_suppliers.dedup_by(|b, a| if a.code == b.code { a.amount += b.amount; true } else { false });
     top_suppliers.truncate(5);
+
+    // ---- 双向身份合并：同一单位既欠我又被我欠 ----
+    //
+    // 小厂常见：宏源既是外发加工商（我欠他外发费），又拿料来加工（他欠我加工费）。
+    // 系统里这是两个档案（客户 S001 / 供应商 S001），首页会分两行显示，
+    // 老板得自己算 15000 − 28000 = 我实际还欠 13000。
+    //
+    // 这里把两边对上：客户行标出"同时我欠他 X"，供应商行标出"同时他欠我 X"。
+    // 不合并成一行，是因为两边金额和账龄都要能查；但要**明示净额**，
+    // 否则老板可能把两笔都付了，或者两笔都催了 —— 那才是真出错。
+    //
+    // 匹配口径：**单位名称完全相同**。编码不一定相同（一个是 C 开头一个是 S 开头），
+    // 但现实中同一个厂只有一个名字。名称相同就认为是同一家。
+    // 匹配用的映射必须**包含预收/预付那一侧**，不能只从 top_customers 建。
+    //
+    // 踩过的坑：宏源预付我 50000、我欠他 28000 时，客户侧是贷方余额（预收），
+    // 被"只列正数"过滤掉了，于是 top_customers 里没有宏源 ——
+    // 双向匹配就失效，供应商行看不到"他预付我 5 万"，净额算不出来。
+    let cust_by_name: std::collections::BTreeMap<String, (String, Money)> = {
+        let mut m = std::collections::BTreeMap::new();
+        for (code, (amt, _)) in cust_map.iter() {
+            if let Ok(Some(e)) = crate::auxs::get(db, fincore::AuxKind::Customer, code) {
+                // 预收（负数）取绝对值参与匹配：他预付我的钱，抵我欠他的
+                m.insert(e.name.clone(), (code.clone(), amt.abs()));
+            }
+        }
+        m
+    };
+    let mut sup_by_name: std::collections::BTreeMap<String, (String, Money)> = {
+        let mut m = std::collections::BTreeMap::new();
+        for (code, amt) in sup_map.iter() {
+            if let Ok(Some(e)) = crate::auxs::get(db, fincore::AuxKind::Supplier, code) {
+                m.insert(e.name.clone(), (code.clone(), amt.abs()));
+            }
+        }
+        m
+    };
+    // 只保留出现在供应商表里的（老板只看得到这几家），否则会匹配到未显示的单位
+    sup_by_name.retain(|name, _| top_suppliers.iter().any(|s| &s.name == name));
+    for c in top_customers.iter_mut() {
+        if let Some((_, amt)) = sup_by_name.get(&c.name) {
+            c.also = *amt;
+            c.also_is_receivable = false; // 供应商那边是"我欠他"
+        }
+    }
+    // 供应商行：他若同时是客户，把客户侧的净额对上
+    // （可能是我欠他、也可能是他预付我更多，方向交给 net_is_receivable 判）
+    for sp in top_suppliers.iter_mut() {
+        if let Some((_, amt)) = cust_by_name.get(&sp.name) {
+            sp.also = *amt;
+            sp.also_is_receivable = true; // 客户那边是"他欠我"
+        }
+    }
 
     Ok(MoneyPosition {
         receivable: ar_debit,

@@ -272,6 +272,29 @@ impl AuxView {
             if !self.err.is_empty() {
                 ui.colored_label(palette::CREDIT, &self.err);
             }
+            // 双向身份提示：这个名称已经是另一种身份的档案了
+            //
+            // 宏源既做外发加工（供应商），又拿料来加工（客户）。新建其中一条时
+            // 如果撞上同名档案，必须当场说清 —— 否则用户不知道"另一头"也该建，
+            // 首页「钱在哪」就只显示一半，净头寸是错的。
+            if is_new && matches!(e.kind, AuxKind::Customer | AuxKind::Supplier) && !e.name.trim().is_empty() {
+                if let Ok(Some(other)) = findb::auxs::find_other_role_by_name(ctx.db(), e.kind, e.name.trim()) {
+                    let other_label = match other.kind {
+                        AuxKind::Supplier => "供应商",
+                        AuxKind::Customer => "客户",
+                        _ => "档案",
+                    };
+                    ui.colored_label(
+                        palette::WARN,
+                        RichText::new(format!(
+                            "↔ 这家已经是你的{}（编码 {}），建好后他既是客户又是供应商，首页会按净额显示",
+                            other_label, other.code
+                        ))
+                        .size(12.0),
+                    );
+                    ui.add_space(4.0);
+                }
+            }
             egui::Grid::new("aux_edit")
                 .num_columns(2)
                 .spacing([10.0, 8.0])

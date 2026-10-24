@@ -517,6 +517,24 @@ impl Dashboard {
                                         };
                                         ui.label(RichText::new(txt).size(11.0).color(col));
                                     });
+                                    // 双向身份：他同时是我的供应商
+                                    // 不合并成一行（两边金额、账龄都要能查），但必须
+                                    // 把净额摆出来 —— 否则老板可能两头都付/两头都催。
+                                    if !c.also.is_zero() {
+                                        cols[0].horizontal(|ui| {
+                                            ui.add_space(12.0);
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "↔ 我欠他 {} → 净{} {}",
+                                                    c.also.fmt_money(),
+                                                    if c.net_is_receivable() { "他欠我" } else { "我欠他" },
+                                                    c.net_with().fmt_money()
+                                                ))
+                                                .size(11.0)
+                                                .color(palette::WARN),
+                                            );
+                                        });
+                                    }
                                 }
 
                                 cols[1].label(RichText::new("我欠最多的供应商").weak().size(12.0));
@@ -542,6 +560,21 @@ impl Dashboard {
                                                 .weak(),
                                         );
                                     });
+                                    if !sp.also.is_zero() {
+                                        cols[1].horizontal(|ui| {
+                                            ui.add_space(12.0);
+                                            ui.label(
+                                                RichText::new(format!(
+                                                    "↔ 他欠我 {} → 净{} {}",
+                                                    sp.also.fmt_money(),
+                                                    if sp.net_is_receivable() { "他欠我" } else { "我欠他" },
+                                                    sp.net_with().fmt_money()
+                                                ))
+                                                .size(11.0)
+                                                .color(palette::WARN),
+                                            );
+                                        });
+                                    }
                                 }
                             });
                         }

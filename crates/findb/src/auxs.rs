@@ -334,6 +334,49 @@ pub fn import_many(db: &Db, items: &[AuxEntity]) -> DbResult<usize> {
 /// 这里宁可少导一条、并在返回值里报告跳过了哪些，也不替用户做决定。
 ///
 /// 返回 (成功条数, 跳过的编码列表)。
+/// 按名称查找**另一种身份**的同名档案（用于识别"既是客户又是供应商"的单位）
+///
+/// 小厂常见：宏源既是外发加工商（供应商），又拿料来加工（客户）。
+/// 系统里这是两条档案（`UNIQUE(kind, code)`），新建其中一条时若名称撞上
+/// 另一条，就该提示用户"这家已经是你的供应商了，要不要一起建客户档案"，
+/// 而不是让他手工再找一遍 —— 漏建的后果是首页看不到这家单位的另一头，
+/// 净头寸算不准。
+pub fn find_other_role_by_name(
+    db: &Db,
+    kind: AuxKind,
+    name: &str,
+) -> DbResult<Option<AuxEntity>> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let other = match kind {
+        AuxKind::Customer => AuxKind::Supplier,
+        AuxKind::Supplier => AuxKind::Customer,
+        _ => return Ok(None),
+    };
+    let mut st = db.conn().prepare(
+        "SELECT id,kind,code,name,parent_code,disabled,props_json,memo
+         FROM aux_entity WHERE kind = ?1 AND name = ?2 AND disabled = 0
+         ORDER BY id LIMIT 1",
+    )?;
+    let mut rows = st.query_map(rusqlite::params![kind_str(other), name], |r| {
+        let kind_s: String = r.get(1)?;
+        let props: String = r.get(6)?;
+        Ok(AuxEntity {
+            id: r.get(0)?,
+            kind: kind_from(&kind_s).unwrap_or(AuxKind::Dept),
+            code: r.get(2)?,
+            name: r.get(3)?,
+            parent_code: r.get(4)?,
+            disabled: r.get::<_, i64>(5)? != 0,
+            props: serde_json::from_str(&props).unwrap_or_default(),
+            memo: r.get(7)?,
+        })
+    })?;
+    Ok(rows.next().transpose()?)
+}
+
 pub fn insert_many_skip_existing(db: &Db, items: &[AuxEntity]) -> DbResult<(usize, Vec<String>)> {
     let tx = db.write_tx()?;
     let mut n = 0;
