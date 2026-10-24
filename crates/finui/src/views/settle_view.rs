@@ -21,6 +21,8 @@ pub enum SettleTab {
     Auto,
     Offset,
     Aging,
+    /// 往来对账单：期初 + 本期流水 + 期末，发给客户回签
+    Statement,
 }
 
 /// 账龄区间方案
@@ -102,6 +104,16 @@ pub struct SettleView {
     pub lines: Vec<AgingLine>,
     /// 6 档坏账计提比例（文本缓冲）
     pub rates: Vec<String>,
+    /// 往来对账单
+    pub statements: Vec<findb::statement::Statement>,
+    /// 对账单类型：ar / ap
+    pub st_kind: String,
+    /// 对账单往来单位编码
+    pub st_party: String,
+    /// 对账单起始期间 / 截止期间
+    pub st_from: String,
+    pub st_to: String,
+    pub st_memo: String,
     /// 自动核销的二次确认
     pub confirm_auto: bool,
     pub dirty: bool,
@@ -146,6 +158,12 @@ impl Default for SettleView {
                 .map(|m| m.fmt_plain())
                 .collect(),
             confirm_auto: false,
+            statements: Vec::new(),
+            st_kind: "ar".to_string(),
+            st_party: String::new(),
+            st_from: String::new(),
+            st_to: String::new(),
+            st_memo: String::new(),
             dirty: true,
             key: String::new(),
         }
@@ -173,6 +191,13 @@ impl SettleView {
         if self.cross_date.is_empty() {
             self.cross_date = chrono::Local::now().date_naive().to_string();
         }
+        if self.st_from.is_empty() {
+            // 默认从建账期到这个月：小厂的账通常从启用月份开始
+            self.st_from = ctx.db().options().start_period.code();
+        }
+        if self.st_to.is_empty() {
+            self.st_to = ctx.period().code();
+        }
         self.dirty = true;
     }
 
@@ -188,7 +213,7 @@ impl SettleView {
         let upto = self.upto(ctx);
         // 缓存 key 按"期间 + Tab + 科目 + 截止期间 + 过滤条件"组，避免每帧重查
         let key = format!(
-            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}",
             ctx.period().ymm(),
             self.tab,
             self.account,
@@ -197,7 +222,8 @@ impl SettleView {
             self.as_of,
             self.scheme.idx(),
             self.cross,
-            self.cross_account
+            self.cross_account,
+            self.st_kind
         );
         if !self.dirty && self.key == key {
             return;
@@ -232,6 +258,10 @@ impl SettleView {
             self.lines = findb::settle::aging(ctx.db(), &self.account, upto, as_of, &self.buckets, None)
                 .unwrap_or_default();
         }
+        if self.tab == SettleTab::Statement {
+            let kind = self.st_kind.clone();
+            self.statements = findb::statement::list(ctx.db(), Some(&kind), None).unwrap_or_default();
+        }
     }
 
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
@@ -253,6 +283,7 @@ impl SettleView {
             ui.selectable_value(&mut self.tab, SettleTab::Auto, "自动核销");
             ui.selectable_value(&mut self.tab, SettleTab::Offset, "往来对冲");
             ui.selectable_value(&mut self.tab, SettleTab::Aging, "账龄分析");
+            ui.selectable_value(&mut self.tab, SettleTab::Statement, "对账单");
             ui.separator();
             ui.label("科目");
             let before = self.account.clone();
@@ -303,6 +334,7 @@ impl SettleView {
             SettleTab::Auto => self.show_auto(ctx, ui),
             SettleTab::Offset => self.show_offset(ctx, ui),
             SettleTab::Aging => self.show_aging(ctx, ui),
+            SettleTab::Statement => self.show_statement(ctx, ui),
         }
     }
 
@@ -1132,5 +1164,398 @@ impl SettleView {
                 RichText::new("按账龄区间比例测算；点击「正式计提」自动生成「借 资产减值损失 / 贷 坏账准备」凭证。").weak(),
             );
         });
+    }
+}
+
+impl SettleView {
+    /// 往来对账单：期初 + 本期流水 + 期末，发给客户回签。
+    ///
+    /// 与「催款单」的区别见 `findb::statement` 模块头：催款单是某一时点的欠款快照，
+    /// 对账单是某期间的**完整流水**（含已核销），客户盖章确认后即为对账闭环。
+    /// 小厂客户几个月才确认一次，靠的就是这个——每一期发出去、等回签，
+    /// 没有回签的就一直挂在"已发出"里，一眼能看出跟谁还没对上。
+    fn show_statement(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        let mut create = false;
+
+        widgets::card(ui, "往来对账单（发客户对账 → 回签确认）", |ui| {
+            ui.label(
+                RichText::new(
+                    "对账单是某期间的完整流水：期初余额 + 本期增加 − 本期减少 = 期末余额，\
+                     逐行带滚动余额。生成时快照落库，之后改凭证、再核销都不影响已发出的对账单。\
+                     客户回签后才算对上——没回签的会一直挂在「已发出」里，提醒你去问。",
+                )
+                .weak(),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("类型");
+                ui.selectable_value(&mut self.st_kind, "ar".to_string(), "应收对账单");
+                ui.selectable_value(&mut self.st_kind, "ap".to_string(), "应付对账单");
+                ui.separator();
+                ui.label(if self.st_kind == "ar" { "客户" } else { "供应商" });
+                ui.add_sized(
+                    [110.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.st_party)
+                        .hint_text(if self.st_kind == "ar" { "C001" } else { "S001" }),
+                    );
+                ui.separator();
+                ui.label("期间");
+                ui.add_sized(
+                    [84.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.st_from).hint_text("2026-11"),
+                );
+                ui.label("至");
+                ui.add_sized(
+                    [84.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.st_to).hint_text("2026-11"),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("备注");
+                ui.add_sized(
+                    [300.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.st_memo)
+                        .hint_text("如：截止 XX 月往来明细，请核对后签章回传"),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_enabled(
+                            ctx.can(Perm::VoucherNew),
+                            egui::Button::new(
+                                RichText::new("生成对账单").color(egui::Color32::WHITE),
+                            )
+                            .fill(palette::PRIMARY),
+                        )
+                        .clicked()
+                    {
+                        create = true;
+                    }
+                });
+            });
+            ui.label(
+                RichText::new(
+                    "客商编码在对账单里用的是档案编码（客户 C001…、供应商 S001…），\
+                     科目留空则取账套默认应收 / 应付。",
+                )
+                .weak()
+                .size(12.0),
+            );
+        });
+
+        if create {
+            self.do_create_statement(ctx);
+        }
+
+        ui.add_space(8.0);
+        self.show_statement_list(ctx, ui);
+    }
+
+    fn do_create_statement(&mut self, ctx: &mut AppCtx<'_>) {
+        let party = self.st_party.trim().to_string();
+        if party.is_empty() {
+            ctx.error(if self.st_kind == "ar" {
+                "请填写客户编码（如 C001）"
+            } else {
+                "请填写供应商编码（如 S001）"
+            });
+            return;
+        }
+        let Ok(from) = Period::parse(self.st_from.trim()) else {
+            ctx.error("起始期间格式应为 YYYY-MM");
+            return;
+        };
+        let Ok(to) = Period::parse(self.st_to.trim()) else {
+            ctx.error("截止期间格式应为 YYYY-MM");
+            return;
+        };
+        // 名称从辅助档案取，取不到就退回编码——对账单上写编码总比空白好
+        let kind = if self.st_kind == "ar" {
+            fincore::AuxKind::Customer
+        } else {
+            fincore::AuxKind::Supplier
+        };
+        let party_name = findb::auxs::list(ctx.db(), &fincore::AuxQuery::kind(kind))
+            .unwrap_or_default()
+            .into_iter()
+            .find(|e| e.code == party)
+            .map(|e| e.name)
+            .unwrap_or_else(|| party.clone());
+        let account = if self.st_kind == "ar" {
+            ctx.db().options().biz_accounts.ar.clone()
+        } else {
+            ctx.db().options().biz_accounts.ap.clone()
+        };
+        let who = ctx.user().display_name.clone();
+        match findb::statement::create(
+            ctx.db(),
+            &self.st_kind,
+            &account,
+            &party,
+            &party_name,
+            from,
+            to,
+            &self.st_memo,
+            &who,
+        ) {
+            Ok(st) => {
+                ctx.log(
+                    "往来",
+                    "生成往来对账单",
+                    &format!("{} {} {}~{}", st.no, st.party_name, st.period_from.code(), st.period_to.code()),
+                );
+                ctx.info(format!(
+                    "已生成对账单 {}：期末余额 {}（正=对方欠我方），发出后等客户回签",
+                    st.no,
+                    st.end_balance.fmt_money()
+                ));
+                self.st_party.clear();
+                self.st_memo.clear();
+                self.dirty = true;
+            }
+            Err(e) => ctx.error(e.to_string()),
+        }
+    }
+
+    fn show_statement_list(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        let mut action: Option<(i64, &'static str)> = None;
+        let rows = std::mem::take(&mut self.statements);
+        let mut detail: Option<findb::statement::Statement> = None;
+        {
+            let cols = [
+                widgets::TCol::new("单号", 130.0).fixed(),
+                widgets::TCol::new("往来单位", 140.0),
+                widgets::TCol::new("期间", 130.0),
+                widgets::TCol::new("期初", 100.0).right(),
+                widgets::TCol::new("本期增加", 100.0).right(),
+                widgets::TCol::new("本期减少", 100.0).right(),
+                widgets::TCol::new("期末", 100.0).right(),
+                widgets::TCol::new("状态", 90.0),
+                widgets::TCol::new("回签人", 90.0),
+                widgets::TCol::new("操作", 210.0),
+            ];
+            widgets::grid(ui, "statement_list", &cols, rows.len(), 26.0, |i, c, ui| {
+                let Some(st) = rows.get(i) else { return };
+                match c {
+                    0 => {
+                        ui.label(&st.no);
+                    }
+                    1 => {
+                        ui.label(format!("{} {}", st.party_code, st.party_name));
+                    }
+                    2 => {
+                        ui.label(format!("{}~{}", st.period_from.code(), st.period_to.code()));
+                    }
+                    3 => widgets::amount_label(ui, st.begin_balance),
+                    4 => widgets::amount_label(ui, st.period_increase),
+                    5 => widgets::amount_label(ui, st.period_decrease),
+                    6 => widgets::report_amount(ui, st.end_balance, true),
+                    7 => {
+                        // 已发出未回签的用警示色，一眼看出跟谁还没对上
+                        let txt = RichText::new(st.status_label());
+                        ui.label(match st.status.as_str() {
+                            "sent" => txt.color(palette::WARN),
+                            "confirmed" => txt.color(palette::OK),
+                            "cancelled" => txt.weak(),
+                            _ => txt,
+                        });
+                    }
+                    8 => {
+                        ui.label(if st.confirmed_by.is_empty() {
+                            "-".to_string()
+                        } else {
+                            st.confirmed_by.clone()
+                        });
+                    }
+                    9 => {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("明细").clicked() {
+                                detail = Some(st.clone());
+                            }
+                            if st.status == "draft"
+                                && ui
+                                    .add_enabled(ctx.can(Perm::VoucherNew), egui::Button::new("发出").small())
+                                    .clicked()
+                            {
+                                action = Some((st.id, "sent"));
+                            }
+                            if matches!(st.status.as_str(), "draft" | "sent")
+                                && ui
+                                    .add_enabled(
+                                        ctx.can(Perm::VoucherNew),
+                                        egui::Button::new("回签确认").small(),
+                                    )
+                                    .clicked()
+                            {
+                                action = Some((st.id, "confirmed"));
+                            }
+                            if matches!(st.status.as_str(), "draft" | "sent")
+                                && ui.small_button("作废").clicked()
+                            {
+                                action = Some((st.id, "cancelled"));
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            });
+        }
+        self.statements = rows;
+
+        if let Some((id, status)) = action {
+            let who = ctx.user().display_name.clone();
+            match findb::statement::set_status(ctx.db(), id, status, &who) {
+                Ok(()) => {
+                    ctx.info(format!(
+                        "对账单已变更为「{}」",
+                        findb::statement::status_label(status)
+                    ));
+                    ctx.log("往来", "对账单状态变更", &format!("#{id} → {status}"));
+                    self.dirty = true;
+                }
+                Err(e) => ctx.error(e.to_string()),
+            }
+        }
+
+
+        if let Some(st) = detail {
+            self.show_statement_detail(ctx, ui, &st);
+        }
+    }
+}
+
+impl SettleView {
+    /// 对账单明细弹窗：期初 + 逐笔流水（带滚动余额）+ 期末。
+    ///
+    /// 这张表就是打印给客户签字的那张——所以金额正负口径要一眼看懂：
+    /// **正 = 对方欠我方**，负数 = 我方欠对方（预收/预付）。
+    fn show_statement_detail(&mut self, ctx: &AppCtx<'_>, ui: &mut Ui, st: &findb::statement::Statement) {
+        let mut open = true;
+        egui::Window::new(format!("{} {}", st.kind_label(), st.no))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(760.0)
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                egui::Grid::new("st_head")
+                    .num_columns(4)
+                    .spacing([18.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("往来单位").weak());
+                        ui.label(format!("{} {}", st.party_code, st.party_name));
+                        ui.label(RichText::new("状态").weak());
+                        ui.label(RichText::new(st.status_label()).strong());
+                        ui.end_row();
+                        ui.label(RichText::new("期间").weak());
+                        ui.label(format!(
+                            "{} 至 {}",
+                            st.period_from.code(),
+                            st.period_to.code()
+                        ));
+                        ui.label(RichText::new("科目").weak());
+                        ui.label(&st.account);
+                        ui.end_row();
+                        ui.label(RichText::new("生成人").weak());
+                        ui.label(format!("{} {}", st.created_by, st.created_at));
+                        ui.label(RichText::new("回签").weak());
+                        if st.confirmed_by.is_empty() {
+                            ui.label(RichText::new("未回签").weak());
+                        } else {
+                            ui.label(format!("{} {}", st.confirmed_by, st.confirmed_at));
+                        }
+                        ui.end_row();
+                    });
+                if !st.memo.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(format!("备注：{}", st.memo));
+                }
+                ui.separator();
+
+                let cols = [
+                    widgets::TCol::new("日期", 100.0).fixed(),
+                    widgets::TCol::new("凭证号", 140.0),
+                    widgets::TCol::new("摘要", 240.0),
+                    widgets::TCol::new("增加", 100.0).right(),
+                    widgets::TCol::new("减少", 100.0).right(),
+                    widgets::TCol::new("余额", 110.0).right(),
+                ];
+                // 明细行 + 首行期初 + 末行合计
+                let lines = &st.lines;
+                widgets::grid(
+                    ui,
+                    "st_detail_grid",
+                    &cols,
+                    lines.len() + 2,
+                    24.0,
+                    |i, c, ui| {
+                        if i == 0 {
+                            // 期初行
+                            match c {
+                                0 => {
+                                    ui.label(RichText::new("期初").weak());
+                                }
+                                1 => {
+                                    ui.label("");
+                                }
+                                2 => {
+                                    ui.label(RichText::new("上期结转").weak());
+                                }
+                                3 => {
+                                    ui.label("");
+                                }
+                                4 => {
+                                    ui.label("");
+                                }
+                                5 => widgets::amount_label(ui, st.begin_balance),
+                                _ => {}
+                            }
+                            return;
+                        }
+                        if i == lines.len() + 1 {
+                            // 合计行
+                            match c {
+                                0 => {
+                                    ui.label(RichText::new("合计").strong());
+                                }
+                                1 => {
+                                    ui.label("");
+                                }
+                                2 => {
+                                    ui.label(RichText::new(format!("共 {} 笔", st.line_count)).weak());
+                                }
+                                3 => widgets::report_amount(ui, st.period_increase, true),
+                                4 => widgets::report_amount(ui, st.period_decrease, true),
+                                5 => widgets::report_amount(ui, st.end_balance, true),
+                                _ => {}
+                            }
+                            return;
+                        }
+                        let Some(ln) = lines.get(i - 1) else { return };
+                        match c {
+                            0 => {
+                                ui.label(&ln.date);
+                            }
+                            1 => {
+                                ui.label(&ln.doc_no);
+                            }
+                            2 => {
+                                ui.label(&ln.summary).on_hover_text(&ln.summary);
+                            }
+                            3 => widgets::amount_label(ui, ln.increase),
+                            4 => widgets::amount_label(ui, ln.decrease),
+                            5 => widgets::amount_label(ui, ln.balance),
+                            _ => {}
+                        }
+                    },
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "余额正数 = 对方欠我方，负数 = 我方欠对方（预收/预付）。\
+                         本表为生成时快照，之后改凭证不影响。",
+                    )
+                    .weak()
+                    .size(12.0),
+                );
+            });
     }
 }
