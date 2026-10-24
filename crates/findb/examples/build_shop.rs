@@ -19,6 +19,37 @@ use std::env;
 use std::path::PathBuf;
 
 /// 客户名单（来源：客户、供应商、外发.xlsx，共 59 家）
+/// 存货档案：(编码, 名称, 规格型号, 计量单位)
+///
+/// 小工厂第一线没有盘点制度，仓库实数是跟着单据走的。所以这四类物料
+/// 必须按数量记，账上的「还剩多少 kg / 多少套」就是唯一的底子。
+/// 品类前缀用来分堆：HG 化工、RL 染料、GJ 挂具、BZ 包装。
+const ITEMS: &[(&str, &str, &str, &str)] = &[
+    // 化工
+    ("HG01", "除油剂", "20kg/桶", "kg"),
+    ("HG02", "碱液", "25kg/桶", "kg"),
+    ("HG03", "硫酸", "30kg/桶", "kg"),
+    ("HG04", "硝酸", "30kg/桶", "kg"),
+    ("HG05", "封孔剂", "20kg/桶", "kg"),
+    ("HG06", "除膜剂", "20kg/桶", "kg"),
+    // 染料
+    ("RL01", "黑色染料", "25kg/箱", "kg"),
+    ("RL02", "彩色染料", "25kg/箱", "kg"),
+    ("RL03", "银白染料", "25kg/箱", "kg"),
+    ("RL04", "香槟染料", "25kg/箱", "kg"),
+    ("RL05", "钛金染料", "25kg/箱", "kg"),
+    ("RL06", "古铜染料", "25kg/箱", "kg"),
+    // 挂具
+    ("GJ01", "铝挂具", "通用型", "套"),
+    ("GJ02", "钛挂具", "通用型", "套"),
+    ("GJ03", "挂具夹片", "配套件", "个"),
+    // 包装
+    ("BZ01", "气泡膜", "1.2m×100m/卷", "卷"),
+    ("BZ02", "缠绕膜", "50cm×300m/卷", "卷"),
+    ("BZ03", "纸箱", "按客户规格", "个"),
+    ("BZ04", "报纸（填充用）", "捆", "捆"),
+];
+
 const CUSTOMERS: &[&str] = &[
     "奇园江门", "火树银花", "姚祥峰", "信研", "弘丰合页", "鑫东飞", "金雨.亚太阳", "澳诗丹",
     "西臣", "精耀", "格顿希尔", "雷老板", "金亚浪", "九曜", "维柯纳", "东蓬二厂", "英兰",
@@ -101,9 +132,9 @@ fn main() {
         base_currency: "CNY".into(),
         company: company.clone(),
         tax_no: String::new(),
-        // 数量核算关掉：小厂现阶段只做财务记账，买料按金额记，不录吨/个
-        // （以后要管库存了，在「账套参数」里勾上即可，不影响已有凭证）
-        enable_qty: false,
+        // 数量核算开着：化工、染料、挂具、包装按「数量 × 单价」记，
+        // 第一线不盘点，账上的数量进出就是唯一的实数底子，全靠它查账。
+        enable_qty: true,
         enable_foreign: false,
         // 小厂不上 MRP 排产，生产模块关掉，侧栏少一大组
         enable_production: false,
@@ -218,32 +249,64 @@ fn main() {
     }
     println!("建外发加工厂 {nw} 家（挂在供应商维度，W 编码）");
 
-    // ---------- 7. 存货：挂具 ----------
+    // ---------- 7. 存货档案：化工 / 染料 / 挂具 / 包装 ----------
+    //
+    // 编码分四段，第 3 位是品类，方便按前缀筛：
+    //   HG 化工、RL 染料、GJ 挂具、BZ 包装
+    // 单位随品类走（kg / 套 / 个 / 卷），填错了数量金额对不上，validate 会拦。
     let mut ni = 0;
-    for (code, name) in [("TG01", "挂具")] {
-        if findb::auxs::insert(&db, &AuxEntity::new(AuxKind::Item, code, name)).is_ok() {
+    for (code, name, spec, unit) in ITEMS {
+        let mut e = AuxEntity::new(AuxKind::Item, *code, *name);
+        e.set_prop(fincore::auxiliary::prop::SPEC, *spec);
+        e.set_prop(fincore::auxiliary::prop::UNIT, *unit);
+        if findb::auxs::insert(&db, &e).is_ok() {
             ni += 1;
         }
     }
-    println!("建存货档案 {ni} 个");
+    println!("建存货档案 {ni} 个（化工/染料/挂具/包装，带规格与计量单位）");
 
-    // ---------- 7.5 关掉数量核算后，把科目上的「按数量核算」标记一起清掉 ----------
+    // ---------- 7.5 存货科目：确保「按数量核算 + 挂存货档案 + 单位」三件套齐备 ----------
     //
-    // 数量核算关着的时候这些标记不生效，但留着是一颗地雷：以后谁只勾上
-    // 「启用数量核算」忘了检查，12 个存货科目会同时开始要数量，
-    // 建账初期录凭证会被拦。既然现阶段按金额记账，这里一并清干净，
-    // 以后真要管库存，逐个科目去勾。挂具档案保留（不碍事，来日可用）。
+    // 默认科目表里 1403x/1405x/1411x 本来就挂着 AuxKind::Item 且 has_qty=true，
+    // 只是单位一律写成"个"。这里按品类改成真实单位，并给新增的明细科目补上标记。
+    // 非末级科目不记账，保持不挂辅助（与 chart.rs 的口径一致）。
+    let qty_accounts: &[(&str, &str)] = &[
+        ("1401", "批"),     // 材料采购 —— 在途归集，按批次记
+        ("140301", "kg"),   // 原料及主要材料
+        ("140302", "kg"),   // 辅助材料 —— 化工料、染料的落脚点
+        ("140303", "kg"),   // 外购半成品
+        ("140304", "个"),   // 修理用备件
+        ("140305", "卷"),   // 包装材料
+        ("140306", "kg"),   // 燃料
+        ("140501", "个"),   // 产成品
+        ("140502", "个"),   // 自制半成品
+        ("141101", "卷"),   // 包装物
+        ("141102", "个"),   // 低值易耗品（挂具）
+        ("141103", "个"),   // 其他周转材料
+    ];
     let mut nq = 0;
-    for mut a in findb::accounts::list(&db).expect("科目列表") {
-        if a.has_qty {
-            a.has_qty = false;
-            findb::accounts::update(&db, &a).expect("清数量标记");
-            nq += 1;
+    for (code, unit) in qty_accounts {
+        if let Some(mut a) = findb::accounts::get(&db, code).expect("查科目") {
+            let mut changed = false;
+            if !a.has_qty {
+                a.has_qty = true;
+                changed = true;
+            }
+            if !a.aux.contains(AuxKind::Item) {
+                a.aux = a.aux.with(AuxKind::Item);
+                changed = true;
+            }
+            if a.unit.as_deref() != Some(unit) {
+                a.unit = Some((*unit).to_string());
+                changed = true;
+            }
+            if changed {
+                findb::accounts::update(&db, &a).expect("更新存货科目");
+                nq += 1;
+            }
         }
     }
-    if nq > 0 {
-        println!("清除「按数量核算」标记 {nq} 个科目（现阶段只按金额记账）");
-    }
+    println!("存货科目按数量金额式配置 {nq} 个（挂存货档案 + 真实计量单位）");
 
     // ---------- 8. 管理员 ----------
     if findb::users::count(&db).unwrap_or(0) == 0 {
