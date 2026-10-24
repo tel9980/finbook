@@ -1979,7 +1979,36 @@ pub fn financial_totals(
     };
     let equity = total_asset - total_liab;
     let revenue = occ("6001") + occ("6051");
-    let cost = exp("6401") + exp("6402");
+    // 「未结转的成本类科目」也要计入当期成本。
+    //
+    // 背景：成本类科目（`5001 生产成本`、`5101 制造费用`）不是损益类，
+    // `AcctCategory::is_profit_loss()` 不含 Cost —— 这是对的，它们要先归集
+    // 再结转进 6401。但小厂往往**不做成本核算**（不核算单位成本、不算产成品），
+    // 房租、水电、煤气、外发加工费就直接挂在 5101 各明细上，指望期末结转。
+    //
+    // 如果利润表只认 6401/6402，这些真实发生的支出会从利润里**整体消失**，
+    // 净利润凭空虚高 —— 账看着是平的，赚没赚钱却是假的。这种错最危险，
+    // 因为它不报错、不报警，只有老板觉得"怎么利润这么高"才发现。
+    //
+    // 所以：把成本类科目的**当前余额**计入当期成本。它们的余额就是"已发生
+    // 但还没转到主营业务成本"的部分。真做了结转的账套，这些余额会被结转
+    // 冲成 0，不会重复计算。
+    let unrecovered_cost = {
+        let accounts = crate::accounts::list(db)?;
+        let mut s = Money::ZERO;
+        for a in accounts.iter() {
+            if !matches!(a.category, fincore::account::AcctCategory::Cost) {
+                continue;
+            }
+            // 只取末级：父科目余额是子科目之和，重复相加会翻倍
+            if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+                continue;
+            }
+            s += exp(&a.code);
+        }
+        s
+    };
+    let cost = exp("6401") + exp("6402") + unrecovered_cost;
     let net_profit = revenue - cost - exp("6403") - exp("6601") - exp("6602") - exp("6603")
         - exp("6701")
         + occ("6101") // 公允价值变动收益

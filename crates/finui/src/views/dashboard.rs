@@ -25,6 +25,14 @@ pub struct Dashboard {
     recent: Vec<Voucher>,
     /// 待办事项
     todos: Vec<(String, String)>,
+    /// 本期营业收入
+    revenue: Money,
+    /// 本期营业成本
+    cost: Money,
+    /// 本期净利润
+    net_profit: Money,
+    /// 本年期初起的累计净利润（年初至今）
+    net_profit_ytd: Money,
 }
 
 impl Default for Dashboard {
@@ -45,6 +53,10 @@ impl Default for Dashboard {
             end_credit: Money::ZERO,
             recent: Vec::new(),
             todos: Vec::new(),
+            revenue: Money::ZERO,
+            cost: Money::ZERO,
+            net_profit: Money::ZERO,
+            net_profit_ytd: Money::ZERO,
         }
     }
 }
@@ -86,6 +98,20 @@ impl Dashboard {
             Ok(s) => s.trial_balance(chart),
             Err(_) => Default::default(),
         };
+        // 本期经营结果：营业收入 / 营业成本 / 净利润。
+        //
+        // 首页前面几个指标卡都是"账记对没有"（试算平不平、几张没记账），
+        // 但不回答老板最关心的那句"这个月赚没赚"。这里把利润口径也放上来，
+        // 数据源与「报表 → 利润表」完全一致（financial_totals），不另算一套。
+        let year_from = fincore::Period::new(p.year(), 1).unwrap_or(p);
+        if let Ok(t) = findb::advanced::financial_totals(db, p, p, None) {
+            self.revenue = t.revenue;
+            self.cost = t.cost;
+            self.net_profit = t.net_profit;
+        }
+        if let Ok(t) = findb::advanced::financial_totals(db, p, year_from, None) {
+            self.net_profit_ytd = t.net_profit;
+        }
         self.begin_debit = tb.begin_debit;
         self.begin_credit = tb.begin_credit;
         self.debit = tb.period_debit;
@@ -206,6 +232,51 @@ impl Dashboard {
                     },
                 );
             });
+
+            ui.add_space(12.0);
+
+            // ---- 经营结果：这个月赚没赚钱 ----
+            //
+            // 放在试算平衡之前：老板每天打开系统最想看到的第一件事是"我赚了多少"，
+            // 而不是"我账平不平"。账平不平是会计的事，赚钱与否是老板的事。
+            egui::Frame::NONE
+                .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
+                .corner_radius(6.0)
+                .inner_margin(12.0)
+                .show(ui, |ui| {
+                    ui.label(RichText::new("本期经营结果").strong());
+                    ui.separator();
+                    ui.columns(3, |cols| {
+                        let np_color = if self.net_profit.is_negative() {
+                            palette::CREDIT
+                        } else if self.net_profit.is_zero() {
+                            palette::GRID
+                        } else {
+                            palette::OK
+                        };
+                        stat_card(
+                            &mut cols[0],
+                            "营业收入",
+                            &self.revenue.fmt_money(),
+                            "本月加工费等收入合计",
+                            palette::PRIMARY,
+                        );
+                        stat_card(
+                            &mut cols[1],
+                            "营业成本",
+                            &self.cost.fmt_money(),
+                            "材料 + 人工 + 外发 + 折旧等",
+                            palette::WARN,
+                        );
+                        stat_card(
+                            &mut cols[2],
+                            "净利润",
+                            &self.net_profit.fmt_money(),
+                            &format!("年初至今 {}", self.net_profit_ytd.fmt_money()),
+                            np_color,
+                        );
+                    });
+                });
 
             ui.add_space(12.0);
 
