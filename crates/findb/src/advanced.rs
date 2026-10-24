@@ -2170,6 +2170,70 @@ pub struct DriverItem {
     pub prev_amount: Money,
 }
 
+/// 首页「钱在哪」一行的往来单位明细
+#[derive(Clone, Debug)]
+pub struct PartyMoney {
+    /// 往来单位编码（裸编码，如 `C001` / `S001`）
+    pub code: String,
+    /// 往来单位名称
+    pub name: String,
+    /// 未结清金额（正数）
+    pub amount: Money,
+    /// 最老一笔的天数（0 表示刚发生）
+    pub max_days: i64,
+}
+
+/// 首页「钱在哪」：应收应付合到一起看
+///
+/// 为什么单列一个结构而不复用账龄报表：账龄报表是按科目拆的（112201 一张、
+/// 220201 另一张），老板要的是**一句话**——"别人欠我多少、我欠别人多少、
+/// 我自己手里有多少"。三个数并排才有判断力，分开看永远做不出决定。
+#[derive(Clone, Debug)]
+pub struct MoneyPosition {
+    /// 客户欠我的（应收未收）
+    pub receivable: Money,
+    /// 我欠供应商的（应付未付）
+    pub payable: Money,
+    /// 客户预收我的（我欠客户的钱/货）
+    pub advance_in: Money,
+    /// 我预付供应商的（供应商欠我的货）
+    pub advance_out: Money,
+    /// 自己手里能动用的钱（现金 + 银行）
+    pub cash: Money,
+    /// 应收毛额（各户借方未轧差之和，用于看清"总共赊出去多少"）
+    pub receivable_gross: Money,
+    /// 应付毛额（各户贷方未轧差之和）
+    pub payable_gross: Money,
+    /// 欠我最多的客户（按金额降序，最多 5 个）
+    pub top_customers: Vec<PartyMoney>,
+    /// 我欠最多的供应商（按金额降序，最多 5 个）
+    pub top_suppliers: Vec<PartyMoney>,
+    /// 超过 90 天还没收回的应收总额（催收重点）
+    pub overdue_90: Money,
+    /// 超过 90 天还没收回的客户家数
+    pub overdue_90_count: usize,
+}
+
+impl MoneyPosition {
+    /// 净头寸 = 应收 + 预付 − 应付 − 预收
+    ///
+    /// 正数表示别人欠我的多，负数表示我欠别人的多。这个数加上手头现金
+    /// 就是"这家厂实际的家底"——利润表看不出来这个。
+    pub fn net(&self) -> Money {
+        self.receivable - self.payable + self.advance_out - self.advance_in
+    }
+
+    /// 欠款总天数加权：把最老那笔的天数摊出来，提醒老板"这钱压多久了"
+    pub fn worst_days(&self) -> i64 {
+        self.top_customers
+            .iter()
+            .chain(self.top_suppliers.iter())
+            .map(|p| p.max_days)
+            .max()
+            .unwrap_or(0)
+    }
+}
+
 /// 财务分析结果
 #[derive(Clone, Debug)]
 pub struct FinancialAnalysis {
@@ -2440,6 +2504,293 @@ pub fn financial_analysis(
         profit_drivers,
         anomaly_notes,
         ratios,
+    })
+}
+
+/// 首页「钱在哪」：应收、应付、预收、预付、手头现金一次算清
+///
+/// 口径说明：
+/// - 应收 = `1122` 下各末级科目的**净借方余额**（未核销部分），不含预收
+/// - 应付 = `2202` 下各末级科目的**净贷方余额**，不含预付
+/// - 预收 / 预付：同一批科目里方向相反的部分（贷方余额的应收、借方余额的应付）
+/// - 现金 = `1001` 库存现金 + `1002` 银行存款 的借方余额
+///
+/// 走科目余额而不是走核销台账，是因为**没做核销的账也要能看到欠款**。
+/// 小厂大量凭证录完从不核销，只认核销的话首页会显示"没人欠我钱"——
+/// 那比不显示更糟。
+pub fn money_position(
+    db: &Db,
+    period: Period,
+    as_of: chrono::NaiveDate,
+    scope: Option<&fincore::user::User>,
+) -> DbResult<MoneyPosition> {
+    use crate::balances::{BalanceQuery, BalanceSnapshot};
+
+    let mut bq = BalanceQuery::period(period);
+    if let Some(u) = scope {
+        bq = bq.with_user_scope(u);
+    }
+    let snap = BalanceSnapshot::load(db, &bq)?;
+    let accounts = crate::accounts::list(db)?;
+
+    // 取一批科目前缀下的末级科目余额，按**往来单位**拆借方/贷方两堆。
+    //
+    // 必须按往来单位逐户拆，不能先按科目汇总再拆极性 —— 先汇总的话
+    // C001 欠 50000、C002 预交 8000 会被轧成"应收 42000"，预收变 0。
+    // 老板看到"客户欠我 4.2 万"是错的：实际是 A 欠我 5 万、我欠 B 8 千的货，
+    // 这两件事必须分开看，否则该催 A 的钱不知道催多少、该给 B 发货也不知道发多少。
+    let collect = |prefixes: &[&str]| -> (Money, Money) {
+        let mut debit = Money::ZERO;
+        let mut credit = Money::ZERO;
+        for a in accounts.iter() {
+            if !prefixes.iter().any(|p| a.code.starts_with(p)) {
+                continue;
+            }
+            // 只取末级：父科目余额是子科目之和，重复相加翻倍
+            if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+                continue;
+            }
+            // 逐户：把该科目下每个往来单位的**期末余额**单独判断极性后再汇总。
+            // 必须用 end() 而不是 debit-credit：后者只是本期发生额，
+            // 会把 9 月挂的应收在 11 月的快照里漏掉（实测华达 80000 凭空消失）。
+            let rows = snap.aux_breakdown(&a.code);
+            if rows.is_empty() {
+                // 没有 aux 维度的科目（极少），退回整户汇总
+                let net = snap.for_account(&a.code, None).end().round2();
+                if net.is_positive() {
+                    debit += net;
+                } else if net.is_negative() {
+                    credit += net.abs();
+                }
+                continue;
+            }
+            for r in rows.iter() {
+                let net = r.end().round2();
+                if net.is_positive() {
+                    debit += net;
+                } else if net.is_negative() {
+                    credit += net.abs();
+                }
+            }
+        }
+        (debit, credit)
+    };
+    // 上面 collect 的语义：**按户轧差后**再按极性归类。
+    // 同一供应商既是我欠他 30000、又有预付 5000 时，轧成净欠 25000 —— 这是对的，
+    // 因为预付本来就能抵这笔欠款。下面再单独算"毛额"给老板看明细。
+
+    let (ar_debit, ar_credit) = collect(&["1122"]);
+    let (ap_debit, ap_credit) = collect(&["2202"]);
+    let (cash_debit, _) = collect(&["1001", "1002"]);
+
+    // 毛额：把每个往来单位的借方、贷方分开累加，不做轧差。
+    // 为什么两个数都要给：净额回答"实际能收回/要付出多少"，
+    // 毛额回答"总共赊了多少"。只看净额会漏掉"某客户已预付、另一客户欠更多"的情况。
+    let gross_of = |prefixes: &[&str]| -> (Money, Money) {
+        let mut d = Money::ZERO;
+        let mut c = Money::ZERO;
+        for a in accounts.iter() {
+            if !prefixes.iter().any(|p| a.code.starts_with(p)) {
+                continue;
+            }
+            if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+                continue;
+            }
+            let rows = snap.aux_breakdown(&a.code);
+            if rows.is_empty() {
+                let e = snap.for_account(&a.code, None).end().round2();
+                if e.is_positive() { d += e; } else { c += e.abs(); }
+                continue;
+            }
+            for r in rows.iter() {
+                let e = r.end().round2();
+                if e.is_positive() { d += e; } else { c += e.abs(); }
+            }
+        }
+        (d, c)
+    };
+    let (ar_gross, _) = gross_of(&["1122"]);
+    let (_, ap_gross) = gross_of(&["2202"]);
+
+    // ---- 往来单位明细（谁欠我、我欠谁） ----
+    //
+    // **不用核销台账，按往来单位的借贷净额算。**
+    //
+    // 一开始这里复用了 `settle::aging()`，结果踩了个坑：aging 只统计"未核销"
+    // 的分录，而小厂大量收款凭证录完**从不做核销**。于是华达欠 80000、已还
+    // 30000，首页却仍显示欠 80000 —— 明细与合计（按科目余额算的 22000）对不上，
+    // 两个数都在首页上，老板必然质疑。
+    //
+    // 这里的取舍：**老板关心的是"这个客户还欠我多少"，不是"核销了几笔"**。
+    // 录了收款就该冲减欠款，不因为这笔收款没做核销就装看不见。
+    // 核销台账的价值在"按单据对账"（对账单模块负责），不在首页这个总数。
+    // 真正需要账龄分档的地方（催收明细）仍走 aging()，那里必须按单据算。
+    let buckets = fincore::engine::aging::buckets_by_days();
+    let _ = &buckets;
+
+    let mut top_customers: Vec<PartyMoney> = Vec::new();
+    let mut overdue_90 = Money::ZERO;
+    let mut overdue_90_count = 0usize;
+    // 按往来单位聚合：每户的借方合计 − 贷方合计 = 该户净欠款。
+    // 同时记录该户"最老一笔未结清日期"用于算账龄。
+    let mut cust_map: std::collections::BTreeMap<String, (Money, Option<chrono::NaiveDate>)> =
+        std::collections::BTreeMap::new();
+    for a in accounts.iter() {
+        if !a.code.starts_with("1122") {
+            continue;
+        }
+        if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+            continue;
+        }
+        for r in snap.aux_breakdown(&a.code) {
+            let key = crate::balances::aux_key_value_of(
+                &r.aux.key(),
+                fincore::AuxKind::Customer,
+            );
+            if key.is_empty() {
+                continue;
+            }
+            let net = r.end().round2();
+            if net.is_zero() {
+                continue;
+            }
+            let e = cust_map.entry(key).or_insert((Money::ZERO, None));
+            e.0 += net;
+            // 账龄取该户最早那笔借方发生日；这里没有逐笔日期，退回用期间末尾估算
+            if e.1.is_none() {
+                e.1 = Some(as_of);
+            }
+        }
+    }
+    // 账龄：金额用净额（可靠），但"压了多久"必须看真实单据日期。
+    //
+    // 净额口径天然没有日期（它是若干笔分录轧出来的），所以这里再单独查一次
+    // 未核销分录，取每户**最老一笔**的日期。两套数据各管一件事：
+    // 金额以净额为准（不漏收款），天数以最老未核销单据为准（能催得下去）。
+    let oldest: std::collections::BTreeMap<String, chrono::NaiveDate> = {
+        let mut m = std::collections::BTreeMap::new();
+        let mut collect_oldest = |account: &str, kind: fincore::AuxKind| {
+            if let Ok(entries) = crate::settle::open_entries(db, account, period, false) {
+                for e in entries {
+                    let key = crate::balances::aux_key_value_of(&e.aux_key, kind);
+                    if key.is_empty() {
+                        continue;
+                    }
+                    m.entry(key)
+                        .and_modify(|d: &mut chrono::NaiveDate| {
+                            if e.date < *d {
+                                *d = e.date;
+                            }
+                        })
+                        .or_insert(e.date);
+                }
+            }
+        };
+        for a in accounts.iter() {
+            let leaf = !accounts
+                .iter()
+                .any(|x| x.code.starts_with(&a.code) && x.code != a.code);
+            if !leaf {
+                continue;
+            }
+            if a.code.starts_with("1122") {
+                collect_oldest(&a.code, fincore::AuxKind::Customer);
+            } else if a.code.starts_with("2202") {
+                collect_oldest(&a.code, fincore::AuxKind::Supplier);
+            }
+        }
+        m
+    };
+
+    for (code, (amt, _)) in cust_map.iter() {
+        if !amt.is_positive() {
+            continue;
+        }
+        let name = crate::auxs::get(db, fincore::AuxKind::Customer, code)
+            .ok()
+            .flatten()
+            .map(|e| e.name)
+            .unwrap_or_else(|| code.clone());
+        let days = oldest
+            .get(code)
+            .map(|d| (as_of - *d).num_days().max(0))
+            .unwrap_or(0);
+        if days >= 90 {
+            overdue_90 += *amt;
+            overdue_90_count += 1;
+        }
+        top_customers.push(PartyMoney {
+            code: code.clone(),
+            name,
+            amount: *amt,
+            max_days: days,
+        });
+    }
+    // 同一客户可能挂在多个应收科目下，合并后再排序
+    top_customers.sort_by(|a, b| b.amount.to_f64().partial_cmp(&a.amount.to_f64()).unwrap_or(std::cmp::Ordering::Equal));
+    top_customers.dedup_by(|b, a| if a.code == b.code { a.amount += b.amount; true } else { false });
+    top_customers.truncate(5);
+
+    let mut top_suppliers: Vec<PartyMoney> = Vec::new();
+    let mut sup_map: std::collections::BTreeMap<String, Money> = std::collections::BTreeMap::new();
+    for a in accounts.iter() {
+        if !a.code.starts_with("2202") {
+            continue;
+        }
+        if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+            continue;
+        }
+        for r in snap.aux_breakdown(&a.code) {
+            let key = crate::balances::aux_key_value_of(
+                &r.aux.key(),
+                fincore::AuxKind::Supplier,
+            );
+            if key.is_empty() {
+                continue;
+            }
+            let net = r.end().round2().negated();
+            if net.is_zero() {
+                continue;
+            }
+            *sup_map.entry(key).or_insert(Money::ZERO) += net;
+        }
+    }
+    for (code, amt) in sup_map.iter() {
+        if !amt.is_positive() {
+            continue;
+        }
+        let name = crate::auxs::get(db, fincore::AuxKind::Supplier, code)
+            .ok()
+            .flatten()
+            .map(|e| e.name)
+            .unwrap_or_else(|| code.clone());
+        let days = oldest
+            .get(code)
+            .map(|d| (as_of - *d).num_days().max(0))
+            .unwrap_or(0);
+        top_suppliers.push(PartyMoney {
+            code: code.clone(),
+            name,
+            amount: *amt,
+            max_days: days,
+        });
+    }
+    top_suppliers.sort_by(|a, b| b.amount.to_f64().partial_cmp(&a.amount.to_f64()).unwrap_or(std::cmp::Ordering::Equal));
+    top_suppliers.dedup_by(|b, a| if a.code == b.code { a.amount += b.amount; true } else { false });
+    top_suppliers.truncate(5);
+
+    Ok(MoneyPosition {
+        receivable: ar_debit,
+        payable: ap_credit,
+        advance_in: ar_credit,
+        advance_out: ap_debit,
+        cash: cash_debit,
+        receivable_gross: ar_gross,
+        payable_gross: ap_gross,
+        top_customers,
+        top_suppliers,
+        overdue_90,
+        overdue_90_count,
     })
 }
 

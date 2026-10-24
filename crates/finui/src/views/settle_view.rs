@@ -1428,7 +1428,7 @@ impl SettleView {
     ///
     /// 这张表就是打印给客户签字的那张——所以金额正负口径要一眼看懂：
     /// **正 = 对方欠我方**，负数 = 我方欠对方（预收/预付）。
-    fn show_statement_detail(&mut self, ctx: &AppCtx<'_>, ui: &mut Ui, st: &findb::statement::Statement) {
+    fn show_statement_detail(&mut self, _ctx: &AppCtx<'_>, ui: &mut Ui, st: &findb::statement::Statement) {
         let mut open = true;
         egui::Window::new(format!("{} {}", st.kind_label(), st.no))
             .collapsible(false)

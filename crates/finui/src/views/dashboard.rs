@@ -39,6 +39,8 @@ pub struct Dashboard {
     cost_top: Vec<(String, Money)>,
     /// 未记账凭证张数（数据完整性提示：有未记账凭证时利润不完整）
     unposted_count: i64,
+    /// 钱在哪：应收应付合到一起看
+    money: Option<findb::advanced::MoneyPosition>,
 }
 
 impl Default for Dashboard {
@@ -66,6 +68,7 @@ impl Default for Dashboard {
             net_profit_prev: Money::ZERO,
             cost_top: Vec::new(),
             unposted_count: 0,
+            money: None,
         }
     }
 }
@@ -139,6 +142,21 @@ impl Dashboard {
             }
         }
         self.unposted_count = draft + audited;
+
+        // 「钱在哪」：利润是账面赚的，这个是真正压在外面的钱。
+        // 很多小厂账面赚钱却倒在这里——所以它必须和净利润并排出现。
+        let as_of = chrono::NaiveDate::from_ymd_opt(p.year(), p.month(), 1)
+            .map(|d| {
+                // 取当月最后一天作为账龄计算基准
+                let next = if p.month() == 12 {
+                    chrono::NaiveDate::from_ymd_opt(p.year() + 1, 1, 1)
+                } else {
+                    chrono::NaiveDate::from_ymd_opt(p.year(), p.month() + 1, 1)
+                };
+                next.and_then(|n| n.pred_opt()).unwrap_or(d)
+            })
+            .unwrap_or_else(|| chrono::Local::now().date_naive());
+        self.money = findb::advanced::money_position(db, p, as_of, None).ok();
         self.begin_debit = tb.begin_debit;
         self.begin_credit = tb.begin_credit;
         self.debit = tb.period_debit;
@@ -390,6 +408,159 @@ impl Dashboard {
                         );
                     }
                 });
+
+            ui.add_space(12.0);
+
+            // ---- 钱在哪：应收应付合到一起 ----
+            //
+            // 利润回答"赚没赚"，这一块回答"钱在谁手上"。小厂倒闭多半不是因为
+            // 不赚钱，而是赚的钱全压在客户那里、同时还要按月付房租工资。
+            // 所以这两块必须并排，缺一个都做不出正确判断。
+            if let Some(m) = self.money.clone() {
+                egui::Frame::NONE
+                    .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
+                    .corner_radius(6.0)
+                    .inner_margin(12.0)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("钱在哪").strong());
+                        ui.separator();
+
+                        // 四个数：别人欠我 / 我欠别人 / 手头现金 / 净头寸
+                        ui.columns(4, |cols| {
+                            cols[0].label("别人欠我");
+                            cols[0].label(
+                                RichText::new(m.receivable.fmt_money())
+                                    .size(22.0)
+                                    .color(palette::PRIMARY)
+                                    .strong(),
+                            );
+                            let mut sub = format!("{} 家客户", m.top_customers.len());
+                            if !m.overdue_90.is_zero() {
+                                sub = format!("{} · 超90天 {}", sub, m.overdue_90.fmt_money());
+                            }
+                            cols[0].label(RichText::new(sub).weak().size(11.0));
+
+                            cols[1].label("我欠别人");
+                            cols[1].label(
+                                RichText::new(m.payable.fmt_money())
+                                    .size(22.0)
+                                    .color(palette::WARN)
+                                    .strong(),
+                            );
+                            cols[1].label(
+                                RichText::new(format!("{} 家供应商", m.top_suppliers.len()))
+                                    .weak()
+                                    .size(11.0),
+                            );
+
+                            cols[2].label("手头现金");
+                            cols[2].label(
+                                RichText::new(m.cash.fmt_money())
+                                    .size(22.0)
+                                    .color(palette::OK)
+                                    .strong(),
+                            );
+                            let mut cash_sub = "现金 + 银行".to_string();
+                            if !m.advance_in.is_zero() {
+                                cash_sub = format!("{} · 预收 {}", cash_sub, m.advance_in.fmt_money());
+                            }
+                            cols[2].label(RichText::new(cash_sub).weak().size(11.0));
+
+                            // 净头寸：正=别人欠我的多，负=我欠别人的多
+                            cols[3].label("净头寸");
+                            let net_c = if m.net().is_negative() {
+                                palette::CREDIT
+                            } else {
+                                palette::PRIMARY
+                            };
+                            cols[3].label(
+                                RichText::new(m.net().fmt_money())
+                                    .size(22.0)
+                                    .color(net_c)
+                                    .strong(),
+                            );
+                            cols[3].label(
+                                RichText::new("应收 − 应付，不含现金").weak().size(11.0),
+                            );
+                        });
+
+                        // ---- 明细：谁欠我、我欠谁 ----
+                        if !m.top_customers.is_empty() || !m.top_suppliers.is_empty() {
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.columns(2, |cols| {
+                                cols[0].label(RichText::new("欠我最多的客户").weak().size(12.0));
+                                if m.top_customers.is_empty() {
+                                    cols[0].label(
+                                        RichText::new("没有未收款项").weak().size(11.0),
+                                    );
+                                }
+                                for c in m.top_customers.iter() {
+                                    let overdue = c.max_days >= 90;
+                                    cols[0].horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(format!("{} {}", c.code, c.name))
+                                                .size(12.0),
+                                        );
+                                        ui.label(
+                                            RichText::new(c.amount.fmt_money())
+                                                .size(12.0)
+                                                .strong(),
+                                        );
+                                        // 账龄：超过 90 天标红，这才是要催的
+                                        let (txt, col) = if overdue {
+                                            (format!("{} 天", c.max_days), palette::CREDIT)
+                                        } else if c.max_days >= 60 {
+                                            (format!("{} 天", c.max_days), palette::WARN)
+                                        } else {
+                                            (format!("{} 天", c.max_days), palette::GRID)
+                                        };
+                                        ui.label(RichText::new(txt).size(11.0).color(col));
+                                    });
+                                }
+
+                                cols[1].label(RichText::new("我欠最多的供应商").weak().size(12.0));
+                                if m.top_suppliers.is_empty() {
+                                    cols[1].label(
+                                        RichText::new("没有未付款项").weak().size(11.0),
+                                    );
+                                }
+                                for sp in m.top_suppliers.iter() {
+                                    cols[1].horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(format!("{} {}", sp.code, sp.name))
+                                                .size(12.0),
+                                        );
+                                        ui.label(
+                                            RichText::new(sp.amount.fmt_money())
+                                                .size(12.0)
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            RichText::new(format!("{} 天", sp.max_days))
+                                                .size(11.0)
+                                                .weak(),
+                                        );
+                                    });
+                                }
+                            });
+                        }
+
+                        // ---- 催收提示 ----
+                        if m.overdue_90_count > 0 {
+                            ui.add_space(6.0);
+                            ui.colored_label(
+                                palette::CREDIT,
+                                RichText::new(format!(
+                                    "⚠ {} 家客户的钱超过 90 天没收回，共 {}，该催了",
+                                    m.overdue_90_count,
+                                    m.overdue_90.fmt_money()
+                                ))
+                                .size(12.0),
+                            );
+                        }
+                    });
+            }
 
             ui.add_space(12.0);
 
