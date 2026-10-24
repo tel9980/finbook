@@ -528,14 +528,22 @@ impl VoucherEdit {
                 return;
             }
         };
-        let res = {
+        let (res, warns) = {
             let db = ctx.db();
             let opts = db.options();
-            validate_voucher(&v, &ValidateCtx::new(ctx.chart(), &opts, closed)).into_result()
+            let iss = validate_voucher(&v, &ValidateCtx::new(ctx.chart(), &opts, closed));
+            // 提醒（如数量×单价与金额的差额）跟错误分开取：
+            // 错误拦住保存，提醒只弹个 toast 让人瞄一眼。
+            let w: Vec<String> = iss.warnings().cloned().collect();
+            (iss.into_result(), w)
         };
         if let Err(e) = res {
             ctx.error(e.to_string());
             return;
+        }
+        // 有提醒就提示一句，但不拦保存
+        if !warns.is_empty() {
+            ctx.info(warns.join("；"));
         }
 
         // 凭证号重复检查

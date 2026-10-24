@@ -206,15 +206,25 @@ pub fn validate_entry(code: &str, e: &crate::voucher::Entry, ctx: &ValidateCtx, 
                 acct.code
             ));
         }
-        // 数量 × 单价 ≈ 金额（容差 0.01）
+        // 数量 × 单价 vs 金额：**只提醒，不拦截**
+        //
+        // 抹零、取整、抹去角分、整单折扣，都会让"数量×单价"和实付金额差几块钱，
+        // 甚至差几十块。这是真实的商业事实——发票按 12,345.67 开，实付 12,300，
+        // 差 45.67 是谈好的。若当成错误拦截，等于逼用户去篡改数量或单价迎合公式，
+        // 那才是把账做假了。
+        //
+        // 所以这里只做**提醒**：差额大于 1 分就提示一句，用户看一眼确认是抹零就过了。
+        // 真正该拦的是"数量或单价压根没填"，那是上面那条硬错误。
         if let (Some(q), Some(p)) = (e.qty, e.price) {
-            let expect = q * p.inner();
+            let expect = (q * p.inner()).round2();
             let actual = e.amount();
-            if (expect - actual).abs() > Money::parse("0.01").unwrap() {
-                iss.push(format!(
-                    "第 {line} 行数量 × 单价 = {}，与金额 {} 不符",
+            let diff = (expect - actual).round2();
+            if diff.abs() > Money::parse("0.01").unwrap() {
+                iss.warn(format!(
+                    "第 {line} 行数量 × 单价 = {}，与金额 {} 相差 {}（抹零/取整可忽略）",
                     expect.fmt_money(),
-                    actual.fmt_money()
+                    actual.fmt_money(),
+                    diff.fmt_money()
                 ));
             }
         }

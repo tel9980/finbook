@@ -66,41 +66,79 @@ impl From<&str> for FinError {
     }
 }
 
-/// 业务校验结果：收集多条问题一次性反馈给用户，而不是弹第一个错就停
+/// 业务校验结果：收集多条问题一次性反馈给用户，而不是弹第一个错就停。
+///
+/// 分**错误**与**提醒**两档：
+/// - 错误（[`Issues::push`]）：违反会计约束，必须改，否则不能保存；
+/// - 提醒（[`Issues::warn`]）：不符合惯例但不影响账目正确，**只提示不拦截**。
+///   典型是"数量 × 单价 ≠ 金额"——抹零、取整、折扣都会让两者不等，
+///   这是正常的商业事实，拦下来等于逼用户去改数据迎合公式。
 #[derive(Debug, Clone, Default)]
-pub struct Issues(Vec<String>);
+pub struct Issues {
+    errs: Vec<String>,
+    warns: Vec<String>,
+}
 
 impl Issues {
     pub fn new() -> Self {
-        Self(Vec::new())
+        Self::default()
     }
+    /// 记一条错误（会导致保存失败）
     pub fn push<S: Into<String>>(&mut self, s: S) {
-        self.0.push(s.into());
+        self.errs.push(s.into());
+    }
+    /// 记一条提醒（不影响保存，只提示）
+    pub fn warn<S: Into<String>>(&mut self, s: S) {
+        self.warns.push(s.into());
     }
     pub fn check<C: Into<bool>>(&mut self, cond: C, msg: impl Into<String>) {
         if !cond.into() {
-            self.0.push(msg.into());
+            self.errs.push(msg.into());
         }
     }
+    /// 没有错误（提醒不算）
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.errs.is_empty()
     }
+    /// 错误条数（不含提醒）
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.errs.len()
     }
+    /// 提醒条数
+    pub fn warn_len(&self) -> usize {
+        self.warns.len()
+    }
+    /// 遍历错误
     pub fn iter(&self) -> std::slice::Iter<'_, String> {
-        self.0.iter()
+        self.errs.iter()
     }
-    /// 有问题则返回 Err（多条合并为一条消息）
+    /// 遍历提醒
+    pub fn warnings(&self) -> std::slice::Iter<'_, String> {
+        self.warns.iter()
+    }
+    /// 错误 + 提醒，按"先错误后提醒"的顺序合并（给用户看的完整列表）
+    pub fn all(&self) -> Vec<&str> {
+        self.errs
+            .iter()
+            .chain(self.warns.iter())
+            .map(|s| s.as_str())
+            .collect()
+    }
+    /// 有错误则返回 Err（多条合并为一条消息）；**只有提醒时返回 Ok**
     pub fn into_result(self) -> Result<(), FinError> {
-        if self.0.is_empty() {
+        if self.errs.is_empty() {
             Ok(())
         } else {
-            Err(FinError::Validate(self.0.join("；")))
+            let mut msg = self.errs.join("；");
+            if !self.warns.is_empty() {
+                msg.push_str("；提醒：");
+                msg.push_str(&self.warns.join("；"));
+            }
+            Err(FinError::Validate(msg))
         }
     }
-    /// 以分号连接
+    /// 以分号连接（错误 + 提醒）
     pub fn join(&self) -> String {
-        self.0.join("\n")
+        self.all().join("\n")
     }
 }

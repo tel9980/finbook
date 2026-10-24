@@ -583,19 +583,40 @@ fn t05_reject_bad_vouchers() {
     let iss = fincore::engine::validate_voucher(&v, &ctx);
     assert!(iss.iter().any(|s| s.contains("数量")), "{iss:?}");
 
-    // 数量 × 单价 ≠ 金额
+    // 数量 × 单价 ≠ 金额：**只提醒，不拦截**
+    //
+    // 抹零、取整、整单折扣都会让两者不等，这是商业事实，不是错误。
+    // 以前这里是硬错误，等于逼用户去改数量或单价迎合公式——那才叫把账做假。
     let mut v = Voucher::new(p1(), d(Y, 1, 10), "记", 5);
-    let mut e1 = Entry::new(1, "140301", "数量金额不符");
+    let mut e1 = Entry::new(1, "140301", "数量金额不符（抹零）");
     e1.debit = m("100.00");
     e1.aux = aux_of("item", "I01");
     e1.qty = Some(m("10"));
     e1.price = Some(m("1"));
-    let mut e2 = Entry::new(2, "4001", "数量金额不符");
+    let mut e2 = Entry::new(2, "4001", "数量金额不符（抹零）");
     e2.credit = m("100.00");
     v.push_entry(e1);
     v.push_entry(e2);
     let iss = fincore::engine::validate_voucher(&v, &ctx);
-    assert!(iss.iter().any(|s| s.contains("单价")), "{iss:?}");
+    // 能存：没有硬错误
+    assert!(iss.is_empty(), "差额不该拦下来：{iss:?}");
+    // 但要提醒一句，让人注意到差额
+    assert!(
+        iss.warnings().any(|s| s.contains("单价")),
+        "应当提示数量与金额不一致：{iss:?}"
+    );
+    // 真错误仍然拦：数量根本没填
+    let mut v_bad = Voucher::new(p1(), d(Y, 1, 10), "记", 5);
+    let mut b1 = Entry::new(1, "140301", "缺数量");
+    b1.debit = m("100.00");
+    b1.aux = aux_of("item", "I01");
+    b1.qty = None;
+    let mut b2 = Entry::new(2, "4001", "缺数量");
+    b2.credit = m("100.00");
+    v_bad.push_entry(b1);
+    v_bad.push_entry(b2);
+    let iss_bad = fincore::engine::validate_voucher(&v_bad, &ctx);
+    assert!(!iss_bad.is_empty(), "缺数量必须拦：{iss_bad:?}");
 
     // 空摘要
     let mut v = Voucher::new(p1(), d(Y, 1, 10), "记", 6);
