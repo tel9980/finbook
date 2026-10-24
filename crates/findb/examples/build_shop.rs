@@ -101,8 +101,9 @@ fn main() {
         base_currency: "CNY".into(),
         company: company.clone(),
         tax_no: String::new(),
-        // 数量核算开着：买化工料、挂具按吨/个入库时要用
-        enable_qty: true,
+        // 数量核算关掉：小厂现阶段只做财务记账，买料按金额记，不录吨/个
+        // （以后要管库存了，在「账套参数」里勾上即可，不影响已有凭证）
+        enable_qty: false,
         enable_foreign: false,
         // 小厂不上 MRP 排产，生产模块关掉，侧栏少一大组
         enable_production: false,
@@ -225,6 +226,24 @@ fn main() {
         }
     }
     println!("建存货档案 {ni} 个");
+
+    // ---------- 7.5 关掉数量核算后，把科目上的「按数量核算」标记一起清掉 ----------
+    //
+    // 数量核算关着的时候这些标记不生效，但留着是一颗地雷：以后谁只勾上
+    // 「启用数量核算」忘了检查，12 个存货科目会同时开始要数量，
+    // 建账初期录凭证会被拦。既然现阶段按金额记账，这里一并清干净，
+    // 以后真要管库存，逐个科目去勾。挂具档案保留（不碍事，来日可用）。
+    let mut nq = 0;
+    for mut a in findb::accounts::list(&db).expect("科目列表") {
+        if a.has_qty {
+            a.has_qty = false;
+            findb::accounts::update(&db, &a).expect("清数量标记");
+            nq += 1;
+        }
+    }
+    if nq > 0 {
+        println!("清除「按数量核算」标记 {nq} 个科目（现阶段只按金额记账）");
+    }
 
     // ---------- 8. 管理员 ----------
     if findb::users::count(&db).unwrap_or(0) == 0 {

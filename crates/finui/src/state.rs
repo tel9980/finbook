@@ -146,8 +146,13 @@ impl NavItem {
 
     /// 是否属于「日常财务」核心菜单（精简模式下侧栏只显示这些）。
     ///
-    /// 选这 12 项的标准：一个不做生产、不管库存的普通记账人，日常真正会打开的页面。
-    /// 覆盖建账 → 录凭证 → 查账 → 出表 → 月末结账 → 备份 这条完整链路。
+    /// 选这些项的标准：一个不做生产、不管库存的普通记账人，日常真正会打开的页面。
+    /// 覆盖建账 → 录凭证 → 查账 → 出表 → 月末结账 → 备份 这条完整链路，
+    /// 再加上三条小企业记账躲不开的支线：
+    /// - `Funds`：资金账户（多个银行户 + 微信）的日报与余额，钱分几处放就得能分处看；
+    /// - `Claims`：人手少时零星费用多是先垫后报，比直接填凭证少出错；
+    /// - `Aux(Customer/Supplier/Bank)`：客户/供应商/银行档案要能就地维护，不然新客户来了没处加。
+    ///   部门/员工/项目/存货档案属管理会计与库存范畴，留在完整模式里。
     ///
     /// **不是删功能**：被过滤掉的项取消勾选即全部回到侧栏。
     pub fn daily_core(&self) -> bool {
@@ -162,6 +167,11 @@ impl NavItem {
                 | NavItem::PeriodEnd
                 | NavItem::BankRec
                 | NavItem::Settle
+                | NavItem::Funds
+                | NavItem::Claims
+                | NavItem::Aux(AuxKind::Customer)
+                | NavItem::Aux(AuxKind::Supplier)
+                | NavItem::Aux(AuxKind::Bank)
                 | NavItem::Account
                 | NavItem::BeginBalance
                 | NavItem::Backup
@@ -631,13 +641,15 @@ impl<'a> AppCtx<'a> {
 mod simple_nav_tests {
     use super::*;
 
-    /// 精简模式必须精确是 12 项：多一项少一项都会让「日常够用」这个说法失真，
+    /// 精简模式的项数钉死：多一项少一项都会让「日常够用」这个说法失真，
     /// 所以把个数钉死，改列表时必须同步改这里（并想清楚为什么）。
+    ///
+    /// 17 = 原 12 项日常链路 + 资金管理 + 费用报销 + 客户/供应商/银行 三张辅助档案。
     #[test]
-    fn simple_nav_has_exactly_12_items() {
+    fn simple_nav_has_exactly_17_items() {
         let n = NavItem::menu().iter().filter(|i| i.daily_core()).count();
         assert_eq!(
-            n, 12,
+            n, 17,
             "精简模式菜单项数变了，先确认这个改动是否还符合「日常财务够用」"
         );
     }
@@ -655,6 +667,9 @@ mod simple_nav_tests {
             NavItem::Reports,      // 报表
             NavItem::PeriodEnd,    // 期末处理
             NavItem::Backup,       // 备份
+            NavItem::Funds,        // 资金管理（多银行 + 微信）
+            NavItem::Claims,       // 费用报销
+            NavItem::Aux(AuxKind::Customer), // 客户档案
         ] {
             assert!(need.daily_core(), "{} 被精简模式藏起来了", need.label());
         }
@@ -665,8 +680,10 @@ mod simple_nav_tests {
     fn simple_nav_hides_heavy_modules() {
         for hide in [
             NavItem::Manufacturing,
+            NavItem::Inventory,
             NavItem::InventoryDeep,
             NavItem::ScmDeep,
+            NavItem::Cost,
             NavItem::Budget,
             NavItem::DimProfit,
         ] {
