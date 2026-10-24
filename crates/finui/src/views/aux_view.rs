@@ -323,6 +323,54 @@ impl AuxView {
                         );
                         ui.end_row();
                     }
+                    // 税点：客户和供应商都要，一客一率是该行业常态
+                    if matches!(e.kind, AuxKind::Customer | AuxKind::Supplier) {
+                        let mut tr = e
+                            .prop(fincore::auxiliary::prop::TAX_RATE)
+                            .cloned()
+                            .unwrap_or_default();
+                        ui.label("税点 %（空=默认）：");
+                        ui.add_sized(
+                            [220.0, 22.0],
+                            egui::TextEdit::singleline(&mut tr)
+                                .hint_text("如 3 / 6 / 13，不要票填 0"),
+                        );
+                        e.set_prop(fincore::auxiliary::prop::TAX_RATE, tr.trim().to_string());
+                        ui.end_row();
+
+                        let mut pol = e
+                            .prop(fincore::auxiliary::prop::TAX_RATE_POLICY)
+                            .cloned()
+                            .unwrap_or_default();
+                        ui.label("开票情况：");
+                        egui::ComboBox::from_id_salt("aux_tax_policy")
+                            .selected_text(match pol.as_str() {
+                                "invoice" => "每次都开票",
+                                "none" => "从不开票",
+                                "sometimes" => "有时开有时不开",
+                                _ => "未设置",
+                            })
+                            .width(220.0)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut pol, String::new(), "未设置");
+                                ui.selectable_value(&mut pol, "invoice".to_string(), "每次都开票");
+                                ui.selectable_value(
+                                    &mut pol,
+                                    "sometimes".to_string(),
+                                    "有时开有时不开",
+                                );
+                                ui.selectable_value(&mut pol, "none".to_string(), "从不开票");
+                            });
+                        e.set_prop(fincore::auxiliary::prop::TAX_RATE_POLICY, pol);
+                        ui.end_row();
+                        ui.label("");
+                        ui.label(
+                            RichText::new("税点按客户/供应商单独记录，开票时按它算税额")
+                                .weak()
+                                .size(12.0),
+                        );
+                        ui.end_row();
+                    }
                     ui.label("上级编码：");
                     let mut p = e.parent_code.clone().unwrap_or_default();
                     ui.add_sized([220.0, 22.0], egui::TextEdit::singleline(&mut p));

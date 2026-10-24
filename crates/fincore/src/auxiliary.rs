@@ -37,6 +37,18 @@ pub mod prop {
     pub const REF_COST: &str = "ref_cost";
     /// 开户行账号所属币种
     pub const CURRENCY: &str = "currency";
+    /// 客户/供应商专属税点（百分数，如 "3"、"6"、"13"、"0"）
+    ///
+    /// 现实里同一个老板的不同客户税点经常不一样：有的客户要 13% 专票、
+    /// 有的只要普票、有的是小规模代开 3%、有的干脆不要票（0）。
+    /// 所以税率不能写死在账套参数里，必须挂在往来单位档案上，一客一率。
+    ///
+    /// 空字符串 = 未设置，用账套默认税率（见 [`TAX_RATE_POLICY`]）。
+    pub const TAX_RATE: &str = "tax_rate";
+    /// 开票政策：invoice=每次开票 / sometimes=有时开有时不开 / none=从不开票
+    ///
+    /// 影响的是**提示**与统计口径，不阻断记账——有没有票都不影响业务入账。
+    pub const TAX_RATE_POLICY: &str = "tax_policy";
 }
 
 /// 辅助核算档案

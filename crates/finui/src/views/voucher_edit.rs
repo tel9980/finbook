@@ -631,6 +631,118 @@ impl VoucherEdit {
         self.dirty = true;
     }
 
+    /// 按往来单位档案上的税点算出税额，并把税额从含税金额里拆出来。
+    ///
+    /// 为什么按单位算而不是按账套参数算：同一家工厂的客户税点经常各不相同——
+    /// 有的要 13% 专票、有的只要普票、有的是小规模代开 3%、有的干脆不要票。
+    /// 税率写死在账套里必然错，只能一客一率，所以档案上带 `tax_rate` 属性。
+    ///
+    /// 做法：找出本凭证里**挂了客户/供应商**的那一行，取它的含税金额，
+    /// 按档案税点拆成「不含税收入 + 销项税」，生成两行：
+    /// - 原行金额改成不含税
+    /// - 新增一行 22210102 销项税额
+    ///
+    /// 只在**收款/应收类**场景有意义；进项（小规模不能抵扣）不做处理。
+    fn tax_from_party(&mut self, ctx: &mut AppCtx<'_>) {
+        // 找第一行带客户/供应商辅助的分录
+        let mut hit: Option<(usize, String, Money, fincore::AuxKind)> = None;
+        for (i, r) in self.rows.iter().enumerate() {
+            if r.code.trim().is_empty() {
+                continue;
+            }
+            let amt = {
+                let d = r.debit();
+                if !d.is_zero() {
+                    d
+                } else {
+                    r.credit()
+                }
+            };
+            if amt.is_zero() {
+                continue;
+            }
+            if let Some(c) = r.aux.customer.as_ref().filter(|c| !c.trim().is_empty()) {
+                hit = Some((i, c.clone(), amt, fincore::AuxKind::Customer));
+                break;
+            }
+            if let Some(sp) = r.aux.supplier.as_ref().filter(|c| !c.trim().is_empty()) {
+                hit = Some((i, sp.clone(), amt, fincore::AuxKind::Supplier));
+                break;
+            }
+        }
+        let Some((idx, party_code, amount, kind)) = hit else {
+            ctx.info("先在某一行填上客户或供应商，再按税点算税");
+            return;
+        };
+
+        // 从档案取税点
+        let rate = findb::auxs::get(ctx.db(), kind, &party_code)
+            .ok()
+            .flatten()
+            .and_then(|e| e.prop(fincore::auxiliary::prop::TAX_RATE).cloned())
+            .and_then(|v| Money::parse(v.trim()).ok());
+        let Some(rate) = rate else {
+            ctx.error(format!(
+                "{} {} 的档案上没设税点。去「辅助档案」里给它填上，或手工算税。",
+                if kind == fincore::AuxKind::Customer {
+                    "客户"
+                } else {
+                    "供应商"
+                },
+                party_code
+            ));
+            return;
+        };
+        if rate.is_zero() {
+            ctx.info(format!("{party_code} 税点为 0（不开票），无需拆税"));
+            return;
+        }
+
+        // 含税 → 不含税 + 税：不含税 = 含税 ÷ (1 + 率%)，税 = 含税 − 不含税
+        let divisor = Money::ONE + rate.checked_div(100).unwrap_or(Money::ZERO);
+        let Some(net) = amount.checked_div(divisor) else {
+            ctx.error("税点计算失败（除数为零）");
+            return;
+        };
+        let net = net.round2();
+        let tax = (amount - net).round2();
+        if tax.is_zero() {
+            ctx.info("金额太小，算出来的税额为 0");
+            return;
+        }
+
+        // 改原行金额为不含税，追加税额行（方向与原行相反）
+        let is_debit = !self.rows[idx].debit().is_zero();
+        if is_debit {
+            self.rows[idx].debit = net.fmt_plain();
+        } else {
+            self.rows[idx].credit = net.fmt_plain();
+        }
+        let summary = self.rows[idx].summary.clone();
+        let mut t = Row::default();
+        t.summary = format!("{summary}（销项税 {rate}%）");
+        t.code = "22210102".to_string();
+        let acct = ctx.chart().get("22210102");
+        if acct.is_none() {
+            ctx.error("账套里没有 22210102 销项税额科目");
+            self.dirty = true;
+            return;
+        }
+        if is_debit {
+            t.credit = tax.fmt_plain();
+        } else {
+            t.debit = tax.fmt_plain();
+        }
+        self.rows.insert(idx + 1, t);
+        while self.rows.len() < 4 {
+            self.rows.push(Row::default());
+        }
+        ctx.info(format!(
+            "已按 {party_code} 税点 {rate}% 拆税：不含税 {net}，税额 {tax}（含税 {amount}）"
+        ));
+        self.dirty = true;
+    }
+
     // ------------------------------------------------------------------
     // 界面
     // ------------------------------------------------------------------
@@ -729,6 +841,14 @@ impl VoucherEdit {
             }
             if ui.button("自动平衡").clicked() && !readonly {
                 self.balance(ctx);
+            }
+            if ui
+                .button("按客商税点算税")
+                .on_hover_text("按客户/供应商档案上的税点，把含税金额拆成不含税 + 销项税额")
+                .clicked()
+                && !readonly
+            {
+                self.tax_from_party(ctx);
             }
             ui.separator();
             // 审核环节（可选）：启用后未记账 → 已审核 → 已记账；未启用时可直接记账
