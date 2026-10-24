@@ -33,6 +33,12 @@ pub struct Dashboard {
     net_profit: Money,
     /// 本年期初起的累计净利润（年初至今）
     net_profit_ytd: Money,
+    /// 上月净利润（环比基准）
+    net_profit_prev: Money,
+    /// 成本构成 Top（科目名, 金额），按金额降序
+    cost_top: Vec<(String, Money)>,
+    /// 未记账凭证张数（数据完整性提示：有未记账凭证时利润不完整）
+    unposted_count: i64,
 }
 
 impl Default for Dashboard {
@@ -57,6 +63,9 @@ impl Default for Dashboard {
             cost: Money::ZERO,
             net_profit: Money::ZERO,
             net_profit_ytd: Money::ZERO,
+            net_profit_prev: Money::ZERO,
+            cost_top: Vec::new(),
+            unposted_count: 0,
         }
     }
 }
@@ -112,6 +121,24 @@ impl Dashboard {
         if let Ok(t) = findb::advanced::financial_totals(db, p, year_from, None) {
             self.net_profit_ytd = t.net_profit;
         }
+        // 上月净利润：只为了算环比。"这个月赚 8 万"本身没有意义，
+        // 老板真正想知道的是"比上个月好还是差"。
+        let prev_p = p.prev();
+        if let Ok(t) = findb::advanced::financial_totals(db, prev_p, prev_p, None) {
+            self.net_profit_prev = t.net_profit;
+        }
+        // 成本构成 Top 3：老板一定会问"钱都花哪了"，把最大的几块直接摆出来，
+        // 不用再点进报表翻。
+        self.cost_top.clear();
+        if let Ok(a) = findb::advanced::financial_analysis(db, p, None) {
+            for d in a.cost_drivers.iter().take(3) {
+                if d.amount.is_zero() {
+                    continue;
+                }
+                self.cost_top.push((d.name.clone(), d.amount));
+            }
+        }
+        self.unposted_count = draft + audited;
         self.begin_debit = tb.begin_debit;
         self.begin_credit = tb.begin_credit;
         self.debit = tb.period_debit;
@@ -246,36 +273,122 @@ impl Dashboard {
                 .show(ui, |ui| {
                     ui.label(RichText::new("本期经营结果").strong());
                     ui.separator();
-                    ui.columns(3, |cols| {
-                        let np_color = if self.net_profit.is_negative() {
-                            palette::CREDIT
-                        } else if self.net_profit.is_zero() {
-                            palette::GRID
+
+                    let np_color = if self.net_profit.is_negative() {
+                        palette::CREDIT
+                    } else if self.net_profit.is_zero() {
+                        palette::GRID
+                    } else {
+                        palette::OK
+                    };
+
+                    // ---- 净利润：唯一的视觉主角 ----
+                    //
+                    // 收入、成本、利润率都是陪衬，老板每天只想知道一个数：
+                    // 这个月赚了多少、比上个月好还是差。所以净利润给最大字号，
+                    // 其它信息全部退成小字挂在副标题里。
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("本月净利润").weak().size(13.0));
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(self.net_profit.fmt_money())
+                                    .size(38.0)
+                                    .color(np_color)
+                                    .strong(),
+                            );
+                            // 环比：箭头 + 差额，比"上月 X 元"更直观
+                            if !self.net_profit_prev.is_zero() || !self.net_profit.is_zero() {
+                                let diff = (self.net_profit - self.net_profit_prev).round2();
+                                if !diff.is_zero() {
+                                    let (arrow, c) = if diff.is_positive() {
+                                        ("▲", palette::OK)
+                                    } else {
+                                        ("▼", palette::CREDIT)
+                                    };
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "{} 较上月 {}",
+                                            arrow,
+                                            diff.abs().fmt_money()
+                                        ))
+                                        .size(14.0)
+                                        .color(c),
+                                    );
+                                }
+                            }
+                        });
+                        // 副标题：利润率 + 年初至今
+                        let margin = if self.revenue.is_zero() {
+                            String::from("—")
                         } else {
-                            palette::OK
+                            let pct = (self.net_profit.to_f64() / self.revenue.to_f64()) * 100.0;
+                            format!("{pct:.1}%")
                         };
-                        stat_card(
-                            &mut cols[0],
-                            "营业收入",
-                            &self.revenue.fmt_money(),
-                            "本月加工费等收入合计",
-                            palette::PRIMARY,
-                        );
-                        stat_card(
-                            &mut cols[1],
-                            "营业成本",
-                            &self.cost.fmt_money(),
-                            "材料 + 人工 + 外发 + 折旧等",
-                            palette::WARN,
-                        );
-                        stat_card(
-                            &mut cols[2],
-                            "净利润",
-                            &self.net_profit.fmt_money(),
-                            &format!("年初至今 {}", self.net_profit_ytd.fmt_money()),
-                            np_color,
-                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(format!("利润率 {margin}"))
+                                    .size(12.0)
+                                    .weak(),
+                            );
+                            ui.label(RichText::new("·").weak().size(12.0));
+                            ui.label(
+                                RichText::new(format!(
+                                    "年初至今 {}",
+                                    self.net_profit_ytd.fmt_money()
+                                ))
+                                .size(12.0)
+                                .weak(),
+                            );
+                        });
                     });
+
+                    ui.add_space(8.0);
+                    ui.separator();
+
+                    // ---- 收入 / 成本：退为陪衬 ----
+                    let cost_detail = if self.cost_top.is_empty() {
+                        "本月尚无成本发生".to_string()
+                    } else {
+                        self.cost_top
+                            .iter()
+                            .map(|(n, v)| format!("{n} {}", v.fmt_money()))
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    };
+                    ui.columns(2, |cols| {
+                        cols[0].label("营业收入");
+                        cols[0].label(
+                            RichText::new(self.revenue.fmt_money())
+                                .size(20.0)
+                                .color(palette::PRIMARY),
+                        );
+                        cols[0].label(RichText::new("本月收入合计").weak().size(11.0));
+
+                        cols[1].label("营业成本");
+                        cols[1].label(
+                            RichText::new(self.cost.fmt_money())
+                                .size(20.0)
+                                .color(palette::WARN),
+                        );
+                        // 成本构成 Top3，直接摊在成本下面
+                        cols[1].label(RichText::new(cost_detail).weak().size(11.0));
+                    });
+
+                    // ---- 数据完整性提示 ----
+                    //
+                    // 有未记账凭证时利润一定是偏小的，但界面上看不出来。
+                    // 老板拿着这个数做决定就会错，所以必须明说。
+                    if self.unposted_count > 0 {
+                        ui.add_space(6.0);
+                        ui.colored_label(
+                            palette::WARN,
+                            RichText::new(format!(
+                                "⚠ {} 张凭证还没记账，未计入上面的数字",
+                                self.unposted_count
+                            ))
+                            .size(12.0),
+                        );
+                    }
                 });
 
             ui.add_space(12.0);

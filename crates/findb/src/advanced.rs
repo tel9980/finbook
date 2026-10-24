@@ -2294,6 +2294,29 @@ pub fn financial_analysis(
     }
     let snap_cur = BalanceSnapshot::load(db, &bq_cur)?;
     let snap_prev = BalanceSnapshot::load(db, &bq_prev)?;
+    // 成本合计：主营业务成本 + 其他业务成本 + 未结转的成本类科目余额。
+    //
+    // 与 financial_totals 的成本口径**必须一致**，否则首页净利润和成本构成
+    // 明细会互相打架。成本类科目只取末级（父科目是子科目之和）。
+    let cost_total = |snap: &BalanceSnapshot| -> Money {
+        let exp_of = |code: &str| {
+            let r = snap.for_account(code, None);
+            r.debit - r.credit
+        };
+        let mut v = exp_of("6401") + exp_of("6402");
+        if let Ok(accounts) = crate::accounts::list(db) {
+            for a in accounts.iter() {
+                if !matches!(a.category, fincore::account::AcctCategory::Cost) {
+                    continue;
+                }
+                if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+                    continue;
+                }
+                v += exp_of(&a.code);
+            }
+        }
+        v
+    };
     let occ = |snap: &BalanceSnapshot, code: &str| {
         let r = snap.for_account(code, None);
         r.credit - r.debit // 收入类贷方正
@@ -2326,7 +2349,12 @@ pub fn financial_analysis(
         })
         .collect();
 
-    let cost_drivers = [("6401", "主营业务成本", -1i8), ("6402", "其他业务成本", -1)]
+    // 营业成本构成：除了 6401/6402，还要把**成本类科目**（5101 制造费用等）
+    // 的余额算进来 —— 与 financial_totals 的成本口径保持一致。
+    //
+    // 不一致的后果：首页净利润把 5101 算进成本，而这里不列出来，老板点开
+    // "成本构成"会发现明细加起来对不上合计，这是最容易被质疑的一类不一致。
+    let mut cost_drivers: Vec<DriverItem> = [("6401", "主营业务成本", -1i8), ("6402", "其他业务成本", -1)]
         .iter()
         .map(|(c, n, _d)| {
             // 营业成本构成显示为正数（成本规模）
@@ -2340,6 +2368,29 @@ pub fn financial_analysis(
             }
         })
         .collect();
+    {
+        let accounts = crate::accounts::list(db)?;
+        let is_leaf = |code: &str| !accounts.iter().any(|x| x.code.starts_with(code) && x.code != code);
+        for a in accounts.iter() {
+            if !matches!(a.category, fincore::account::AcctCategory::Cost) || !is_leaf(&a.code) {
+                continue;
+            }
+            let cur = exp(&snap_cur, &a.code);
+            let prv = exp(&snap_prev, &a.code);
+            // 两个月都没发生额的不占位，否则成本构成里全是一排 0
+            if cur.is_zero() && prv.is_zero() {
+                continue;
+            }
+            cost_drivers.push(DriverItem {
+                code: a.code.clone(),
+                name: a.name.clone(),
+                amount: cur,
+                prev_amount: prv,
+            });
+        }
+        // 金额大的排前面：老板要的是"钱主要花哪了"，不是科目表顺序
+        cost_drivers.sort_by(|x, y| y.amount.to_f64().partial_cmp(&x.amount.to_f64()).unwrap_or(std::cmp::Ordering::Equal));
+    }
 
     // 净利润构成（利润表口径）：营业收入、营业成本、税金、三项费用、资产减值、营业外、所得税
     let profit_drivers = [
@@ -2364,8 +2415,9 @@ pub fn financial_analysis(
                 occ(&snap_prev, "6001") + occ(&snap_prev, "6051"),
             )
         } else if *c == "_cost" {
-            let a = exp(&snap_cur, "6401") + exp(&snap_cur, "6402");
-            let b = exp(&snap_prev, "6401") + exp(&snap_prev, "6402");
+            // 与 financial_totals 同口径：6401+6402+未结转成本类科目余额
+            let a = cost_total(&snap_cur);
+            let b = cost_total(&snap_prev);
             (a.negated(), b.negated())
         } else {
             (signed(&snap_cur, c, *d), signed(&snap_prev, c, *d))
