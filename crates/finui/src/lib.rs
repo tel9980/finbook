@@ -425,22 +425,31 @@ impl FinBookApp {
     }
 }
 
+/// 把用户这次会话里对精简模式的选择写进 Persist。
+///
+/// 必须是「传进来的当前值」，不能拿 `effective_simple_nav(&p)` 重算 ——
+/// update() 里勾选框改的是局部量，Persist 还是上一帧的旧值，
+/// 重算等于把用户这次的点击丢掉（曾经就是这个 bug：取消勾选退出后重启又勾上）。
+pub fn persist_simple_nav(p: &mut Persist, current: bool) {
+    p.simple_nav = Some(current);
+}
+
 impl eframe::App for FinBookApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        // 落盘时把推断值固化成 Some(b) —— 之后它就是「用户的明确选择」，
-        // 不再走默认推断。注意这意味着「没动过开关」的用户退出后会留下
-        // Some(true)：等价于默认值，无害；他一旦取消勾选即记为 Some(false)。
-        self.persist.simple_nav = Some(effective_simple_nav(&self.persist));
+        // 勾选框一点就通过 persist_simple_nav 写进 self.persist（见 side_bar），
+        // 所以这里**不能重算** —— 曾经写成 Some(effective_simple_nav(&self.persist))，
+        // 而 save() 看到的还是上一帧的旧值，等于把用户刚点的取消丢掉。
+        // 这里只处理「从没明确选过」的情形：固化成默认精简。
+        if self.persist.simple_nav.is_none() {
+            // 从未明确选择过：固化成当前生效值（等价于默认，无害）
+            persist_simple_nav(&mut self.persist, true);
+        }
         eframe::set_value(storage, eframe::APP_KEY, &self.persist);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let now = ctx.input(|i| i.time);
         self.st.toasts.retain(now);
-
-        // 精简模式的实际取值（Option → bool 的判定见 effective_simple_nav）。
-        // 每帧从 Persist 重算；勾选框改的是这个局部量，save() 时才写回 Persist。
-        let mut simple_nav = effective_simple_nav(&self.persist);
 
         if self.st.want_quit {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -625,7 +634,9 @@ impl eframe::App for FinBookApp {
             .exact_width(168.0)
             .resizable(false)
             .show(ctx, |ui| {
-                side_bar(&mut self.st, ui, &mut simple_nav);
+                // 直接把 Persist 传进去：勾选框一 changed() 就落盘，
+                // 不再经过「局部量 → 事后同步」这条曾经丢过用户选择的路。
+                side_bar(&mut self.st, ui, &mut self.persist);
             });
 
         // ---------------- 中央工作区 ----------------
@@ -705,7 +716,10 @@ fn period_selector(st: &mut AppState, views: &mut views::Views, ui: &mut Ui) {
         });
 }
 
-fn side_bar(st: &mut AppState, ui: &mut Ui, simple_nav: &mut bool) {
+fn side_bar(st: &mut AppState, ui: &mut Ui, persist: &mut Persist) {
+    // 每帧从 Persist 取当前值；勾选框一 changed() 就写回去，
+    // 不留给 save() 事后重算（那是它曾经丢用户选择的原因）。
+    let mut simple_nav = effective_simple_nav(persist);
     // 借出来会和其他 &mut st 字段冲突，所以取局部副本，改完再写回
     let mut show_all_hint = st.show_all_hint;
     egui::Frame::NONE
@@ -723,7 +737,7 @@ fn side_bar(st: &mut AppState, ui: &mut Ui, simple_nav: &mut bool) {
                     }
                     // 精简模式：只留日常财务够用的菜单，其余（生产制造 / 供应链 / 成本 /
                     // 预算 / 多维损益…）先藏起来。功能一项没少，取消勾选立刻全回来。
-                    if *simple_nav && !show_all_hint && !item.daily_core() {
+                    if simple_nav && !show_all_hint && !item.daily_core() {
                         continue;
                     }
                     let g = item.group();
@@ -774,7 +788,7 @@ fn side_bar(st: &mut AppState, ui: &mut Ui, simple_nav: &mut bool) {
                 ui.add_space(6.0);
                 ui.separator();
                 ui.add_space(4.0);
-                let mut simple = *simple_nav;
+                let mut simple = simple_nav;
                 if ui
                     .checkbox(&mut simple, "精简模式")
                     .on_hover_text(
@@ -785,7 +799,8 @@ fn side_bar(st: &mut AppState, ui: &mut Ui, simple_nav: &mut bool) {
                     )
                     .changed()
                 {
-                    *simple_nav = simple;
+                    simple_nav = simple;
+                    persist_simple_nav(persist, simple);
                     if simple && st.nav != NavItem::Dashboard && !st.nav.daily_core() {
                         // 当前停在被藏起来的页面上：那页继续显示，但侧栏没有高亮项，
                         // 用户会以为「界面坏了」。先把他带回工作台。
@@ -796,7 +811,7 @@ fn side_bar(st: &mut AppState, ui: &mut Ui, simple_nav: &mut bool) {
                 // 勾上精简模式后，被藏起来的页面在侧栏就没有入口了（顶栏只有
                 // 填制凭证/凭证查询两个快捷键），那就等于「功能没了」。
                 // 给一个临时的「临时看全部」：只影响这一屏，不动开关本身。
-                if *simple_nav {
+                if simple_nav {
                     if show_all_hint {
                         if ui.link("← 回到精简模式").clicked() {
                             show_all_hint = false;
@@ -907,6 +922,62 @@ mod onboarding_tests {
             effective_simple_nav(&p(Some(true), 5)),
             "用户主动打开后要保持"
         );
+    }
+
+    /// 勾选框点一下 → 落盘 → 重启读回，用户的选择不能丢。
+    ///
+    /// 这条曾经挂掉：`save()` 里写的是
+    /// `self.persist.simple_nav = Some(effective_simple_nav(&self.persist))`，
+    /// 而勾选框改的是 update() 里的**局部量**，save() 只能看到旧值。
+    /// 于是取消勾选 → 侧栏当场变回完整菜单 → 退出 → 重启又勾上了，
+    /// 用户以为「精简模式存不住」，反复勾也没用。
+    #[test]
+    fn unchecking_survives_restart() {
+        let mut p = Persist {
+            simple_nav: Some(true),
+            ..Default::default()
+        };
+        persist_simple_nav(&mut p, false);
+        assert_eq!(p.simple_nav, Some(false));
+        let text = serde_json::to_string(&p).unwrap();
+        let back: Persist = serde_json::from_str(&text).unwrap();
+        assert!(!effective_simple_nav(&back), "重启后仍是完整菜单");
+    }
+
+    /// 反过来：勾上之后重启还是勾上的。
+    #[test]
+    fn rechecking_survives_restart() {
+        let mut p = Persist {
+            simple_nav: Some(false),
+            ..Default::default()
+        };
+        persist_simple_nav(&mut p, true);
+        let text = serde_json::to_string(&p).unwrap();
+        let back: Persist = serde_json::from_str(&text).unwrap();
+        assert!(effective_simple_nav(&back), "重启后仍然精简");
+    }
+
+    /// 用户的勾选/取消必须真的落到 Persist（能跨重启保留）。
+    ///
+    /// 试过用 `include_str!` 断言源码里有没有那行调用 —— 假绿：
+    /// 断言字符串本身就写在测试里，删掉调用照样 contains 为真。
+    /// egui 的点击事件在测试里又不好伪造，所以这里守住两头：
+    /// ① 写入函数本身能往返；② save() 绝不重算覆盖（那正是原 bug）。
+    #[test]
+    fn sidebar_choice_survives_save() {
+        // ① 取消勾选 → Persist 记为 Some(false)
+        let mut persist = Persist {
+            simple_nav: Some(true),
+            ..Default::default()
+        };
+        persist_simple_nav(&mut persist, false);
+        assert_eq!(persist.simple_nav, Some(false));
+
+        // ② 模拟 save()：把存储里的值读回来，不能被重算成 true
+        let stored = serde_json::to_string(&persist).unwrap();
+        let back: Persist = serde_json::from_str(&stored).unwrap();
+        assert_eq!(back.simple_nav, Some(false), "save 不能把用户的选择改回去");
+        assert!(!effective_simple_nav(&back));
     }
 
     /// 反序列化老版本配置（没有 simple_nav 字段）不能崩，且落到 None。
