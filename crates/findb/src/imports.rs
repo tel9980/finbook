@@ -62,6 +62,10 @@ struct BeginLine {
     debit_accum: Option<Money>,
     /// 累计贷方
     credit_accum: Option<Money>,
+    /// 数量期初（数量核算科目才有，v1.8.22 起可从表里带）
+    qty_begin: Option<Money>,
+    /// 辅助核算维度（分客户/分存货的期初），v1.8.22 起可从表里带
+    aux: AuxRef,
     /// 金额列无法识别的提示；非空表示本行金额不可信，调用方应丢弃该行
     warn: Vec<String>,
 }
@@ -82,13 +86,43 @@ struct VoucherLine {
 }
 
 /// 按模板从 CSV 行提取期初余额行
-fn extract_begin_line(tmpl: ImportTemplate, f: &[String]) -> Option<BeginLine> {
+fn extract_begin_line(
+    tmpl: ImportTemplate,
+    f: &[String],
+    map: &HeadMap,
+) -> Option<BeginLine> {
     let code = f.first()?.trim().to_string();
     if code.is_empty() || !code.chars().any(|c| c.is_ascii_digit()) {
         return None;
     }
     let mut w = MoneyWarn::default();
     let mut line = match tmpl {
+        ImportTemplate::Generic if map.has_header => {
+            // 有表头就按列名取，不再靠「第 2 列是不是借/贷」猜是布局 A 还是 B。
+            // 猜布局只对「没有表头的老文件」有意义 —— 文件里明明有列名，却还要
+            // 靠位置猜，等于把用户能改的东西（列顺序）当成不能改的。
+            let amt = w.money("期初余额", &map.cell(f, &["期初余额", "金额"], 3));
+            let mut acc_of = |aliases: &[&str], pos: usize| -> Option<Money> {
+                let v = map.cell(f, aliases, pos);
+                if v.is_empty() {
+                    None
+                } else {
+                    Some(w.money(aliases[0], &v))
+                }
+            };
+            let debit_accum = acc_of(&["累计借方"], 4);
+            let credit_accum = acc_of(&["累计贷方"], 5);
+            BeginLine {
+                code,
+                direction: map.cell(f, &["方向", "余额方向"], 2),
+                amount: amt,
+                debit_accum,
+                credit_accum,
+                qty_begin: None,
+                aux: AuxRef::default(),
+                warn: Vec::new(),
+            }
+        }
         ImportTemplate::Generic => {
             // 通用模板实际有两种写法，**都必须认**：
             //   A) 科目编码, 方向, 金额
@@ -122,6 +156,8 @@ fn extract_begin_line(tmpl: ImportTemplate, f: &[String]) -> Option<BeginLine> {
                     amount: amt,
                     debit_accum,
                     credit_accum,
+                    qty_begin: None,
+                    aux: AuxRef::default(),
                     warn: Vec::new(),
                 }
             } else {
@@ -136,6 +172,8 @@ fn extract_begin_line(tmpl: ImportTemplate, f: &[String]) -> Option<BeginLine> {
                     amount: amt,
                     debit_accum: None,
                     credit_accum: None,
+                    qty_begin: None,
+                    aux: AuxRef::default(),
                     warn: Vec::new(),
                 }
             }
@@ -154,6 +192,8 @@ fn extract_begin_line(tmpl: ImportTemplate, f: &[String]) -> Option<BeginLine> {
                 amount: amt,
                 debit_accum,
                 credit_accum,
+                qty_begin: None,
+                aux: AuxRef::default(),
                 warn: Vec::new(),
             }
         }
@@ -174,12 +214,45 @@ fn extract_begin_line(tmpl: ImportTemplate, f: &[String]) -> Option<BeginLine> {
                 amount: amt,
                 debit_accum,
                 credit_accum,
+                qty_begin: None,
+                aux: AuxRef::default(),
                 warn: Vec::new(),
             }
         }
     };
     line.warn = std::mem::take(&mut w.0);
+    // 数量期初与辅助核算维度（v1.8.22）。这两块原来一律丢：导出的期初表只有
+    // 金额，导回来就是 `qty_begin: None`、`aux: AuxRef::default()`。数量核算
+    // 科目（原材料/库存商品）搬过去数量期初归零，而金额是对的 —— 只有去看
+    // 「数量金额式」明细才会发现数量是空的。
+    let qty = map.cell(f, &["数量", "期初数量", "数量期初"], usize::MAX);
+    if !qty.is_empty() {
+        let mut wq = MoneyWarn::default();
+        let m = wq.money("数量", &qty);
+        if wq.0.is_empty() {
+            line.qty_begin = Some(m);
+        }
+    }
+    line.aux = AuxRef {
+        customer: opt_aux(map.cell(f, &["客户编码", "客户"], usize::MAX)),
+        supplier: opt_aux(map.cell(f, &["供应商编码", "供应商"], usize::MAX)),
+        dept: opt_aux(map.cell(f, &["部门编码", "部门"], usize::MAX)),
+        employee: opt_aux(map.cell(f, &["职员编码", "职员", "员工编码"], usize::MAX)),
+        project: opt_aux(map.cell(f, &["项目编码", "项目"], usize::MAX)),
+        item: opt_aux(map.cell(f, &["存货编码", "存货"], usize::MAX)),
+        cash_flow: opt_aux(map.cell(f, &["现金流量项目编码"], usize::MAX)),
+        bank: opt_aux(map.cell(f, &["银行账户", "银行账户编码"], usize::MAX)),
+    };
     Some(line)
+}
+
+/// 空串 → None。辅助维度就是这样：表里留空表示「不分这个维度」。
+fn opt_aux(s: String) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// 取 CSV 第 `i` 列（0 起），空串返回 None
@@ -187,6 +260,126 @@ fn opt_field(f: &[String], i: usize) -> Option<String> {
     f.get(i)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+/// 表头归一化：去掉空格、全角空格、必填星号、冒号，英文统一小写。
+///
+/// 「税点%」和「税点 %」要认成同一列；「编码*」（模板里标必填的写法）也要认。
+fn normalize_header(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace() && *c != '*' && *c != '：' && *c != ':')
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// 整行是不是表头：只要有一格是「编码」类词就算。
+///
+/// 不能只看某一列 —— 表头的列顺序用户是可以改的（这正是 `HeadMap` 的意义）。
+/// 数据行里不会有一格恰好写着「编码」两个字。
+fn row_is_header(f: &[String]) -> bool {
+    f.iter().any(|c| is_header_code(c.trim()))
+}
+
+/// 这一格是不是「编码」类的表头词（用来认出表头行）。
+fn is_header_code(s: &str) -> bool {
+    matches!(s, "编码" | "科目编码" | "存货编码" | "代码" | "编号")
+        || s.eq_ignore_ascii_case("code")
+}
+
+/// 列名 → 列下标。
+///
+/// 基础资料的四个导入器（辅助档案 / 存货 / 科目 / 期初）最早都按**列下标**
+/// 取值。于是只要导出端多加一列，或者用户在 Excel 里删列、调换顺序，数据就
+/// 开始错位 —— 而错位通常不报错：备注被写进上级编码，税点被当成信用额度。
+/// 账套看着搬成功了，对账时才发现。
+///
+/// 现在先认表头再退回位置，于是：
+/// - 没有表头的老文件（四列/六列）行为完全不变，照旧能导；
+/// - 我们自己导出的表，列顺序随便换、列可以删，都不会错位；
+/// - 用户插一列自己的「备注2」也不会把后面的列顶歪。
+#[derive(Default)]
+struct HeadMap {
+    idx: std::collections::HashMap<String, usize>,
+    /// 这份文件到底有没有表头。
+    ///
+    /// 这个字段是必需的，不是冗余：**有表头**时缺列必须当成「空」，缺列就说明
+    /// 用户删了它；**没有表头**时才能退回按位置猜。混起来会出真错 —— 曾经
+    /// 一个把「备注」挪到第一列的表，因为少了上级编码这一列，退回按位置取到了
+    /// 编码列，于是「上级编码 = 自己」，导进去报「会形成环，层级汇总无法收敛」。
+    has_header: bool,
+}
+
+impl HeadMap {
+    /// 同一列名出现多次取最左边那个（用户在 Excel 里复制出一列时，左边是他
+    /// 原本填的那列）。
+    fn from_row(row: &[String]) -> Self {
+        let mut idx = std::collections::HashMap::new();
+        for (i, raw) in row.iter().enumerate() {
+            let k = normalize_header(raw);
+            if k.is_empty() {
+                continue;
+            }
+            idx.entry(k).or_insert(i);
+        }
+        Self {
+            idx,
+            has_header: true,
+        }
+    }
+
+    /// 按别名取单元格。
+    ///
+    /// - 表里有表头：只认列名，**找不到就是空**（用户删了这一列）；
+    /// - 表里没表头：退回 `pos`（老格式的位置），行为与升级前一致。
+    fn cell(&self, f: &[String], aliases: &[&str], pos: usize) -> String {
+        for a in aliases {
+            if let Some(i) = self.idx.get(&normalize_header(a)) {
+                return master_cell(f, *i);
+            }
+        }
+        if self.has_header {
+            return String::new();
+        }
+        master_cell(f, pos)
+    }
+}
+
+/// 「是 / 否」类单元格：认得的是、Y、yes、1、√。空 = 否。
+fn is_yes(s: &str) -> bool {
+    matches!(
+        s.trim(),
+        "是" | "有" | "Y" | "y" | "yes" | "YES" | "1" | "√" | "true" | "TRUE"
+    )
+}
+
+/// 辅助核算维度文字 → `AuxKind`。认中文标签也认英文码，认不出返回 None。
+fn aux_kind_of_dim(s: &str) -> Option<fincore::AuxKind> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    match t {
+        "客户" => Some(fincore::AuxKind::Customer),
+        "供应商" => Some(fincore::AuxKind::Supplier),
+        "部门" => Some(fincore::AuxKind::Dept),
+        "职员" | "员工" => Some(fincore::AuxKind::Employee),
+        "项目" => Some(fincore::AuxKind::Project),
+        "存货" | "商品" => Some(fincore::AuxKind::Item),
+        "现金流量" | "现金流量项目" => Some(fincore::AuxKind::CashFlow),
+        "银行账户" | "银行" => Some(fincore::AuxKind::Bank),
+        _ => aux_kind_of(t),
+    }
+}
+
+/// 「客户,存货」→ AuxMask。分隔符认中英文逗号、顿号、斜杠、分号。
+fn parse_aux_mask(s: &str) -> fincore::account::AuxMask {
+    let mut m = fincore::account::AuxMask::NONE;
+    for part in s.split(|c: char| c == ',' || c == '，' || c == '、' || c == '/' || c == ';' || c == '；') {
+        if let Some(k) = aux_kind_of_dim(part) {
+            m = m.with(k);
+        }
+    }
+    m
 }
 
 /// 按模板从 CSV 行提取凭证行
@@ -681,14 +874,21 @@ fn import_aux_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportR
         skipped: 0,
         warnings: Vec::new(),
     };
+    // 表头映射：有表头就按列名取，没有就按老位置取（见 `HeadMap`）
+    let mut map = HeadMap::default();
     for (i, f) in rows.iter().enumerate() {
         if f.len() < 3 {
             continue; // 空行/说明行
         }
-        let kind_s = master_cell(f, 0);
-        let code = master_cell(f, 1);
-        if code.is_empty() || code == "编码" || code.eq_ignore_ascii_case("code") {
-            continue; // 表头
+        if row_is_header(f) {
+            map = HeadMap::from_row(f);
+            continue;
+        }
+        // 「类型」「编码」也走表头映射：用户完全可以把类型挪到最后一列
+        let kind_s = map.cell(f, &["类型", "档案类型"], 0);
+        let code = map.cell(f, &["编码", "档案编码", "代码", "编号"], 1);
+        if code.is_empty() {
+            continue;
         }
         let Some(kind) = aux_kind_of(&kind_s) else {
             res.warnings
@@ -708,15 +908,41 @@ fn import_aux_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportR
             continue; // 已存在静默跳过（重导常见）
         }
         let mut e = fincore::auxiliary::AuxEntity::new(kind, code.clone(), name);
-        e.memo = master_cell(f, 3);
+        e.memo = map.cell(f, &["备注"], 3);
         // 第 5、6 列（上级编码、状态）是 v1.8.21 才加进模板的。老模板只有前四列，
         // `master_cell` 越界返回空串，所以老文件照旧能导 —— 升级不会让用户
         // 手上那份表突然导不进去。
-        let parent = master_cell(f, 4);
+        let parent = map.cell(f, &["上级编码", "上级", "父级编码"], 4);
         if !parent.is_empty() {
             e.parent_code = Some(parent);
         }
-        e.disabled = master_cell(f, 5) == "停用";
+        e.disabled = map.cell(f, &["状态"], 5) == "停用";
+
+        // 扩展属性（v1.8.22）。原来这一整块都不导：客户档案上的「税点%」「开票
+        // 情况」在桌面端能改、在网页端还改不了，导出表里又没有这两列 —— 想批量
+        // 把 59 个客户的税点填一遍，只能一个个点开改。现在它们跟着表走。
+        //
+        // 空单元格 = 不动，**不是**清空：导出的表如果客户本来没填税点，导回来
+        // 也不该凭空给它写个空值；而用户想清空某一格，删掉内容导回来仍然是空，
+        // 效果一样。
+        for (aliases, key) in [
+            (&["税点%", "税点", "税率%", "税率"][..], fincore::auxiliary::prop::TAX_RATE),
+            (&["信用额度", "信用额度（0=不限）"][..], fincore::auxiliary::prop::CREDIT_LIMIT),
+            (&["开户行", "开户银行"][..], fincore::auxiliary::prop::BANK_NAME),
+            (&["银行账号", "账号"][..], fincore::auxiliary::prop::BANK_ACCOUNT),
+            (&["规格型号", "规格"][..], fincore::auxiliary::prop::SPEC),
+            (&["计量单位", "单位"][..], fincore::auxiliary::prop::UNIT),
+        ] {
+            let v = map.cell(f, aliases, usize::MAX);
+            if !v.is_empty() {
+                e.set_prop(key, v);
+            }
+        }
+        // 开票情况要中文标签 ↔ 存储码互转；认不出的自由文字**保留原值不写**
+        let pol = map.cell(f, &["开票情况", "开票"], usize::MAX);
+        if let Some(v) = fincore::auxiliary::tax_policy_value(&pol) {
+            e.set_prop(fincore::auxiliary::prop::TAX_RATE_POLICY, v.to_string());
+        }
         crate::auxs::insert(db, &e)?;
         res.ok += 1;
     }
@@ -742,15 +968,20 @@ fn import_items_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<Impor
         skipped: 0,
         warnings: Vec::new(),
     };
+    let mut map = HeadMap::default();
     for (i, f) in rows.iter().enumerate() {
         if f.len() < 2 {
             continue;
         }
-        let code = master_cell(f, 0);
-        if code.is_empty() || code == "编码" || code.eq_ignore_ascii_case("code") {
+        if row_is_header(f) {
+            map = HeadMap::from_row(f);
             continue;
         }
-        let name = master_cell(f, 1);
+        let code = map.cell(f, &["编码", "存货编码", "代码", "编号"], 0);
+        if code.is_empty() {
+            continue;
+        }
+        let name = map.cell(f, &["名称", "存货名称"], 1);
         if name.is_empty() {
             res.warnings
                 .push(format!("第 {} 行：{code} 名称为空，已跳过", i + 1));
@@ -762,13 +993,22 @@ fn import_items_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<Impor
             continue;
         }
         let mut e = fincore::auxiliary::AuxEntity::new(fincore::AuxKind::Item, code.clone(), name);
-        let shelf = master_cell(f, 2);
+        let shelf = map.cell(f, &["保质期天", "保质期"], 2);
         if !shelf.is_empty() {
-            e.props.insert("shelf_life_days".into(), shelf);
+            e.props
+                .insert("shelf_life_days".into(), shelf);
         }
+        // 「单位」「状态」「备注」是 v1.8.22 才进表的：网页存货页面一直在显示
+        // 这三列，导出的表里却没有 —— 改完导回去，单位就没了。
+        let unit = map.cell(f, &["计量单位", "单位"], usize::MAX);
+        if !unit.is_empty() {
+            e.set_prop(fincore::auxiliary::prop::UNIT, unit);
+        }
+        e.memo = map.cell(f, &["备注"], usize::MAX);
+        e.disabled = map.cell(f, &["状态"], usize::MAX) == "停用";
         crate::auxs::insert(db, &e)?;
         // 安全库存（列4）→ item_plan（MRP/低库存预警口径）
-        let safety = master_cell(f, 3);
+        let safety = map.cell(f, &["安全库存"], 3);
         if !safety.is_empty() {
             crate::advanced::item_plan_upsert(
                 db,
@@ -799,6 +1039,7 @@ pub fn import_accounts_bytes(db: &Db, bytes: &[u8], who: &str) -> DbResult<Impor
 }
 
 fn import_accounts_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportResult> {
+    let mut map = HeadMap::default();
     let mut res = ImportResult {
         ok: 0,
         skipped: 0,
@@ -808,15 +1049,15 @@ fn import_accounts_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<Im
         if f.len() < 2 {
             continue;
         }
-        let code = master_cell(f, 0);
-        if code.is_empty()
-            || code == "编码"
-            || code == "科目编码"
-            || code.eq_ignore_ascii_case("code")
-        {
+        if row_is_header(f) {
+            map = HeadMap::from_row(f);
             continue;
         }
-        let name = master_cell(f, 1);
+        let code = map.cell(f, &["编码", "科目编码", "代码", "编号"], 0);
+        if code.is_empty() {
+            continue;
+        }
+        let name = map.cell(f, &["名称", "科目名称"], 1);
         if name.is_empty() {
             res.warnings
                 .push(format!("第 {} 行：{code} 名称为空，已跳过", i + 1));
@@ -827,14 +1068,34 @@ fn import_accounts_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<Im
             res.skipped += 1;
             continue;
         }
-        let cat = acct_category_of(&code, &master_cell(f, 2));
+        let cat = acct_category_of(&code, &map.cell(f, &["类别", "科目类别"], 2));
         let mut acc = fincore::account::Account::new(code.clone(), name, cat);
-        match master_cell(f, 3).as_str() {
+        match map.cell(f, &["方向", "余额方向"], 3).as_str() {
             "贷" | "credit" => acc.dir = fincore::Direction::Credit,
             "借" | "debit" => acc.dir = fincore::Direction::Debit,
             _ => {} // 空 = 类别默认方向
         }
-        acc.memo = master_cell(f, 4);
+        acc.memo = map.cell(f, &["备注"], 4);
+
+        // 下面这些是 v1.8.22 才认的列。原来导出表里第 6 列写着「辅助核算维度
+        // （只读提示，导回时不生效）」—— 一句自相矛盾的说明：页面上明明有这一
+        // 项，导出的表却告诉用户「别改，改了没用」。搬账套时科目上的辅助核算、
+        // 数量单位、外币、现金/银行标志全丢，余额表按辅助拆不开，只能一个个
+        // 重设。
+        let dims = map.cell(f, &["辅助核算维度", "辅助核算"], usize::MAX);
+        acc.aux = parse_aux_mask(&dims);
+        let unit = map.cell(f, &["数量单位", "计量单位", "单位"], usize::MAX);
+        if !unit.is_empty() {
+            acc.unit = Some(unit);
+            acc.has_qty = true;
+        }
+        let cur = map.cell(f, &["币种", "外币币种"], usize::MAX);
+        if !cur.is_empty() {
+            acc.currency = Some(cur);
+        }
+        acc.is_cash = is_yes(&map.cell(f, &["现金科目"], usize::MAX));
+        acc.is_bank = is_yes(&map.cell(f, &["银行科目"], usize::MAX));
+        acc.disabled = map.cell(f, &["状态"], usize::MAX) == "停用";
         crate::accounts::insert(db, &acc)?;
         res.ok += 1;
     }
@@ -1459,8 +1720,16 @@ fn import_begin_rows(
     };
     // 整批导入同事务：中途任何数据库错误都整体回滚，不留"导了一半"的期初
     let tx = db.write_tx()?;
+    // 期初表第一行可能是表头（「科目编码,科目名称,方向,…」）。`extract_begin_line`
+    // 靠「第一格必须有数字」把表头挡掉；但表头本身对 `HeadMap` 有用 —— 先认列名，
+    // 后面每行就按名字取，列顺序怎么换都不会错位。
+    let mut map = HeadMap::default();
     for (i, f) in rows.iter().enumerate() {
-        let Some(line) = extract_begin_line(tmpl, f) else {
+        if row_is_header(f) {
+            map = HeadMap::from_row(f);
+            continue;
+        }
+        let Some(line) = extract_begin_line(tmpl, f, &map) else {
             continue; // 表头 / 说明行
         };
         if !line.warn.is_empty() {
@@ -1489,11 +1758,11 @@ fn import_begin_rows(
                     &BeginRow {
                         id: 0,
                         account_code: code.clone(),
-                        aux: AuxRef::default(),
+                        aux: line.aux.clone(),
                         year_begin: signed,
                         debit_accum: line.debit_accum.unwrap_or(Money::ZERO),
                         credit_accum: line.credit_accum.unwrap_or(Money::ZERO),
-                        qty_begin: None,
+                        qty_begin: line.qty_begin,
                     },
                 )?;
                 res.ok += 1;
@@ -2372,6 +2641,99 @@ mod tests {
     }
 
     /// 回归：现金流量项目档案原来无法经数据导入迁移（`aux_kind_of` 不认这个类型）。
+    /// 列头就是接口：列顺序换掉、中间删一列，都不能错位。
+    ///
+    /// 这一条守的是 `HeadMap`。按列下标取值时，用户把「备注」挪到第一列、
+    /// 「编码」挪到最后，导进去就会变成：名称写进编码、税点写进名称 —— 不报错，
+    /// 数据全歪。现实里这种事天天发生：老板觉得备注碍眼就拖到最右边。
+    #[test]
+    fn 表头认列名所以列顺序可以换() {
+        let db = mem();
+        // 故意打乱顺序，并删掉「上级编码」「状态」两列
+        let text = "备注\t税点%\t名称\t类型\t编码\n月结30天\t13\t客户甲\t客户\tC001\n";
+        let res = import_aux(&db, text, "tester").unwrap();
+        assert_eq!((res.ok, res.skipped), (1, 0), "{:?}", res.warnings);
+        let e = crate::auxs::get(&db, fincore::AuxKind::Customer, "C001")
+            .unwrap()
+            .expect("客户没导进去 —— 列顺序换了就认不出编码了");
+        assert_eq!(e.name, "客户甲");
+        assert_eq!(e.memo, "月结30天", "备注被写到了别处");
+        assert_eq!(
+            e.prop(fincore::auxiliary::prop::TAX_RATE).map(|s| s.as_str()),
+            Some("13"),
+            "税点跟着列名走，不该看位置"
+        );
+    }
+
+    /// 老格式（没有表头、按位置写的四列）行为必须一点不变。
+    #[test]
+    fn 没有表头的老文件仍按位置解析() {
+        let db = mem();
+        let text = "客户\tC002\t客户乙\t现金结算\n";
+        let res = import_aux(&db, text, "tester").unwrap();
+        assert_eq!((res.ok, res.skipped), (1, 0), "{:?}", res.warnings);
+        let e = crate::auxs::get(&db, fincore::AuxKind::Customer, "C002")
+            .unwrap()
+            .expect("老格式导不进去了");
+        assert_eq!(e.name, "客户乙");
+        assert_eq!(e.memo, "现金结算");
+    }
+
+    /// 期初的分户（客户编码）与数量也要能从表里带回来。
+    #[test]
+    fn 期初表能带分户与数量() {
+        let db = mem();
+        let text = "科目编码\t科目名称\t方向\t期初余额\t累计借方\t累计贷方\t数量\t客户编码\n\
+                    112201\t应收账款-货款\t借\t50000\t0\t0\t\tC001\n\
+                    4001\t实收资本\t贷\t50000\t0\t0\t\t\n";
+        let res = import_begin(
+            &db,
+            text,
+            "tester",
+            &std::collections::HashMap::new(),
+            ImportTemplate::Generic,
+        )
+        .unwrap();
+        assert_eq!((res.ok, res.skipped), (2, 0), "{:?}", res.warnings);
+        let rows = crate::balances::list_begin(&db).unwrap();
+        let ar = rows
+            .iter()
+            .find(|r| r.account_code == "112201")
+            .expect("应收账款期初没进去");
+        assert_eq!(ar.aux.customer.as_deref(), Some("C001"), "分户丢了");
+    }
+
+    /// 期初表的列顺序也能换：有表头就别再靠「第 2 列是不是借/贷」猜布局。
+    ///
+    /// 这条守的是 `extract_begin_line` 里那个按位置猜 A/B 布局的老逻辑 ——
+    /// 一旦文件带表头，猜就不该再发生。把「期初余额」和「方向」对调，
+    /// 按位置猜会把金额当成方向、方向当成金额，整批进 warnings 被丢掉。
+    #[test]
+    fn 期初表列顺序换了也认得() {
+        let db = mem();
+        let text = "科目编码\t期初余额\t方向\t科目名称\t累计借方\t累计贷方\n\
+                    1001\t10000\t借\t库存现金\t0\t0\n\
+                    4001\t10000\t贷\t实收资本\t0\t0\n";
+        let res = import_begin(
+            &db,
+            text,
+            "tester",
+            &std::collections::HashMap::new(),
+            ImportTemplate::Generic,
+        )
+        .unwrap();
+        assert_eq!((res.ok, res.skipped), (2, 0), "{:?}", res.warnings);
+        let rows = crate::balances::list_begin(&db).unwrap();
+        let cash = rows.iter().find(|r| r.account_code == "1001").unwrap();
+        assert_eq!(cash.year_begin, Money::parse("10000").unwrap());
+        let cap = rows.iter().find(|r| r.account_code == "4001").unwrap();
+        assert_eq!(
+            cap.year_begin,
+            Money::parse("-10000").unwrap(),
+            "方向列换了位置后贷方要被认出来，不能当成借方"
+        );
+    }
+
     #[test]
     fn import_aux_accepts_cashflow_kind() {
         let db = mem();

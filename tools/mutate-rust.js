@@ -168,13 +168,15 @@ const MUT = [
     cmd: API("audit_default_on_for_new_books"),
   },
   {
-    // 期初导入：通用模板其实是 6 列（科目编码,科目名称,方向,期初余额,…），
-    // 只按 3 列解析会让方向列读到「库存现金」、金额列读到「借」→ 整批丢行。
-    name: "⑬ 期初导入不再识别 6 列模板布局（整批丢行）",
+    // 期初表有表头时也退回按位置猜布局 → 用户把「期初余额」和「方向」对调，
+    // 金额会被当成方向、方向被当成金额，整批进 warnings 丢掉。
+    // （原本守的是「只按 3 列解析」那条，有了「有表头就按列名取」之后那条分支
+    //   对带表头的文件不再走到，变异会假失败 —— 改成守新分支。）
+    name: "⑬ 期初表有表头也按位置猜布局",
     file: "crates/findb/src/imports.rs",
-    from: "            if !looks_dir(c1) && looks_dir(c2) {",
-    to: "            if false {",
-    cmd: FIMPORT("import_begin_generic_accepts_template_shape_with_account_name"),
+    from: "        ImportTemplate::Generic if map.has_header => {",
+    to: "        ImportTemplate::Generic if false => {",
+    cmd: FIMPORT("期初表列顺序换了也认得"),
   },
   {
     // 现金流量项目档案无法经数据导入迁移 → 「导出全部 → 导进另一个账套」不完整
@@ -223,10 +225,60 @@ const MUT = [
     // 停用状态不还原 → 搬完账套停掉的客户又冒出来
     name: "⑭ 导入档案不还原停用状态",
     file: "crates/findb/src/imports.rs",
-    from: '        e.disabled = master_cell(f, 5) == "停用";',
+    from: '        e.disabled = map.cell(f, &["状态"], 5) == "停用";',
     to: "        e.disabled = false;",
     cmd: ROUND("停用与上级编码导出后能导回"),
-  },];
+  },
+  {
+    // 档案导出不带税点列 → 59 个客户的税点只能一个个点开改，导出表改完导回去全没了
+    name: "⑮ 档案导出不带税点列",
+    file: "crates/finweb/src/sheets.rs",
+    from: "                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::TAX_RATE).cloned().unwrap_or_default(),",
+    to: "                |_e: &AuxEntity| String::new(),",
+    cmd: ROUND("客户税点与开票情况导出后能导回"),
+  },
+  {
+    // 有表头时缺列又退回按位置猜 → 删掉「上级编码」这一列，会在别处取到编码，
+    // 变成「上级编码=自己」，导进去报「会形成环」
+    name: "⑮ 有表头时缺列仍按位置兜底",
+    file: "crates/findb/src/imports.rs",
+    from: "        if self.has_header {\n            return String::new();\n        }",
+    to: "        if false {\n            return String::new();\n        }",
+    cmd: FIMPORT("表头认列名所以列顺序可以换"),
+  },
+  {
+    // 数量期初不导出 → 原材料/库存商品搬过去数量归零，金额却对得上
+    name: "⑮ 期初导出不带数量列",
+    file: "crates/finweb/src/sheets.rs",
+    from: "                r.qty_begin.map(|q| q.fmt_plain()).unwrap_or_default(),",
+    to: "                String::new(),",
+    cmd: ROUND("期初数量与分户导出后能导回"),
+  },
+  {
+    // 科目导出不带辅助核算维度 → 余额表按客户拆不开
+    name: "⑮ 科目导出不带辅助核算维度",
+    file: "crates/finweb/src/sheets.rs",
+    from: "                .filter(|k| a.aux.contains(**k))",
+    to: "                .filter(|_k| false)",
+    cmd: ROUND("科目辅助核算与数量单位导出后能导回"),
+  },
+  {
+    // 存货导出不带计量单位 → 改完导回去单位没了
+    name: "⑮ 存货导出不带计量单位",
+    file: "crates/finweb/src/sheets.rs",
+    from: "                e.prop(fincore::auxiliary::prop::UNIT).cloned().unwrap_or_default(),",
+    to: "                String::new(),",
+    cmd: ROUND("存货单位与停用状态导出后能导回"),
+  },
+  {
+    // 期初导入不还原分户 → 期初总额对得上，按客户一查是空的
+    name: "⑮ 期初导入不还原分户",
+    file: "crates/findb/src/imports.rs",
+    from: "                        aux: line.aux.clone(),",
+    to: "                        aux: AuxRef::default(),",
+    cmd: ROUND("期初数量与分户导出后能导回"),
+  },
+];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */
 function applyMut(src, from, to) {

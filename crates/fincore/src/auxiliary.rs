@@ -51,6 +51,35 @@ pub mod prop {
     pub const TAX_RATE_POLICY: &str = "tax_policy";
 }
 
+/// 开票政策的存储值 → 中文标签。
+///
+/// 库里存 `invoice` / `sometimes` / `none` 这类稳定的码，导出的 Excel 里写
+/// 中文（老板看得懂、能直接在表里改）。两边必须成对，否则「导出→改→导回」
+/// 会把开票情况改回未设置，而人看不出哪里丢了。
+pub fn tax_policy_label(v: &str) -> &'static str {
+    match v.trim() {
+        "invoice" => "每次都开票",
+        "sometimes" => "有时开有时不开",
+        "none" => "从不开票",
+        _ => "",
+    }
+}
+
+/// 中文标签（或英文码）→ 存储值。认不出来返回 `None`，调用方应当**保留原值**
+/// 而不是写空 —— 表里填了「偶尔开」这种自由文字时，静默清空比报错更难查。
+pub fn tax_policy_value(label: &str) -> Option<&'static str> {
+    let t = label.trim();
+    if t.is_empty() {
+        return None;
+    }
+    Some(match t {
+        "每次都开票" | "每次开票" | "全开" | "invoice" => "invoice",
+        "有时开有时不开" | "有时开" | "部分开" | "sometimes" => "sometimes",
+        "从不开票" | "不开票" | "不要票" | "无票" | "none" => "none",
+        _ => return None,
+    })
+}
+
 /// 辅助核算档案
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct AuxEntity {

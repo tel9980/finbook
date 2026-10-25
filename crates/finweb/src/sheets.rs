@@ -3,9 +3,16 @@
 //! # 为什么列头要和 `findb::imports` 写在一起看
 //!
 //! 基础资料导出的列头必须与三处逐字一致：
-//! 1. `crates/findb/src/imports.rs` 的解析器（按**列下标**取值，不看列名）；
+//! 1. `crates/findb/src/imports.rs` 的解析器；
 //! 2. `/api/import/template` 给出的模板（用户照它手填）；
 //! 3. 本文件的导出（用户导出去改了再导回来）。
+//!
+//! 解析器现在**先认列名再退回列下标**（`imports::HeadMap`）。只按下标取值的
+//! 时代，导出端多加一列、或者用户在 Excel 里删列换序，就会整体错位 —— 而且不
+//! 报错：备注被写进上级编码、税点被当成信用额度，等对账才发现。
+//!
+//! 约定（改列时请守住）：**老列的位置一位不动，新列一律追加在末尾**。这样
+//! 即便有人把表头行删了，退回按位置解析也还是对的。
 //!
 //! 三者任何一处改了而另两处没跟上，用户拿到的就是「导得出来、导不回去」的文件，
 //! 而且症状通常不是报错，是**少了几条**或**数值整体错位**。把取数放在这里，
@@ -28,35 +35,111 @@ const T: ColFmt = ColFmt::Text;
 const M: ColFmt = ColFmt::Money;
 const I: ColFmt = ColFmt::Int;
 
-/// 辅助核算档案：列头与 `import_aux_rows` 一致（类型, 编码, 名称, 备注）
+/// 辅助核算档案：列头与 `import_aux_rows` 一致。
+///
+/// 除了六个公共列，**每种档案还带上它自己在页面上能编辑的扩展属性**：
+/// 客户/供应商有「税点%」「开票情况」「信用额度」，银行账户有开户行和账号，
+/// 存货有规格型号和计量单位。这些列原来一个都不导 —— 于是「导出去批量改」这条
+/// 路走不通：59 个客户的税点只能一个个点开改，存了半年才发现改不过来。
+///
+/// 为什么按档案种类给不同列、而不是给一张大宽表：大宽表里 90% 的格子是空的，
+/// 老板填表时要先判断「这列跟我有没有关系」。列名就是接口，多余的列也是噪音。
+/// 解析器现在先认表头（见 `imports::HeadMap`），所以列集不同、顺序不同都能导回。
 pub fn aux_sheet(rows: &[AuxEntity], kind_label: &str) -> Sheet {
-    let rows = rows
+    let kind = rows.first().map(|e| e.kind);
+    // (列头, 取值) —— 顺序即导出顺序；缺失的列在导回时不会被误认成别的字段。
+    let mut extra: Vec<(&str, fn(&AuxEntity) -> String)> = Vec::new();
+    match kind {
+        Some(fincore::AuxKind::Customer) | Some(fincore::AuxKind::Supplier) => {
+            extra.push((
+                "税点%",
+                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::TAX_RATE).cloned().unwrap_or_default(),
+            ));
+            extra.push((
+                "开票情况",
+                |e: &AuxEntity| {
+                    fincore::auxiliary::tax_policy_label(
+                        e.prop(fincore::auxiliary::prop::TAX_RATE_POLICY)
+                            .map(|s| s.as_str())
+                            .unwrap_or(""),
+                    )
+                    .to_string()
+                },
+            ));
+            extra.push((
+                "信用额度",
+                |e: &AuxEntity| {
+                    e.prop(fincore::auxiliary::prop::CREDIT_LIMIT).cloned().unwrap_or_default()
+                },
+            ));
+        }
+        Some(fincore::AuxKind::Bank) => {
+            extra.push((
+                "开户行",
+                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::BANK_NAME).cloned().unwrap_or_default(),
+            ));
+            extra.push((
+                "银行账号",
+                |e: &AuxEntity| {
+                    e.prop(fincore::auxiliary::prop::BANK_ACCOUNT).cloned().unwrap_or_default()
+                },
+            ));
+        }
+        Some(fincore::AuxKind::Item) => {
+            extra.push((
+                "规格型号",
+                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::SPEC).cloned().unwrap_or_default(),
+            ));
+            extra.push((
+                "计量单位",
+                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::UNIT).cloned().unwrap_or_default(),
+            ));
+        }
+        _ => {}
+    }
+
+    let body = rows
         .iter()
         .map(|e| {
-            vec![
+            let mut r = vec![
                 e.kind.label().to_string(),
                 e.code.clone(),
                 e.name.clone(),
                 e.memo.clone(),
                 e.parent_code.clone().unwrap_or_default(),
                 if e.disabled { "停用" } else { "启用" }.to_string(),
-            ]
+            ];
+            for (_, f) in &extra {
+                r.push(f(e));
+            }
+            r
         })
         .collect();
-    Sheet::plain(
-        &format!("{kind_label}档案"),
-        &["类型", "编码", "名称", "备注", "上级编码", "状态"],
-        &[T, T, T, T, T, T],
-    )
-    .with_rows(rows)
+
+    let mut headers: Vec<&str> = vec!["类型", "编码", "名称", "备注", "上级编码", "状态"];
+    headers.extend(extra.iter().map(|(h, _)| *h));
+    let mut cols = vec![T; headers.len()];
+    // 「税点%」「信用额度」是数字列，单元格要能被 Excel 排序/求和
+    for (i, h) in headers.iter().enumerate() {
+        if *h == "税点%" || *h == "信用额度" {
+            cols[i] = M;
+        }
+    }
+    Sheet::plain(&format!("{kind_label}档案"), &headers, &cols).with_rows(body)
 }
 
-/// 存货档案：列头与 `import_items_rows` 一致（编码, 名称, 保质期天, 安全库存）
+/// 存货档案：列头与 `import_items_rows` 一致。
 ///
-/// `safety` 是 `item_plan` 里的安全库存（低库存预警口径），与档案分开存在两张表，
-/// 导出时合起来；导回时 `import_items_rows` 也会拆回去。
+/// `safety` 是 `item_plan` 里的安全库存（低库存预警口径），与档案分存两张表，
+/// 导出时合起来；导回时 `import_items_rows` 会拆回去。
+///
+/// 后三列（备注/计量单位/状态）是 v1.8.22 补的：网页存货页面一直在显示这三列，
+/// 导出的表里却没有 —— 用户在表里改完导回，单位没了、停用的又恢复启用。
+///
+/// 老的四列位置**一位没动**（编码, 名称, 保质期天, 安全库存），新列全部追加在
+/// 后面。这样即便有人把表头行删了，退回按位置解析也不会错位。
 pub fn items_sheet(rows: &[AuxEntity], safety: &dyn Fn(&str) -> Option<Money>) -> Sheet {
-    let rows = rows
+    let body = rows
         .iter()
         .map(|e| {
             vec![
@@ -64,26 +147,34 @@ pub fn items_sheet(rows: &[AuxEntity], safety: &dyn Fn(&str) -> Option<Money>) -
                 e.name.clone(),
                 e.props.get("shelf_life_days").cloned().unwrap_or_default(),
                 safety(&e.code).map(|m| m.fmt_plain()).unwrap_or_default(),
+                e.memo.clone(),
+                e.prop(fincore::auxiliary::prop::UNIT).cloned().unwrap_or_default(),
+                if e.disabled { "停用" } else { "启用" }.to_string(),
             ]
         })
         .collect();
     Sheet::plain(
         "存货档案",
-        &["编码", "名称", "保质期天", "安全库存"],
-        &[T, T, I, M],
+        &["编码", "名称", "保质期天", "安全库存", "备注", "计量单位", "状态"],
+        &[T, T, I, M, T, T, T],
     )
-    .with_rows(rows)
+    .with_rows(body)
 }
 
-/// 科目建档：列头与 `import_accounts_rows` 一致（编码, 名称, 类别, 方向, 备注）
+/// 科目建档：列头与 `import_accounts_rows` 一致。
 ///
-/// 第 6 列「辅助核算维度」是**只读提示**：导入器读的是下标 0~4，这一列不进库。
-/// 标出来是因为辅助核算维度决定了这个科目记账时要不要填客户/存货，
-/// 搬账套的人需要看到「哪些科目是核算维度科目」，否则会以为科目搬全了。
+/// v1.8.22 起第 6 列往后是**真能导回的**，不再是只读提示。原来那一列的标题写着
+/// 「只读提示，导回时不生效」—— 一句自相矛盾的话：页面上科目明明设了辅助核算，
+/// 导出的表却告诉用户别改。搬账套时辅助核算维度、数量单位、外币、现金/银行标志
+/// 全丢，余额表按辅助拆不开，只能一个个重设。
+///
+/// **停用科目也导出**。早先的版本把它们过滤掉了（注释说「停用科目不导出」），
+/// 理由是「搬过去也没用」。可是账套搬家要看的是「像不像原来那本账」：一个科目
+/// 在旧账里停用，搬到新账里变启用，做账时就会多出一堆不该能选的科目，而人根本
+/// 想不起来是哪个。状态如实带过去，用不用是用户的事。
 pub fn accounts_sheet(accounts: &[&Account]) -> Sheet {
-    let rows = accounts
+    let body = accounts
         .iter()
-        .filter(|a| !a.disabled)
         .map(|a| {
             let dims = fincore::AuxKind::ALL
                 .iter()
@@ -98,6 +189,11 @@ pub fn accounts_sheet(accounts: &[&Account]) -> Sheet {
                 a.dir.label().to_string(),
                 a.memo.clone(),
                 dims,
+                a.unit.clone().unwrap_or_default(),
+                a.currency.clone().unwrap_or_default(),
+                if a.is_cash { "是" } else { "" }.to_string(),
+                if a.is_bank { "是" } else { "" }.to_string(),
+                if a.disabled { "停用" } else { "启用" }.to_string(),
             ]
         })
         .collect();
@@ -109,20 +205,31 @@ pub fn accounts_sheet(accounts: &[&Account]) -> Sheet {
             "类别",
             "方向",
             "备注",
-            "辅助核算维度（只读提示，导回时不生效）",
+            "辅助核算维度",
+            "数量单位",
+            "币种",
+            "现金科目",
+            "银行科目",
+            "状态",
         ],
-        &[T, T, T, T, T, T],
+        &[T, T, T, T, T, T, T, T, T, T, T],
     )
-    .with_rows(rows)
+    .with_rows(body)
 }
 
 /// 期初余额：列头与 `/api/import/template?kind=begin` 及 Generic 解析器
-/// 的「布局 B」一致（科目编码, 科目名称, 方向, 期初余额, 累计借方, 累计贷方）
+/// 的「布局 B」一致（科目编码, 科目名称, 方向, 期初余额, 累计借方, 累计贷方）。
 ///
 /// `year_begin` 在库里是带符号的（借正贷负），导出的「方向 + 正数金额」是给人看的
 /// 写法 —— 会计不写负号，写成「贷 3000」。
+///
+/// v1.8.22 追加了三类列，都在末尾，绝不动前六列的位置：
+/// - `数量`：数量核算科目（原材料/库存商品）的期初数量；
+/// - 七个辅助维度编码：分客户/分供应商/分存货的期初余额。小厂经常「华达还欠我
+///   5 万」这种期初，金额记在 112201 上、分户靠辅助核算 —— 原来这一步搬不过去，
+///   期初金额对了但按客户查是空的。
 pub fn begin_sheet(rows: &[BeginRow], name_of: &dyn Fn(&str) -> String) -> Sheet {
-    let rows = rows
+    let body = rows
         .iter()
         .map(|r| {
             let (dir, amt) = if r.year_begin < Money::ZERO {
@@ -137,15 +244,38 @@ pub fn begin_sheet(rows: &[BeginRow], name_of: &dyn Fn(&str) -> String) -> Sheet
                 amt.fmt_plain(),
                 r.debit_accum.fmt_plain(),
                 r.credit_accum.fmt_plain(),
+                r.qty_begin.map(|q| q.fmt_plain()).unwrap_or_default(),
+                r.aux.customer.clone().unwrap_or_default(),
+                r.aux.supplier.clone().unwrap_or_default(),
+                r.aux.item.clone().unwrap_or_default(),
+                r.aux.project.clone().unwrap_or_default(),
+                r.aux.dept.clone().unwrap_or_default(),
+                r.aux.employee.clone().unwrap_or_default(),
+                r.aux.bank.clone().unwrap_or_default(),
             ]
         })
         .collect();
     Sheet::plain(
         "期初余额",
-        &["科目编码", "科目名称", "方向", "期初余额", "累计借方", "累计贷方"],
-        &[T, T, T, M, M, M],
+        &[
+            "科目编码",
+            "科目名称",
+            "方向",
+            "期初余额",
+            "累计借方",
+            "累计贷方",
+            "数量",
+            "客户编码",
+            "供应商编码",
+            "存货编码",
+            "项目编码",
+            "部门编码",
+            "职员编码",
+            "银行账户",
+        ],
+        &[T, T, T, M, M, M, M, T, T, T, T, T, T, T],
     )
-    .with_rows(rows)
+    .with_rows(body)
 }
 
 /// 科目余额表：逐科目一行，期初/发生/期末都带方向列
@@ -284,24 +414,79 @@ mod tests {
     fn 基础资料导出的列头与导入模板一致() {
         let a = acct("1001", "库存现金", AcctCategory::Asset);
         let s = accounts_sheet(&[&a]);
+        // 前五列是 v1.8.21 就有的老位置，**一位都不能动**：老文件退回按位置解析
+        // 时靠的就是它们。后面的列都是 v1.8.22 追加的。
         assert_eq!(&s.headers[..5], &["编码", "名称", "类别", "方向", "备注"]);
+        assert_eq!(
+            &s.headers[5..],
+            &[
+                "辅助核算维度",
+                "数量单位",
+                "币种",
+                "现金科目",
+                "银行科目",
+                "状态"
+            ],
+            "这几列原来只写「只读提示，导回时不生效」——列名就是接口，说了不生效等于断闭环"
+        );
 
         let mut e = AuxEntity::new(fincore::AuxKind::Customer, "C001", "客户甲");
         e.parent_code = Some("C00".into());
         e.disabled = true;
+        e.set_prop(
+            fincore::auxiliary::prop::TAX_RATE,
+            String::from("13"),
+        );
+        e.set_prop(
+            fincore::auxiliary::prop::TAX_RATE_POLICY,
+            String::from("sometimes"),
+        );
         let s = aux_sheet(&[e], "客户");
-        // 后两列（上级编码、状态）是 v1.8.21 加的：少了它们，「导出→改→导回」
-        // 会把层级塌平、把停用的档案变回启用，而界面上看不出任何异常。
         assert_eq!(
             s.headers,
-            vec!["类型", "编码", "名称", "备注", "上级编码", "状态"]
+            vec![
+                "类型", "编码", "名称", "备注", "上级编码", "状态", "税点%", "开票情况",
+                "信用额度"
+            ]
         );
         assert_eq!(s.rows[0][4], "C00");
         assert_eq!(s.rows[0][5], "停用", "停用状态必须写出来");
+        assert_eq!(s.rows[0][6], "13");
+        assert_eq!(
+            s.rows[0][7], "有时开有时不开",
+            "库里存 sometimes，表里要写字 —— 老板看的是表，不是库"
+        );
 
         let e = AuxEntity::new(fincore::AuxKind::Item, "P001", "产品A");
         let s = items_sheet(&[e], &|_| None);
-        assert_eq!(s.headers, vec!["编码", "名称", "保质期天", "安全库存"]);
+        assert_eq!(
+            s.headers,
+            vec!["编码", "名称", "保质期天", "安全库存", "备注", "计量单位", "状态"]
+        );
+    }
+
+    /// 档案的扩展列按种类给：客户身上不该出现「规格型号」，存货身上不该出现
+    /// 「税点%」。宽表里 90% 的格子空着，填表的人要先判断「这列跟我有关系吗」。
+    #[test]
+    fn 档案扩展列按种类不同() {
+        let c = AuxEntity::new(fincore::AuxKind::Customer, "C1", "客户");
+        let s = aux_sheet(&[c], "客户");
+        assert!(s.headers.iter().any(|h| h == "税点%"));
+        assert!(!s.headers.iter().any(|h| h == "规格型号"));
+
+        let i = AuxEntity::new(fincore::AuxKind::Item, "I1", "存货");
+        let s = aux_sheet(&[i], "存货");
+        assert!(s.headers.iter().any(|h| h == "规格型号"));
+        assert!(!s.headers.iter().any(|h| h == "税点%"));
+
+        let b = AuxEntity::new(fincore::AuxKind::Bank, "B1", "基本户");
+        let s = aux_sheet(&[b], "银行");
+        assert!(s.headers.iter().any(|h| h == "开户行"));
+        assert!(!s.headers.iter().any(|h| h == "税点%"));
+
+        let d = AuxEntity::new(fincore::AuxKind::Dept, "D1", "车间");
+        let s = aux_sheet(&[d], "部门");
+        assert_eq!(s.headers.len(), 6, "部门没有扩展列");
     }
 
     /// 科目类别与方向的标签必须能被 `imports::acct_category_of` /
@@ -384,12 +569,18 @@ mod tests {
         assert!(sheet_name_of(&"x".repeat(60)).chars().count() <= 31);
     }
 
+    /// 停用科目**要**导出（v1.8.22 改的口径）。
+    ///
+    /// 早先过滤掉它们，理由是「搬过去也没用」。可账套搬家要看的是「像不像原来
+    /// 那本账」：旧账里停用的科目搬到新账里变启用，做账时就多出一堆不该能选的
+    /// 科目，而人想不起来是哪个。
     #[test]
-    fn 停用科目不导出() {
+    fn 停用科目也导出并带上状态() {
         let mut a = acct("1001", "库存现金", AcctCategory::Asset);
         a.disabled = true;
         let s = accounts_sheet(&[&a]);
-        assert!(s.rows.is_empty());
+        assert_eq!(s.rows.len(), 1);
+        assert_eq!(s.rows[0][10], "停用");
     }
 }
 

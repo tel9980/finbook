@@ -271,3 +271,255 @@ fn 期初余额导出后能导回且方向不变() {
     let tb = snap.trial_balance(&findb::accounts::chart(&dst).unwrap());
     assert!(tb.begin_balanced(), "导回后期初借贷不平：{tb:?}");
 }
+
+// ---------------------------------------------------------------------------
+// v1.8.22：把「页面上能编辑、导出表里却没有」的字段接上
+// ---------------------------------------------------------------------------
+
+/// 客户的「税点%」「开票情况」必须跟着表走。
+///
+/// 这一条背后是真的要命：小厂 59 个客户，每个客户税点都不一样（13% 专票 / 3%
+/// 代开 / 不要票）。原来这两个字段只在桌面端点开档案一个个改，导出表里没有它们，
+/// 网页端也改不了 —— 想把税点批量核对一遍，只能点开 59 次。
+#[test]
+fn 客户税点与开票情况导出后能导回() {
+    use fincore::auxiliary::prop;
+    let dir = tempfile::tempdir().unwrap();
+    let src = db_at(dir.path(), "a.fbk");
+    let mut c = fincore::AuxEntity::new(AuxKind::Customer, "C001", "华达五金");
+    c.set_prop(prop::TAX_RATE, String::from("13"));
+    c.set_prop(prop::TAX_RATE_POLICY, String::from("invoice"));
+    c.set_prop(prop::CREDIT_LIMIT, String::from("50000"));
+    findb::auxs::insert(&src, &c).unwrap();
+    let mut s = fincore::AuxEntity::new(AuxKind::Supplier, "S001", "宏源氧化");
+    s.set_prop(prop::TAX_RATE, String::from("3"));
+    s.set_prop(prop::TAX_RATE_POLICY, String::from("none"));
+    findb::auxs::insert(&src, &s).unwrap();
+
+    let rows = findb::auxs::list(&src, &fincore::AuxQuery::default()).unwrap();
+    let bytes = finweb::xlsxout::build(&[finweb::sheets::aux_sheet(&rows, "全部")]).unwrap();
+
+    let dst = db_at(dir.path(), "b.fbk");
+    let res = findb::imports::import_aux_bytes(&dst, &bytes, "tester").unwrap();
+    assert_eq!((res.ok, res.skipped), (2, 0), "{:?}", res.warnings);
+
+    let got = findb::auxs::get(&dst, AuxKind::Customer, "C001")
+        .unwrap()
+        .expect("客户没导进去");
+    assert_eq!(got.prop_or(prop::TAX_RATE, "-"), "13");
+    assert_eq!(
+        got.prop_or(prop::TAX_RATE_POLICY, "-"),
+        "invoice",
+        "开票情况要按中文标签转回存储码"
+    );
+    assert_eq!(got.prop_or(prop::CREDIT_LIMIT, "-"), "50000");
+
+    let sup = findb::auxs::get(&dst, AuxKind::Supplier, "S001")
+        .unwrap()
+        .expect("供应商没导进去");
+    assert_eq!(sup.prop_or(prop::TAX_RATE, "-"), "3");
+    assert_eq!(sup.prop_or(prop::TAX_RATE_POLICY, "-"), "none");
+}
+
+/// 存货的「计量单位」「备注」「停用」和「安全库存」要能一起搬过去。
+///
+/// 网页存货页面一直在显示这几列，导出表里却只有四列：改完导回去，单位没了，
+/// 停用的存货又变回启用（录凭证时又能选到）。
+#[test]
+fn 存货单位与停用状态导出后能导回() {
+    use fincore::auxiliary::prop;
+    let dir = tempfile::tempdir().unwrap();
+    let src = db_at(dir.path(), "a.fbk");
+    let mut it = fincore::AuxEntity::new(AuxKind::Item, "HG001", "合页坯");
+    it.set_prop(prop::UNIT, String::from("吨"));
+    it.memo = "外发前存放".into();
+    it.props.insert("shelf_life_days".into(), "365".into());
+    findb::auxs::insert(&src, &it).unwrap();
+    let mut off = fincore::AuxEntity::new(AuxKind::Item, "OLD01", "淘汰料");
+    off.disabled = true;
+    findb::auxs::insert(&src, &off).unwrap();
+    findb::advanced::item_plan_upsert(
+        &src,
+        &findb::advanced::ItemPlan {
+            item_code: "HG001".into(),
+            safety_stock: Money::parse("120").unwrap(),
+            lead_days: 0,
+            lot_size: Money::ZERO,
+        },
+    )
+    .unwrap();
+
+    let rows = findb::auxs::list(
+        &src,
+        &fincore::AuxQuery {
+            kind: Some(AuxKind::Item),
+            include_disabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let plans: HashMap<String, Money> = findb::advanced::item_plan_all(&src)
+        .unwrap()
+        .into_iter()
+        .map(|p| (p.item_code, p.safety_stock))
+        .collect();
+    let sheet = finweb::sheets::items_sheet(&rows, &|c| plans.get(c).copied());
+    let bytes = finweb::xlsxout::build(&[sheet]).unwrap();
+
+    let dst = db_at(dir.path(), "b.fbk");
+    let res = findb::imports::import_items_bytes(&dst, &bytes, "tester").unwrap();
+    assert_eq!((res.ok, res.skipped), (2, 0), "{:?}", res.warnings);
+
+    let got = findb::auxs::get(&dst, AuxKind::Item, "HG001")
+        .unwrap()
+        .expect("存货没导进去");
+    assert_eq!(got.prop_or(prop::UNIT, "-"), "吨", "计量单位丢了");
+    assert_eq!(got.memo, "外发前存放");
+    assert_eq!(got.props.get("shelf_life_days").map(|s| s.as_str()), Some("365"));
+    let plan = findb::advanced::item_plan_get(&dst, "HG001")
+        .unwrap()
+        .expect("安全库存没导进去");
+    assert_eq!(plan.safety_stock, Money::parse("120").unwrap());
+
+    let off = findb::auxs::get(&dst, AuxKind::Item, "OLD01")
+        .unwrap()
+        .expect("停用的存货也要搬过去");
+    assert!(off.disabled, "停用状态丢了 —— 淘汰料又能被选进凭证");
+}
+
+/// 科目的「辅助核算维度」「数量单位」「现金/银行标志」「停用」都要能搬。
+///
+/// 这几项原来导出表里写着一句「只读提示，导回时不生效」。搬账套后科目是齐的，
+/// 但余额表按客户拆不开（科目上没挂客户维度），数量金额式没数量（没设数量核算），
+/// 报表取现金流取不到（现金科目标志丢了）。
+#[test]
+fn 科目辅助核算与数量单位导出后能导回() {
+    use fincore::account::{AuxKind as _AuxKindUnused, AuxMask};
+    let _ = std::marker::PhantomData::<_AuxKindUnused>;
+    let dir = tempfile::tempdir().unwrap();
+    let src = db_at(dir.path(), "a.fbk");
+
+    let mut ar = fincore::account::Account::new("112299", "应收账款-样品", AcctCategory::Asset);
+    ar.aux = AuxMask::NONE.with(AuxKind::Customer);
+    findb::accounts::insert(&src, &ar).unwrap();
+
+    let mut stock = fincore::account::Account::new("140599", "原材料-辅料", AcctCategory::Asset);
+    stock.aux = AuxMask::NONE.with(AuxKind::Item);
+    stock.unit = Some("吨".into());
+    stock.has_qty = true;
+    findb::accounts::insert(&src, &stock).unwrap();
+
+    let mut gone = fincore::account::Account::new("660999", "停用费用", AcctCategory::Expense);
+    gone.disabled = true;
+    findb::accounts::insert(&src, &gone).unwrap();
+
+    let chart = findb::accounts::chart(&src).unwrap();
+    let all: Vec<&fincore::account::Account> = chart.all();
+    let bytes = finweb::xlsxout::build(&[finweb::sheets::accounts_sheet(&all)]).unwrap();
+
+    let dst = db_at(dir.path(), "b.fbk");
+    let res = findb::imports::import_accounts_bytes(&dst, &bytes, "tester").unwrap();
+    assert_eq!(res.ok, 3, "三个自建科目应导入：{:?}", res.warnings);
+
+    let dc = findb::accounts::chart(&dst).unwrap();
+    let a = dc.get("112299").expect("应收样品科目没导进去");
+    assert!(
+        a.aux.contains(AuxKind::Customer),
+        "辅助核算维度丢了 —— 余额表按客户拆不开"
+    );
+    let s = dc.get("140599").expect("原材料辅料科目没导进去");
+    assert!(s.aux.contains(AuxKind::Item));
+    assert_eq!(s.unit.as_deref(), Some("吨"), "数量单位丢了");
+    assert!(s.has_qty, "数量核算标志丢了");
+    let g = dc.get("660999").expect("停用科目没导进去");
+    assert!(g.disabled, "停用状态丢了 —— 新账里又多出一个能选的费用科目");
+}
+
+/// 期初的「数量」和「分户」（客户/存货）要能搬过去。
+///
+/// 小厂真实场景：开工第一天，「华达还欠我 5 万」记在 112201 上、客户靠辅助核算
+/// 分。原来金额搬得过去、分户搬不过去 —— 期初总额对得上，按客户一查是空的。
+#[test]
+fn 期初数量与分户导出后能导回() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = db_at(dir.path(), "a.fbk");
+    let oa = fincore::AuxRef {
+        customer: Some("C001".into()),
+        ..Default::default()
+    };
+    let oi = fincore::AuxRef {
+        item: Some("HG001".into()),
+        ..Default::default()
+    };
+    let rows = vec![
+        BeginRow {
+            id: 0,
+            account_code: "112201".into(),
+            aux: oa,
+            year_begin: Money::parse("50000").unwrap(),
+            debit_accum: Money::ZERO,
+            credit_accum: Money::ZERO,
+            qty_begin: None,
+        },
+        BeginRow {
+            id: 0,
+            account_code: "140501".into(),
+            aux: oi,
+            year_begin: Money::parse("10000").unwrap(),
+            debit_accum: Money::ZERO,
+            credit_accum: Money::ZERO,
+            qty_begin: Some(Money::parse("5").unwrap()),
+        },
+        BeginRow {
+            id: 0,
+            account_code: "4001".into(),
+            aux: Default::default(),
+            year_begin: Money::parse("-60000").unwrap(),
+            debit_accum: Money::ZERO,
+            credit_accum: Money::ZERO,
+            qty_begin: None,
+        },
+    ];
+    for r in &rows {
+        findb::balances::upsert_begin(&src, r).unwrap();
+    }
+    let chart = findb::accounts::chart(&src).unwrap();
+    let saved = list_begin(&src).unwrap();
+    let bytes = finweb::xlsxout::build(&[finweb::sheets::begin_sheet(&saved, &|c| {
+        chart.get(c).map(|a| a.name.clone()).unwrap_or_default()
+    })])
+    .unwrap();
+
+    let dst = db_at(dir.path(), "b.fbk");
+    let res = findb::imports::import_begin_bytes(
+        &dst,
+        &bytes,
+        "tester",
+        &HashMap::new(),
+        ImportTemplate::Generic,
+    )
+    .unwrap();
+    assert_eq!((res.ok, res.skipped), (3, 0), "{:?}", res.warnings);
+
+    let back = list_begin(&dst).unwrap();
+    let ar = back
+        .iter()
+        .find(|r| r.account_code == "112201")
+        .expect("应收账款期初没导回");
+    assert_eq!(ar.year_begin, Money::parse("50000").unwrap());
+    assert_eq!(
+        ar.aux.customer.as_deref(),
+        Some("C001"),
+        "分户丢了 —— 期初总额对得上，按客户查是空的"
+    );
+    let raw = back
+        .iter()
+        .find(|r| r.account_code == "140501")
+        .expect("原材料期初没导回");
+    assert_eq!(
+        raw.qty_begin,
+        Some(Money::parse("5").unwrap()),
+        "数量期初丢了 —— 数量金额式明细里数量是 0"
+    );
+    assert_eq!(raw.aux.item.as_deref(), Some("HG001"));
+}
