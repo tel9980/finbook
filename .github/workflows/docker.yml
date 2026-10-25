@@ -83,12 +83,17 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          # 只出 amd64。多数工厂机器和 VPS 都是 x86_64；加 arm64 要么走 QEMU
+          # 模拟（Rust release 构建会拖到一小时以上），要么换 arm runner。
+          # 真有 ARM NAS 要装，再单独加一个 ubuntu-24.04-arm 任务原生构建。
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # 独立的 cache scope：ci.yml 的 docker job 也用 type=gha，默认 scope
+          # 相同，两个 workflow 同时写会互相顶掉对方的缓存层。
+          cache-from: type=gha,scope=docker-publish
+          cache-to: type=gha,mode=max,scope=docker-publish
           provenance: false
 
       - name: 汇总
