@@ -7,7 +7,7 @@
 >
 > | 文中说 | 现在的实际 |
 > |---|---|
-> | 测试 203 项（fincore 87 / findb 105 / finweb 11） | **657 项**（fincore 113 / findb 325 / core_loop 21 / ext_loop 7 / finui 1 / finweb lib 4 / finweb api 186），另有 **73 条** Playwright E2E |
+> | 测试 203 项（fincore 87 / findb 105 / finweb 11） | 已远超此数，且有 Playwright E2E —— **准确基线不抄在这里**（抄了就会过期），见 [README §8 测试基线表](../../README.md#8-测试与质量) |
 > | MRP运算 ❌ 0% | 已实现（e2e 用例 mrp-procure-sales-cost、集成测试 mps_schedule_flow） |
 > | 工序报工 ❌ / 待实现 | 已实现（工序报工 + 工艺路线） |
 > | BOM 管理「无 / 完全缺失」 | 已实现（BOM、组装拆卸、损耗率） |
@@ -18,8 +18,8 @@
 | 资金调拨 ❌ | 已实现（`findb::transfer`：账户间转账 借 转入 / 贷 转出 + SPA / finui 页签） |
 | 往来只能「同科目同往来单位」一对一核销 | 已补齐：差异核销（抹零，`findb::settle::settle_with_diff`）、往来对冲单（应收↔应付 / 三方抵账，`findb::offset`）、跨往来单位 / 跨科目互抵（代收代付，`findb::settle::settle_cross`） |
 >
-> **现状看 [README.md](README.md)**（功能清单与测试基线表）、
-> **部署看 [DEPLOY.md](DEPLOY.md)**。本文只作为「当时做了什么」的记录保留。
+> **现状看 [README.md](../../README.md)**（功能清单与测试基线表）、
+> **部署看 [DEPLOY.md](../../DEPLOY.md)**。本文只作为「当时做了什么」的记录保留。
 >
 > 下文保持原样未改，以便看清当时的判断依据。
 

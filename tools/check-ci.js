@@ -702,12 +702,18 @@ if (FIX_ROOT) {
 
 // ---- 2.8 里程碑报告必须带「历史快照」声明 ----------------------------------
 //
-// 判据的来历：仓库转公开后，8 份报告里的「MRP运算 ❌ 0%」「测试 203 项」会被
+// 判据的来历：仓库转公开后，这批报告里的「MRP运算 ❌ 0%」「测试 203 项」会被
 // 任何读者当成现状。这些结论**实测已被推翻**（MRP / 工序报工 / 委外 / BOM 都已
-// 实现，测试是 657 项 + 73 条 E2E），但文档不会自己更新。
+// 实现），但文档不会自己更新。
 //
 // 不删那些报告 —— 它们是「当时做了什么」的记录，删掉是另一种信息损失。
 // 关键区别从来不是「文档旧」，而是「旧文档读起来像现状」。
+//
+// ⚠️ 这批文件已归档到 docs/archive/。路径写在这里是**故意的**：
+// 下面的循环用的是 `fs.existsSync` + `continue`，所以路径一错（比如文件被
+// 挪走却没改这里），检查就静默跳过 —— 看着在守，实际没守。
+// 因此另有一条 ARCHIVE_DIR_MUST_EXIST 兜底：目录不存在直接判 FAIL。
+const ARCHIVE = "docs/archive";
 const REPORT_MD = [
   "COMPLETION_SUMMARY.md",
   "DELIVERY_CHECKLIST.md",
@@ -717,7 +723,17 @@ const REPORT_MD = [
   "FINAL_VERIFICATION.md",
   "MANUFACTURING_ERP_IMPLEMENTATION_REPORT.md",
   "COMPREHENSIVE_COMPARISON.md",
-];
+  // 归档时补进来的两份（原先漏在清单外，没有声明也没人管）
+  "GAP_RESEARCH_REPORT.md",
+  "SECURITY_FIX_SUMMARY.md",
+].map((name) => path.join(ARCHIVE, name));
+// 归档目录本身必须存在 —— 否则上面整张清单会被 existsSync 全部跳过
+if (!fs.existsSync(path.join(FIX_ROOT || ".", ARCHIVE))) {
+  bad++;
+  console.log(
+    `FAIL 归档目录 ${ARCHIVE} 不存在，但 REPORT_MD 指向它 —— 下面这条检查会全部跳过`
+  );
+}
 let docBad = 0;
 for (const rel of REPORT_MD) {
   const f = path.join(FIX_ROOT || '.', rel);
