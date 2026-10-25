@@ -74,14 +74,11 @@ services:
     volumes:
       - ./data:/data
 
-    healthcheck:
-      # 用镜像自带的探针，别在这里重写 —— Dockerfile 里那条 /dev/tcp 写法
-      # 踩过 bash 的 exec 优化坑（详见 Dockerfile 注释）。
-      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf \"GET /api/health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q ok <&3'"]
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
+    # 健康检查不在这里重写 —— 镜像 Dockerfile 里已经带了 HEALTHCHECK
+    # （interval 30s / timeout 5s / start-period 10s / retries 3），compose
+    # 不写就自动继承。重写一遍只会让两处慢慢跑偏，而那条 /dev/tcp 探针
+    # 的写法踩过 bash 的 exec 优化坑，改错就会变成「应用正常但永远
+    # unhealthy」——恒失败的探针比没有探针更糟。详见 Dockerfile 注释。
 
     # 日志别无限涨：单文件 10MB × 5 个封顶
     logging:
