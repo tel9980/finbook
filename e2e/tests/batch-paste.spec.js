@@ -13,7 +13,12 @@ const { newBook } = require("../helpers");
 // ⚠️ 粘贴文本用 Tab 分隔，模拟 Excel 复制的真实输出（\t）。
 // 用逗号的话，金额里的千分位会被当分隔符切坏（fincore 的 begin 测试里有钉住这条）。
 const AUX_TEXT = "编码\t名称\nC01\t杭州明远贸易\nC02\t宁波华信电子";
-const BEGIN_TEXT = "科目编码\t金额\n1001\t58000\n1002\t125000\n2001\t80000";
+// 银行存款要用末级科目 100201（工行基本户），不能用 1002 ——
+// 1002 下面挂着 100201~100207 七个子户，属非末级。期初录在非末级科目上时
+// 试算平衡表只遍历末级科目，这笔钱不会被统计，账「不平」却查不出原因，
+// 所以 upsert_begin 现在直接拒收非末级（见 balances::ensure_begin_leaf）。
+// 这条用例最初用的就是 1002，加了校验后弹窗关不掉，才改成末级。
+const BEGIN_TEXT = "科目编码\t金额\n1001\t58000\n100201\t125000\n2001\t80000";
 
 test("辅助档案批量粘贴：先预览再导入，已存在的跳过不覆盖", async ({ page }) => {
   await newBook(page, `E2E粘档案${Date.now()}`);
@@ -91,7 +96,7 @@ test("期初批量粘贴：方向按科目自动归位，预览带试算", async
   await expect(page.locator("#bp-trial")).toContainText("借方合计");
   await expect(page.locator("#bp-trial")).toContainText("贷方合计");
   await expect(page.locator("#bp-trial")).toContainText("差额");
-  // 方向不用填：1001/1002 是资产（借）、2001 是负债（贷），由科目表决定
+  // 方向不用填：1001/100201 是资产（借）、2001 是负债（贷），由科目表决定
   const trial = await page.locator("#bp-trial").innerText();
   expect(trial).toContain("183,000.00"); // 58000 + 125000
   expect(trial).toContain("80,000.00"); // 2001
