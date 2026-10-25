@@ -19782,6 +19782,39 @@ async fn begin_rejects_nonexistent_account() {
         "校验失败必须整批不落地：{rows}"
     );
 
+    // 一次列出**全部**缺失科目，不是遇到第一个就停。
+    //
+    // 为什么单独断言这一点：DB 层（balances::ensure_begin_leaf）也会拦不存在的
+    // 科目，但它是在**逐行 upsert 的过程中**报错，报的只是当前那一行。Web 这道
+    // 预检的价值就是先把整批扫一遍，把 999999、888888 一次性告诉会计 ——
+    // 否则改一行、存一次、再报下一个，几十行的期初要来回十几趟。
+    //
+    // 没有这条断言的话，把 Web 预检整段删掉，上面那两条断言照样过
+    // （DB 层兜住了），变异测试就失去了意义。实测过。
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/begin",
+            &sid,
+            serde_json::json!({
+                "rows": [
+                    { "account_code": "1001",    "dir": "debit",  "yb": "5000", "ad": "0", "ac": "0", "qty": null },
+                    { "account_code": "999999",  "dir": "debit",  "yb": "1000", "ad": "0", "ac": "0", "qty": null },
+                    { "account_code": "888888",  "dir": "credit", "yb": "2000", "ad": "0", "ac": "0", "qty": null }
+                ],
+                "delete_ids": []
+            }),
+        ))
+        .await
+        .unwrap();
+    let st = resp.status();
+    let b = body_string(resp).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "两个坏科目应 400：{b}");
+    assert!(b.contains("999999"), "必须点名 999999：{b}");
+    assert!(
+        b.contains("888888"),
+        "必须一次列出全部缺失科目，不能只报第一个：{b}"
+    );
+
     // 对照：真实科目照常能存（别把校验写太死）
     let resp = handlers::router(state.clone())
         .oneshot(authed_post(
