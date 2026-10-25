@@ -161,6 +161,15 @@ async fn upload_fbk_registers_a_usable_book() {
     };
     {
         let db = findb::Db::create_no_admin(&external, &opts).expect("建外部账套失败");
+        // 关键：桌面版建的账套里，同名 admin 那行是「首次登录必须改密」状态。
+        // Web 端登录走平台口令（这边的平台 boss 是 not-must-change），两边一比
+        // 就卡在账套层的改密闸门上 —— 每个账套内接口 401，前端就是「点账套又
+        // 弹回选择页」。所以这一行必须照真实形态造出来，否则这条测试守不住它。
+        findb::users::create_admin(&db, "boss", "Desktop!2026", "管理员")
+            .expect("造桌面版账套内的 admin 失败");
+        let mut u = findb::users::get(&db, "boss").unwrap().unwrap();
+        u.must_change_pwd = true;
+        findb::users::update(&db, &u).unwrap();
     }
     let bytes = std::fs::read(&external).expect("读外部账套失败");
     std::fs::remove_file(&external).unwrap();
@@ -227,6 +236,54 @@ async fn upload_fbk_registers_a_usable_book() {
         StatusCode::OK,
         "导入的账套应能选中进入"
     );
+    // `/api/me` 是前端进账套后的第一枪（`enterBook`：select → /me → 建界面）。
+    // 它 401 就等于「导入成功但进不去」，而这正是用户报的那个问题。
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/me", &sid))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let me = body_string(resp).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "进账套后 /api/me 必须能过（账套内那行的改密标记不该拦住平台已认证的身份）：{me}"
+    );
+    assert!(me.contains("boss"), "应返回账套内身份：{me}");
+
+    // 导入后账套内那一行应与平台身份对齐。这不是内部整洁问题：用户搬完家
+    // 回到桌面端打开同一个账套，若那行还是 `must_change_pwd = 1`，会先被要求
+    // 「首次登录必须改密」—— 刚迁移完就给一道密码闸门，很容易被当成迁移出错。
+    {
+        let db = findb::Db::open(&books_dir.join(format!("{key}.fbk"))).expect("重新打开账套");
+        let u = findb::users::get(&db, "boss").unwrap().unwrap();
+        assert!(
+            !u.must_change_pwd,
+            "导入后账套内同名行应与平台身份对齐（改密标记），否则桌面端会莫名要求改密"
+        );
+    }
+
+    // 再验一层：万一账套里那行的改密标记事后又被置回 true（桌面端重置口令、
+    // 或者这个账套是修复之前导入的），也不该把平台已认证的身份拦在门外 ——
+    // 平台层 `RealmUser` 已经按真身拦过一次了，账套这份影子不参与鉴权。
+    {
+        let db = findb::Db::open(&books_dir.join(format!("{key}.fbk"))).expect("重新打开账套");
+        let mut u = findb::users::get(&db, "boss").unwrap().unwrap();
+        u.must_change_pwd = true;
+        findb::users::update(&db, &u).unwrap();
+    }
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/me", &sid))
+        .await
+        .unwrap();
+    let status = resp.status();
+    let me = body_string(resp).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "账套层的改密标记只是平台标记的影子，不该单独拦人：{me}"
+    );
+
     fetch_xlsx(&state, &sid, "/api/reports/balance-sheet/xlsx").await;
 }
 

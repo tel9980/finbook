@@ -866,17 +866,17 @@ impl FromRequestParts<Arc<WebState>> for CurrentUser {
                 "该账号已在其他设备登录，本设备会话已被下线",
             ));
         }
-        // 强制改密拦截（不删除会话，仅拒绝非改密/退出请求）
-        if user.must_change_pwd {
-            let path = parts.uri.path();
-            let is_allowed =
-                path == "/api/change-password" || path == "/api/logout" || path == "/api/login";
-            if !is_allowed {
-                return Err(AppError::unauthorized(
-                    "你的口令已过期或需首次设置，请先修改口令",
-                ));
-            }
-        }
+        // 「强制改密」不再在账套层拦人。
+        //
+        // 上面 `RealmUser` 那一段已经按**平台**账号拦过一次（`ru.must_change_pwd`），
+        // 平台层要求改密时所有接口本来就过不去。账套这一份标记只是
+        // `sync_password_to_books` 同步下来的影子，而桌面端重置口令、或者账套
+        // 本来就是桌面版建好再导进来的（admin 那行 `must_change_pwd = 1`，
+        // 在桌面端从没改过），都会让它和平台层对不上。
+        // 在这里拿影子拦人，唯一的后果是把**平台已经认证通过**的用户挡在门外：
+        // 每个账套内接口 401「你的口令已过期或需首次设置」，前端 `enterBook`
+        // 收到非登录类错误就退回选择页 —— 用户看到的就是「导入账套后进不去」。
+        // 真身有且只有平台那一份，账套层的这个标记不参与鉴权。
         let company = db.options().company;
         state.sessions.touch(&token);
         Ok(CurrentUser {

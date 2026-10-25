@@ -16930,16 +16930,56 @@ async fn import_book(
         .map_err(|e| AppError::Internal(format!("落盘失败：{e}")))?;
 
     // 账套自己的 user 表用的是它自己那套口令。平台管理员要用平台口令进来，
-    // 所以按 `create_book` 同样的做法，把平台口令哈希种成账套内管理员；
-    // 账套里已有同名用户则不动（可能是人家原来的密码）。
+    // 所以按 `create_book` 同样的做法，把平台身份同步成账套内管理员。
+    //
+    // 「账套里已有同名用户就一个字段都不动」曾经是这里的做法，它会让**从桌面版
+    // 搬来的账套根本进不去**：桌面版建的 admin 那行 `must_change_pwd = 1`
+    // （首次登录必须改密，而在桌面端从没改过），Web 端登录走的是平台口令，
+    // 平台那边 `must_change_pwd = 0`，两边一比就卡在账套层的闸门上 ——
+    // 每个账套内接口都 401「你的口令已过期或需首次设置」，前端表现是
+    // 点了账套又弹回选择页，看起来就是「导入后进不了工作页面」。
+    // 所以这里必须把平台身份**对齐**进去（与 `post_change_password` 里
+    // `sync_password_to_books` 的口径一致：平台是唯一真身，账套内是同名的影子）。
     {
         let db = Db::open(&final_path)?;
-        if users::get(&db, &owner).ok().flatten().is_none() {
-            let mut u = User::new(&owner, &user.display_name, Role::Admin);
-            if let Ok(Some(ru)) = state.realm.get_user(&owner) {
-                u.password_hash = ru.password_hash;
+        let realm_user = state.realm.get_user(&owner).ok().flatten();
+        match users::get(&db, &owner)? {
+            None => {
+                let mut u = User::new(&owner, &user.display_name, Role::Admin);
+                if let Some(ru) = &realm_user {
+                    u.password_hash = ru.password_hash.clone();
+                }
+                users::insert(&db, &u)?;
             }
-            users::insert(&db, &u)?;
+            Some(mut u) => {
+                // **口令哈希故意不动**：Web 端从不校验账套内口令（登录只认平台
+                // 口令），改它唯一的效果是让桌面端原本能用的口令失效 —— 那是把
+                // 一个「进不去」换成了另一个「进不去」。
+                // 要动的是那个闸门标记：它才是 Web 端真正会读的字段。
+                let mut touched: Vec<&str> = Vec::new();
+                if let Some(ru) = &realm_user {
+                    if u.must_change_pwd != ru.must_change_pwd {
+                        u.must_change_pwd = ru.must_change_pwd;
+                        touched.push("改密标记");
+                    }
+                }
+                // 停用状态也一起放开：这是刚导入的、属于当前账号的账套，
+                // 账套里那行停用只可能来自桌面端的旧配置，留着就是把人锁在门外。
+                if u.disabled {
+                    u.disabled = false;
+                    touched.push("停用");
+                }
+                if !touched.is_empty() {
+                    let what = touched.join("、");
+                    users::update(&db, &u)?;
+                    db.log(
+                        &owner,
+                        "账套",
+                        "导入账套",
+                        &format!("账套内同名账号已与平台身份对齐（{what}）"),
+                    )?;
+                }
+            }
         }
         db.log(
             &owner,

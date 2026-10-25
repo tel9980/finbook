@@ -271,6 +271,23 @@ const MUT = [
     cmd: ROUND("存货单位与停用状态导出后能导回"),
   },
   {
+    // 导入账套后不与平台身份对齐改密标记 → 桌面版搬来的账套（admin 那行是
+    // 「首次必须改密」）在 Web 端每个接口都 401，前端退回选择页
+    name: "⑯ 导入账套后不对齐改密标记（导入成功但进不去）",
+    file: "crates/finweb/src/handlers.rs",
+    from: "                    if u.must_change_pwd != ru.must_change_pwd {\n                        u.must_change_pwd = ru.must_change_pwd;",
+    to: "                    if false {\n                        u.must_change_pwd = ru.must_change_pwd;",
+    cmd: XLSX("upload_fbk_registers_a_usable_book"),
+  },
+  {
+    // 账套层的改密标记重新参与鉴权 → 平台已认证的用户被影子挡在门外
+    name: "⑯ 账套层的改密标记又参与鉴权",
+    file: "crates/finweb/src/state.rs",
+    from: "        let company = db.options().company;\n        state.sessions.touch(&token);\n        Ok(CurrentUser {",
+    to: "        if user.must_change_pwd {\n            return Err(AppError::unauthorized(\"你的口令已过期或需首次设置，请先修改口令\"));\n        }\n        let company = db.options().company;\n        state.sessions.touch(&token);\n        Ok(CurrentUser {",
+    cmd: XLSX("upload_fbk_registers_a_usable_book"),
+  },
+  {
     // 期初导入不还原分户 → 期初总额对得上，按客户一查是空的
     name: "⑮ 期初导入不还原分户",
     file: "crates/findb/src/imports.rs",
