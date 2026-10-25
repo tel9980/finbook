@@ -279,6 +279,73 @@ node tools/mutate-rust.js           # 改坏 Rust 源码，验证对应测试真
 > **全部**会话，于是第 2 台一登录就把第 1 台踢下线 —— 上限只是个数字，
 > 用户体感仍然是只能登一台。改「能绑几台」时必须同时改「会话怎么存」。
 
+### 4.5 用 Dockge 部署（不想敲 docker 命令的话）
+
+镜像已发到 GitHub Container Registry，不用自己在服务器上编译：
+
+```
+ghcr.io/tel9980/finbook:1.8.20   精确版本，生产钉这个
+ghcr.io/tel9980/finbook:1.8      次版本，自动收补丁
+ghcr.io/tel9980/finbook:latest   最新正式版
+```
+
+**步骤**
+
+1. Dockge → `Stacks` → `Add Stack`，名字填 `finbook`
+2. 把仓库 [`deploy/docker-compose.yml`](deploy/docker-compose.yml) 整段粘进去
+3. 按需改端口和 `FINWEB_SECURE_COOKIE`（下面有说明）
+4. `Deploy` —— Dockge 会先跑 `init` 服务建目录，再起 `finbook`
+5. 首次启动的管理员口令在日志里，只打印一次：
+
+   ```bash
+   docker logs finbook 2>&1 | grep -i 管理员
+   ```
+
+   不想靠日志，就在 compose 里填 `FINBOOK_ADMIN_USER` / `FINBOOK_ADMIN_PASS` 预置。
+
+**为什么 compose 里多一个 `init` 服务**
+
+因为 §10 那道守卫不能破。账套目录不存在时 finweb 拒绝启动，是为了让「卷没挂上」
+当场暴露；如果让主服务自己 `mkdir`，它会顺手在容器可写层造一个 `books/`，
+一切看着正常，直到容器重建才发现账套没了。
+
+`init` 容器就干一件事：**在真正挂上的卷里** `mkdir -p /data/books` 并把属主改成
+`finbook`(10001)，然后退出。主服务 `depends_on` 它的完成，所以启动顺序是固定的。
+它需要 root，因为新建的 bind mount 目录默认属于 root；也正因为 `chown` 在 init 里，
+主服务才能继续保持非 root 运行。
+
+**端口和 Cookie 标记要一起改**
+
+compose 默认 `127.0.0.1:8080:8080` + `FINWEB_SECURE_COOKIE=true`，意思是前面有
+HTTPS 反代（见 §5），Dockge 只管起容器不管 TLS。如果你想让局域网直接
+`http://192.168.x.x:8080` 访问，**两行要同时改**：
+
+```yaml
+ports:
+  - "8080:8080"
+environment:
+  FINWEB_SECURE_COOKIE: "false"
+```
+
+只改端口不改 Cookie 标记的症状很有辨识度：**登录看着成功了，页面立刻退回登录页**
+—— 因为浏览器不肯在 HTTP 下回传带 `Secure` 的会话 Cookie。反之，上了 HTTPS 却留着
+`false`，会话就能被中间人窃取。这条别忘。
+
+**升级**
+
+改 compose 里的镜像 tag → `Deploy`。数据在 `./data`，容器重建不丢。
+跨大版本前先备份：`./data` 整个目录拷走就是全部数据（`realm.db` + `books/*.fbk`）。
+热备份用 `deploy/backup.sh`，它走 SQLite 在线备份 API 而不是直接 `cp`（§6.1）。
+
+**确认数据真的落在宿主机上**
+
+```bash
+docker inspect finbook --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'
+ls -l ./data/books/          # 应该看得到 .fbk 账套文件
+```
+
+看不到 `.fbk` 就是挂载没生效，立刻停下排查 —— 这时候录的账在容器里，见 §10。
+
 ## 5. HTTPS 反向代理（必须）
 
 finweb 本身只提供 HTTP。**生产环境禁止把 8080 裸暴露到公网**（口令明文传输）。

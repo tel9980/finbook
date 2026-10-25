@@ -9,6 +9,7 @@
 | 想知道某个功能怎么用 | [docs/功能参考.md](docs/功能参考.md)（§4.1 – §4.73） |
 | 开发 / 运维 / 要装起来跑 | 本文件 |
 | 部署 Web 端到服务器 | [DEPLOY.md](DEPLOY.md) |
+| 用 Dockge / docker compose 一键部署 | [deploy/docker-compose.yml](deploy/docker-compose.yml) → 说明见 [DEPLOY.md §4.5](DEPLOY.md) |
 | 还有哪些安全待办没做 | [SECURITY_TODO.md](SECURITY_TODO.md)（这份是在办的，会更新） |
 | 追溯「当时为什么这么判断」 | [docs/archive/](docs/archive/)（**结论全部已过时**，别看） |
 

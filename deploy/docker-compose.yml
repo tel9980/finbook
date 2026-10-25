@@ -1,0 +1,95 @@
+# FinBook Web 端 — Docker Compose 栈（Dockge / Portainer / docker compose 通用）
+#
+# 用法（Dockge）：
+#   Stacks → Add Stack → 名字填 finbook → 把本文件整段粘进去 → Deploy
+#
+# 用法（命令行）：
+#   mkdir -p finbook && cd finbook
+#   cp <本文件> compose.yaml && docker compose up -d
+#
+# ── 关于数据目录 ──────────────────────────────────────────────────
+# 镜像里 FINBOOK_REQUIRE_BOOKS_DIR=true，账套目录不存在时**拒绝启动**。
+# 这是故意的：如果挂载失败，服务会在容器可写层里造一个 books/，然后一切看着
+# 正常（能登录、能记账、备份也写进去），直到容器重建时账套和备份一起消失。
+# 详见仓库 DEPLOY.md §10。
+#
+# 所以这里用 init 容器**在真正挂上的卷里**建目录 + 改属主，而不是让主服务
+# 自己造。init 完成后主服务才启动；挂载没挂上时 init 起的也是空卷，问题照样
+# 暴露得出来。
+
+services:
+  # 一次性初始化：建 /data/books，把属主改成 finbook(10001)。
+  # 需要 root，因为新建的 bind mount 目录默认属于 root。
+  init:
+    image: ghcr.io/tel9980/finbook:1.8.20
+    user: root
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /data/books
+        chown -R 10001:10001 /data
+        echo "数据目录就绪："
+        ls -ld /data /data/books
+    volumes:
+      - ./data:/data
+    restart: "no"
+
+  finbook:
+    image: ghcr.io/tel9980/finbook:1.8.20
+    container_name: finbook
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    # ⚠ 默认只监听回环，前面必须有自己的 HTTPS 反代（Caddy / nginx / NPM）。
+    # 想让局域网直连，把下面两行换成注释里的写法，并读一遍「Cookie 安全标记」。
+    ports:
+      - "127.0.0.1:8080:8080"
+    # ports:
+    #   - "8080:8080"
+    environment:
+      # 平台身份库与账套目录（都在 /data 下，随卷持久化）
+      FINBOOK_REALM: /data/realm.db
+      FINBOOK_BOOKS_DIR: /data/books
+      FINBOOK_LISTEN: 0.0.0.0:8080
+      FINBOOK_REQUIRE_BOOKS_DIR: "true"
+      FINWEB_STATIC_DIR: /app/static
+
+      # ── Cookie 安全标记 ────────────────────────────────────────
+      # true  = 会话 Cookie 带 Secure，浏览器只在 HTTPS 下回传。
+      #         走 HTTPS 反代时**必须** true，否则等于把会话降级到明文。
+      # false = 允许纯 HTTP 访问，仅用于「局域网内先试一下」。
+      #         用 http:// 访问却设了 true，症状是**登录成功但立刻掉线**。
+      FINWEB_SECURE_COOKIE: "true"
+
+      # ── 平台管理员（仅首次启动、realm.db 为空时生效）──────────────
+      # 不填则自动生成强口令，只在启动日志里打印一次：
+      #   docker compose logs finbook | grep -i 管理员
+      # 生产建议预置，不要依赖自动生成。
+      # FINBOOK_ADMIN_USER: admin
+      # FINBOOK_ADMIN_PASS: 换成你自己的强口令
+      # FINBOOK_ADMIN_MUST_CHANGE: "true"
+
+    volumes:
+      - ./data:/data
+
+    healthcheck:
+      # 用镜像自带的探针，别在这里重写 —— Dockerfile 里那条 /dev/tcp 写法
+      # 踩过 bash 的 exec 优化坑（详见 Dockerfile 注释）。
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf \"GET /api/health HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q ok <&3'"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+    # 日志别无限涨：单文件 10MB × 5 个封顶
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+# 备份：./data 整个目录拷走就是全部数据（realm.db + books/*.fbk）。
+# 停机备份最稳；热备份请用仓库里的 deploy/backup.sh（它走 SQLite 的
+# integrity_check + 在线备份 API，不是直接 cp）。
