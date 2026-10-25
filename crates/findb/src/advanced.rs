@@ -434,6 +434,25 @@ pub fn item_plan_get(db: &Db, item_code: &str) -> DbResult<Option<ItemPlan>> {
         .map_err(Into::into)
 }
 
+/// 一次取全表（存货档案导出要用：逐条 `item_plan_get` 是 N 次查询，
+/// 上千个存货时导出会明显卡）。
+pub fn item_plan_all(db: &Db) -> DbResult<Vec<ItemPlan>> {
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT item_code,safety_stock,lead_days,lot_size FROM item_plan")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ItemPlan {
+                item_code: r.get(0)?,
+                safety_stock: read_m(&r.get::<_, String>(1)?),
+                lead_days: r.get(2)?,
+                lot_size: read_m(&r.get::<_, String>(3)?),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 pub fn item_plan_upsert(db: &Db, p: &ItemPlan) -> DbResult<()> {
     db.conn().execute(
         "INSERT INTO item_plan(item_code,safety_stock,lead_days,lot_size) VALUES(?1,?2,?3,?4)

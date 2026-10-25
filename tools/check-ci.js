@@ -373,10 +373,27 @@ if (rustList.cases.length < MIN_RUST_MUTATIONS) {
   );
   bad++;
 }
-const testSrc =
-  fs.readFileSync("crates/finweb/tests/api.rs", "utf8") +
-  fs.readFileSync("crates/fincore/src/user.rs", "utf8") +
-  fs.readFileSync("crates/findb/src/users.rs", "utf8");
+// 变异指向的测试必须能在源码里找到。原来这里硬编码了 3 个文件路径
+// （api.rs / user.rs / users.rs），于是**新增测试 target 的变异一律报「已不存在」**；
+// 更糟的是反过来——若有人只改这 3 个文件里的测试名，检查照过，而指向
+// 别的 target 的变异早就名存实亡。改成扫 crates/ 下全部 .rs：
+// 慢一点（两百多个文件），但不会再出现「新加的 target 没登记」这类失效。
+function walkRs(dir) {
+  const out = [];
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      if (ent.name === "target" || ent.name === "node_modules") continue;
+      out.push(...walkRs(p));
+    } else if (ent.name.endsWith(".rs")) {
+      out.push(p);
+    }
+  }
+  return out;
+}
+const testSrc = walkRs("crates")
+  .map((f) => fs.readFileSync(f, "utf8"))
+  .join("\n");
 for (const m of rustList.cases) {
   const src = fs.readFileSync(m.file, "utf8");
   if (!stillMatches(src, m.from)) {
@@ -390,7 +407,9 @@ for (const m of rustList.cases) {
   // 指向的测试必须真的存在，否则跑出来是「0 passed」并被读成 PASS。
   // 直接取命令数组最后一项；旧正则要求命令里有引号，而 join(" ") 后永远没有引号，
   // 于是这条检查从未生效。以 `::` 结尾的是模块前缀（如 user::tests::），跳过。
-  const testName = m.cmd[m.cmd.length - 1];
+  // 末项可能是 `mod::path::test_name` 形式（cargo test 的过滤器），比对时取最后一段。
+  let testName = m.cmd[m.cmd.length - 1];
+  if (testName && testName.includes("::")) testName = testName.split("::").pop();
   if (testName && !testName.endsWith("::") && !testSrc.includes(testName)) {
     console.log(`FAIL mutate-rust 指向的测试 ${testName} 已不存在（${m.name}）`);
     bad++;

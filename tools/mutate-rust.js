@@ -15,6 +15,12 @@ const { execFileSync } = require("child_process");
 
 const API = (name) => ["test", "-p", "finweb", "--test", "api", "--", name];
 const CORE = (name) => ["test", "-p", "fincore", "--lib", "user::tests::"];
+// v1.8.21「导入导出闭环」的三个新 target。这类功能最典型的失效是
+// 「界面点得动、文件也下来了，但数据其实没进去/没出来」，所以每条都要有变异守着。
+const XLSX = (name) => ["test", "-p", "finweb", "--test", "export_xlsx", "--", name];
+const ROUND = (name) => ["test", "-p", "finweb", "--test", "roundtrip", "--", name];
+// imports.rs 的测试都在 `mod tests` 里，全路径是 `imports::tests::<name>`
+const FIMPORT = (name) => ["test", "-p", "findb", "--lib", `imports::tests::${name}`];
 
 const MUT = [
   {
@@ -158,6 +164,40 @@ const MUT = [
     from: "            require_cashier: true,",
     to: "            require_cashier: false,",
     cmd: API("audit_default_on_for_new_books"),
+  },
+  {
+    // 期初导入：通用模板其实是 6 列（科目编码,科目名称,方向,期初余额,…），
+    // 只按 3 列解析会让方向列读到「库存现金」、金额列读到「借」→ 整批丢行。
+    name: "⑬ 期初导入不再识别 6 列模板布局（整批丢行）",
+    file: "crates/findb/src/imports.rs",
+    from: "            if !looks_dir(c1) && looks_dir(c2) {",
+    to: "            if false {",
+    cmd: FIMPORT("import_begin_generic_accepts_template_shape_with_account_name"),
+  },
+  {
+    // 现金流量项目档案无法经数据导入迁移 → 「导出全部 → 导进另一个账套」不完整
+    name: "⑬ 辅助档案不认现金流量项目",
+    file: "crates/findb/src/imports.rs",
+    from: '        "现金流量" | "现金流量项目" | "现金流" | "cashflow" | "cf" => fincore::AuxKind::CashFlow,',
+    to: '        "__not_a_kind__" => fincore::AuxKind::CashFlow,',
+    cmd: FIMPORT("import_aux_accepts_cashflow_kind"),
+  },
+  {
+    // 上传账套不再核对「是不是 FinBook」→ 随便一个 sqlite 都会被迁成空账套
+    name: "⑬ 上传账套不再核对科目表",
+    file: "crates/finweb/src/handlers.rs",
+    from: "    if has_account == 0 {",
+    to: "    if false {",
+    cmd: XLSX("upload_rejects_non_finbook_file"),
+  },
+  {
+    // 科目导出漏掉「方向」列 → 负债/权益科目方向被类别默认值盖掉
+    // （219901 待确认往来：类别=负债 默认贷，档案里是借 —— 导出-导回就反了）
+    name: "⑬ 科目导出不带方向列",
+    file: "crates/finweb/src/sheets.rs",
+    from: "                a.dir.label().to_string(),",
+    to: "                String::new(),",
+    cmd: ROUND("科目导出后类别与方向能导回"),
   },];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

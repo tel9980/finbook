@@ -266,6 +266,12 @@ pub fn router(state: Arc<WebState>) -> Router {
         )
         .route("/api/books/:key/select", post(select_book))
         .route("/api/books/:key", delete(delete_book))
+        // 上传外部账套（.fbk 或从别的服务器导出的 .zip 备份）。
+        // 单独放宽 body 上限：全局 12MB，账套含附件时可能上百 MB。
+        .route(
+            "/api/books/import",
+            post(import_book).layer(axum::extract::DefaultBodyLimit::max(MAX_IMPORT_BOOK_BYTES)),
+        )
         .route("/api/login", post(post_login))
         .route("/api/logout", post(post_logout))
         // 平台安全中心（仅管理员）：口令策略 / 登录审计 / 锁定账号
@@ -406,6 +412,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/reports/trial-balance", get(get_trial_balance))
         .route("/api/reports/account-detail", get(account_detail_ep))
         .route("/api/reports/trial-balance/print", get(print_trial_balance))
+        .route("/api/reports/trial-balance/xlsx", get(export_trial_balance_xlsx))
         .route(
             "/api/reports/trial-balance/export",
             get(export_trial_balance),
@@ -429,6 +436,13 @@ pub fn router(state: Arc<WebState>) -> Router {
             post(delete_export_schedule),
         )
         .route("/api/export/schedules/:id/run", post(run_export_schedule))
+        // xlsx 导出（需 Export 权限）。与上面的 CSV 并存而不是替换：
+        // 那批是凭证/明细账/工资等老接口，前端和外部脚本在用。
+        // 这批专给「要拿去继续算的表」和三大报表 —— 金额是数字，能求和能透视。
+        .route("/api/export/aux", get(export_aux_xlsx))
+        .route("/api/export/items", get(export_items_xlsx))
+        .route("/api/export/accounts", get(export_accounts_xlsx))
+        .route("/api/export/begin", get(export_begin_xlsx))
         // 高级功能：多栏账 / 摘要汇总表 / 财务指标
         .route("/api/reports/multi-column", get(get_multi_column))
         .route("/api/reports/summary-table", get(get_summary_table))
@@ -436,16 +450,23 @@ pub fn router(state: Arc<WebState>) -> Router {
         // 财务核心：三大报表（资产负债表/利润表/现金流量表）
         .route("/api/reports/balance-sheet", get(get_balance_sheet))
         .route("/api/reports/balance-sheet/print", get(print_balance_sheet))
+        .route("/api/reports/balance-sheet/xlsx", get(export_balance_sheet_xlsx))
         .route("/api/reports/income-statement", get(get_income_statement))
         .route(
             "/api/reports/income-statement/print",
             get(print_income_statement),
         )
+        .route(
+            "/api/reports/income-statement/xlsx",
+            get(export_income_statement_xlsx),
+        )
         .route("/api/reports/cash-flow", get(get_cash_flow))
         .route("/api/reports/cash-flow/print", get(print_cash_flow))
+        .route("/api/reports/cash-flow/xlsx", get(export_cash_flow_xlsx))
         // 财务核心：所有者权益变动表 / 报表对比 / 科目日报表 / 期末对账
         .route("/api/reports/equity", get(get_equity_statement))
         .route("/api/reports/equity/print", get(print_equity_statement))
+        .route("/api/reports/equity/xlsx", get(export_equity_xlsx))
         .route("/api/reports/compare", get(get_report_compare))
         .route("/api/reports/daily", get(get_account_daily))
         .route("/api/reports/reconcile", get(get_period_reconcile))
@@ -16319,6 +16340,570 @@ async fn claim_voucher(
         &format!("#{id} 凭证 #{vid}"),
     )?;
     Ok(Json(json!({ "id": vid })))
+}
+
+// ---------------------------------------------------------------------------
+// Excel（xlsx）导出 —— 需 Export 权限
+//
+// 与上面的 CSV 导出**并存**而不替换：那批（凭证/明细账/工资/报销/催款/派工）
+// 已经有前端和外部脚本在用，换格式会打断它们。这里加的是两类真需要 xlsx 的表：
+//   1. 基础资料（客户/存货/科目/期初）—— 必须能「导出 → 改 → 导回」，
+//      所以列头与 `findb::imports` 的解析器逐字对齐，见 `crates/finweb/src/sheets.rs`；
+//   2. 三大报表 + 科目余额表 —— 金额要是真数字，能求和、能透视。
+// 早期用户拿到的 CSV 在 Excel 里金额是文本（左对齐、不能求和），要手动「分列」，
+// 这是本次改造最直接的动力。
+// ---------------------------------------------------------------------------
+
+/// 附件下载头。中文文件名要走 RFC 5987 的 `filename*`。
+///
+/// 只写 `filename="报表.xlsx"` 是不够的：`HeaderValue::from_str` 遇到非 ASCII
+/// 会**失败**，而旧代码是 `if let Ok(v) = ... { insert }` —— 于是响应里干脆
+/// 没有 Content-Disposition，浏览器把文件存成随机名。用户看不出是这个原因。
+pub fn attachment_header(filename: &str) -> Option<axum::http::HeaderValue> {
+    let ascii: String = filename
+        .chars()
+        .map(|c| if c.is_ascii() && c != '"' && c != '\\' { c } else { '_' })
+        .collect();
+    let mut pct = String::new();
+    for b in filename.as_bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'~') {
+            pct.push(*b as char);
+        } else {
+            pct.push_str(&format!("%{b:02X}"));
+        }
+    }
+    axum::http::HeaderValue::from_str(&format!(
+        "attachment; filename=\"{ascii}\"; filename*=UTF-8''{pct}"
+    ))
+    .ok()
+}
+
+const XLSX_MIME: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+fn xlsx_response(filename: &str, bytes: Vec<u8>) -> Response {
+    let mut resp = bytes.into_response();
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static(XLSX_MIME));
+    if let Some(v) = attachment_header(filename) {
+        resp.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+    }
+    resp
+}
+
+fn build_xlsx(sheets: &[crate::xlsxout::Sheet], filename: &str, bytes_hint: &str) -> Result<Response, AppError> {
+    let bytes = crate::xlsxout::build(sheets).map_err(AppError::BadRequest)?;
+    if bytes.is_empty() {
+        return Err(AppError::Internal(format!("生成 {bytes_hint} 失败：内容为空")));
+    }
+    Ok(xlsx_response(filename, bytes))
+}
+
+/// 辅助核算档案导出（客户/供应商/部门/职员/项目/存货/现金流量/银行账户）
+///
+/// `kind` 省略 = 全部维度导在一张表里。两种用法都有意义：按维度导出便于
+/// 单独维护某类档案，全量导出用于整套搬运（导回时 `import_aux` 会按类型列
+/// 分派，不要求一张表里只有一种）。
+async fn export_aux_xlsx(
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    let kind = match q.get("kind").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(s) => Some(
+            AuxKind::from_code(s)
+                .ok_or_else(|| AppError::bad_request(format!("未知的档案类型：{s}")))?,
+        ),
+        None => None,
+    };
+    let rows = auxs::list(
+        &user.db,
+        &AuxQuery {
+            kind,
+            include_disabled: true,
+            ..Default::default()
+        },
+    )?;
+    // 停用档案也导出：导出的目的是搬账套/留底，漏掉停用的会让历史凭证的
+    // 辅助核算在目标账套里指向不存在的档案（余额表拆不出那一行）。
+    let label = kind.map(|k| k.label()).unwrap_or("全部");
+    let sheet = crate::sheets::aux_sheet(&rows, label);
+    let n = rows.len();
+    user.db.log(
+        user.username(),
+        "导出",
+        "导出基础档案",
+        &format!("{label} {n} 条"),
+    )?;
+    build_xlsx(
+        &[sheet],
+        &format!("基础档案_{}.xlsx", kind.map(|k| k.code()).unwrap_or("all")),
+        "基础档案",
+    )
+}
+
+/// 存货档案导出（含保质期天与安全库存）
+async fn export_items_xlsx(user: CurrentUser) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    let rows = auxs::list(
+        &user.db,
+        &AuxQuery {
+            kind: Some(AuxKind::Item),
+            include_disabled: true,
+            ..Default::default()
+        },
+    )?;
+    // 安全库存单独存在 item_plan 表里，一次全取再做内存查表
+    let plans: HashMap<String, Money> = advanced::item_plan_all(&user.db)?
+        .into_iter()
+        .map(|p| (p.item_code, p.safety_stock))
+        .collect();
+    let sheet = crate::sheets::items_sheet(&rows, &|code| plans.get(code).copied());
+    let n = rows.len();
+    user.db
+        .log(user.username(), "导出", "导出存货档案", &format!("{n} 条"))?;
+    build_xlsx(&[sheet], "存货档案.xlsx", "存货档案")
+}
+
+/// 会计科目导出（停用的不导：导入器不接受 disabled 列，
+/// 把停用科目混进去会在目标账套里变成启用状态，反而更错）
+async fn export_accounts_xlsx(user: CurrentUser) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    let chart = accounts::chart(&user.db)?;
+    let all: Vec<&Account> = chart
+        .all()
+        .into_iter()
+        .filter(|a| user.user.can_see_account(&a.code))
+        .collect();
+    let sheet = crate::sheets::accounts_sheet(&all);
+    let n = all.len();
+    user.db
+        .log(user.username(), "导出", "导出会计科目", &format!("{n} 条"))?;
+    build_xlsx(&[sheet], "会计科目.xlsx", "会计科目")
+}
+
+/// 期初余额导出（列头与通用导入模板一致，可直接改完导回）
+async fn export_begin_xlsx(user: CurrentUser) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    let chart = accounts::chart(&user.db)?;
+    let rows: Vec<BeginRow> = balances::list_begin(&user.db)?
+        .into_iter()
+        .filter(|r| user.user.can_see_account(&r.account_code))
+        .collect();
+    let sheet = crate::sheets::begin_sheet(&rows, &|code| {
+        chart.get(code).map(|a| a.name.clone()).unwrap_or_default()
+    });
+    let n = rows.len();
+    user.db
+        .log(user.username(), "导出", "导出期初余额", &format!("{n} 行"))?;
+    build_xlsx(&[sheet], "期初余额.xlsx", "期初余额")
+}
+
+/// 科目余额表导出
+async fn export_trial_balance_xlsx(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    let (rows, totals) = trial_balance_data(&state, &user, &q)?;
+    let from = q.get("from").cloned().unwrap_or_default();
+    let to = q.get("to").cloned().unwrap_or_default();
+    let sheet = crate::sheets::trial_balance_sheet(&rows, &totals, &from, &to);
+    let n = rows.len();
+    user.db.log(
+        user.username(),
+        "导出",
+        "导出科目余额表",
+        &format!("{from} 至 {to} {n} 行"),
+    )?;
+    build_xlsx(&[sheet], &format!("科目余额表_{to}.xlsx"), "科目余额表")
+}
+
+/// 三大报表 + 所有者权益变动表的导出目标
+#[derive(Clone, Copy)]
+enum StatementKind {
+    BalanceSheet,
+    Income,
+    CashFlow,
+    Equity,
+}
+
+impl StatementKind {
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "balance-sheet" => StatementKind::BalanceSheet,
+            "income-statement" => StatementKind::Income,
+            "cash-flow" => StatementKind::CashFlow,
+            "equity" => StatementKind::Equity,
+            _ => return None,
+        })
+    }
+    fn filename(self) -> &'static str {
+        match self {
+            StatementKind::BalanceSheet => "资产负债表",
+            StatementKind::Income => "利润表",
+            StatementKind::CashFlow => "现金流量表",
+            StatementKind::Equity => "所有者权益变动表",
+        }
+    }
+}
+
+fn export_statement_xlsx(
+    state: &WebState,
+    user: &CurrentUser,
+    q: &HashMap<String, String>,
+    kind: StatementKind,
+) -> Result<Response, AppError> {
+    let db = &user.db;
+    let (from, to) = report_range(state, user, q)?;
+    let subtitle = format!("{} 至 {}", from.label(), to.label());
+    // 取数与打印页/JSON 接口**走同一条路**（statement_table / cash_flow_statement /
+    // equity_statement）。另起一套取数逻辑是这类改造最容易犯的错：导出的表和
+    // 页面上的表对不上，而两张表看起来都"挺对"。
+    let sheet = match kind {
+        StatementKind::BalanceSheet => {
+            let t = statement_table(
+                db,
+                user,
+                "balance_sheet",
+                from,
+                to,
+                vec![
+                    Box::new(fincore::report::identity),
+                    Box::new(fincore::report::to_begin),
+                ],
+            )?;
+            crate::sheets::report_sheet(&t, "元")
+        }
+        StatementKind::Income => {
+            let t = statement_table(
+                db,
+                user,
+                "income_statement",
+                from,
+                to,
+                vec![Box::new(fincore::report::identity), Box::new(to_ytd)],
+            )?;
+            crate::sheets::report_sheet(&t, "元")
+        }
+        StatementKind::CashFlow => {
+            let cf = findb::reports::cash_flow_statement(db, from, to, Some(&user.user))?;
+            crate::sheets::cash_flow_sheet(&cf, &subtitle)
+        }
+        StatementKind::Equity => {
+            let st = findb::reports::equity_statement(db, from, to, Some(&user.user))?;
+            crate::sheets::equity_sheet(&st, &subtitle)
+        }
+    };
+    user.db.log(
+        user.username(),
+        "导出",
+        "导出报表",
+        &format!("{} {subtitle}", kind.filename()),
+    )?;
+    build_xlsx(
+        &[sheet],
+        &format!("{}_{}.xlsx", kind.filename(), period_to_str(to)),
+        kind.filename(),
+    )
+}
+
+async fn export_balance_sheet_xlsx(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    export_statement_xlsx(&state, &user, &q, StatementKind::BalanceSheet)
+}
+
+async fn export_income_statement_xlsx(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    export_statement_xlsx(&state, &user, &q, StatementKind::Income)
+}
+
+async fn export_cash_flow_xlsx(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    export_statement_xlsx(&state, &user, &q, StatementKind::CashFlow)
+}
+
+async fn export_equity_xlsx(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    export_statement_xlsx(&state, &user, &q, StatementKind::Equity)
+}
+
+// ---------------------------------------------------------------------------
+// 账套导入：把外部 .fbk（桌面端账套 / 另一台服务器导出的备份）搬进本服务
+//
+// 原来这是 Web 端**唯一的硬缺口**：`restore_restore` 那条路只认
+// `books_dir/backups/` 下、经 `backup_belongs_to` 校验属于当前账套的备份文件，
+// 所以桌面版辛苦建好的账套一个字都上不来。用户要的就是把 `.fbk` 传上去。
+// ---------------------------------------------------------------------------
+
+/// 单次上传上限。账套含附件时可能上百 MB，所以这条路单独放宽（全局是 12MB）。
+const MAX_IMPORT_BOOK_BYTES: usize = 512 * 1024 * 1024;
+
+/// 校验一个上传上来的文件「是不是一个能用的 FinBook 账套」。
+///
+/// 三步都要做，缺一步就会把垃圾文件注册成账套、后面每次开都 500：
+/// 1. `PRAGMA integrity_check` —— 传一半断线的文件是能打开 SQLite 的；
+/// 2. 有没有 `account` 表 —— 任意 Sqlite 文件都能被 `Db::open` 迁成空账套，
+///    不先认出来就会把一张随便什么库"变成"一个科目全空的账套；
+/// 3. schema 版本不能比本二进制新 —— 新版本的列旧代码不认识，
+///    放进来之后第一次用到就 no such column，而且没有任何线索指向"版本太新"。
+fn validate_book_file(path: &std::path::Path) -> Result<(), AppError> {
+    let conn = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|e| {
+        AppError::bad_request(format!(
+            "这个文件不是 SQLite 数据库（{e}）。请确认上传的是 .fbk 账套文件或本系统导出的备份 zip"
+        ))
+    })?;
+    let check: String = conn
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .map_err(|e| AppError::bad_request(format!("账套文件无法读取：{e}")))?;
+    if check != "ok" {
+        return Err(AppError::bad_request(format!(
+            "账套文件已损坏（integrity_check: {check}），不能导入"
+        )));
+    }
+    let has_account: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='account'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if has_account == 0 {
+        return Err(AppError::bad_request(
+            "这个文件不是 FinBook 账套（缺少科目表 account）",
+        ));
+    }
+    let v = findb::schema::version(&conn);
+    if v > findb::schema::SCHEMA_VERSION {
+        return Err(AppError::bad_request(format!(
+            "这个账套是更新版本的 FinBook 建的（数据结构 v{v}），当前服务只支持到 v{}。请先升级服务再导入",
+            findb::schema::SCHEMA_VERSION
+        )));
+    }
+    Ok(())
+}
+
+/// 从上传内容里取出 (账套字节, 附件列表)。
+///
+/// 认两种格式，都是为了跟「导出」对上：
+/// - 裸 `.fbk`（桌面端账套文件、单文件备份）；
+/// - `.zip`（本服务 `/api/backup/download` 的产物，含 `.attachments/` 大附件）。
+///   只收 `.fbk` 会丢掉附件 —— 附件不认后账套里那些凭证的扫描件就全是空链接。
+fn unpack_book_upload(
+    data: &[u8],
+    filename: &str,
+) -> Result<(Vec<u8>, Vec<(String, Vec<u8>)>), AppError> {
+    // SQLite 文件头 16 字节：`SQLite format 3\0`
+    if data.starts_with(b"SQLite format 3\0") {
+        return Ok((data.to_vec(), Vec::new()));
+    }
+    // ZIP 本地文件头
+    if data.starts_with(b"PK\x03\x04") {
+        let mut zip = zip::ZipArchive::new(io::Cursor::new(data))
+            .map_err(|e| AppError::bad_request(format!("zip 无法解析：{e}")))?;
+        let mut book: Option<Vec<u8>> = None;
+        let mut attach: Vec<(String, Vec<u8>)> = Vec::new();
+        for i in 0..zip.len() {
+            let mut f = zip
+                .by_index(i)
+                .map_err(|e| AppError::bad_request(format!("zip 条目无法读取：{e}")))?;
+            if f.is_dir() {
+                continue;
+            }
+            let name = f.name().to_string();
+            // zip-slip：只接受「根目录下的 .fbk」和「.attachments/<扁平文件名>」，
+            // 任何含 `..` 或额外目录层的条目一律丢弃，绝不落盘到目标路径之外。
+            if name.contains("..") || name.starts_with('/') || name.contains('\\') {
+                continue;
+            }
+            let lower = name.to_ascii_lowercase();
+            if lower.ends_with(".fbk") && !name.contains('/') {
+                if book.is_some() {
+                    return Err(AppError::bad_request(
+                        "压缩包里不止一个 .fbk 账套文件，无法确定要导入哪个",
+                    ));
+                }
+                let mut buf = Vec::new();
+                io::Read::read_to_end(&mut f, &mut buf)
+                    .map_err(|e| AppError::bad_request(format!("读取 zip 内账套失败：{e}")))?;
+                book = Some(buf);
+            } else if let Some(rel) = name.strip_prefix(".attachments/") {
+                if rel.is_empty() || rel.contains('/') {
+                    continue;
+                }
+                if !rel
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                {
+                    continue;
+                }
+                let mut buf = Vec::new();
+                io::Read::read_to_end(&mut f, &mut buf)
+                    .map_err(|e| AppError::bad_request(format!("读取 zip 内附件失败：{e}")))?;
+                attach.push((rel.to_string(), buf));
+            }
+        }
+        let book = book.ok_or_else(|| {
+            AppError::bad_request(format!(
+                "压缩包里没有 .fbk 账套文件（收到的是 {filename}）"
+            ))
+        })?;
+        return Ok((book, attach));
+    }
+    Err(AppError::bad_request(
+        "不认识这个文件格式：需要 .fbk 账套文件，或本系统导出的备份 .zip",
+    ))
+}
+
+/// 导入账套：上传 .fbk（或含 .fbk 的备份 zip）→ 校验 → 落库到 books_dir → 注册
+async fn import_book(
+    State(state): State<Arc<WebState>>,
+    user: RealmUser,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // 与 `create_book` 同一套门禁：仅管理员、每账号有账套数上限
+    if !user.is_admin {
+        return Err(AppError::forbidden("仅管理员可导入账套"));
+    }
+    let owner = user.username.clone();
+    let owned = state.realm.count_books_of(&owner)?;
+    if owned >= MAX_BOOKS_PER_USER {
+        return Err(AppError::bad_request(format!(
+            "每个账号最多创建 {MAX_BOOKS_PER_USER} 个账套（当前已有 {owned} 个），请先删除不用的账套"
+        )));
+    }
+
+    let mut filename = String::new();
+    let mut want_name = String::new();
+    let mut data: Option<Vec<u8>> = None;
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::bad_request(format!("上传解析失败：{e}")))?
+    {
+        match field.name() {
+            Some("file") => {
+                filename = field.file_name().unwrap_or("book.fbk").to_string();
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::bad_request(format!("读取上传内容失败：{e}")))?;
+                data = Some(bytes.to_vec());
+            }
+            Some("name") => {
+                want_name = field.text().await.unwrap_or_default();
+            }
+            _ => {}
+        }
+    }
+    let data = data.ok_or_else(|| AppError::bad_request("缺少文件字段 file"))?;
+    if data.is_empty() {
+        return Err(AppError::bad_request("上传文件为空"));
+    }
+    if data.len() > MAX_IMPORT_BOOK_BYTES {
+        return Err(AppError::bad_request(format!(
+            "文件超过 {} MB 上限",
+            MAX_IMPORT_BOOK_BYTES / 1024 / 1024
+        )));
+    }
+    let (book_bytes, attach) = unpack_book_upload(&data, &filename)?;
+
+    // 先写临时文件再校验：校验要用 SQLite 打开，而校验不过时不能留下
+    // 一个已注册、已出现在账套列表里的坏账套。
+    let key = make_book_key(&want_name, &owner, &state.realm)?;
+    let final_path = state.books_dir.join(format!("{key}.fbk"));
+    if final_path.exists() {
+        return Err(AppError::bad_request("账套文件已存在"));
+    }
+    let tmp_path = state.books_dir.join(format!(".import_{key}.tmp"));
+    std::fs::write(&tmp_path, &book_bytes)
+        .map_err(|e| AppError::Internal(format!("写入临时文件失败：{e}")))?;
+    if let Err(e) = validate_book_file(&tmp_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    // `Db::open` 会把老版本账套迁到当前 schema；放在 rename 之前，
+    // 迁移失败就还没动过正式文件名。
+    let company = match Db::open(&tmp_path) {
+        Ok(db) => db.options().company,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(AppError::bad_request(format!("打开账套失败：{e}")));
+        }
+    };
+    // `Db::open` 会在这个临时文件旁边留一对 `-wal` / `-shm`。连接关掉时
+    // SQLite 一般会自己收走，但**收不走也不该留在账套目录里**：`books_dir`
+    // 里躺着一堆 `.import_xxx.tmp-wal` 半年后没人敢删。
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", tmp_path.display()));
+    }
+    std::fs::rename(&tmp_path, &final_path)
+        .map_err(|e| AppError::Internal(format!("落盘失败：{e}")))?;
+
+    // 账套自己的 user 表用的是它自己那套口令。平台管理员要用平台口令进来，
+    // 所以按 `create_book` 同样的做法，把平台口令哈希种成账套内管理员；
+    // 账套里已有同名用户则不动（可能是人家原来的密码）。
+    {
+        let db = Db::open(&final_path)?;
+        if users::get(&db, &owner).ok().flatten().is_none() {
+            let mut u = User::new(&owner, &user.display_name, Role::Admin);
+            if let Ok(Some(ru)) = state.realm.get_user(&owner) {
+                u.password_hash = ru.password_hash;
+            }
+            users::insert(&db, &u)?;
+        }
+        db.log(
+            &owner,
+            "账套",
+            "导入账套",
+            &format!("从 {filename} 导入，编码 {key}，公司 {company}"),
+        )?;
+    }
+
+    // 附件：内容寻址目录是全账套共享的，写入前先确认文件真的在（同名即同内容）
+    if !attach.is_empty() {
+        let dir = state.books_dir.join(findb::attach::DIR_NAME);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| AppError::Internal(format!("创建附件目录失败：{e}")))?;
+        for (rel, bytes) in &attach {
+            let p = dir.join(rel);
+            if !p.exists() {
+                std::fs::write(&p, bytes)
+                    .map_err(|e| AppError::Internal(format!("写入附件 {rel} 失败：{e}")))?;
+            }
+        }
+    }
+
+    state.books.register(&final_path, 16);
+    state
+        .realm
+        .register_book(&key, &final_path.to_string_lossy(), &owner, &company)?;
+
+    Ok(Json(json!({
+        "key": key,
+        "company": company,
+        "attachments": attach.len(),
+    })))
 }
 
 #[cfg(test)]

@@ -11,3 +11,5 @@ pub mod pdf;
 pub mod realm;
 pub mod report_html;
 pub mod state;
+pub mod sheets;
+pub mod xlsxout;

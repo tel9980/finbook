@@ -90,18 +90,54 @@ fn extract_begin_line(tmpl: ImportTemplate, f: &[String]) -> Option<BeginLine> {
     let mut w = MoneyWarn::default();
     let mut line = match tmpl {
         ImportTemplate::Generic => {
-            // 科目编码, 方向, 金额
-            if f.len() < 2 {
-                return None;
-            }
-            let amt = w.money("期初余额", f.get(2).map(|s| s.as_str()).unwrap_or(""));
-            BeginLine {
-                code,
-                direction: f.get(1).unwrap_or(&String::new()).trim().to_string(),
-                amount: amt,
-                debit_accum: None,
-                credit_accum: None,
-                warn: Vec::new(),
+            // 通用模板实际有两种写法，**都必须认**：
+            //   A) 科目编码, 方向, 金额
+            //   B) 科目编码, 科目名称, 方向, 期初余额, 累计借方, 累计贷方
+            //
+            // 历史遗留：解析器最早只认 A，后来 `/api/import/template?kind=begin`
+            // 导出的「通用」模板改成了 B（多一列科目名称、带上累计发生额，更像
+            // 一张能核对的余额表），两边就一直错着。后果不是「少几列」而是
+            // **整批丢行**：按 B 的表去喂 A 的解析器，方向读到「库存现金」、
+            // 金额读到「借」，`MoneyWarn` 把「借」判成无法识别 → 每一行都进
+            // warnings 被跳过。用户下载了官方模板、照着填、一条也导不进去，
+            // 而提示是「期初余额「借」无法识别为金额」—— 看不出是列错位。
+            //
+            // 判据只看第 2 列是不是借/贷：B 的第 2 列是科目名称，不可能只有
+            // 一个字「借」或「贷」；A 的第 2 列本来就是方向。不会误判。
+            let c1 = f.get(1).map(|s| s.trim()).unwrap_or("");
+            let c2 = f.get(2).map(|s| s.trim()).unwrap_or("");
+            let looks_dir = |s: &str| {
+                matches!(s, "借" | "贷" | "平" | "借方" | "贷方")
+                    || s.eq_ignore_ascii_case("debit")
+                    || s.eq_ignore_ascii_case("credit")
+            };
+            if !looks_dir(c1) && looks_dir(c2) {
+                // 布局 B：科目名称在第 2 列
+                let amt = w.money("期初余额", f.get(3).map(|s| s.as_str()).unwrap_or(""));
+                let debit_accum = opt_field(f, 4).map(|s| w.money("累计借方", &s));
+                let credit_accum = opt_field(f, 5).map(|s| w.money("累计贷方", &s));
+                BeginLine {
+                    code,
+                    direction: c2.to_string(),
+                    amount: amt,
+                    debit_accum,
+                    credit_accum,
+                    warn: Vec::new(),
+                }
+            } else {
+                // 布局 A
+                if f.len() < 2 {
+                    return None;
+                }
+                let amt = w.money("期初余额", f.get(2).map(|s| s.as_str()).unwrap_or(""));
+                BeginLine {
+                    code,
+                    direction: c1.to_string(),
+                    amount: amt,
+                    debit_accum: None,
+                    credit_accum: None,
+                    warn: Vec::new(),
+                }
             }
         }
         ImportTemplate::Kingdee => {
@@ -592,6 +628,10 @@ fn aux_kind_of(s: &str) -> Option<fincore::AuxKind> {
         "项目" | "project" | "p" => fincore::AuxKind::Project,
         "银行" | "bank" | "b" => fincore::AuxKind::Bank,
         "存货" | "商品" | "item" | "i" => fincore::AuxKind::Item,
+        // 现金流量项目也能建档案（`AuxKind::CashFlow`），但这里原来漏了 ——
+        // 「导出全部辅助档案 → 导进另一个账套」这条闭环里，现金流量项目必然被
+        // 当成「类型无法识别」跳过。少几条档案不会报错，搬账套的人发现不了。
+        "现金流量" | "现金流量项目" | "现金流" | "cashflow" | "cf" => fincore::AuxKind::CashFlow,
         _ => return None,
     })
 }
@@ -2260,6 +2300,82 @@ mod tests {
         let rows2 = balances::list_begin(&db2).unwrap();
         let bank2 = rows2.iter().find(|r| r.account_code == "100201").unwrap();
         assert_eq!(bank2.year_begin, Money::parse("-2000").unwrap());
+    }
+
+    /// 回归：`/api/import/template?kind=begin` 导出的「通用」模板是 6 列
+    /// （科目编码,科目名称,方向,期初余额,累计借方,累计贷方），而 Generic 解析器
+    /// 原本按 3 列读（科目编码,方向,金额）。两边对不上时后果是**整批丢行**：
+    /// 方向读到「库存现金」、金额读到「借」，`MoneyWarn` 判「借」不是金额，
+    /// 每一行都进 warnings 被跳过。用户下载官方模板照着填、一条也导不进去。
+    #[test]
+    fn import_begin_generic_accepts_template_shape_with_account_name() {
+        let db = mem();
+        // 逐字照 `/api/import/template?kind=begin` 的列头与示例行
+        let csv = "\u{feff}科目编码,科目名称,方向,期初余额,累计借方,累计贷方\n\
+                   1001,库存现金,借,1000,0,0\n\
+                   220201,应付账款,贷,3000,0,0\n";
+        let res = import_begin(
+            &db,
+            csv,
+            "u1",
+            &std::collections::HashMap::new(),
+            ImportTemplate::Generic,
+        )
+        .unwrap();
+        assert_eq!(
+            (res.ok, res.skipped),
+            (2, 0),
+            "通用模板 6 列形状应全部导入：{:?}",
+            res.warnings
+        );
+        let rows = balances::list_begin(&db).unwrap();
+        let cash = rows.iter().find(|r| r.account_code == "1001").unwrap();
+        let ap = rows.iter().find(|r| r.account_code == "220201").unwrap();
+        assert_eq!(cash.year_begin, Money::parse("1000").unwrap(), "借方期初");
+        assert_eq!(
+            ap.year_begin,
+            Money::parse("-3000").unwrap(),
+            "贷方期初要落成负数，方向列不能被当成科目名称忽略"
+        );
+    }
+
+    /// 3 列老形状（科目编码,方向,金额）不能被上一条的列错位修正带跑偏。
+    #[test]
+    fn import_begin_generic_still_accepts_three_column_shape() {
+        let db = mem();
+        let csv = "\u{feff}科目编码,方向,期初余额\n1001,借,1000\n220201,贷,3000\n";
+        let res = import_begin(
+            &db,
+            csv,
+            "u1",
+            &std::collections::HashMap::new(),
+            ImportTemplate::Generic,
+        )
+        .unwrap();
+        assert_eq!((res.ok, res.skipped), (2, 0), "{:?}", res.warnings);
+        let rows = balances::list_begin(&db).unwrap();
+        assert_eq!(
+            rows.iter()
+                .find(|r| r.account_code == "220201")
+                .unwrap()
+                .year_begin,
+            Money::parse("-3000").unwrap()
+        );
+    }
+
+    /// 回归：现金流量项目档案原来无法经数据导入迁移（`aux_kind_of` 不认这个类型）。
+    #[test]
+    fn import_aux_accepts_cashflow_kind() {
+        let db = mem();
+        let csv = "\u{feff}类型,编码,名称,备注\n\
+                   客户,C001,客户甲,\n\
+                   现金流量,CF01,销售商品收到的现金,\n";
+        let res = import_aux(&db, csv, "u1").unwrap();
+        assert_eq!((res.ok, res.skipped), (2, 0), "{:?}", res.warnings);
+        let cf = crate::auxs::get(&db, fincore::AuxKind::CashFlow, "CF01")
+            .unwrap()
+            .expect("现金流量项目应已建档");
+        assert_eq!(cf.name, "销售商品收到的现金");
     }
 
     /// 回归：金额列无法识别必须丢行 + 报警告，而不是静默按 0 记账。

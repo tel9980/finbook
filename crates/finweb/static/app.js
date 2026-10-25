@@ -1021,6 +1021,7 @@ async function showBookPicker(pre, force) {
           </div>`).join("") : `<div class="muted" style="padding:18px 0">${isPlatformAdmin ? "还没有账套，点击下方「新建账套」开始记账。" : "暂无可用账套，请让管理员创建并邀请你加入。"}</div>`}</div>
         <div style="display:flex;gap:10px;margin-top:16px">
           ${isPlatformAdmin ? `<button class="btn primary" id="new-book">＋ 新建账套</button>` : ""}
+          ${isPlatformAdmin ? `<button class="btn ghost" id="import-book">导入账套</button>` : ""}
           <span class="grow"></span>
           <button class="btn ghost" id="picker-logout">退出登录</button>
         </div>
@@ -1033,6 +1034,7 @@ async function showBookPicker(pre, force) {
     el.addEventListener("click", () => deleteBook(el.dataset.del, el.dataset.del));
   });
   if ($("#new-book")) $("#new-book").addEventListener("click", openCreateBook);
+  if ($("#import-book")) $("#import-book").addEventListener("click", openImportBook);
   $("#picker-logout").addEventListener("click", async () => {
     try { await api("/logout", { method: "POST" }); } catch (e) {}
     session.user = null;
@@ -1075,6 +1077,55 @@ async function deleteBook(key, name) {
   } catch (e) { toast(e.message, "err"); }
 }
 
+/// 导入账套：桌面版建的 .fbk / 别的服务器上的账套 / 本系统「备份下载」得到的 .zip
+///
+/// 这里**不做任何客户端预检**（不查文件头、不看大小）：判断一个文件是不是
+/// 能用的账套要在服务端跑 `PRAGMA integrity_check` 并核对科目表与 schema 版本，
+/// 前端拿到的前 16 字节说明不了任何问题。上传后由服务端给出明确拒绝理由。
+function openImportBook() {
+  const mask = modal(`
+    <h3>导入账套</h3>
+    <p class="muted" style="font-size:12px;line-height:1.7;margin:0 0 14px">
+      支持两种文件：<b>.fbk</b> 账套文件（桌面版建的、或从别的服务器搬来的），
+      以及本系统「下载备份」得到的 <b>.zip</b>（带附件）。
+      上传后服务端会先做完整性校验 —— 不是 FinBook 账套的文件会被拒绝，不会留下半个账套。
+    </p>
+    <label style="display:block;margin-bottom:10px">账套名称
+      <input id="ib-name" placeholder="留空则用文件名" style="width:100%;margin-top:4px" />
+    </label>
+    <label style="display:block;margin-bottom:12px">选择文件
+      <input id="ib-file" type="file" accept=".fbk,.zip" style="width:100%;margin-top:4px" />
+    </label>
+    <div class="muted" id="ib-msg" style="min-height:18px;font-size:12px;line-height:1.5"></div>
+    <div class="foot"><button class="btn primary" id="ib-ok">开始导入</button><button class="btn ghost" id="ib-cancel">取消</button></div>
+  `);
+  const msg = (t) => { const el = $("#ib-msg", mask); if (el) el.innerHTML = t; };
+  $("#ib-cancel", mask).onclick = () => mask.remove();
+  $("#ib-ok", mask).onclick = async () => {
+    const input = $("#ib-file", mask);
+    const f = input.files && input.files[0];
+    if (!f) { msg('<span style="color:var(--err)">先选一个 .fbk 或 .zip 文件</span>'); return; }
+    const okBtn = $("#ib-ok", mask);
+    okBtn.disabled = true;
+    msg(`正在上传 ${esc(f.name)}（${(f.size / 1048576).toFixed(1)} MB），大账套要等一会…`);
+    const fd = new FormData();
+    fd.append("name", ($("#ib-name", mask).value || "").trim());
+    fd.append("file", f);
+    try {
+      // 上传超时单独放宽到 10 分钟：几百 MB 的账套走 30s 默认值必然失败，
+      // 而失败时用户看到的是「连接超时」，会以为网络坏了。
+      const r = await api("/books/import", { method: "POST", body: fd, timeout: 10 * 60 * 1000 });
+      mask.remove();
+      toast(`已导入账套「${r.company || r.key}」${r.attachments ? `，含 ${r.attachments} 个附件` : ""}`, "ok");
+      await showBookPicker();
+    } catch (e) {
+      okBtn.disabled = false;
+      msg(`<span style="color:var(--err)">导入失败：${esc(e.message)}</span>`);
+    }
+  };
+}
+
+/// 删除账套（管理员 或 账套归属者）；删除后回到账套选择页
 function openCreateBook() {
   const now = new Date();
   const mask = modal(`
@@ -5084,7 +5135,8 @@ async function viewReports(main) {
       </select></label>
       <button class="btn ghost sm" id="r-qty">数量金额账</button>
       <span class="spacer"></span>
-      ${can("export") ? `<button class="btn ghost sm" id="r-export">导出 CSV</button>
+      ${can("export") ? `<button class="btn ghost sm" id="r-xlsx" title="金额是真数字，能直接求和">导出 Excel</button>
+      <button class="btn ghost sm" id="r-export">导出 CSV</button>
       <button class="btn ghost sm" id="r-pdf">导出 PDF</button>` : `<span class="tag warn" title="无导出权限">无导出权限，仅可打印</span>`}
       <button class="btn ghost sm" id="r-print">打印预览</button>
     </div>
@@ -5095,6 +5147,7 @@ async function viewReports(main) {
   $("#r-go").addEventListener("click", loadTrial);
   $("#r-print").addEventListener("click", () => { const f = $("#r-from").value, t = $("#r-to").value; window.open(`/api/reports/trial-balance/print?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`, "_blank"); });
   if (can("export")) {
+    $("#r-xlsx").addEventListener("click", () => { const f = $("#r-from").value, t = $("#r-to").value; downloadUrl(`/api/reports/trial-balance/xlsx?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`); });
     $("#r-export").addEventListener("click", () => { const f = $("#r-from").value, t = $("#r-to").value; window.location = `/api/reports/trial-balance/export?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`; });
     $("#r-pdf").addEventListener("click", () => { const f = $("#r-from").value, t = $("#r-to").value; window.location = `/api/reports/trial-balance/pdf?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`; });
   }
@@ -5254,6 +5307,7 @@ async function viewBalanceSheet(main) {
       <label>从 <input id="bs-from" type="month" value="${esc(state.current)}" style="width:90px" /></label>
       <label>至 <input id="bs-to" type="month" value="${esc(state.current)}" style="width:90px" /></label>
       <button class="btn primary" id="bs-run">查询</button>
+      ${can("export") ? `<button class="btn ghost sm" id="bs-xlsx" title="导出 资产负债表（金额是真数字）">导出 Excel</button>` : ""}
       <button class="btn ghost sm" id="bs-print">打印预览</button>
     </div>
     <div id="bs-result" class="muted">填写期间后点击查询</div>`;
@@ -5265,6 +5319,7 @@ async function viewBalanceSheet(main) {
     } catch (e) { toast(e.message, "err"); }
   };
   $("#bs-run").addEventListener("click", load);
+  if ($("#bs-xlsx")) $("#bs-xlsx").addEventListener("click", () => { const f = $("#bs-from").value, t = $("#bs-to").value; downloadUrl(`/api/reports/balance-sheet/xlsx?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`); });
   $("#bs-print").addEventListener("click", () => { const f = $("#bs-from").value, t = $("#bs-to").value; window.open(`/api/reports/balance-sheet/print?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`, "_blank"); });
   load();
 }
@@ -5275,6 +5330,7 @@ async function viewIncomeStatement(main) {
       <label>从 <input id="is-from" type="month" value="${esc(state.current)}" style="width:90px" /></label>
       <label>至 <input id="is-to" type="month" value="${esc(state.current)}" style="width:90px" /></label>
       <button class="btn primary" id="is-run">查询</button>
+      ${can("export") ? `<button class="btn ghost sm" id="is-xlsx" title="导出 利润表（金额是真数字）">导出 Excel</button>` : ""}
       <button class="btn ghost sm" id="is-print">打印预览</button>
     </div>
     <div id="is-result" class="muted">填写期间后点击查询</div>`;
@@ -5295,6 +5351,7 @@ async function viewIncomeStatement(main) {
     } catch (e) { toast(e.message, "err"); }
   };
   $("#is-run").addEventListener("click", load);
+  if ($("#is-xlsx")) $("#is-xlsx").addEventListener("click", () => { const f = $("#is-from").value, t = $("#is-to").value; downloadUrl(`/api/reports/income-statement/xlsx?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`); });
   $("#is-print").addEventListener("click", () => { const f = $("#is-from").value, t = $("#is-to").value; window.open(`/api/reports/income-statement/print?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`, "_blank"); });
   load();
 }
@@ -5305,6 +5362,7 @@ async function viewCashFlow(main) {
       <label>从 <input id="cf-from" type="month" value="${esc(state.current)}" style="width:90px" /></label>
       <label>至 <input id="cf-to" type="month" value="${esc(state.current)}" style="width:90px" /></label>
       <button class="btn primary" id="cf-run">查询</button>
+      ${can("export") ? `<button class="btn ghost sm" id="cf-xlsx" title="导出 现金流量表（金额是真数字）">导出 Excel</button>` : ""}
       <button class="btn ghost sm" id="cf-print">打印预览</button>
     </div>
     <div id="cf-result" class="muted">填写期间后点击查询</div>`;
@@ -5330,6 +5388,7 @@ async function viewCashFlow(main) {
     } catch (e) { toast(e.message, "err"); }
   };
   $("#cf-run").addEventListener("click", load);
+  if ($("#cf-xlsx")) $("#cf-xlsx").addEventListener("click", () => { const f = $("#cf-from").value, t = $("#cf-to").value; downloadUrl(`/api/reports/cash-flow/xlsx?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`); });
   $("#cf-print").addEventListener("click", () => { const f = $("#cf-from").value, t = $("#cf-to").value; window.open(`/api/reports/cash-flow/print?from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`, "_blank"); });
   load();
 }
@@ -6881,9 +6940,14 @@ async function viewEquity(main) {
   main.innerHTML = `<h2>所有者权益变动表</h2>
     <div class="toolbar"><label>期间 <input id="eq-period" type="month" value="${esc(state.current)}" style="width:90px" /></label>
     <button class="btn primary" id="eq-run">查询</button>
+      ${can("export") ? `<button class="btn ghost sm" id="eq-xlsx" title="导出 所有者权益变动表（金额是真数字）">导出 Excel</button>` : ""}
       <button class="btn ghost sm" id="eq-run-print">打印预览</button></div>
     <div id="eq-result" class="muted">填写期间后点击查询</div>`;
   $("#eq-run-print").addEventListener("click", () => { const el = $("#eq-result").querySelector("table"); printPreview("所有者权益变动表", el); });
+  if ($("#eq-xlsx")) $("#eq-xlsx").addEventListener("click", () => {
+    const p = $("#eq-period").value.trim();
+    downloadUrl(`/api/reports/equity/xlsx?from=${encodeURIComponent(p)}&to=${encodeURIComponent(p)}`);
+  });
   $("#eq-run").addEventListener("click", async () => {
     const p = $("#eq-period").value.trim();
     try {
@@ -7004,6 +7068,7 @@ async function viewCustomers(main) {
       <label style="font-size:12px"><input type="checkbox" id="cu-only-open" checked /> 只看有欠款</label>
       <button class="btn primary sm" id="cu-load">查询</button>
       <button class="btn ghost sm" id="cu-print">打印预览</button>
+      ${can("export") ? `<button class="btn ghost sm" id="cu-export" title="导出客户档案（编码/名称/备注），改完能导回">导出 Excel</button>` : ""}
       <span class="grow"></span>
       <span class="muted" style="font-size:12px">余额只算**已记账**凭证；改档案请到「辅助档案」</span>
     </div>
@@ -7061,6 +7126,7 @@ async function viewCustomers(main) {
   $("#cu-print").addEventListener("click", () => {
     printPreview("客户往来汇总", $("#cu-list").querySelector("table"));
   });
+  if ($("#cu-export")) $("#cu-export").addEventListener("click", () => downloadUrl("/api/export/aux?kind=customer"));
   // 初始化分页状态
   state.cuPage = 1;
   state.cuPageSize = 50;
@@ -8714,6 +8780,7 @@ async function viewItemsMaster(main) {
       <span class="grow"></span>
       <label style="font-size:12px"><input type="checkbox" id="im-low" /> 只看低库存</label>
       <button class="btn ghost sm" id="im-reload">刷新</button>
+      ${can("export") ? `<button class="btn ghost" id="im-export" title="导出存货编码/名称/保质期/安全库存，改完可以导回">导出 Excel</button>` : ""}
       <button class="btn primary" id="im-new">新增存货</button>
     </div>
     <div class="panel"><div id="im-list" class="muted">加载中…</div></div>
@@ -8765,6 +8832,7 @@ async function viewItemsMaster(main) {
   $("#im-q").addEventListener("input", render);
   $("#im-low").addEventListener("change", render);
   $("#im-reload").addEventListener("click", load);
+  if ($("#im-export")) $("#im-export").addEventListener("click", () => downloadUrl("/api/export/items"));
   $("#im-new").addEventListener("click", () => openAuxEditor(main, null, "item"));
   await load();
 }
@@ -11183,6 +11251,7 @@ function renderAccounts(main, rows) {
       <input id="acct-kw" placeholder="编码 / 名称" value="${esc(kw)}" style="width:160px" />
       <button class="btn" id="acct-search">查询</button>
       <div class="spacer"></div>
+      ${can("export") ? `<button class="btn ghost" id="acct-export" title="导出全部科目（编码/名称/类别/方向/备注），自建科目改完能导回">导出 Excel</button>` : ""}
       ${session.platformAdmin ? `<button class="btn ghost" id="acct-fill">填充默认科目</button>` : ""}
       ${can("account_edit") ? `<button class="btn primary" id="acct-new">新增科目</button>` : ""}
     </div>
@@ -11211,6 +11280,7 @@ function renderAccounts(main, rows) {
       </table>
     </div>`;
   $("#acct-search").addEventListener("click", () => { state.acctKw = $("#acct-kw").value; renderAccounts(main, rows); });
+  if ($("#acct-export")) $("#acct-export").addEventListener("click", () => downloadUrl("/api/export/accounts"));
   $("#acct-kw").addEventListener("keydown", (e) => { if (e.key === "Enter") { state.acctKw = $("#acct-kw").value; renderAccounts(main, rows); } });
   const fill = $("#acct-fill");
   if (fill) fill.addEventListener("click", async () => {
@@ -11376,6 +11446,7 @@ function renderBegin(main, rows) {
         <button class="btn" id="bg-add">添加科目行</button>
         ${can("opening") ? `<button class="btn" id="bg-batch">批量粘贴期初</button>` : ""}
         <div class="spacer"></div>
+        ${can("export") ? `<button class="btn ghost" id="bg-export" title="导出已保存的期初余额（科目编码/名称/方向/期初/累计），改完可以导回">导出 Excel</button>` : ""}
         ${can("opening") ? `<button class="btn primary" id="bg-save">保存全部</button>` : ""}
       </div>
       <div class="panel" style="padding:0;overflow:auto;max-height:60vh">
@@ -11403,6 +11474,7 @@ function renderBegin(main, rows) {
       <div class="muted u-sm" id="bg-balance-note" style="margin-top:6px;min-height:16px"></div>`;
     paintTotals();
     $all(".bg-code", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].account_code = inp.value.trim(); });
+    if ($("#bg-export")) $("#bg-export").addEventListener("click", () => downloadUrl("/api/export/begin"));
     $all(".bg-dir", main).forEach((sel) => sel.onchange = () => { draft[+sel.dataset.i].dir = sel.value; paintTotals(); });
     $all(".bg-yb", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].yb = inp.value; paintTotals(); });
     $all(".bg-ad", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].ad = inp.value; paintTotals(); });
@@ -11478,6 +11550,7 @@ function renderAux(main, rows, kind) {
     <div class="toolbar">
       ${AUX_KINDS.map((k) => `<button class="btn sm ${kind === k.code ? "primary" : "ghost"}" data-kind="${k.code}">${k.label}</button>`).join("")}
       <div class="spacer"></div>
+      ${can("export") ? `<button class="btn ghost" id="aux-export" title="导出当前类型的全部档案；改完可以原样导回去">导出 Excel</button>` : ""}
       ${can("aux_edit") ? `<button class="btn" id="aux-batch">批量粘贴</button>` : ""}
       ${can("aux_edit") ? `<button class="btn" id="aux-preset" hidden>预置常用档案</button>` : ""}
       ${can("aux_edit") ? `<button class="btn primary" id="aux-new">新增${esc(AUX_KINDS.find((k) => k.code === kind).label)}</button>` : ""}
@@ -11506,6 +11579,7 @@ function renderAux(main, rows, kind) {
   loadAuxPreset(main, rows, kind);
   $all("[data-kind]", main).forEach((b) => b.addEventListener("click", () => { state.auxKind = b.dataset.kind; viewAux(main); }));
   if ($("#aux-new")) $("#aux-new").addEventListener("click", () => openAuxEditor(main, null, kind));
+  if ($("#aux-export")) $("#aux-export").addEventListener("click", () => downloadUrl(`/api/export/aux?kind=${encodeURIComponent(kind)}`));
   if ($("#aux-batch")) $("#aux-batch").addEventListener("click", () => openAuxBatch(main, kind));
   $all("[data-act]", main).forEach((b) => b.addEventListener("click", async () => {
     const id = parseInt(b.dataset.id, 10);
