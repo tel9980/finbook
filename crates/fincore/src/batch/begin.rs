@@ -43,6 +43,16 @@ pub enum SkipReason {
     ExistsInBook,
     /// 金额解析失败
     BadAmount,
+    /// 科目存在，但下面还挂着子户（非末级）。
+    ///
+    /// 期初录在非末级科目上时，试算平衡表和资产负债表只按末级汇总，
+    /// 这笔钱不会出现在任何一行里 —— 账「不平」却翻不出原因。
+    /// `upsert_begin` 现在会拒收，所以预览阶段就得说清楚，
+    /// 不能出现「预览说能导、一点导入就报错」。
+    NotLeaf {
+        /// 该科目下的末级子户，给用户直接抄
+        children: Vec<String>,
+    },
 }
 
 impl SkipReason {
@@ -56,6 +66,18 @@ impl SkipReason {
             SkipReason::DuplicateInBatch => "跳过：本批内重复".to_string(),
             SkipReason::ExistsInBook => "跳过：已填过".to_string(),
             SkipReason::BadAmount => "跳过：金额看不懂".to_string(),
+            SkipReason::NotLeaf { children } => {
+                let mut s = "跳过：这不是末级科目，期初要录到子户上".to_string();
+                if !children.is_empty() {
+                    s.push_str("（可录 ");
+                    s.push_str(&children.join("、"));
+                    if children.len() == 3 {
+                        s.push('…');
+                    }
+                    s.push('）');
+                }
+                s
+            }
         }
     }
 }
@@ -205,9 +227,14 @@ fn has_cjk(s: &str) -> bool {
 
 /// 解析粘贴文本。
 ///
-/// `dir_of`: 科目编码 → 该科目的余额方向（用来自动归位 + 判定科目是否存在）；
-/// `leaf_codes`: 全部末级科目编码（找抄错的提示用）；
+/// `dir_of`: 科目编码 → 该科目的余额方向（用来自动归位，也用来判定**科目存在**）；
+/// `leaf_codes`: 全部末级科目编码。两用：找抄错时的提示、以及判定这行是不是末级；
 /// `existing`: 库里/草稿里已有期初数的编码。
+///
+/// 注意 `dir_of` 对**所有**科目都有值（含上级科目），所以「dir_of 有值」只说明
+/// 科目存在，不说明能录期初。非末级科目会标成 [`SkipReason::NotLeaf`] 跳过 ——
+/// 不这么做的话，预览会说「可导入」，一点导入却被 `upsert_begin` 拒收，
+/// 用户看到的是「预览骗我」。
 pub fn parse(
     text: &str,
     dir_of: &dyn Fn(&str) -> Option<Direction>,
@@ -307,6 +334,17 @@ pub fn parse(
         } else if dir_of(&code).is_none() {
             let sg = suggest(&code, leaf_codes.iter().map(|s| s.as_str()));
             Some(SkipReason::UnknownCode { suggestion: sg })
+        } else if !leaf_codes.is_empty() && !leaf_codes.iter().any(|l| l == &code) {
+            // 科目存在（dir_of 有值）但不在末级集合里 —— 下级还挂着子户。
+            // `leaf_codes` 为空说明调用方没给科目表（测试里的最小场景），此时不拦。
+            let mut children: Vec<String> = leaf_codes
+                .iter()
+                .filter(|l| l.starts_with(&code) && l.len() > code.len())
+                .cloned()
+                .collect();
+            children.sort();
+            children.truncate(3);
+            Some(SkipReason::NotLeaf { children })
         } else {
             seen.push(code.clone());
             None
@@ -546,6 +584,10 @@ mod tests {
             SkipReason::UnknownCode {
                 suggestion: Some("1001".into()),
             },
+            SkipReason::NotLeaf { children: vec![] },
+            SkipReason::NotLeaf {
+                children: vec!["100201".into(), "100202".into(), "100207".into()],
+            },
         ] {
             let label = r.label();
             assert!(!label.is_empty(), "{r:?} 缺文案");
@@ -555,6 +597,13 @@ mod tests {
         }
         .label()
         .contains("1001"));
+        // 子户列满 3 个时末尾加省略号，免得提示长得挤爆一行
+        let many = SkipReason::NotLeaf {
+            children: vec!["100201".into(), "100202".into(), "100207".into()],
+        }
+        .label();
+        assert!(many.ends_with('）'), "列举后应闭合括号：{many}");
+        assert!(many.contains('…'), "三个子户应省略后续：{many}");
     }
 
     /// 方向词大小写敏感：DR / Debit 不认（手打的人写「借」或「贷」）
@@ -606,5 +655,61 @@ mod tests {
         assert_eq!(parsed.rows[1].dir, Direction::Credit, "2001 负债应归贷方");
         let (_, _, diff) = parsed.trial();
         assert!(diff.is_zero(), "示例一借一贷，试算应该是平的");
+    }
+
+    /// 非末级科目（下面挂着子户）必须在**预览**里就标成跳过。
+    ///
+    /// 这条守的是「预览别骗人」：`upsert_begin` 有末级校验会拒收，
+    /// 如果预览不拦，用户看到的是「3 条可导入」→ 点导入 → 报错，
+    /// 回头还得自己猜是哪一行。预览必须和保存口径一致。
+    #[test]
+    fn 非末级科目在预览里就标跳过() {
+        // 真实分级科目表：1002 下面挂着 100201/100202
+        let dir_of_full = |code: &str| -> Option<Direction> {
+            match code {
+                "1001" | "1002" | "100201" | "100202" => Some(Direction::Debit),
+                "2001" => Some(Direction::Credit),
+                _ => None,
+            }
+        };
+        let leaves_full: Vec<String> = ["1001", "100201", "100202", "2001"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+
+        let parsed = parse(
+            "1001,5000\n1002,125000\n100201,80000\n2001,80000",
+            &dir_of_full,
+            &leaves_full,
+            &[],
+        );
+
+        // 1002 那行：科目存在，但不是末级
+        assert_eq!(
+            parsed.rows[1].skip,
+            Some(SkipReason::NotLeaf {
+                children: vec!["100201".to_string(), "100202".to_string()]
+            }),
+            "1002 有子户，必须标 NotLeaf 并把子户列出来"
+        );
+        // 提示里要给出可以直接抄的子户编码，否则用户还得自己去查
+        let label = parsed.rows[1].skip.as_ref().unwrap().label();
+        assert!(label.contains("末级"), "提示要说清原因：{label}");
+        assert!(label.contains("100201"), "提示要给出可录的子户：{label}");
+
+        // 末级 100201 照常能导
+        assert_eq!(parsed.rows[2].skip, None, "末级科目不该被拦");
+        assert_eq!(
+            parsed.importable().len(),
+            3,
+            "1001 / 100201 / 2001 三行可导入，1002 被跳过"
+        );
+    }
+
+    /// 科目表没给（空）时不拦 —— 避免测试里的最小场景被误伤
+    #[test]
+    fn 没给末级科目表时不判非末级() {
+        let parsed = parse("1001,5000", &dir_of, &[], &[]);
+        assert_eq!(parsed.rows[0].skip, None);
     }
 }

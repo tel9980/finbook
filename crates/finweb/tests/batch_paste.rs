@@ -293,6 +293,41 @@ async fn 期初预览标出未知科目并给建议() {
     assert_eq!(v["trial"]["debit"], "5,000.00");
 }
 
+/// 非末级科目必须在**预览**里就标跳过，不能等到导入才报错。
+///
+/// 守的是口径一致：`/api/begin` 有末级校验会拒收 1002，
+/// 如果 `/api/begin-batch` 预览说「可导入」，用户看到的就是
+/// 「3 条可导入」→ 点导入 → 400。预览和保存必须说同一句话。
+#[tokio::test]
+async fn 期初预览把非末级科目标成跳过() {
+    let (state, _d, _t) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 1002 银行存款下面挂着 100201~100207 七个子户，属非末级；
+    // 1001 库存现金是末级，照常可导。
+    let (st, v) = post(
+        &state,
+        &sid,
+        "/api/begin-batch",
+        serde_json::json!({"text": "1001,5000\n1002,125000"}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "预览本身应 200：{v}");
+
+    let skip = v["rows"][1]["skip"].as_str().unwrap_or("");
+    assert!(!skip.is_empty(), "1002 非末级，必须标跳过：{v}");
+    assert!(skip.contains("末级"), "提示要说清是非末级：{skip}");
+    assert!(
+        skip.contains("100201"),
+        "提示要给出可直接抄的末级子户：{skip}"
+    );
+    assert_eq!(v["importable"], 1, "只有 1001 可导入");
+
+    // 被跳过的行不进试算 —— 否则用户以为「差 125,000」
+    assert_eq!(v["trial"]["debit"], "5,000.00");
+    assert_eq!(v["trial"]["credit"], "0.00");
+}
+
 #[tokio::test]
 async fn 期初导入落库并可再读回() {
     let (state, _d, _t) = test_state();
