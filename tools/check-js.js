@@ -631,4 +631,23 @@ if (appSrc) {
   }
 }
 
+// 视图函数「引用了作用域外变量」→ 浏览器里白屏，`node --check` 只验语法验不出来。
+// 这一项把函数原文抽出来给桩**真调用一次**，ReferenceError 当场就现形。
+// （v1.8.21 档案页的「显示停用」勾选框就是这么白屏的，靠 CI 的 Playwright 抓到。）
+{
+  const r = require("child_process").spawnSync(
+    process.execPath,
+    [path.join(__dirname, "check-app-render.js")],
+    { encoding: "utf8" }
+  );
+  const out = ((r.stdout || "") + (r.stderr || "")).trim();
+  if (r.status !== 0) {
+    bad++;
+    console.log("FAIL 视图函数渲染检查未通过：");
+    console.log(out.split("\n").filter((l) => l.startsWith("FAIL")).map((l) => "     " + l).join("\n") || "     " + out);
+  } else {
+    console.log(`视图函数渲染：${out.split("\n").filter((l) => l.startsWith("OK")).length} 个通过（引用作用域外变量会当场抛 ReferenceError）`);
+  }
+}
+
 process.exit(bad === 0 ? 0 : 1);

@@ -316,7 +316,8 @@
 ## 8. 测试与质量
 
 ```bash
-# 1. 前端静态检查（语法 + 同函数内重复 id + 行为约束 + nginx sub_filter 锚点）
+# 1. 前端静态检查（语法 + 同函数内重复 id + 行为约束 + nginx sub_filter 锚点
+#    + 视图函数给桩真渲染一次，引用了作用域外变量会当场抛 ReferenceError）
 node tools/check-js.js
 
 # 2. 仓库卫生（CI 配置可解析 + 变异清单未过期 + 全仓库编码无损坏）

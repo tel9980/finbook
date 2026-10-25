@@ -11541,6 +11541,10 @@ async function viewAux(main) {
   // 停用档案默认不列（凭证/收付款单选客商时不该出现），但基础资料页必须能
   // 把它们调出来 —— 否则「停用」在网页端是单向操作：停掉之后再也找不到，
   // 也就没法恢复。
+  // 唯一来源是 state.auxShowDisabled：勾选框的 checked 与这里的请求参数都读它。
+  // （第一版把它存成局部变量 showOff，再在 renderAux 里引用 —— 那是另一个函数，
+  //   运行到那一步直接 ReferenceError，整个档案页白屏。`node --check` 只验语法，
+  //   验不出「引用了作用域外的变量」，这条是 CI 的 E2E 抓到的。）
   const showOff = !!state.auxShowDisabled;
   let rows;
   try {
@@ -11557,7 +11561,7 @@ function renderAux(main, rows, kind) {
       ${AUX_KINDS.map((k) => `<button class="btn sm ${kind === k.code ? "primary" : "ghost"}" data-kind="${k.code}">${k.label}</button>`).join("")}
       <div class="spacer"></div>
       <label class="muted" style="display:flex;align-items:center;gap:4px;font-size:12px">
-        <input type="checkbox" id="aux-showoff" ${showOff ? "checked" : ""}> 显示停用
+        <input type="checkbox" id="aux-showoff" ${state.auxShowDisabled ? "checked" : ""}> 显示停用
       </label>
       ${can("export") ? `<button class="btn ghost" id="aux-export" title="导出当前类型的全部档案；改完可以原样导回去">导出 Excel</button>` : ""}
       ${can("aux_edit") ? `<button class="btn" id="aux-batch">批量粘贴</button>` : ""}
