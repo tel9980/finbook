@@ -295,7 +295,7 @@ impl AutomationView {
         let q = BalanceQuery::period(p).with_posted_only(false);
         match findb::balances::BalanceSnapshot::load(ctx.db(), &q) {
             Ok(s) => {
-                let rows = s.profit_loss_rows(ctx.chart());
+                let rows = s.carry_forward_rows(ctx.chart());
                 self.pl_net = rows.iter().map(|r| r.end()).fold(Money::ZERO, |a, b| a + b);
             }
             Err(_) => self.pl_net = Money::ZERO,

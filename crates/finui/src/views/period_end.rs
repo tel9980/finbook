@@ -94,7 +94,7 @@ impl PeriodEndView {
         match snap {
             Ok(s) => {
                 let chart = ctx.chart();
-                self.pl_rows = s.profit_loss_rows(chart);
+                self.pl_rows = s.carry_forward_rows(chart);
                 self.pl_net = self
                     .pl_rows
                     .iter()
@@ -201,14 +201,15 @@ impl PeriodEndView {
     fn show_carry(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui, p: Period) {
         ui.label(
             RichText::new(
-                "结转损益会把本期所有损益类科目的净发生额转入「本年利润」，结转后损益类科目期末余额归零。",
+                "结转损益会把本期损益类科目**和成本类科目（5001 生产成本除外）**的净发生额转入「本年利润」，结转后这些科目余额归零。\n\
+                 房租、水电、煤气、外发加工费记在 5101 制造费用里的，也会一并转入——小厂不做存货分摊，这些就是当月成本。",
             )
             .weak(),
         );
         ui.add_space(6.0);
 
         if self.pl_rows.is_empty() {
-            widgets::empty_hint(ui, "本期损益类科目没有发生额，无需结转");
+            widgets::empty_hint(ui, "本期损益类和成本类科目都没有发生额，无需结转");
         } else {
             let rows = self.pl_rows.clone();
             let cols = [
@@ -237,7 +238,7 @@ impl PeriodEndView {
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(format!(
-                        "损益净额（正为净亏损）：{}",
+                        "本期净损益（正为净亏损，含成本类）：{}",
                         self.pl_net.fmt_money()
                     ))
                     .strong(),

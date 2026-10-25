@@ -3511,7 +3511,7 @@ async fn period_precheck(
     let chart = accounts::chart(&db)?;
     // 预检展示与【结转】按钮同口径：结转按含草稿取数（见 period_carry_forward）
     let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
-    let pl_rows = snap.profit_loss_rows(&chart);
+    let pl_rows = snap.carry_forward_rows(&chart);
     let profit = snap
         .for_account(fincore::engine::period_end::PROFIT_ACCOUNT, None)
         .end();
@@ -3544,9 +3544,9 @@ async fn period_carry_forward(
     // 等前者提交后再取数，第二次看到的净额已是 0。
     let tx = db.write_tx()?;
     let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
-    let rows = snap.profit_loss_rows(&chart);
+    let rows = snap.carry_forward_rows(&chart);
     if rows.is_empty() {
-        return Err(AppError::bad_request("本期损益类科目没有发生额，无需结转"));
+        return Err(AppError::bad_request("本期损益类（含成本类）科目没有发生额，无需结转"));
     }
     // 已结转过就先说清楚，不要让用户对着「没有可结转的分录」去猜。
     //

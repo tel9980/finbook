@@ -199,7 +199,7 @@ impl Dashboard {
             ));
         }
         if let Ok(pl) = findb::balances::BalanceSnapshot::load(db, &BalanceQuery::period(p)) {
-            let rows = pl.profit_loss_rows(chart);
+            let rows = pl.carry_forward_rows(chart);
             if !rows.is_empty() {
                 todos.push((
                     "本期损益尚未结转".to_string(),

@@ -56,7 +56,11 @@ pub fn generate_carry_forward(
             Some(a) => a,
             None => continue,
         };
-        if !acct.category.is_profit_loss() {
+        // 含成本类：小工厂的房租、水电、煤气、外发加工费多数直接记在
+        // 5101 制造费用（成本类），不做存货成本核算。只结损益类会让这些
+        // 真实支出永远挂在账上、从不进入利润表（净利润虚高且无任何提示）。
+        // 调用方用 BalanceSnapshot::carry_forward_rows 取数，与此口径一致。
+        if !acct.category.is_profit_loss() && acct.category != crate::AcctCategory::Cost {
             continue;
         }
         if !chart.is_leaf(&r.account_code) {

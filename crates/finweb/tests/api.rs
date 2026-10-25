@@ -19817,7 +19817,7 @@ async fn begin_delete_ids_actually_remove_rows() {
             serde_json::json!([
                 { "account_code": "1001", "dir": "debit", "yb": "5000", "ad": "0", "ac": "0", "qty": null },
                 { "account_code": "2001", "dir": "credit", "yb": "3000", "ad": "0", "ac": "0", "qty": null },
-                { "account_code": "2202", "dir": "credit", "yb": "2000", "ad": "0", "ac": "0", "qty": null }
+                { "account_code": "220201", "dir": "credit", "yb": "2000", "ad": "0", "ac": "0", "qty": null }
             ]),
         ))
         .await
@@ -19839,7 +19839,7 @@ async fn begin_delete_ids_actually_remove_rows() {
             .as_i64()
             .unwrap()
     };
-    let (id1001, id2001, _) = (id_of("1001"), id_of("2001"), id_of("2202"));
+    let (id1001, id2001, _) = (id_of("1001"), id_of("2001"), id_of("220201"));
 
     // 界面上移除 2001（3,000 贷方），另两行原样重发
     let resp = handlers::router(state.clone())
@@ -19849,7 +19849,7 @@ async fn begin_delete_ids_actually_remove_rows() {
             serde_json::json!({
                 "rows": [
                     { "account_code": "1001", "dir": "debit", "yb": "5000", "ad": "0", "ac": "0", "qty": null },
-                    { "account_code": "2202", "dir": "credit", "yb": "2000", "ad": "0", "ac": "0", "qty": null }
+                    { "account_code": "220201", "dir": "credit", "yb": "2000", "ad": "0", "ac": "0", "qty": null }
                 ],
                 "delete_ids": [id2001]
             }),

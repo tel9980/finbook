@@ -367,9 +367,20 @@ impl BalanceSnapshot {
         })
     }
 
-    /// 未结转的损益净额：所有末级损益类科目余额之和（正=净亏损，负=净盈利）
+    /// 未结转的经营成果净额：末级损益类（收入/费用）**+ 直接费用性质的
+    /// 成本类**科目余额之和（正=净亏损，负=净盈利）
     ///
     /// 资产负债表用它把尚未结转的本期盈亏并入"未分配利润"。
+    ///
+    /// 为什么含成本类：小工厂的房租、水电、煤气、外发加工费多数直接记在
+    /// `5101 制造费用`，不做存货分摊、也不进 `5001 生产成本`。若这里的
+    /// 只算损益类，未结转时资产负债表「未分配利润」会把这块真实支出漏掉
+    /// ——实测收入 50,000、制造费用 20,000 时权益表显示赚 50,000（应为 30,000）。
+    ///
+    /// 为什么排除 `5001 生产成本`：它的余额已经作为**存货**计入资产，
+    /// 再加到未分配利润就是重复计算（资产和权益同时虚增）。
+    /// 判据是科目编码前缀而不是 `AcctCategory`——生产成本的资本化属性
+    /// 只由科目本身决定。
     pub fn profit_loss_net(&self, kind: AmountKind) -> Money {
         let chart = match &self.chart {
             Some(c) => c,
@@ -377,7 +388,10 @@ impl BalanceSnapshot {
         };
         let mut sum = Money::ZERO;
         for a in chart.all() {
-            if !a.category.is_profit_loss() || !chart.is_leaf(&a.code) {
+            let capitalized = a.code.starts_with("5001");
+            let in_scope =
+                a.category.is_profit_loss() || (a.category == fincore::AcctCategory::Cost && !capitalized);
+            if !in_scope || !chart.is_leaf(&a.code) {
                 continue;
             }
             let r = self.for_account(&a.code, None);
@@ -555,11 +569,47 @@ impl BalanceSnapshot {
         out
     }
 
-    /// 损益类科目的余额行（结转损益取数用）
+    /// 损益类科目的余额行（**不含成本类**，纯利润表口径）
+    ///
+    /// 成本类科目（5001 生产成本、5101 制造费用、5201 劳务成本）**不在这里**：
+    /// 它们在会计上先资本化到存货，卖出时才转成本。所以本方法只给
+    /// **利润表取数**用，不能给结转损益用——小工厂的房租、水电、煤气、
+    /// 外发加工费大多直接记在 5101 制造费用上，不经存货，若不结转就永远
+    /// 挂在账上，利润虚高。结转请用 [`Self::carry_forward_rows`]。
     pub fn profit_loss_rows(&self, chart: &Chart) -> Vec<BalanceRow> {
         let mut out = Vec::new();
         for a in chart.all() {
             if !a.category.is_profit_loss() || !chart.is_leaf(&a.code) {
+                continue;
+            }
+            let r = self.for_account(&a.code, None);
+            if r.is_empty_row() {
+                continue;
+            }
+            let mut r = r;
+            r.account_name = a.name.clone();
+            out.push(r);
+        }
+        out
+    }
+
+    /// 结转损益的取数范围：损益类 **+ 成本类**末级科目。
+    ///
+    /// 为什么成本类也要结转：小工厂没有完整的存货成本核算，房租、水电、煤气、
+    /// 外发加工费这些每个月真实发生的支出多数直接记在 `5101 制造费用`（成本类）。
+    /// 若结转不含成本类，这些钱会一直挂在账上从不进入利润表——净利润虚高、
+    /// 且没有任何报错提示。实测：收入 100,000、房租 15,000 记 510105，
+    /// 只按损益类结转时「本年利润」显示赚 100,000（应为 85,000），
+    /// 而 510105 的 15,000 余额永远留在账上。
+    ///
+    /// 与 [`Self::profit_loss_rows`] 分开两个方法而不是改那一个：利润表
+    /// （及资产负债表「未分配利润」）必须保持纯损益口径，否则同一笔成本
+    /// 会在报表上加两次（一次是未结转的制造费用、一次是结转到本年利润的金额）。
+    pub fn carry_forward_rows(&self, chart: &Chart) -> Vec<BalanceRow> {
+        let mut out = Vec::new();
+        for a in chart.all() {
+            let in_scope = a.category.is_profit_loss() || a.category == fincore::AcctCategory::Cost;
+            if !in_scope || !chart.is_leaf(&a.code) {
                 continue;
             }
             let r = self.for_account(&a.code, None);
@@ -1020,6 +1070,41 @@ fn ensure_begin_editable(conn: &rusqlite::Connection) -> DbResult<()> {
     Ok(())
 }
 
+/// 期初只能录在末级科目上。
+///
+/// `trial_balance` 只遍历末级科目（`chart.is_leaf`），录在一级科目上的期初
+/// **不会被试算平衡表统计**：`for_account("1122")` 显示 20,000，但
+/// `for_account("112201")` 是 0，试算结果借贷不等，而报表上又看不到这笔钱
+/// —— 账"不平"却查不出哪一行，是最难查的一类错。
+///
+/// 桌面版期初表本来就只列末级科目，所以这条校验对正常操作无感；
+/// 它挡的是批量粘贴、Excel/CSV 导入和 Web API 这些能绕过 UI 的路径。
+fn ensure_begin_leaf(conn: &rusqlite::Connection, code: &str) -> DbResult<()> {
+    let chart = crate::accounts::chart_of(conn)?;
+    if chart.get(code).is_none() {
+        return Err(fincore::FinError::validate(format!(
+            "科目 {code} 不存在，不能录入期初余额"
+        ))
+        .into());
+    }
+    if !chart.is_leaf(code) {
+        let kids: Vec<String> = chart
+            .children(code)
+            .into_iter()
+            .filter(|c| c.code != code)
+            .take(3)
+            .map(|c| format!("{} {}", c.code, c.name))
+            .collect();
+        return Err(fincore::FinError::validate(format!(
+            "科目 {code} 还有下级科目（{}），期初余额必须录在末级科目上。\
+             录在上级科目上时试算平衡表不会统计这笔钱，账会显示不平却查不出原因。",
+            kids.join("、")
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 /// 写入 / 更新一条期初余额（按 科目+辅助核算 唯一）
 pub fn upsert_begin(db: &Db, r: &BeginRow) -> DbResult<()> {
     upsert_begin_on(db.conn(), r)
@@ -1028,6 +1113,7 @@ pub fn upsert_begin(db: &Db, r: &BeginRow) -> DbResult<()> {
 /// 同 `upsert_begin`，但只依赖连接，可在调用方的事务内执行（导入整体原子化）
 pub fn upsert_begin_on(conn: &rusqlite::Connection, r: &BeginRow) -> DbResult<()> {
     ensure_begin_editable(conn)?;
+    ensure_begin_leaf(conn, &r.account_code)?;
     conn.execute(
         "INSERT INTO begin_balance(account_code,aux_key,aux_json,year_begin,debit_accum,credit_accum,qty_begin)
          VALUES(?1,?2,?3,?4,?5,?6,?7)
@@ -2369,5 +2455,151 @@ mod drill_tests {
         };
         let err = upsert_begin(&db, &r).unwrap_err().to_string();
         assert!(err.contains("已结账"), "{err}");
+    }
+
+    /// 期初录在非末级科目 → 必须拒绝。
+    ///
+    /// `trial_balance` 只遍历末级科目，录在上级科目上的期初不会被统计：
+    /// 试算借贷不等，报表上又看不到那笔钱（`for_account("1122")` 显示 20,000，
+    /// 而 `for_account("112201")` 是 0），账"不平却查不出哪一行"。
+    #[test]
+    fn begin_on_non_leaf_account_is_rejected() {
+        let db = mem();
+        // 1122 下有 112201/112202，是非末级
+        let chart = crate::accounts::chart(&db).unwrap();
+        assert!(!chart.is_leaf("1122"), "1122 应是非末级科目");
+        assert!(chart.is_leaf("112201"), "112201 应是末级科目");
+
+        let r = BeginRow {
+            id: 0,
+            account_code: "1122".into(),
+            aux: Default::default(),
+            year_begin: Money::parse("20000").unwrap(),
+            debit_accum: Money::ZERO,
+            credit_accum: Money::ZERO,
+            qty_begin: None,
+        };
+        let err = upsert_begin(&db, &r).unwrap_err().to_string();
+        assert!(err.contains("末级科目"), "{err}");
+
+        // 同样的金额录在末级科目上就行
+        let mut ok = r.clone();
+        ok.account_code = "112201".into();
+        upsert_begin(&db, &ok).unwrap();
+
+        // 不存在的科目也要拦住（以前会静默写进去，然后从试算里消失）
+        let mut bad = r.clone();
+        bad.account_code = "999999".into();
+        let err = upsert_begin(&db, &bad).unwrap_err().to_string();
+        assert!(err.contains("不存在"), "{err}");
+    }
+
+    /// 结转损益必须包含成本类（5101 制造费用），否则小工厂的房租水电永不进利润。
+    ///
+    /// 实测过的坑：只按 `is_profit_loss()` 取数时，收入 100,000、房租 15,000 记
+    /// 510105 → 结转凭证只转收入，「本年利润」显示赚 100,000（应为 85,000），
+    /// 而 510105 的余额永远留在账上。两层都要改：`carry_forward_rows` 取数
+    /// 要含成本类，`generate_carry_forward` 内的 `is_profit_loss` 过滤也要放行
+    /// 成本类——只改一层时凭证里仍然没有那笔分录（踩过）。
+    #[test]
+    fn carry_forward_includes_cost_accounts() {
+        use crate::vouchers;
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let chart = crate::accounts::chart(&db).unwrap();
+        let date = p.last_day();
+
+        // 收入 100000、制造费用 15000
+        let mut v = fincore::Voucher::new(p, date, "记", 1);
+        let mut e = fincore::Entry::new(1, "600101", "销售收入");
+        e.credit = Money::parse("100000").unwrap();
+        v.entries.push(e);
+        let mut e = Entry::new(2, "1001", "销售收入");
+        e.debit = Money::parse("100000").unwrap();
+        v.entries.push(e);
+        let mut v2 = fincore::Voucher::new(p, date, "记", 2);
+        let mut e = Entry::new(1, "510105", "房租");
+        e.debit = Money::parse("15000").unwrap();
+        v2.entries.push(e);
+        let mut e = Entry::new(2, "1001", "房租");
+        e.credit = Money::parse("15000").unwrap();
+        v2.entries.push(e);
+        for vv in [&mut v, &mut v2] {
+            let id = vouchers::save(&db, vv).unwrap();
+            vouchers::post(&db, id, "t").unwrap();
+        }
+
+        let snap =
+            BalanceSnapshot::load(&db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
+        let rows = snap.carry_forward_rows(&chart);
+        assert!(
+            rows.iter().any(|r| r.account_code == "510105"),
+            "carry_forward_rows 必须含成本类 510105"
+        );
+        assert!(
+            !snap
+                .profit_loss_rows(&chart)
+                .iter()
+                .any(|r| r.account_code == "510105"),
+            "profit_loss_rows 必须保持纯损益口径（不含成本类）"
+        );
+
+        let cv = fincore::engine::generate_carry_forward(
+            p, date, "转", 1, &rows, &chart, "4103", "t",
+        )
+        .unwrap();
+        let cost_line = cv.entries.iter().find(|e| e.account_code == "510105");
+        assert!(cost_line.is_some(), "结转凭证必须含 510105 分录：{:?}", cv.entries);
+        assert_eq!(cost_line.unwrap().credit, Money::parse("15000").unwrap());
+        // 本年利润 = 100000 - 15000
+        let pl = cv.entries.iter().find(|e| e.account_code == "4103").unwrap();
+        assert_eq!(pl.credit, Money::parse("85000").unwrap(), "净利润应为 85,000");
+    }
+
+    /// `profit_loss_net` 含直接费用性质的成本类，但排除 5001 生产成本（会与存货重复计算）。
+    #[test]
+    fn profit_loss_net_includes_direct_cost_but_not_wip() {
+        use crate::vouchers;
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let date = p.last_day();
+
+        // 510105 制造费用 20000（直接费用性质）
+        let mut v = fincore::Voucher::new(p, date, "记", 1);
+        let mut e = Entry::new(1, "510105", "水电");
+        e.debit = Money::parse("20000").unwrap();
+        v.entries.push(e);
+        let mut e = Entry::new(2, "1001", "水电");
+        e.credit = Money::parse("20000").unwrap();
+        v.entries.push(e);
+        let id = vouchers::save(&db, &mut v).unwrap();
+        vouchers::post(&db, id, "t").unwrap();
+
+        let snap =
+            BalanceSnapshot::load(&db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
+        assert_eq!(
+            snap.profit_loss_net(fincore::report::AmountKind::End),
+            Money::parse("20000").unwrap(),
+            "510105 应计入未结转经营成果（正=净亏损）"
+        );
+
+        // 再加 5001 生产成本 → 已资本化到存货，不该再算一次
+        let mut v = fincore::Voucher::new(p, date, "记", 2);
+        let mut e = Entry::new(1, "500101", "领料");
+        e.debit = Money::parse("30000").unwrap();
+        v.entries.push(e);
+        let mut e = Entry::new(2, "1001", "领料");
+        e.credit = Money::parse("30000").unwrap();
+        v.entries.push(e);
+        let id = vouchers::save(&db, &mut v).unwrap();
+        vouchers::post(&db, id, "t").unwrap();
+
+        let snap =
+            BalanceSnapshot::load(&db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
+        assert_eq!(
+            snap.profit_loss_net(fincore::report::AmountKind::End),
+            Money::parse("20000").unwrap(),
+            "5001 生产成本已资本化到存货，不能重复计入经营成果"
+        );
     }
 }
