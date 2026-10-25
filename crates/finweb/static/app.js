@@ -11538,8 +11538,14 @@ function renderBegin(main, rows) {
 async function viewAux(main) {
   const kind = state.auxKind || "customer";
   main.innerHTML = `<h2>辅助核算档案</h2><div class="muted">加载中…</div>`;
+  // 停用档案默认不列（凭证/收付款单选客商时不该出现），但基础资料页必须能
+  // 把它们调出来 —— 否则「停用」在网页端是单向操作：停掉之后再也找不到，
+  // 也就没法恢复。
+  const showOff = !!state.auxShowDisabled;
   let rows;
-  try { rows = await api(`/aux?kind=${encodeURIComponent(kind)}`); }
+  try {
+    rows = await api(`/aux?kind=${encodeURIComponent(kind)}${showOff ? "&include_disabled=1" : ""}`);
+  }
   catch (e) { main.innerHTML = `<h2>辅助核算档案</h2><div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; return; }
   renderAux(main, rows, kind);
 }
@@ -11550,6 +11556,9 @@ function renderAux(main, rows, kind) {
     <div class="toolbar">
       ${AUX_KINDS.map((k) => `<button class="btn sm ${kind === k.code ? "primary" : "ghost"}" data-kind="${k.code}">${k.label}</button>`).join("")}
       <div class="spacer"></div>
+      <label class="muted" style="display:flex;align-items:center;gap:4px;font-size:12px">
+        <input type="checkbox" id="aux-showoff" ${showOff ? "checked" : ""}> 显示停用
+      </label>
       ${can("export") ? `<button class="btn ghost" id="aux-export" title="导出当前类型的全部档案；改完可以原样导回去">导出 Excel</button>` : ""}
       ${can("aux_edit") ? `<button class="btn" id="aux-batch">批量粘贴</button>` : ""}
       ${can("aux_edit") ? `<button class="btn" id="aux-preset" hidden>预置常用档案</button>` : ""}
@@ -11578,6 +11587,10 @@ function renderAux(main, rows, kind) {
   // 「有预置」而后端返回空，按钮点了没反应。
   loadAuxPreset(main, rows, kind);
   $all("[data-kind]", main).forEach((b) => b.addEventListener("click", () => { state.auxKind = b.dataset.kind; viewAux(main); }));
+  if ($("#aux-showoff")) $("#aux-showoff").addEventListener("change", (ev) => {
+    state.auxShowDisabled = ev.target.checked;
+    viewAux(main);
+  });
   if ($("#aux-new")) $("#aux-new").addEventListener("click", () => openAuxEditor(main, null, kind));
   if ($("#aux-export")) $("#aux-export").addEventListener("click", () => downloadUrl(`/api/export/aux?kind=${encodeURIComponent(kind)}`));
   if ($("#aux-batch")) $("#aux-batch").addEventListener("click", () => openAuxBatch(main, kind));

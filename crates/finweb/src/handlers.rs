@@ -5244,12 +5244,15 @@ async fn import_template(
     user.require(Perm::Report)?;
     let kind = q.get("kind").map(String::as_str).unwrap_or("");
     let rows: Vec<Vec<&str>> = match kind {
+        // 后两列（上级编码、状态）是 v1.8.21 加的：没有它们，「导出档案 →
+        // 改一遍 → 导回来」会丢掉停用状态和层级关系，导出的表就白导了。
+        // 老的四列文件仍然能导（导入器越界取到空串，按「没写」处理）。
         "aux" => vec![
-            vec!["类型", "编码", "名称", "备注"],
-            vec!["客户", "C01", "示例客户", ""],
-            vec!["供应商", "S01", "示例供应商", ""],
-            vec!["部门", "D01", "示例部门", ""],
-            vec!["存货", "I01", "示例存货", ""],
+            vec!["类型", "编码", "名称", "备注", "上级编码", "状态"],
+            vec!["客户", "C01", "示例客户", "", "", "启用"],
+            vec!["供应商", "S01", "示例供应商", "", "", "启用"],
+            vec!["部门", "D01", "示例部门", "", "", "启用"],
+            vec!["存货", "I01", "示例存货", "", "", "启用"],
         ],
         "item" => vec![
             vec!["编码", "名称", "保质期天", "安全库存"],
@@ -15288,7 +15291,21 @@ async fn list_aux(
         .get("kind")
         .and_then(|s| AuxKind::from_code(s))
         .unwrap_or(AuxKind::Customer);
-    Ok(Json(auxs::list(&db, &AuxQuery::kind(kind))?))
+    // 默认只列启用的（凭证/收付款单选客商时不该出现停用的），但基础资料页
+    // 必须能看见停用档案 —— 否则「停用」在网页端等于**单向操作**：停掉之后
+    // 再也找不到它，也就没法恢复。
+    let include_disabled = matches!(
+        q.get("include_disabled").map(|s| s.as_str()),
+        Some("1") | Some("true")
+    );
+    Ok(Json(auxs::list(
+        &db,
+        &AuxQuery {
+            kind: Some(kind),
+            include_disabled,
+            ..Default::default()
+        },
+    )?))
 }
 
 #[derive(Deserialize)]
@@ -15463,6 +15480,14 @@ struct AuxBatchImportReq {
 struct AuxBatchRow {
     code: String,
     name: String,
+    /// 「导出文件」粘回来时才有的三列。前端只做透传（不渲染），
+    /// 所以桌面端能还原的上级/停用/备注，网页端也一并还原。
+    #[serde(default)]
+    parent_code: Option<String>,
+    #[serde(default)]
+    memo: String,
+    #[serde(default)]
+    disabled: bool,
 }
 
 /// 解析结果里的一行（给前端渲染预览表格）
@@ -15472,6 +15497,9 @@ struct AuxBatchRowView {
     name: String,
     /// None = 可导入；Some = 跳过原因（中文文案）
     skip: Option<String>,
+    parent_code: Option<String>,
+    memo: String,
+    disabled: bool,
 }
 
 /// 解析并返回预览。不写库 —— 前端把预览给用户看，确认后再调 PUT 导入。
@@ -15495,6 +15523,9 @@ async fn parse_aux_batch(
             code: r.code.clone(),
             name: r.name.clone(),
             skip: r.skip.as_ref().map(|s| s.label().to_string()),
+            parent_code: r.parent_code.clone(),
+            memo: r.memo.clone(),
+            disabled: r.disabled,
         })
         .collect();
     let importable = parsed.importable().len();
@@ -15544,7 +15575,11 @@ async fn import_aux_batch(
             in_book.push(code);
             continue;
         }
-        items.push(AuxEntity::new(req.kind, code, name));
+        let mut e = AuxEntity::new(req.kind, code, name);
+        e.parent_code = r.parent_code.as_ref().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        e.memo = r.memo.trim().to_string();
+        e.disabled = r.disabled;
+        items.push(e);
     }
     if items.is_empty() {
         return Ok(Json(json!({

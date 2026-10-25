@@ -38,13 +38,15 @@ pub fn aux_sheet(rows: &[AuxEntity], kind_label: &str) -> Sheet {
                 e.code.clone(),
                 e.name.clone(),
                 e.memo.clone(),
+                e.parent_code.clone().unwrap_or_default(),
+                if e.disabled { "停用" } else { "启用" }.to_string(),
             ]
         })
         .collect();
     Sheet::plain(
         &format!("{kind_label}档案"),
-        &["类型", "编码", "名称", "备注"],
-        &[T, T, T, T],
+        &["类型", "编码", "名称", "备注", "上级编码", "状态"],
+        &[T, T, T, T, T, T],
     )
     .with_rows(rows)
 }
@@ -284,9 +286,18 @@ mod tests {
         let s = accounts_sheet(&[&a]);
         assert_eq!(&s.headers[..5], &["编码", "名称", "类别", "方向", "备注"]);
 
-        let e = AuxEntity::new(fincore::AuxKind::Customer, "C001", "客户甲");
+        let mut e = AuxEntity::new(fincore::AuxKind::Customer, "C001", "客户甲");
+        e.parent_code = Some("C00".into());
+        e.disabled = true;
         let s = aux_sheet(&[e], "客户");
-        assert_eq!(s.headers, vec!["类型", "编码", "名称", "备注"]);
+        // 后两列（上级编码、状态）是 v1.8.21 加的：少了它们，「导出→改→导回」
+        // 会把层级塌平、把停用的档案变回启用，而界面上看不出任何异常。
+        assert_eq!(
+            s.headers,
+            vec!["类型", "编码", "名称", "备注", "上级编码", "状态"]
+        );
+        assert_eq!(s.rows[0][4], "C00");
+        assert_eq!(s.rows[0][5], "停用", "停用状态必须写出来");
 
         let e = AuxEntity::new(fincore::AuxKind::Item, "P001", "产品A");
         let s = items_sheet(&[e], &|_| None);

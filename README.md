@@ -333,7 +333,7 @@ cargo test --workspace
 
 | 套件 | 数量 |
 |------|------|
-| `fincore`（纯计算引擎） | 165 |
+| `fincore`（纯计算引擎） | 169 |
 | `findb`（持久化 + DAO + 安全闸门） | 398 |
 | `findb` 端到端 `core_loop` | 21 |
 | `findb` 端到端 `ext_loop` | 7 |
@@ -341,17 +341,18 @@ cargo test --workspace
 | `finui` | 59 |
 | `finweb` lib | 24 |
 | `finweb` `aux_preset.rs` | 4 |
-| `finweb` `batch_paste.rs` | 12 |
+| `finweb` `batch_paste.rs` | 13 |
 | `finweb` REST API 集成 | 193 |
 | `finweb` 客户视图 API | 9 |
 | `finweb` 导入导出 xlsx 闭环 | 6 |
-| `finweb` 导出→导回数据往返 | 3 |
-| **小计** | **903** |
+| `finweb` 导出→导回数据往返 | 4 |
+| **小计** | **909** |
 | Playwright E2E | 103 |
 
 > **2026-10-25 v1.8.21 校准**：`findb` 395→398（期初 6 列模板、现金流量项目两条回归 + 1）、
 > `finweb` lib 9→24（xlsx 写出口 9 条 + 列头映射 6 条）、新增 `export_xlsx` 6 条与
-> `roundtrip` 3 条，小计 876→**903**。
+> `roundtrip` 3 条，小计 876→**903**。随后补「导出档案粘回去」闭环时又加了 6 条
+> （`fincore` 165→169、`batch_paste` 12→13、`roundtrip` 3→4），小计 **909**。
 >
 > **2026-10-25 重新校准**（v1.8.19 后整理仓库时顺手核的）：`fincore` 162→165、
 > `findb` 377→395、`finui` 54→59、`finweb` lib 4→9、`batch_paste` 11→12、

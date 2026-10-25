@@ -124,6 +124,50 @@ async fn 辅助档案只导入前端确认过的行() {
     assert_eq!(rows[0]["code"], "C01");
 }
 
+/// 桌面上「导出档案 → 把文件原样粘回批量粘贴框」这条闭环，网页端也得走通：
+/// 表头不能被当成一条档案，停用状态与备注不能在转一圈后消失。
+#[tokio::test]
+async fn 导出文件原样粘回来不产生垃圾档案且保留状态() {
+    let (state, _d, _t) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 与桌面端「导出」出去的列头逐字一致
+    let text = "编码,名称,上级编码,状态,备注\n\
+                C01,杭州明远,,启用,月结 30 天\n\
+                C02,宁波华信,,停用,";
+    let (st, pv) = post(
+        &state,
+        &sid,
+        "/api/aux-batch",
+        serde_json::json!({"kind": "customer", "text": text}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "预览应 200：{pv}");
+    let rows = pv["rows"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 2, "表头行不该变成一条档案：{pv}");
+    assert_eq!(rows[0]["memo"], "月结 30 天", "备注要一起送到前端：{pv}");
+    assert_eq!(rows[1]["disabled"], true, "停用要一起送到前端：{pv}");
+
+    // 前端是透传的：把预览行原样回传
+    let (st, v) = put(
+        &state,
+        &sid,
+        "/api/aux-batch",
+        serde_json::json!({"kind": "customer", "rows": rows}),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "导入应 200：{v}");
+    assert_eq!(v["inserted"], 2);
+
+    let (_, list) = get(&state, &sid, "/api/aux?kind=customer&include_disabled=true").await;
+    let got = list.as_array().cloned().unwrap_or_default();
+    assert_eq!(got.len(), 2, "不该多出「编码 名称」这种垃圾档案：{list}");
+    let c1 = got.iter().find(|r| r["code"] == "C01").expect("C01");
+    assert_eq!(c1["memo"], "月结 30 天");
+    let c2 = got.iter().find(|r| r["code"] == "C02").expect("C02");
+    assert_eq!(c2["disabled"], true, "停用状态转一圈后丢了：{list}");
+}
+
 #[tokio::test]
 async fn 辅助档案导入时跳过已存在() {
     let (state, _d, _t) = test_state();

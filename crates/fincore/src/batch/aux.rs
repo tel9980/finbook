@@ -22,6 +22,12 @@ pub struct ParsedRow {
     pub name: String,
     /// 该行被跳过的原因（None = 可导入）
     pub skip: Option<SkipReason>,
+    /// 上级编码（只有带了表头的「导出文件」才认得出，见 [`header_map`]）
+    pub parent_code: Option<String>,
+    /// 备注
+    pub memo: String,
+    /// 停用
+    pub disabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -100,6 +106,56 @@ fn is_header_row(cols: &[&str]) -> bool {
         let c = c.trim();
         HEADER_WORDS.contains(&c)
     })
+}
+
+/// 从表头行读出的列位置。`None` = 该列不存在。
+///
+/// 存在的理由：桌面端「导出」出去的档案表是
+/// `编码,名称,上级编码,状态,备注` 五列，而粘贴解析原本只认前两列、且表头
+/// 要求**整行都是表头词**才跳过 —— 于是把导出的表原样粘回来会出现两个问题：
+///   1. 表头行（含「上级编码」「状态」「备注」）不算表头 → 被当成数据，
+///      生成一条名为「编码 名称」的垃圾档案；
+///   2. 停用状态、备注、上级编码全丢 —— 导出的表导不回来，导出就没意义了。
+///
+/// 所以先按表头**按列名**取值，有表头就信表头；没有表头（用户直接从 Excel
+/// 里选了两列粘）仍走原来的位置推断，行为不变。
+#[derive(Debug, Clone, Copy, Default)]
+struct ColMap {
+    code: Option<usize>,
+    name: Option<usize>,
+    parent: Option<usize>,
+    status: Option<usize>,
+    memo: Option<usize>,
+}
+
+/// 判表头并取出列映射。
+///
+/// 安全判据：**整行不能有任何一格长得像编码**。否则 `C01,编码` 这种真实数据
+/// （名称恰好叫「编码」）会被当成表头整行吞掉 —— 那是最难查的一类丢数据。
+/// 同时要求「编码列」与「名称列」至少认出一个，避免把某行正常数据误判成表头。
+fn header_map(cols: &[&str]) -> Option<ColMap> {
+    if cols.iter().any(|c| looks_like_code(c.trim())) {
+        return None;
+    }
+    let mut m = ColMap::default();
+    for (i, raw) in cols.iter().enumerate() {
+        let c = raw.trim();
+        if matches!(c, "编码" | "代码" | "编号" | "code" | "Code" | "CODE") {
+            m.code.get_or_insert(i);
+        } else if matches!(c, "名称" | "姓名" | "name" | "Name" | "NAME") {
+            m.name.get_or_insert(i);
+        } else if matches!(c, "上级编码" | "上级" | "父级编码") {
+            m.parent.get_or_insert(i);
+        } else if matches!(c, "状态") {
+            m.status.get_or_insert(i);
+        } else if matches!(c, "备注" | "说明") {
+            m.memo.get_or_insert(i);
+        }
+    }
+    if m.code.is_none() && m.name.is_none() {
+        return None;
+    }
+    Some(m)
 }
 
 /// 「像不像一个编码」的启发式判据。
@@ -184,6 +240,9 @@ pub fn parse(text: &str, kind: AuxKind, existing: &[String]) -> Parsed {
     let mut rows: Vec<ParsedRow> = Vec::new();
     let mut seen_in_batch: Vec<String> = Vec::new();
 
+    // 有表头就按列名取值（导出文件 → 粘回来这条路），没有表头就按位置推断。
+    let mut map: Option<ColMap> = None;
+
     for (lineno, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
@@ -194,31 +253,60 @@ pub fn parse(text: &str, kind: AuxKind, existing: &[String]) -> Parsed {
         if cols.is_empty() {
             continue;
         }
-        if lineno == 0 && is_header_row(&cols) {
-            continue;
+        if lineno == 0 {
+            if let Some(m) = header_map(&cols) {
+                map = Some(m);
+                continue;
+            }
+            if is_header_row(&cols) {
+                continue;
+            }
         }
 
-        // 只有一列 → 名称，编码自动生成
-        // 两列 → 编码,名称（容忍顺序反了：像编码的那列才是编码）
-        let (code, name) = match cols.len() {
-            1 => {
-                let name = cols[0].to_string();
-                (cg.next_code(), name)
-            }
-            _ => {
-                let (a, b) = (cols[0], cols[1]);
-                if looks_like_code(a) && !looks_like_code(b) {
-                    (a.to_string(), b.to_string())
-                } else if looks_like_code(b) && !looks_like_code(a) {
-                    (b.to_string(), a.to_string())
-                } else {
-                    // 两列都不是编码形状 → 当成「名称,名称」，仍自动编号。
-                    // 名称取**前两列**，不再 `cols.join(" ")`：三列以上（比如从
-                    // Excel 多带了一列备注）时，旧写法会把编码也拼进名称，
-                    // 生成「C01 客户名 备注」这种没人会要的档案。
-                    (String::new(), cols[..2.min(cols.len())].join(" "))
+        let cell = |i: Option<usize>| -> String {
+            i.and_then(|i| cols.get(i))
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default()
+        };
+
+        // 三件事一起取：编码、名称、以及「导出文件」才有的上级/状态/备注
+        let (code, name, parent_code, disabled, memo) = if let Some(m) = map {
+            let status = cell(m.status);
+            (
+                cell(m.code),
+                cell(m.name),
+                {
+                    let p = cell(m.parent);
+                    if p.is_empty() {
+                        None
+                    } else {
+                        Some(p)
+                    }
+                },
+                status == "停用",
+                cell(m.memo),
+            )
+        } else {
+            // 只有一列 → 名称，编码自动生成
+            // 两列 → 编码,名称（容忍顺序反了：像编码的那列才是编码）
+            let (c, n) = match cols.len() {
+                1 => (cg.next_code(), cols[0].to_string()),
+                _ => {
+                    let (a, b) = (cols[0], cols[1]);
+                    if looks_like_code(a) && !looks_like_code(b) {
+                        (a.to_string(), b.to_string())
+                    } else if looks_like_code(b) && !looks_like_code(a) {
+                        (b.to_string(), a.to_string())
+                    } else {
+                        // 两列都不是编码形状 → 当成「名称,名称」，仍自动编号。
+                        // 名称取**前两列**，不再 `cols.join(" ")`：三列以上（比如从
+                        // Excel 多带了一列备注）时，旧写法会把编码也拼进名称，
+                        // 生成「C01 客户名 备注」这种没人会要的档案。
+                        (String::new(), cols[..2.min(cols.len())].join(" "))
+                    }
                 }
-            }
+            };
+            (c, n, None, false, String::new())
         };
 
         if name.trim().is_empty() {
@@ -244,6 +332,9 @@ pub fn parse(text: &str, kind: AuxKind, existing: &[String]) -> Parsed {
             code,
             name: name.trim().to_string(),
             skip,
+            parent_code,
+            memo,
+            disabled,
         });
     }
 
@@ -254,7 +345,15 @@ pub fn parse(text: &str, kind: AuxKind, existing: &[String]) -> Parsed {
 pub fn to_entities(kind: AuxKind, rows: &[ParsedRow]) -> Vec<AuxEntity> {
     rows.iter()
         .filter(|r| r.skip.is_none())
-        .map(|r| AuxEntity::new(kind, r.code.clone(), r.name.clone()))
+        .map(|r| {
+            let mut e = AuxEntity::new(kind, r.code.clone(), r.name.clone());
+            // 这三个字段只有「带表头的导出文件」才有值；手粘两列时保持默认，
+            // 不会把用户没写的东西写成空备注/停用。
+            e.parent_code = r.parent_code.clone();
+            e.memo = r.memo.clone();
+            e.disabled = r.disabled;
+            e
+        })
         .collect()
 }
 
@@ -478,5 +577,56 @@ mod tests {
             );
             assert!(p.rows[0].code.starts_with(code_prefix(kind)));
         }
+    }
+
+    /// 桌面端「导出」出去的档案表是五列（编码,名称,上级编码,状态,备注）。
+    /// 原实现里表头判定要求**整行都是表头词**，所以「上级编码」「状态」「备注」
+    /// 让这一行不算表头 → 被当成数据，生成一条名为「编码 名称」的垃圾档案。
+    #[test]
+    fn 导出的五列表头不会被当成数据() {
+        let text = "编码,名称,上级编码,状态,备注\n\
+                    C01,杭州明远贸易,,启用,月结 30 天\n\
+                    C02,宁波华信电子,,停用,";
+        let p = parse(text, AuxKind::Customer, &[]);
+        assert_eq!(p.rows.len(), 2, "表头行不该变成档案：{:?}", p.rows);
+        assert_eq!(p.rows[0].code, "C01");
+        assert_eq!(p.rows[0].name, "杭州明远贸易");
+        assert!(!p.rows[0].disabled);
+        assert_eq!(p.rows[0].memo, "月结 30 天");
+        assert_eq!(p.rows[1].code, "C02");
+        assert!(p.rows[1].disabled, "「停用」必须还原成停用");
+    }
+
+    /// 上级编码也要能还原（部门/科目式层级档案靠它）。
+    #[test]
+    fn 导出的上级编码能被还原() {
+        let text = "编码,名称,上级编码,状态,备注\nD01,生产部,,启用,\nD0101,氧化车间,D01,启用,";
+        let p = parse(text, AuxKind::Dept, &[]);
+        assert_eq!(p.rows.len(), 2);
+        assert_eq!(p.rows[1].parent_code.as_deref(), Some("D01"));
+        let ents = to_entities(AuxKind::Dept, &p.importable());
+        assert_eq!(ents[1].parent_code.as_deref(), Some("D01"));
+    }
+
+    /// 安全判据：一行的第一格长得像编码时，**不能**被判成表头。
+    /// 否则名称恰好叫「编码」的真实档案会被整行吞掉 —— 最难查的丢数据。
+    #[test]
+    fn 首格像编码的行不会被当成表头() {
+        let text = "C01,编码\nC02,名称";
+        let p = parse(text, AuxKind::Customer, &[]);
+        assert_eq!(p.rows.len(), 2, "真实数据被当成表头吞掉了");
+        assert_eq!(p.rows[0].code, "C01");
+        assert_eq!(p.rows[0].name, "编码");
+    }
+
+    /// 手粘两列的老写法不受影响（有表头时按列名，没表头时按位置推断）。
+    #[test]
+    fn 没有表头的两列粘法行为不变() {
+        let p = parse("C01,甲\nC02,乙", AuxKind::Customer, &[]);
+        assert_eq!(p.rows.len(), 2);
+        assert_eq!(p.rows[0].code, "C01");
+        assert!(p.rows[0].parent_code.is_none());
+        assert!(p.rows[0].memo.is_empty());
+        assert!(!p.rows[0].disabled);
     }
 }

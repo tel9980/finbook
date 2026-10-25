@@ -85,6 +85,57 @@ fn 辅助档案导出后能导回另一个账套() {
     );
 }
 
+/// 停用状态与上级编码也要能搬过去。
+///
+/// 这两列是 v1.8.21 才补进导出表的。原来导出只有「类型,编码,名称,备注」四列，
+/// 于是搬完账套之后：停用的档案全变回启用（凭证选客商时又冒出来），
+/// 层级的部门全变成一级（树状结构塌平）。数据没丢，但**结构丢了**，
+/// 而界面上看不出任何异常 —— 比丢几条数据更难发现。
+#[test]
+fn 停用与上级编码导出后能导回() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = db_at(dir.path(), "a.fbk");
+    findb::auxs::insert(
+        &src,
+        &fincore::AuxEntity::new(AuxKind::Dept, "D01", "生产部"),
+    )
+    .unwrap();
+    let mut sub = fincore::AuxEntity::new(AuxKind::Dept, "D0101", "氧化车间");
+    sub.parent_code = Some("D01".into());
+    findb::auxs::insert(&src, &sub).unwrap();
+    let mut old = fincore::AuxEntity::new(AuxKind::Customer, "C099", "已停用的老客户");
+    old.disabled = true;
+    findb::auxs::insert(&src, &old).unwrap();
+
+    let rows = findb::auxs::list(
+        &src,
+        &fincore::AuxQuery {
+            include_disabled: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let bytes =
+        finweb::xlsxout::build(&[finweb::sheets::aux_sheet(&rows, "全部")]).unwrap();
+
+    let dst = db_at(dir.path(), "b.fbk");
+    let res = findb::imports::import_aux_bytes(&dst, &bytes, "tester").unwrap();
+    assert_eq!(res.ok, 3, "三条档案应全部导入：{:?}", res.warnings);
+
+    let got_sub = findb::auxs::get(&dst, AuxKind::Dept, "D0101")
+        .unwrap()
+        .expect("子部门没导进去");
+    assert_eq!(
+        got_sub.parent_code.as_deref(),
+        Some("D01"),
+        "上级编码丢了 —— 层级树会塌平"
+    );
+    let got_old = findb::auxs::get(&dst, AuxKind::Customer, "C099")
+        .unwrap()
+        .expect("停用客户没导进去（停用的也要导出，否则历史凭证的辅助核算断了）");
+    assert!(got_old.disabled, "停用状态丢了 —— 停掉的客户又冒出来了");
+}
+
 /// 科目：类别与方向必须原样回来。方向错了报表会整体反号，
 /// 而余额表看着仍然是平的 —— 最容易蒙混过关的一种错。
 ///

@@ -709,6 +709,14 @@ fn import_aux_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportR
         }
         let mut e = fincore::auxiliary::AuxEntity::new(kind, code.clone(), name);
         e.memo = master_cell(f, 3);
+        // 第 5、6 列（上级编码、状态）是 v1.8.21 才加进模板的。老模板只有前四列，
+        // `master_cell` 越界返回空串，所以老文件照旧能导 —— 升级不会让用户
+        // 手上那份表突然导不进去。
+        let parent = master_cell(f, 4);
+        if !parent.is_empty() {
+            e.parent_code = Some(parent);
+        }
+        e.disabled = master_cell(f, 5) == "停用";
         crate::auxs::insert(db, &e)?;
         res.ok += 1;
     }

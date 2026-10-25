@@ -21,6 +21,8 @@ const XLSX = (name) => ["test", "-p", "finweb", "--test", "export_xlsx", "--", n
 const ROUND = (name) => ["test", "-p", "finweb", "--test", "roundtrip", "--", name];
 // imports.rs 的测试都在 `mod tests` 里，全路径是 `imports::tests::<name>`
 const FIMPORT = (name) => ["test", "-p", "findb", "--lib", `imports::tests::${name}`];
+// 批量粘贴解析（fincore）：表头按列名取值、停用/上级/备注还原
+const FBATCH = (name) => ["test", "-p", "fincore", "--lib", `batch::aux::tests::${name}`];
 
 const MUT = [
   {
@@ -198,6 +200,23 @@ const MUT = [
     from: "                a.dir.label().to_string(),",
     to: "                String::new(),",
     cmd: ROUND("科目导出后类别与方向能导回"),
+  },
+  {
+    // 表头按列名取值退回「整行都是表头词才算表头」→ 导出的五列文件粘回来
+    // 会把表头行当成一条档案，凭空生成「编码 名称」
+    name: "⑭ 导出文件表头又被当成数据",
+    file: "crates/fincore/src/batch/aux.rs",
+    from: "            if let Some(m) = header_map(&cols) {",
+    to: "            if let Some(m) = header_map(&cols).filter(|_| false) {",
+    cmd: FBATCH("导出的五列表头不会被当成数据"),
+  },
+  {
+    // 停用状态不还原 → 搬完账套停掉的客户又冒出来
+    name: "⑭ 导入档案不还原停用状态",
+    file: "crates/findb/src/imports.rs",
+    from: '        e.disabled = master_cell(f, 5) == "停用";',
+    to: "        e.disabled = false;",
+    cmd: ROUND("停用与上级编码导出后能导回"),
   },];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */
