@@ -140,15 +140,26 @@ fn header_map(cols: &[&str]) -> Option<ColMap> {
     let mut m = ColMap::default();
     for (i, raw) in cols.iter().enumerate() {
         let c = raw.trim();
+        // 先认全等的专有列名，再退到「以某某结尾」：用户在 Excel 里写的表头
+        // 常常是「客户编码」「供应商名称」（本软件粘贴框的示例提示就是这么写的），
+        // 只认全等会让自家示例复制进来变成一条垃圾档案。
         if matches!(c, "编码" | "代码" | "编号" | "code" | "Code" | "CODE") {
             m.code.get_or_insert(i);
         } else if matches!(c, "名称" | "姓名" | "name" | "Name" | "NAME") {
             m.name.get_or_insert(i);
         } else if matches!(c, "上级编码" | "上级" | "父级编码") {
             m.parent.get_or_insert(i);
-        } else if matches!(c, "状态") {
+        } else if c == "状态" {
             m.status.get_or_insert(i);
         } else if matches!(c, "备注" | "说明") {
+            m.memo.get_or_insert(i);
+        } else if c.ends_with("上级编码") || c.ends_with("父级编码") {
+            m.parent.get_or_insert(i);
+        } else if c.ends_with("编码") || c.ends_with("代码") || c.ends_with("编号") {
+            m.code.get_or_insert(i);
+        } else if c.ends_with("名称") || c.ends_with("姓名") {
+            m.name.get_or_insert(i);
+        } else if c.ends_with("备注") {
             m.memo.get_or_insert(i);
         }
     }
@@ -617,6 +628,20 @@ mod tests {
         assert_eq!(p.rows.len(), 2, "真实数据被当成表头吞掉了");
         assert_eq!(p.rows[0].code, "C01");
         assert_eq!(p.rows[0].name, "编码");
+    }
+
+    /// 粘贴框里的示例提示写的是「客户编码\t客户名称」（带类别前缀的表头）。
+    /// 那段提示是自家给的范例——用户照着复制进来，结果多一条垃圾档案，
+    /// 这是最伤人的一种错：错在范例本身。
+    #[test]
+    fn 带类别前缀的表头也认得() {
+        // 数据行的编码故意用 C05/C06 而不是 C01/C02：自动编号恰好会发出 C01，
+        // 用 C01 的话「编码列没认出来、退回自动编号」也照样断言通过 —— 假绿。
+        let text = "客户编码,客户名称\nC05,杭州明远贸易有限公司\nC06,宁波华信电子有限公司";
+        let p = parse(text, AuxKind::Customer, &[]);
+        assert_eq!(p.rows.len(), 2, "示例里那种表头应被跳过：{:?}", p.rows);
+        assert_eq!(p.rows[0].code, "C05", "编码列必须认出来，不能退回自动编号");
+        assert_eq!(p.rows[0].name, "杭州明远贸易有限公司");
     }
 
     /// 手粘两列的老写法不受影响（有表头时按列名，没表头时按位置推断）。

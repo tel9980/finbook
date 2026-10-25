@@ -211,6 +211,15 @@ const MUT = [
     cmd: FBATCH("导出的五列表头不会被当成数据"),
   },
   {
+    // 只认全等表头（不认「客户编码」这种带前缀的）→ 粘贴框里自家示例
+    // 复制进来就多一条垃圾档案
+    name: "⑭ 表头不认类别前缀",
+    file: "crates/fincore/src/batch/aux.rs",
+    from: '        } else if c.ends_with("编码") || c.ends_with("代码") || c.ends_with("编号") {',
+    to: "        } else if false {",
+    cmd: FBATCH("带类别前缀的表头也认得"),
+  },
+  {
     // 停用状态不还原 → 搬完账套停掉的客户又冒出来
     name: "⑭ 导入档案不还原停用状态",
     file: "crates/findb/src/imports.rs",
