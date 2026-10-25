@@ -653,7 +653,7 @@ pub fn escape_like(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// 测试用账套参数（所有测试夹具的唯一来源）

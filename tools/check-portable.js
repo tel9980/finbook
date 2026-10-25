@@ -32,7 +32,10 @@ const RULES = [
   },
   {
     name: "写死 CRLF",
-    re: /\.(?:join|split)\("\\\\r\\\\n"\)/,
+    // 源码里写的是 .join("\r\n")，正则要匹配「反斜杠+r」，所以是 \\r 而不是 \\\\r。
+    // 原正则多写了一层转义，实际在找两个反斜杠 + r，真源码永远匹配不上 ——
+    // 这条规则从加上起就没生效过。由 selftest-portable.js 的变异 3 发现。
+    re: /\.(?:join|split)\("\\r\\n"\)/,
     hint: "按文件探测：s.indexOf('\\r\\n') >= 0 ? '\\r\\n' : '\\n'",
   },
 ];
@@ -47,9 +50,19 @@ const EXEMPT = {
     "它已用 __dirname 定位自己的文件（不依赖绝对路径），只有**变异数据**是字面量。",
 };
 
+// `--file <path>`：只检查指定文件，跳过目录扫描。
+// 供 selftest-portable.js 的探针使用 —— 探针把违规样本写进临时文件，
+// 用这个参数直接问「这条规则会不会拦」，不必污染 tools/*.js 让全量扫描撞上。
+const onlyIdx = process.argv.indexOf("--file");
+const ONLY = onlyIdx >= 0 ? path.resolve(process.argv[onlyIdx + 1] || "") : null;
+
 let bad = 0;
 const files = [];
-for (const d of DIRS) {
+if (ONLY) {
+  if (!fs.existsSync(ONLY)) { console.log("FAIL 文件不存在：" + ONLY); process.exit(1); }
+  files.push(ONLY);
+}
+for (const d of ONLY ? [] : DIRS) {
   const base = path.join(ROOT, d);
   if (!fs.existsSync(base)) { console.log("FAIL " + d + "/ 不存在"); bad++; continue; }
   (function walk(p) {

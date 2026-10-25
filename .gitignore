@@ -25,3 +25,4 @@ Thumbs.db
 # 运行时数据与本地启动脚本
 /data/
 run-web.sh
+node_modules/

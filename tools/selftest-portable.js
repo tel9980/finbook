@@ -1,104 +1,124 @@
 // 用这一轮**真实犯过的错**验证 check-portable：
 // 它上一版就含 `C:\\Users\\Administrator\\Documents\\Default Project\\finbook`，
 // 本地跑完全正常，只有 CI 的 Linux 上才崩。检查必须能抓到它。
-// 注意：自检脚本自己也在这两个目录里，所以它**不许**含绝对路径
-// —— 第一版写了 `const ROOT = "C:\\Users\\Administrator\\..."`，
-// 结果 check-portable 把**自己**判成不可移植（第一次跑就红）。
-// 一个检查脚本把自己也算进去是可接受的（它确实该守自己），
-// 但前提是它自己先满足规则。
+//
+// ── 为什么改成「临时文件 + --file」而不是原地改 tools/*.js ──
+//
+// 第一版的做法：把违规样本写进 tools/selftest-design-doc.js（改完再还原）。
+// 两个后果，都是真实踩到的：
+//
+//   ① check-ci 先跑可移植性检查（扫全部 .js）、后跑设计文档自检。
+//      顺序一变，全量扫描就撞上探针留下的中间态，日志里冒出
+//         FAIL tools/selftest-design-doc.js:19 盘符绝对路径
+//      ——看着像「基线本身不干净」，实际只是探针的中间态被拍到了。
+//   ② 任一步推进程崩掉（断言失败 / 被打断），还原就被跳过，
+//      仓库里留下一份脏源码。本地还看不出来，下次全量扫描才红。
+//
+// 现在：违规样本写到系统临时目录里的 .js，用 `check-portable --file` 单点问
+// 「这条规则会不会拦」。仓库里的文件从头到尾一个字节都不动。
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const { execFileSync } = require("child_process");
 
 const ROOT = path.join(__dirname, "..");
-const P = path.join(ROOT, "tools", "selftest-design-doc.js");
 const C = path.join(ROOT, "tools", "check-portable.js");
-const orig = fs.readFileSync(P, "utf8");
 
-// 变异有没有被拦下。**不能就地 process.exit(1)** —— 那样会跳过下面的还原，
-// 把变异过的源码留在磁盘上，下一个人接手时看到的是一个脏工作区，
-// 而且脏在哪个文件都不好找（这里改的是别的文件）。
-// 所以只记结果，最后统一还原再退出。
+const TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), "finbook-portable-"));
+
 let missed = false;
 
-function run() {
+function runOn(file) {
   try {
-    const o = execFileSync(process.execPath, [C], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const o = execFileSync(process.execPath, [C, "--file", file], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     return { ok: true, out: o };
   } catch (e) {
     return { ok: false, out: String((e && e.stdout) || "") + String((e && e.stderr) || "") };
   }
 }
 
-console.log("=== 基线（已修好）===");
-const b = run();
-console.log("  退出成功？ " + b.ok + (b.ok ? "（应为 true）" : "（不应红）"));
-
-// 变异 1：把 ROOT 换回硬编码绝对路径（真实发生过的）
-const mutated = orig.replace(
-  'const ROOT = path.join(__dirname, "..");',
-  'const ROOT = "C:\\\\Users\\\\Administrator\\\\Documents\\\\Default Project\\\\finbook";'
-);
-if (mutated === orig) { console.log("FAIL 变异没写进去（源码形态与预期不符）"); process.exit(1); }
-
-console.log("\n=== 变异 1：ROOT 写回硬编码绝对路径 ===");
-fs.writeFileSync(P, mutated, "utf8");
-const r1 = run();
-console.log("  退出成功？ " + r1.ok + "   ← 必须 false");
-console.log(r1.out.split(/\r?\n/).filter((l) => /FAIL|修法/.test(l)).map((l) => "  " + l).join("\n"));
-
-// 变异 2：写死 CRLF（另一个真实形状）
-console.log("\n=== 变异 2：写死 CRLF ===");
-fs.writeFileSync(P, orig, "utf8");
-const m2 = orig.replace(
-  'const scmeol = scmOrig.indexOf("\\r\\n") >= 0 ? "\\r\\n" : "\\n";',
-  'const scmeol = "\\r\\n";'
-);
-const hasEol = m2 !== orig;
-if (hasEol) {
-  fs.writeFileSync(P, m2, "utf8");
-  const r2 = run();
-  console.log("  退出成功？ " + r2.ok + "   ← 必须 false");
-  console.log(r2.out.split(/\r?\n/).filter((l) => /FAIL|修法/.test(l)).map((l) => "  " + l).join("\n"));
-  // 同上：这个变异的结论必须参与判定，否则探针形同虚设
-  if (r2.ok) {
-    console.log("FAIL CRLF 变异未被拦下 —— check-portable 漏了写死行尾");
+/** 一个探针：样本源码 + 期望是否被拦下 */
+function probe(name, src, mustBlock) {
+  const f = path.join(TMPDIR, `probe-${name.replace(/[^\w]/g, "_")}.js`);
+  fs.writeFileSync(f, src, "utf8");
+  const r = runOn(f);
+  const shown = r.out
+    .split(/\r?\n/)
+    .filter((l) => /FAIL|修法/.test(l))
+    .map((l) => "  " + l)
+    .join("\n");
+  if (mustBlock && r.ok) {
+    console.log(`FAIL ${name} 未被拦下 —— check-portable 存在漏网规则`);
     missed = true;
-  }
-} else {
-  // 兜底形状：源码里没有 scmeol 那行时（代码演进过），换一个**同样该被拦**的形状。
-  //
-  // 第一版这里用 `const X = "D:\\tmp"` —— 两个问题：
-  //   ① 变异目标写成了一个新的、与被测代码无关的常量，check-portable 报出来的 FAIL
-  //      指向 selftest-design-doc.js，读日志的人会以为**基线本身**不干净
-  //      （第一版就踩过这个，见 check-ci 的 2c 段注释）；
-  //   ② 更要命的是它**没进第 69 行的退出条件**（那里只判了 r1 和 after），
-  //      也就是说变异 2 拦没拦住都算通过 —— 一个不被验证的探针等于没有探针。
-  // 现在：变异的是 ROOT 本身（这才是 check-portable 真正要守的东西），
-  // 并且把结论显式纳入判定。
-  console.log("  （当前源码没有 scmeol 那行，改用等效形状：ROOT 写死盘符路径）");
-  const m3 = orig.replace(
-    'const ROOT = path.join(__dirname, "..");',
-    'const ROOT = "D:\\\\tmp\\\\finbook";'
-  );
-  if (m3 === orig) {
-    console.log("FAIL 兜底变异没写进去（源码形态与预期不符）");
+  } else if (!mustBlock && !r.ok) {
+    console.log(`FAIL ${name} 被误拦 —— 检查过严，会逼人绕过它`);
     missed = true;
   } else {
-    fs.writeFileSync(P, m3, "utf8");
-    const r3 = run();
-    console.log("  退出成功？ " + r3.ok + "   ← 必须 false");
-    console.log(r3.out.split(/\r?\n/).filter((l) => /FAIL|修法/.test(l)).map((l) => "  " + l).join("\n"));
-    // 让 r3 的结论参与最终判定（原来漏了，探针形同虚设）
-    if (r3.ok) {
-      console.log("FAIL 兜底变异未被拦下 —— check-portable 漏了盘符路径");
-      missed = true;
-    }
+    console.log(`PASS ${mustBlock ? "拦下" : "放行"}  ${name}`);
+  }
+  if (shown) console.log(shown);
+}
+
+/** 当前探针在起作用？给「该拦」探针用 */
+function main() {
+  // ── 基线：合规样本必须放行 ──
+  console.log("=== 基线（合规样本，应放行）===");
+  probe(
+    "合规样本",
+    'const path = require("path");\nconst ROOT = path.join(__dirname, "..");\nmodule.exports = ROOT;\n',
+    false
+  );
+
+  // ── 变异 1：ROOT 写回硬编码用户目录（第一次真实发生的错）──
+  console.log("\n=== 变异 1：ROOT 写死 C:\\Users\\... ===");
+  probe(
+    "用户目录",
+    'const ROOT = "C:\\\\Users\\\\Administrator\\\\Documents\\\\Default Project\\\\finbook";\n',
+    true
+  );
+
+  // ── 变异 2：盘符绝对路径（不带 Users）──
+  // 这条正是当初把 selftest-design-doc.js 判红的那一行，必须能拦住。
+  console.log("\n=== 变异 2：盘符绝对路径 D:\\tmp ===");
+  probe("盘符路径", 'const ROOT = "D:\\\\tmp\\\\finbook";\n', true);
+
+  // ── 变异 3：写死 CRLF（规则只认 .join/.split("\r\n") 这种行尾处理写法，
+  //     普通字符串里出现 \r\n 不拦 —— 那是正当用法）──
+  console.log("\n=== 变异 3：写死 CRLF（join） ===");
+  probe("写死CRLF", 'const s = arr.join("\\r\\n");\n', true);
+
+  // ── 变异 4：用户目录的 Unix 写法 /Users/<名> ──
+  console.log("\n=== 变异 4：/Users/<名> 目录 ===");
+  probe("Users目录", 'const f = "/Users/alice/project/x";\n', true);
+
+  // ── 反向断言 1：注释里提到绝对路径不算违规（文档该说清为什么）──
+  // 没有这条，check-portable 会把「解释这条规则」的注释也判红，
+  // 逼着作者把说明删掉 —— 那是把检查做成敌人。
+  console.log("\n=== 反向断言：注释里的路径不算违规（应放行）===");
+  probe("注释含路径", '// 不能写 C:\\\\Users\\\\xxx，要用 path.join\nconst ROOT = 1;\n', false);
+
+  // ── 反向断言 2：普通字符串里的相对路径不算违规 ──
+  console.log("\n=== 反向断言：相对路径（应放行）===");
+  probe("相对路径", 'const f = "crates/findb/src/periods.rs";\n', false);
+}
+
+try {
+  main();
+} finally {
+  // 临时文件在系统 temp 下，清不掉也不污染仓库
+  try {
+    for (const f of fs.readdirSync(TMPDIR)) fs.unlinkSync(path.join(TMPDIR, f));
+    fs.rmdirSync(TMPDIR);
+  } catch (_) {
+    /* 清不掉就算了 */
   }
 }
 
-fs.writeFileSync(P, orig, "utf8");
-const after = run();
-console.log("\n还原后基线：" + (after.ok ? "OK（绿）" : "FAIL（仍红）"));
-if (missed) console.log("有变异未被拦下 —— check-portable 存在漏网规则");
-process.exit(!b.ok || r1.ok || missed || !after.ok ? 1 : 0);
+if (missed) {
+  console.log("\n有探针未生效 —— check-portable 存在漏网或过严");
+  process.exit(1);
+}
+console.log("\n全部探针生效：该拦的拦下，该放的放行");
