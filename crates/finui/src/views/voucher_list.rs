@@ -384,7 +384,9 @@ impl VoucherList {
             return;
         }
         let period_label = format!("{}~{}", self.from, self.to);
-        let html = findb::printform::voucher_form_html(&company, &period_label, &prints, true);
+        let po = ctx.db().options().print;
+        let html =
+            findb::printform::voucher_form_html(&company, &period_label, &prints, true, &po);
         let title = format!("凭证套打_{}_{}", self.from, self.to);
         match crate::views::export::print_html_content(&title, &html) {
             Ok(m) => ctx.info(m),

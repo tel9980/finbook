@@ -781,7 +781,9 @@ impl Default for BookOptions {
             code_scheme: vec![4, 2, 2, 2, 2],
             start_period: Period::default(),
             base_currency: "CNY".to_string(),
-            company: String::new(),
+            // 默认值必须能过 `validate()`：企业名称会印在每张报表抬头和套打单据上，
+            // 留空等于「报表没抬头」。建账向导会立刻覆盖成真实名称。
+            company: "未命名单位".to_string(),
             tax_no: String::new(),
             enable_qty: false,
             enable_foreign: false,
@@ -828,8 +830,65 @@ impl BookOptions {
         if self.voucher_words.iter().any(|w| w.trim().is_empty()) {
             out.push("凭证字号不能有空白项（多个用逗号分隔，如 记,收,付）".to_string());
         }
+        if let Some(long) = self.voucher_words.iter().find(|w| w.chars().count() > 4) {
+            out.push(format!("凭证字号「{long}」太长（最多 4 个字）"));
+        }
+        // 重复的凭证字会让凭证号变成「记-0001」两份，谁也说不清是同一张还是两张
+        let mut seen: Vec<&str> = Vec::new();
+        for w in &self.voucher_words {
+            let t = w.trim();
+            if seen.contains(&t) {
+                out.push(format!("凭证字号「{t}」重复了 —— 凭证号会分不清"));
+                break;
+            }
+            seen.push(t);
+        }
         if self.base_currency.trim().is_empty() {
             out.push("本位币不能为空（一般为 CNY）".to_string());
+        } else if !(self.base_currency.trim().len() == 3
+            && self.base_currency.trim().chars().all(|c| c.is_ascii_alphabetic()))
+        {
+            out.push(format!(
+                "本位币应填三位字母代码（如 CNY / USD），当前是「{}」",
+                self.base_currency.trim()
+            ));
+        }
+        if self.company.trim().is_empty() {
+            // 企业名称会印在每张报表的抬头和套打单据上，空了就是「报表没抬头」
+            out.push("企业名称不能为空 —— 报表抬头和单据套打都会用到".to_string());
+        } else if self.company.chars().count() > 60 {
+            out.push("企业名称过长（最多 60 个字）".to_string());
+        }
+        if self.tax_no.chars().count() > 30 {
+            out.push("纳税识别号过长（最多 30 个字）".to_string());
+        }
+        if !matches!(
+            self.budget_control.trim(),
+            "" | "off" | "warn" | "strong"
+        ) {
+            // 认不出的值会被当成「关闭」，用户以为开了预算控制，其实一直没管
+            out.push(format!(
+                "预算控制只能是 关闭/warn/strong，当前是「{}」（认不出的值按关闭处理）",
+                self.budget_control.trim()
+            ));
+        }
+        const PREFIX_KEYS: [&str; 5] = ["po", "so", "req", "quo", "prod"];
+        for (k, v) in &self.doc_prefixes {
+            if !PREFIX_KEYS.contains(&k.as_str()) {
+                out.push(format!(
+                    "单据前缀「{k}」不认识（只能是 po/so/req/quo/prod），填了不生效"
+                ));
+                continue;
+            }
+            let t = v.trim();
+            if t.chars().count() > 8 {
+                out.push(format!("单据前缀「{k}」太长（最多 8 个字符）"));
+            }
+            if !t.chars().all(|c| c.is_ascii_alphanumeric()) {
+                out.push(format!(
+                    "单据前缀「{k}」只能用字母或数字（当前「{t}」），带空格/符号会让单据号难对账"
+                ));
+            }
         }
         for (label, code) in [
             ("应收科目", &self.biz_accounts.ar),
@@ -927,6 +986,46 @@ mod tests {
         assert_eq!(AcctCategory::from_code("6001"), Some(AcctCategory::Income));
         assert_eq!(AcctCategory::from_code("6601"), Some(AcctCategory::Expense));
         assert_eq!(AcctCategory::from_code("6602"), Some(AcctCategory::Expense));
+    }
+
+    /// 这几条都有一个共同点：**填错了不报错，只是悄悄不生效**。
+    /// 预算控制写了 `warning`（应为 `warn`）→ 当成关闭，超预算一路放行；
+    /// 单据前缀键写成 `purchase` → 永远用默认 CG；凭证字重复 → 两张凭证同号。
+    #[test]
+    fn options_validation_catches_silent_misconfigurations() {
+        let mut o = BookOptions::default();
+        assert!(o.validate().is_empty(), "默认值必须自洽：{:?}", o.validate());
+
+        o.budget_control = "warning".into();
+        assert!(o.validate().iter().any(|x| x.contains("warning")));
+
+        o.budget_control = "strong".into();
+        o.doc_prefixes.insert("purchase".into(), "CG".into());
+        let probs = o.validate();
+        assert!(probs.iter().any(|x| x.contains("purchase")), "{probs:?}");
+
+        o.doc_prefixes.clear();
+        o.doc_prefixes.insert("po".into(), "C G".into());
+        assert!(o.validate().iter().any(|x| x.contains("字母或数字")));
+
+        o.doc_prefixes.clear();
+        o.doc_prefixes.insert("po".into(), "CG2026XYZ".into());
+        assert!(o.validate().iter().any(|x| x.contains("太长")));
+
+        o.doc_prefixes.clear();
+        o.voucher_words = vec!["记".into(), "记".into()];
+        assert!(o.validate().iter().any(|x| x.contains("重复")));
+
+        o.voucher_words = vec!["记".into()];
+        o.base_currency = "人民币".into();
+        assert!(o.validate().iter().any(|x| x.contains("三位字母")));
+
+        o.base_currency = "CNY".into();
+        o.company = "   ".into();
+        assert!(o.validate().iter().any(|x| x.contains("企业名称")));
+
+        o.company = "某厂".into();
+        assert!(o.validate().is_empty(), "改回来就该通过：{:?}", o.validate());
     }
 
     #[test]

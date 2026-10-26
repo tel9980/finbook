@@ -139,6 +139,7 @@ pub fn voucher_form_html(
     period_label: &str,
     vouchers: &[VoucherPrint],
     page_from_1: bool,
+    po: &fincore::PrintOptions,
 ) -> String {
     let forms: String = vouchers
         .iter()
@@ -150,13 +151,13 @@ pub fn voucher_form_html(
     format!(
         r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>记账凭证</title>
-<style>{VOUCHER_CSS}{PBAR_CSS}</style>
-</head><body>{PRINT_BAR}{forms}</body></html>"#
+<style>{VOUCHER_CSS}{PBAR_CSS}{page}</style>
+</head><body>{PRINT_BAR}{forms}</body></html>"#,
+        page = po.page_box_css("A4 landscape", 10)
     )
 }
 
 const VOUCHER_CSS: &str = r#"
-@page{size:A4 landscape;margin:12mm 10mm;}
 body{font-family:"宋体","SimSun","Noto Serif CJK SC",serif;color:#111;margin:0;font-size:12px;}
 .form{width:100%;page-break-after:always;box-sizing:border-box;}
 .form:last-child{page-break-after:auto;}
@@ -304,7 +305,11 @@ pub struct LedgerPrint {
 }
 
 /// 生成账簿套打 HTML。标准三栏账版式：日期 / 凭证字号 / 摘要 / 借 / 贷 / 借或贷 / 余额。
-pub fn ledger_form_html(company: &str, ledger: &LedgerPrint) -> String {
+pub fn ledger_form_html(
+    company: &str,
+    ledger: &LedgerPrint,
+    po: &fincore::PrintOptions,
+) -> String {
     let mut body = String::new();
     for r in &ledger.rows {
         body.push_str(&format!(
@@ -339,7 +344,7 @@ pub fn ledger_form_html(company: &str, ledger: &LedgerPrint) -> String {
     format!(
         r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>{title}</title>
-<style>{LEDGER_CSS}{PBAR_CSS}</style>
+<style>{LEDGER_CSS}{PBAR_CSS}{page}</style>
 </head><body>
 {PB}<div class="lhead">
   <span class="ltitle">{title}</span>
@@ -374,7 +379,6 @@ pub fn ledger_form_html(company: &str, ledger: &LedgerPrint) -> String {
 }
 
 const LEDGER_CSS: &str = r#"
-@page{size:A4 landscape;margin:10mm 10mm;}
 body{font-family:"宋体","SimSun","Noto Serif CJK SC",serif;color:#111;font-size:12px;margin:0;}
 .lhead{display:flex;justify-content:space-between;align-items:center;border:1px solid #000;
   border-bottom:none;padding:4px 10px;background:#fafafa;}
@@ -595,6 +599,16 @@ const DOC_OVERHEAD: i32 = 6;
 /// 支持 `a4`(210×297) / `a5`(二等分 210×148) / `third`(三等分 99×210) /
 /// 自定义 `"宽x高"`（mm，50..=600）；非法值回退 A4。
 pub fn page_setup(size: &str) -> (String, i32, String) {
+    let (sz, budget, m, extra) = page_spec(size);
+    (format!("@page{{size:{sz};margin:{m}mm;}}"), budget, extra)
+}
+
+/// 纸型拆解：`(CSS size 片段, 行单位预算, 基础页边距 mm, 窄/小纸附加 CSS)`。
+///
+/// 与 [`page_setup`] 分开是因为套打偏移要改「四边页边距」，而 `@page` 那句话
+/// 必须整块重新生成（改字符串拼接太脆）：调用方拿到 size 与基础边距后，用
+/// `PrintOptions::page_box_css(size, margin)` 生成带偏移的纸张规则。
+pub fn page_spec(size: &str) -> (String, i32, u8, String) {
     let s = size.trim().to_ascii_lowercase();
     let custom = s
         .split_once('x')
@@ -611,10 +625,10 @@ pub fn page_setup(size: &str) -> (String, i32, String) {
     };
     // 页高 − 上下边距，按 6.5mm/行 折行单位预算
     let budget = (((h - 2 * m) as f32) / 6.5) as i32;
-    let page = match (w, h) {
-        (210, 297) => "@page{size:A4;margin:10mm;}".to_string(),
-        (210, 148) => "@page{size:A5;margin:8mm;}".to_string(),
-        _ => format!("@page{{size:{w}mm {h}mm;margin:{m}mm;}}"),
+    let size_css = match (w, h) {
+        (210, 297) => "A4".to_string(),
+        (210, 148) => "A5".to_string(),
+        _ => format!("{w}mm {h}mm"),
     };
     // 窄纸（宽 < 120mm，如三等分联）压缩字号与行高；小纸（高 < 200mm）略紧
     let extra = if w < 120 {
@@ -625,7 +639,7 @@ pub fn page_setup(size: &str) -> (String, i32, String) {
     } else {
         String::new()
     };
-    (page, budget.max(6), extra)
+    (size_css, budget.max(6), m as u8, extra)
 }
 
 const DOC_CSS: &str = r#"
@@ -661,8 +675,15 @@ tr.l{height:21px;}
 @media print{body{font-size:11px;}}
 "#;
 
-fn doc_shell(title: &str, body: &str, size: &str, auto_print: bool) -> String {
-    let (page, _, extra) = page_setup(size);
+fn doc_shell(
+    title: &str,
+    body: &str,
+    size: &str,
+    auto_print: bool,
+    po: &fincore::PrintOptions,
+) -> String {
+    let (size_css, _, margin_mm, extra) = page_spec(size);
+    let page = po.page_box_css(&size_css, margin_mm);
     // 默认渲染顶部「打印本页」工具条（先看后打、省纸）；auto=1 时进页自动弹打印对话框
     let js = if auto_print {
         "<script>window.onload=function(){setTimeout(function(){window.print();},300);};</script>"
@@ -718,8 +739,13 @@ fn order_units(f: &DocPrintFields, o: &OrderPrint) -> i32 {
 }
 
 /// 订单套打 HTML（默认 A4；多尺寸见 [`order_forms_sized_html`]）
-pub fn order_forms_html(company: &str, orders: &[OrderPrint], f: &DocPrintFields) -> String {
-    order_forms_sized_html(company, orders, f, "a4", false)
+pub fn order_forms_html(
+    company: &str,
+    orders: &[OrderPrint],
+    f: &DocPrintFields,
+    po: &fincore::PrintOptions,
+) -> String {
+    order_forms_sized_html(company, orders, f, "a4", false, po)
 }
 
 /// 订单套打 HTML（指定纸张）：`fields` 控制显示字段/列；`pack` 时按**该纸张的
@@ -731,6 +757,7 @@ pub fn order_forms_sized_html(
     f: &DocPrintFields,
     size: &str,
     auto_print: bool,
+    po: &fincore::PrintOptions,
 ) -> String {
     let budget = page_setup(size).1;
     let mut pages: Vec<Vec<&OrderPrint>> = Vec::new();
@@ -773,7 +800,7 @@ pub fn order_forms_sized_html(
             )
         })
         .collect();
-    doc_shell("单据套打", &body, size, auto_print)
+    doc_shell("单据套打", &body, size, auto_print, po)
 }
 
 fn one_order_doc(o: &OrderPrint, f: &DocPrintFields) -> String {
@@ -886,8 +913,13 @@ fn one_order_doc(o: &OrderPrint, f: &DocPrintFields) -> String {
 }
 
 /// 收付款单套打 HTML（默认 A4；多尺寸见 [`receipt_forms_sized_html`]）
-pub fn receipt_forms_html(company: &str, docs: &[ReceiptPrint], f: &DocPrintFields) -> String {
-    receipt_forms_sized_html(company, docs, f, "a4", false)
+pub fn receipt_forms_html(
+    company: &str,
+    docs: &[ReceiptPrint],
+    f: &DocPrintFields,
+    po: &fincore::PrintOptions,
+) -> String {
+    receipt_forms_sized_html(company, docs, f, "a4", false, po)
 }
 
 /// 收付款单套打 HTML（指定纸张）：信息双列 + 金额大写 + 签章；`pack` 紧凑分页同订单
@@ -897,6 +929,7 @@ pub fn receipt_forms_sized_html(
     f: &DocPrintFields,
     size: &str,
     auto_print: bool,
+    po: &fincore::PrintOptions,
 ) -> String {
     const UNITS: i32 = DOC_OVERHEAD + 3;
     let budget = page_setup(size).1;
@@ -939,7 +972,7 @@ pub fn receipt_forms_sized_html(
             )
         })
         .collect();
-    doc_shell("收付款单套打", &body, size, auto_print)
+    doc_shell("收付款单套打", &body, size, auto_print, po)
 }
 
 fn one_receipt_doc(d: &ReceiptPrint, f: &DocPrintFields) -> String {
@@ -1076,7 +1109,7 @@ mod tests {
     #[test]
     fn order_forms_pack_and_fields() {
         let two = vec![mk_order("XS001", 2), mk_order("XS002", 2)];
-        let html = super::order_forms_html("甲公司", &two, &Default::default());
+        let html = super::order_forms_html("甲公司", &two, &Default::default(), &po());
         assert_eq!(
             html.matches("class=\"page\"").count(),
             1,
@@ -1087,7 +1120,7 @@ mod tests {
 
         // 超页长单 + 小单：长单占满首页，小单换页
         let mixed = vec![mk_order("XS003", 40), mk_order("XS004", 2)];
-        let html = super::order_forms_html("甲公司", &mixed, &Default::default());
+        let html = super::order_forms_html("甲公司", &mixed, &Default::default(), &po());
         assert_eq!(html.matches("class=\"page\"").count(), 2, "超页单据应换页");
 
         // pack 关闭 → 一单一页
@@ -1095,7 +1128,7 @@ mod tests {
             pack: false,
             ..Default::default()
         };
-        let html = super::order_forms_html("甲公司", &two, &f);
+        let html = super::order_forms_html("甲公司", &two, &f, &po());
         assert_eq!(
             html.matches("class=\"page\"").count(),
             2,
@@ -1104,7 +1137,7 @@ mod tests {
 
         // 字段收窄：不打税率列与合计，公司抬头始终保留
         let f = super::fields_from_tokens("no,date,code,qty,price,amount");
-        let html = super::order_forms_html("甲公司", &two, &f);
+        let html = super::order_forms_html("甲公司", &two, &f, &po());
         assert!(html.contains("单号") && html.contains("存货编码"));
         assert!(
             !html.contains("税率") && !html.contains("合计"),
@@ -1126,13 +1159,13 @@ mod tests {
             voucher_no: "记-0007".to_string(),
         };
         let html =
-            super::receipt_forms_html("甲公司", std::slice::from_ref(&d), &Default::default());
+            super::receipt_forms_html("甲公司", std::slice::from_ref(&d), &Default::default(), &po());
         assert!(html.contains("收款单"), "标题应为收款单");
         assert!(html.contains("壹仟贰佰叁拾肆元伍角陆分"), "金额大写");
         assert!(html.contains("记-0007") && html.contains("资金账户"));
 
         let f = super::fields_from_tokens("no,amount");
-        let html = super::receipt_forms_html("甲公司", &[d], &f);
+        let html = super::receipt_forms_html("甲公司", &[d], &f, &po());
         assert!(!html.contains("资金账户"), "未勾选资金账户不应出现");
         assert!(html.contains("金额"), "金额行应保留");
     }
@@ -1153,8 +1186,8 @@ mod tests {
 
         // 尺寸影响分页：两张 8 行单（单张成本 = 6+8+1+1 = 16 行单位）
         let two = vec![mk_order("XS101", 8), mk_order("XS102", 8)];
-        let a4 = super::order_forms_sized_html("甲", &two, &Default::default(), "a4", false);
-        let a5 = super::order_forms_sized_html("甲", &two, &Default::default(), "a5", false);
+        let a4 = super::order_forms_sized_html("甲", &two, &Default::default(), "a4", false, &po());
+        let a5 = super::order_forms_sized_html("甲", &two, &Default::default(), "a5", false, &po());
         assert_eq!(a4.matches("class=\"page\"").count(), 1, "A4 两单同页");
         assert_eq!(a5.matches("class=\"page\"").count(), 2, "A5 只装得下一单");
         assert!(a5.contains("size:A5"), "应输出 A5 @page");
@@ -1168,12 +1201,17 @@ mod tests {
             memo: String::new(),
             voucher_no: String::new(),
         };
-        let html = super::receipt_forms_sized_html("甲", &[d], &Default::default(), "third", false);
+        let html = super::receipt_forms_sized_html("甲", &[d], &Default::default(), "third", false, &po());
         assert!(html.contains("99mm 210mm"), "三等分应输出自定义 @page 尺寸");
     }
 
     use super::*;
     use chrono::NaiveDate;
+
+    /// 套打测试统一用默认版式：偏移 0、页码开
+    fn po() -> fincore::PrintOptions {
+        fincore::PrintOptions::default()
+    }
     use fincore::{Account, AcctCategory, Chart, CodeScheme, Money, Period};
 
     fn sample_chart() -> Chart {
@@ -1220,13 +1258,42 @@ mod tests {
         let v = sample_voucher();
         let aux = |_: &fincore::AuxRef| "".to_string();
         let prints = vec![voucher_print_from(&v, &chart, &aux)];
-        let html = voucher_form_html("某某公司", "2026-09", &prints, true);
+        let html = voucher_form_html("某某公司", "2026-09", &prints, true, &po());
         assert!(html.contains("记　账　凭　证"));
         assert!(html.contains("某某公司"));
         assert!(html.contains("记-0001"));
         assert!(html.contains("借方金额"));
         assert!(html.contains("合计"));
         assert!(html.contains("1,200.00"));
+    }
+
+    /// 套打也要认账套里的纸张设置：偏移进四边页边距、页码进页边距盒子。
+    ///
+    /// 针式打印机走纸偏 2–3mm 是常态，以前只能改打印机驱动或忍着；现在
+    /// 「参数 → 打印预览 → 套打横向偏移」填 ±5mm 就能对位。
+    #[test]
+    fn voucher_form_honours_paper_offset_and_page_numbers() {
+        let chart = sample_chart();
+        let v = sample_voucher();
+        let aux = |_: &fincore::AuxRef| "".to_string();
+        let prints = vec![voucher_print_from(&v, &chart, &aux)];
+
+        let mut p = po();
+        p.offset_x_mm = 5;
+        p.offset_y_mm = -3;
+        let html = voucher_form_html("某某公司", "2026-09", &prints, true, &p);
+        // 基础边距 10mm：向右 5 → 左 15 右 5；向上 3 → 上 7 下 13
+        assert!(
+            html.contains("margin:7mm 5mm 13mm 15mm"),
+            "偏移没有进页边距：{html}"
+        );
+        assert!(html.contains("counter(page)"), "套打页也该有页码");
+
+        let mut q = po();
+        q.show_page_no = false;
+        let html = voucher_form_html("某某公司", "2026-09", &prints, true, &q);
+        assert!(!html.contains("counter(page)"), "关了页码就不能有页边距盒子");
+        assert!(html.contains("size:A4 landscape"), "凭证套打固定横向 A4");
     }
 
     #[test]
@@ -1248,7 +1315,7 @@ mod tests {
             }],
             page_from_1: true,
         };
-        let html = ledger_form_html("某某公司", &ledger);
+        let html = ledger_form_html("某某公司", &ledger, &po());
         assert!(html.contains("明细账"));
         assert!(html.contains("期初余额：借500.00"));
         assert!(html.contains("借或贷"));

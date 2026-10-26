@@ -128,7 +128,52 @@ impl OptionsView {
             );
             ui.checkbox(&mut o.enable_qty, "启用数量核算");
             ui.checkbox(&mut o.enable_foreign, "启用外币核算");
+            ui.checkbox(
+                &mut o.enable_production,
+                "启用生产制造（MRP / 排产 / 工序报工）",
+            );
         });
+
+        // 预算控制 + 单据前缀：网页端早就有，桌面端一直缺。
+        // 缺的后果不是「不能用」，而是同一套账在两处看到不同的设置项 ——
+        // 在网页上关掉的预算强控，回到桌面端根本找不到开关。
+        ui.add_space(6.0);
+        egui::Grid::new("biz_control_misc")
+            .num_columns(2)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                ui.label("预算控制");
+                ui.horizontal(|ui| {
+                    for (val, label) in [
+                        ("", "关闭"),
+                        ("warn", "超预算提醒（放行）"),
+                        ("strong", "超预算强控（拒绝保存）"),
+                    ] {
+                        ui.radio_value(&mut o.budget_control, val.to_string(), label);
+                    }
+                });
+                ui.end_row();
+
+                ui.label("单据前缀");
+                ui.horizontal(|ui| {
+                    for (key, hint) in [
+                        ("po", "采购订单 CG"),
+                        ("so", "销售订单 XS"),
+                        ("req", "请购单 QG"),
+                        ("quo", "报价单 BJ"),
+                        ("prod", "生产订单 SC"),
+                    ] {
+                        let e = o.doc_prefixes.entry(key.to_string()).or_default();
+                        ui.add_sized([48.0, 20.0], egui::TextEdit::singleline(e))
+                            .on_hover_text(hint);
+                    }
+                });
+                ui.end_row();
+            });
+        ui.label(
+            RichText::new("前缀只能用字母或数字、最多 8 个字符；留空用默认值。")
+                .weak(),
+        );
 
         ui.add_space(6.0);
         ui.separator();
@@ -228,6 +273,27 @@ impl OptionsView {
                     [380.0, 22.0],
                     egui::TextEdit::singleline(&mut o.print.sign_line),
                 );
+                ui.end_row();
+
+                ui.label("套打偏移");
+                ui.horizontal(|ui| {
+                    ui.label("左右");
+                    ui.add(
+                        egui::DragValue::new(&mut o.print.offset_x_mm)
+                            .range(-20..=20)
+                            .suffix(" mm"),
+                    );
+                    ui.label("上下");
+                    ui.add(
+                        egui::DragValue::new(&mut o.print.offset_y_mm)
+                            .range(-20..=20)
+                            .suffix(" mm"),
+                    );
+                    ui.label(
+                        RichText::new("正数=向右/向下；针式打印机走纸偏时用来对位")
+                            .weak(),
+                    );
+                });
                 ui.end_row();
             });
         ui.label(

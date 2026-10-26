@@ -5951,6 +5951,7 @@ async fn print_voucher_form(
         &format!("{}~{}", period_to_str(from), period_to_str(to)),
         &prints,
         true,
+        &db.options().print,
     );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
@@ -6091,7 +6092,7 @@ async fn print_ledger_form(
         rows,
         page_from_1: true,
     };
-    let html = findb::printform::ledger_form_html(&company, &ledger);
+    let html = findb::printform::ledger_form_html(&company, &ledger, &db.options().print);
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -6184,7 +6185,8 @@ async fn print_trial_balance(
     // 打印预览：所有有「账簿报表」权限的角色都可使用（不落地文件）
     user.require(Perm::Report)?;
     let (rows, totals) = trial_balance_data(&state, &user, &q)?;
-    let html = trial_balance_html(&user.company, &q, &rows, &totals);
+    let po = print_opts_from_q(user.db.options().print, &q);
+    let html = trial_balance_html(&user.company, &q, &rows, &totals, &po);
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -6541,6 +6543,7 @@ fn trial_balance_html(
     q: &HashMap<String, String>,
     rows: &[fincore::balance::BalanceRow],
     totals: &fincore::balance::TrialBalance,
+    po: &fincore::PrintOptions,
 ) -> String {
     let from = q.get("from").cloned().unwrap_or_default();
     let to = q.get("to").cloned().unwrap_or_default();
@@ -6564,22 +6567,10 @@ fn trial_balance_html(
             r.ytd_credit.fmt_money(),
         ));
     }
-    format!(
-        "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>\
-         <title>科目余额表</title>\
-         <style>body{{font-family:-apple-system,'Microsoft YaHei',sans-serif;color:#222;}}\
-         h2{{text-align:center;margin:8px 0;}}.meta{{text-align:center;color:#666;font-size:13px;}}\
-         table{{border-collapse:collapse;width:100%;margin-top:12px;font-size:13px;}}\
-         th,td{{border:1px solid #bbb;padding:4px 8px;}}\
-         th{{background:#f0f3f7;}}td.r{{text-align:right;}}\
-         tfoot td{{font-weight:bold;background:#fafafa;}}\
-         @media print{{body{{font-size:12px;}}}}\
-         .pbar{{position:sticky;top:0;z-index:9;display:flex;gap:14px;align-items:center;background:#1a1a1a;color:#fff;padding:8px 14px;font-family:system-ui,sans-serif;font-size:12px;}}\
-         .pbar button{{background:#fff;color:#111;border:0;border-radius:4px;padding:6px 14px;font-size:13px;cursor:pointer;}}\
-         @media print{{.pbar{{display:none;}}}}</style></head>\
-         <body><h2>{} 科目余额表</h2>\
-         <div class='meta'>期间：{} 至 {}　打印时间：{}</div>\
-         <table><thead><tr>\
+    // 表体自己拼，壳用 `report_html::page_shell` —— 以前这里是一整套独立 `<style>`，
+    // 于是「账套里设了页码/横向/偏移，科目余额表不跟着变」成了长期没人发现的分叉。
+    let table = format!(
+        "<table><thead><tr>\
          <th>科目编码</th><th>科目名称</th><th>期初</th>\
          <th>本期借方</th><th>本期贷方</th><th>期末</th><th>本年累计</th>\
          </tr></thead><tbody>{}</tbody>\
@@ -6587,13 +6578,7 @@ fn trial_balance_html(
          <td class='r'>借 {} / 贷 {}</td>\
          <td class='r'>{}</td><td class='r'>{}</td>\
          <td class='r'>借 {} / 贷 {}</td>\
-         <td class='r'>—</td></tr></tfoot></table>\
-         <div class='pbar'><button onclick='window.print()'>🖨 打印本页</button><span>纸张 / 份数在打印对话框中选择；关闭本页即取消</span></div>\
-         </body></html>",
-        html_escape(company),
-        html_escape(&from),
-        html_escape(&to),
-        chrono::Local::now().format("%Y-%m-%d %H:%M"),
+         <td class='r'>—</td></tr></tfoot></table>",
         body,
         totals.begin_debit.fmt_money(),
         totals.begin_credit.fmt_money(),
@@ -6601,6 +6586,15 @@ fn trial_balance_html(
         totals.period_credit.fmt_money(),
         totals.end_debit.fmt_money(),
         totals.end_credit.fmt_money(),
+    );
+    crate::report_html::page_shell(
+        "科目余额表",
+        company,
+        &format!("期间：{} 至 {}", from, to),
+        "元",
+        &table,
+        7,
+        po,
     )
 }
 
@@ -8687,6 +8681,7 @@ async fn print_so_form(
         &f,
         &doc_size_from_q(&q),
         q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false),
+        &db.options().print,
     );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
@@ -8735,6 +8730,7 @@ async fn print_po_form(
         &f,
         &doc_size_from_q(&q),
         q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false),
+        &db.options().print,
     );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
@@ -8771,6 +8767,7 @@ async fn print_receipt_form(
         &f,
         &doc_size_from_q(&q),
         q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false),
+        &db.options().print,
     );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
@@ -14485,6 +14482,17 @@ fn print_opts_from_q(mut po: fincore::PrintOptions, q: &HashMap<String, String>)
     if let Some(v) = get("po_signline") {
         if !v.is_empty() {
             po.sign_line = v.to_string();
+        }
+    }
+    // 套打偏移：正数=向右/向下（针式打印机走纸偏时对位用）
+    if let Some(v) = get("po_ox").and_then(|v| v.parse::<i16>().ok()) {
+        if (-20..=20).contains(&v) {
+            po.offset_x_mm = v;
+        }
+    }
+    if let Some(v) = get("po_oy").and_then(|v| v.parse::<i16>().ok()) {
+        if (-20..=20).contains(&v) {
+            po.offset_y_mm = v;
         }
     }
     po

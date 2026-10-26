@@ -62,7 +62,7 @@ pub fn report_table_html(
         ));
     }
     let cols = 2 + table.columns.len();
-    shell(
+    page_shell(
         &table.title,
         company,
         &table.subtitle,
@@ -135,7 +135,7 @@ pub fn cash_flow_html(
             cf.unassigned.fmt_money()
         ));
     }
-    shell(
+    page_shell(
         "现金流量表",
         company,
         subtitle,
@@ -174,7 +174,7 @@ pub fn equity_html(
         e.total.change.fmt_money(),
         e.total.end.fmt_money()
     ));
-    shell(
+    page_shell(
         "所有者权益变动表",
         company,
         subtitle,
@@ -189,10 +189,13 @@ pub fn equity_html(
     )
 }
 
-/// 打印页外壳（统一排版，打开即弹打印对话框）
+/// 打印页外壳：**任何**一张表都能套（表体自己拼好传进来）。
 ///
 /// `cols` 用来判自动方向（见 `PrintOptions::landscape`），`po` 提供纸张/字号/边距/页码/落款。
-fn shell(
+///
+/// 公开的理由：科目余额表、明细账这些页面以前各自写了一份 `<style>`，于是
+/// 「网页打印有页码、这张表没有」这类分叉反复出现。表体各不相同，**壳必须只有一个**。
+pub fn page_shell(
     title: &str,
     company: &str,
     subtitle: &str,

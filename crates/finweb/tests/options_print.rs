@@ -121,3 +121,70 @@ async fn options_roundtrip_is_idempotent() {
     let (st, body) = put_options(&state, &sid, &o).await;
     assert_eq!(st, StatusCode::OK, "原样回存应成功：{body}");
 }
+
+/// 套打偏移能存能读。针式打印机走纸偏 2–3mm 是常态，以前只能改驱动或忍着；
+/// 这两个字段丢了，退回去就又是「每次都对不齐」。
+#[tokio::test]
+async fn paper_offset_survives_save_and_reload() {
+    let (state, sid, _g) = ready().await;
+    let mut o = get_options(&state, &sid).await;
+    assert_eq!(o["print"]["offset_x_mm"], 0, "默认不该有偏移：{o}");
+    assert_eq!(o["print"]["offset_y_mm"], 0, "默认不该有偏移：{o}");
+
+    o["print"]["offset_x_mm"] = json!(5);
+    o["print"]["offset_y_mm"] = json!(-3);
+    let (st, body) = put_options(&state, &sid, &o).await;
+    assert_eq!(st, StatusCode::OK, "合法偏移应保存成功：{body}");
+
+    let back = get_options(&state, &sid).await;
+    assert_eq!(back["print"]["offset_x_mm"], 5, "横向偏移没存住：{back}");
+    assert_eq!(back["print"]["offset_y_mm"], -3, "纵向偏移没存住：{back}");
+}
+
+#[tokio::test]
+async fn out_of_range_paper_offset_is_rejected() {
+    let (state, sid, _g) = ready().await;
+    let mut o = get_options(&state, &sid).await;
+    // ±20mm 是「对位」的量级；填 80 说明是想改版式，不是对纸，得拦住问一句
+    o["print"]["offset_x_mm"] = json!(80);
+    let (st, body) = put_options(&state, &sid, &o).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "越界偏移必须被拦：{body}");
+    assert!(body.contains("偏移"), "要讲清是偏移的问题：{body}");
+    assert!(body.contains("80"), "要把填错的值带出来：{body}");
+}
+
+/// 试打一张：`?po_ox=` 覆盖**本次**渲染、不写库。没有这条，用户只能
+/// 「改 → 存 → 去报表 → 打印 → 发现偏 → 回来再改」。
+#[tokio::test]
+async fn preview_query_can_shift_paper_without_saving() {
+    let (state, sid, _g) = ready().await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/reports/trial-balance/print?from=202601&to=202601&po_ox=5",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let html = body_string(resp).await;
+    // 默认页边距 12mm：向右 5 → 左 17、右 7
+    assert!(
+        html.contains("margin:12mm 7mm 12mm 17mm"),
+        "试打参数没有进页边距：{html}"
+    );
+
+    // 库里那份不能被动过
+    let back = get_options(&state, &sid).await;
+    assert_eq!(back["print"]["offset_x_mm"], 0, "试打不该改账套参数");
+}
+
+/// 单据统计前缀写错键名 → 永远用默认值，界面上看不出来。
+#[tokio::test]
+async fn unknown_doc_prefix_key_is_rejected() {
+    let (state, sid, _g) = ready().await;
+    let mut o = get_options(&state, &sid).await;
+    o["doc_prefixes"] = json!({ "purchase": "CG" });
+    let (st, body) = put_options(&state, &sid, &o).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "拼错的键名必须被拦：{body}");
+    assert!(body.contains("purchase"), "要把拼错的键名带出来：{body}");
+}

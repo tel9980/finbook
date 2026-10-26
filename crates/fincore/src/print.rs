@@ -39,6 +39,10 @@ pub struct PrintOptions {
     pub show_signatures: bool,
     /// 落款文字，可自行改（比如加上店名或「复核」）
     pub sign_line: String,
+    /// 套打横向偏移（毫米，正=向右）：针式打印机走纸偏左/偏右时用来对位
+    pub offset_x_mm: i16,
+    /// 套打纵向偏移（毫米，正=向下）
+    pub offset_y_mm: i16,
 }
 
 impl Default for PrintOptions {
@@ -52,6 +56,8 @@ impl Default for PrintOptions {
             show_page_no: true,
             show_signatures: true,
             sign_line: "制表：　　　　　审核：　　　　　负责人：".to_string(),
+            offset_x_mm: 0,
+            offset_y_mm: 0,
         }
     }
 }
@@ -96,10 +102,49 @@ impl PrintOptions {
         if self.show_signatures && self.sign_line.trim().is_empty() {
             out.push("选了显示落款，但落款文字是空的".to_string());
         }
+        if !(-20..=20).contains(&self.offset_x_mm) {
+            out.push(format!(
+                "套打横向偏移应在 −20 到 20 毫米之间，当前是 {}",
+                self.offset_x_mm
+            ));
+        }
+        if !(-20..=20).contains(&self.offset_y_mm) {
+            out.push(format!(
+                "套打纵向偏移应在 −20 到 20 毫米之间，当前是 {}",
+                self.offset_y_mm
+            ));
+        }
         out
     }
 
-    /// 生成 `@page` 与基础排版 CSS（两端共用）。
+    /// 只生成 `@page`（纸张 + 四边页边距 + 页码），**不含字号**。
+    ///
+    /// 套打页（凭证/账簿/单据）自己有以 px 计的排版（预印纸的格子是固定的），
+    /// 被 `font-size:Npt` 一冲就会溢格。所以纸张规则与字号规则分开：
+    /// 报表用 [`Self::page_css`]（两者都要），套打只取这一份。
+    ///
+    /// `base_margin_mm` 是这类纸的**基础**页边距（报表用设置里的 `margin_mm`，
+    /// 套打用纸型自带的值），套打偏移在此基础上加减。
+    pub fn page_box_css(&self, size: &str, base_margin_mm: u8) -> String {
+        let base = base_margin_mm as i32;
+        // 偏移是「内容整体往右下推」，等价于左/上边距变大、右/下变小。
+        // 减到负数会被浏览器当成非法值整条忽略（不是变成 0），所以先夹住。
+        let l = (base + self.offset_x_mm as i32).max(0);
+        let r = (base - self.offset_x_mm as i32).max(0);
+        let t = (base + self.offset_y_mm as i32).max(0);
+        let b = (base - self.offset_y_mm as i32).max(0);
+        let mut css = format!("@page{{size:{size};margin:{t}mm {r}mm {b}mm {l}mm;");
+        if self.show_page_no {
+            css.push_str(
+                "@bottom-right{content:\"第 \" counter(page) \" 页 / 共 \" counter(pages) \" 页\";\
+                 font-size:9pt;color:#666;}",
+            );
+        }
+        css.push('}');
+        css
+    }
+
+    /// 生成 `@page` 与基础排版 CSS（两端共用），供**报表**打印使用。
     ///
     /// 页码用 `@page` 的页边距盒子（`@bottom-right`）实现：这是浏览器里唯一能拿到
     /// `counter(page)` 的地方。旧浏览器（Chrome < 131 等）不认识页边距盒子，
@@ -111,25 +156,17 @@ impl PrintOptions {
         } else {
             "A4 portrait"
         };
-        let mut css = format!(
-            "@page{{size:{size};margin:{m}mm;",
-            m = self.margin_mm
-        );
-        if self.show_page_no {
-            css.push_str(
-                "@bottom-right{content:\"第 \" counter(page) \" 页 / 共 \" counter(pages) \" 页\";\
-                 font-size:9pt;color:#666;}",
-            );
-        }
-        css.push('}');
-        css.push_str(&format!(
-            "body{{font-size:{pt}pt;}}\
-             table{{border-collapse:collapse;width:100%;font-size:{pt}pt;}}\
-             thead{{display:table-header-group;}}\
-             tr,td,th{{break-inside:avoid;page-break-inside:avoid;}}",
-            pt = self.font_pt
-        ));
-        css
+        format!(
+            "{}{}",
+            self.page_box_css(size, self.margin_mm),
+            format!(
+                "body{{font-size:{pt}pt;}}\
+                 table{{border-collapse:collapse;width:100%;font-size:{pt}pt;}}\
+                 thead{{display:table-header-group;}}\
+                 tr,td,th{{break-inside:avoid;page-break-inside:avoid;}}",
+                pt = self.font_pt
+            )
+        )
     }
 
     /// 落款 HTML；关闭时返回空串（调用方直接拼接即可，不会多出空行）
@@ -260,15 +297,46 @@ mod tests {
     }
 
     #[test]
+    fn paper_offset_shifts_the_printable_area() {
+        let mut p = PrintOptions::default();
+        p.margin_mm = 12;
+        p.offset_x_mm = 3;
+        p.offset_y_mm = -2;
+        let css = p.page_box_css("A4 landscape", 12);
+        // 上右下左：向右推 3mm → 左 15、右 9；向上推 2mm → 上 10、下 14
+        assert!(css.contains("margin:10mm 9mm 14mm 15mm"), "{css}");
+    }
+
+    #[test]
+    fn paper_offset_never_produces_a_negative_margin() {
+        let mut p = PrintOptions::default();
+        p.offset_x_mm = -20;
+        let css = p.page_box_css("A4", 10);
+        // 负数边距会被浏览器整条丢弃（不是当 0），所以必须夹住
+        assert!(!css.contains("--"), "{css}");
+        assert!(css.contains("margin:10mm 30mm 10mm 0mm"), "{css}");
+    }
+
+    #[test]
+    fn page_box_has_no_font_rules_so_taoda_keeps_its_grid() {
+        let p = PrintOptions::default();
+        let box_css = p.page_box_css("A4 landscape", 10);
+        assert!(!box_css.contains("font-size:1"), "套打纸型不该被正文字号冲掉：{box_css}");
+        assert!(p.page_css(4).contains("font-size:11pt"), "报表才需要字号");
+    }
+
+    #[test]
     fn out_of_range_settings_are_reported_with_the_value() {
         let mut p = PrintOptions::default();
         p.font_pt = 30;
         p.margin_mm = 1;
         p.orientation = "sideways".into();
+        p.offset_y_mm = 40;
         let probs = p.problems();
         assert!(probs.iter().any(|x| x.contains("30")), "{probs:?}");
         assert!(probs.iter().any(|x| x.contains("当前是 1")), "{probs:?}");
         assert!(probs.iter().any(|x| x.contains("sideways")), "{probs:?}");
+        assert!(probs.iter().any(|x| x.contains("40")), "偏移越界也要报出来：{probs:?}");
     }
 
     #[test]

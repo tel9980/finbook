@@ -33,6 +33,10 @@ const FADV = (name) => ["test", "-p", "findb", "--lib", `advanced::tests::${name
 // 勾了页码纸上没有、选了横向还是竖的、账套参数被拒了却照样存进去。
 const FPRINT = (name) => ["test", "-p", "fincore", "--lib", `print::tests::${name}`];
 const OPT = (name) => ["test", "-p", "finweb", "--test", "options_print", "--", name];
+// v1.8.28 套打：凭证/账簿/单据也走账套里的纸张设置。失效形态是"设置对了但纸上没变"。
+const FPFORM = (name) => ["test", "-p", "findb", "--lib", `printform::tests::${name}`];
+// 账套参数结构校验（fincore::BookOptions::validate）
+const FOPT = (name) => ["test", "-p", "fincore", "--lib", `account::tests::${name}`];
 
 const MUT = [
   {
@@ -435,6 +439,38 @@ const MUT = [
     from: "        out.extend(self.print.problems());",
     to: "        // out.extend(self.print.problems());",
     cmd: OPT("out_of_range_print_settings_are_rejected_with_the_value"),
+  },
+  {
+    // 偏移不进页边距 → 用户把"套打偏移"调到 +5mm，纸上一点没动
+    name: "㉑ 套打偏移不进页边距",
+    file: "crates/fincore/src/print.rs",
+    from: "        let l = (base + self.offset_x_mm as i32).max(0);",
+    to: "        let l = base;",
+    cmd: FPRINT("paper_offset_shifts_the_printable_area"),
+  },
+  {
+    // 负偏移不夹零 → 生成 margin:-8mm，浏览器整条丢弃，纸张回到默认边距（比不设还乱）
+    name: "㉑ 负偏移不夹到零",
+    file: "crates/fincore/src/print.rs",
+    from: "        let l = (base + self.offset_x_mm as i32).max(0);\n        let r = (base - self.offset_x_mm as i32).max(0);",
+    to: "        let l = base + self.offset_x_mm as i32;\n        let r = base - self.offset_x_mm as i32;",
+    cmd: FPRINT("paper_offset_never_produces_a_negative_margin"),
+  },
+  {
+    // 凭证套打自己写死纸张 → 账套里设的页码/偏移对凭证不生效（历史分叉复现）
+    name: "㉑ 凭证套打不认账套版式",
+    file: "crates/findb/src/printform.rs",
+    from: 'page = po.page_box_css("A4 landscape", 10)',
+    to: 'page = String::new()',
+    cmd: FPFORM("voucher_form_honours_paper_offset_and_page_numbers"),
+  },
+  {
+    // 预算控制值拼错（warning）不报 → 静默按"关闭"跑，超预算一路放行
+    name: "㉑ 预算控制拼错也放行",
+    file: "crates/fincore/src/account.rs",
+    from: '        if !matches!(\n            self.budget_control.trim(),\n            "" | "off" | "warn" | "strong"\n        ) {',
+    to: '        if false {',
+    cmd: FOPT("options_validation_catches_silent_misconfigurations"),
   },
   {
     // 业务默认科目不查末级：填了一级科目照样存得进，等到点"发货"才炸

@@ -11861,6 +11861,13 @@ function openAuxEditor(main, ent, kind) {
 }
 
 // ---------------- 账套参数 ----------------
+// 套打偏移：夹在 ±20mm 内；输入非法时沿用旧值（不要让一次手误把版式打歪）
+function clampI16(v, fallback) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n)) return Number.isFinite(+fallback) ? +fallback : 0;
+  return Math.max(-20, Math.min(20, n));
+}
+
 async function viewOptions(main) {
   main.innerHTML = `<h2>账套参数</h2><div class="muted">加载中…</div>`;
   let o;
@@ -11872,6 +11879,9 @@ async function viewOptions(main) {
     sign_line: "制表：　　　　　审核：　　　　　负责人：",
   }, o.print || {});
   const pOr = p.orientation, pFnt = p.font_pt, pMar = p.margin_mm;
+  // 套打偏移：老账套没有这两个字段，缺省 0
+  const pOx = Number.isFinite(+p.offset_x_mm) ? +p.offset_x_mm : 0;
+  const pOy = Number.isFinite(+p.offset_y_mm) ? +p.offset_y_mm : 0;
   main.innerHTML = `
     <h2>账套参数</h2>
     <div class="panel" style="max-width:640px">
@@ -11920,6 +11930,11 @@ async function viewOptions(main) {
         <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-print-sign" ${p.show_signatures ? "checked" : ""} />落款</label>
       </div>
       <div class="field"><label>落款文字（制表 / 审核 / 负责人，可自行改）</label><input id="op-print-signline" value="${esc(p.sign_line)}" /></div>
+      <div class="field" style="display:flex;gap:20px;flex-wrap:wrap;align-items:end">
+        <label>套打偏移 左右 <input id="op-print-ox" type="number" min="-20" max="20" value="${pOx}" style="width:64px" /> mm</label>
+        <label>上下 <input id="op-print-oy" type="number" min="-20" max="20" value="${pOy}" style="width:64px" /> mm</label>
+        <span class="muted" style="font-size:12px">正数=向右/向下。凭证、账簿、单据套打走预印纸时用它对位</span>
+      </div>
       <div class="toolbar" style="margin-top:6px">
         <button class="btn ghost" id="op-print-preview">试打一张（按上面设置，未保存也生效）</button>
         <span class="muted" style="font-size:12px">页码靠浏览器「页边距盒子」实现，Chrome 131 之前的旧内核会整块忽略——勾了页码纸上却没有，就用新版浏览器。</span>
@@ -11938,6 +11953,8 @@ async function viewOptions(main) {
       po_pageno: $("#op-print-pageno").checked ? "1" : "0",
       po_sign: $("#op-print-sign").checked ? "1" : "0",
       po_signline: $("#op-print-signline").value,
+      po_ox: $("#op-print-ox").value,
+      po_oy: $("#op-print-oy").value,
     });
     const cur = state.current || "";
     window.open(`/api/reports/trial-balance/print?from=${encodeURIComponent(cur)}&to=${encodeURIComponent(cur)}&${q}`, "_blank");
@@ -11975,6 +11992,8 @@ async function viewOptions(main) {
         show_page_no: $("#op-print-pageno").checked,
         show_signatures: $("#op-print-sign").checked,
         sign_line: $("#op-print-signline").value,
+        offset_x_mm: clampI16($("#op-print-ox").value, p.offset_x_mm),
+        offset_y_mm: clampI16($("#op-print-oy").value, p.offset_y_mm),
       }),
       biz_accounts: {
         ar: $("#op-biz-ar").value.trim() || "112201",

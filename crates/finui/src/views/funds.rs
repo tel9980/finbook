@@ -1709,6 +1709,7 @@ impl FundsView {
                         &company,
                         &prints,
                         &Default::default(),
+                        &ctx.db().options().print,
                     );
                     match crate::views::export::print_html_content("收付款单套打", &html) {
                         Ok(m) => {

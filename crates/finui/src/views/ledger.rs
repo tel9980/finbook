@@ -546,7 +546,8 @@ impl LedgerView {
             rows,
             page_from_1: true,
         };
-        let html = findb::printform::ledger_form_html(&company, &ledger);
+        let html =
+            findb::printform::ledger_form_html(&company, &ledger, &ctx.db().options().print);
         let name = format!("{tab_name}_{}_{}", self.code, self.from);
         match crate::views::export::print_html_content(&name, &html) {
             Ok(m) => ctx.info(m),
