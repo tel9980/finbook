@@ -22,6 +22,14 @@ use finweb::realm::RealmDb;
 use finweb::state::{BookRegistry, SessionStore, WebState};
 
 pub fn test_state() -> (Arc<WebState>, PathBuf, tempfile::TempDir) {
+    test_state_with_static(PathBuf::new())
+}
+
+/// 同 [`test_state`]，但把静态资源目录指到指定位置（用于验证静态资源响应头）。
+///
+/// 单独开一个入口而不是给 `test_state` 加参数：绝大多数用例不关心静态目录，
+/// 加参数会让 190 多个调用点全部要改一遍。
+pub fn test_state_with_static(static_dir: PathBuf) -> (Arc<WebState>, PathBuf, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("创建临时目录失败");
     // 平台身份库：引导管理员 boss（不强制改密，便于测试）
     let realm = RealmDb::open(dir.path().join("realm.db")).expect("建 realm 失败");
@@ -76,7 +84,7 @@ pub fn test_state() -> (Arc<WebState>, PathBuf, tempfile::TempDir) {
         books_dir.clone(),
         "test".to_string(),
         opts.start_period.ymm(),
-        std::path::PathBuf::new(),
+        static_dir,
         "test".to_string(),
     );
     (state, books_dir, dir)

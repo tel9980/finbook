@@ -344,7 +344,7 @@ const appJs = fs.readFileSync(jsList.file, "utf8");
 // 下限 = 当前实际条数，所以「删掉几条」和「清单被清空」都会被立刻发现。
 // （之前写的是 10/7，而实际已到 16/17 —— 下限形同虚设，删掉 6 条都不会有人知道。）
 const MIN_CHECK_MUTATIONS = 22;
-const MIN_RUST_MUTATIONS = 41;
+const MIN_RUST_MUTATIONS = 44;
 if (jsList.cases.length < MIN_CHECK_MUTATIONS) {
   console.log(
     `FAIL mutate-check 只剩 ${jsList.cases.length} 条变异（下限 ${MIN_CHECK_MUTATIONS}）—— ` +
@@ -1015,19 +1015,33 @@ if (FIX_ROOT) {
     }
     return out.join("\n");
   }
-  const fx = fnBodyOf(apiSrc, "test_state");
+  // 按**内容**找夹具，而不是按名字：`test_state()` 现在只是转调
+  // `test_state_with_static(PathBuf::new())` 的薄壳（为了让静态资源目录可注入），
+  // 字面量落在被转调的那个函数里。按名字取 body 会取到 3 行空壳，然后得出
+  // 「夹具没写闸门」的错误结论 —— 这正是本节开头警告的那类假失败。
+  // 于是改成：在文件里找**第一个 body 里出现 `BookOptions {`** 的函数。
+  let fxName = "test_state";
+  let fx = null;
+  for (const m of apiSrc.matchAll(/^\s*(?:pub(?:\(crate\))?\s+)?(?:async\s+)?fn\s+(\w+)\s*\(/gm)) {
+    const body = fnBodyOf(apiSrc, m[1]);
+    if (body && /\bBookOptions\s*\{/.test(body)) {
+      fxName = m[1];
+      fx = body;
+      break;
+    }
+  }
   if (!fx) {
     bad++;
     console.log(
       "FAIL 在 " + FIX_FILES.map((f) => path.relative(FIX_ROOT, f)).join(" / ") +
-        " 里都找不到 test_state() —— 夹具改名或搬走时本检查要跟着改"
+        " 里都找不到构造 BookOptions 的夹具函数 —— 夹具改名或搬走时本检查要跟着改"
     );
   } else {
-    console.log(`测试夹具：${fxFile} 的 test_state() 显式声明了两道闸门`);
+    console.log(`测试夹具：${fxFile} 的 ${fxName}() 显式声明了两道闸门`);
     for (const field of ["enable_audit", "require_cashier"]) {
       if (!new RegExp("\\b" + field + "\\s*:").test(fx)) {
         bad++;
-        console.log(`FAIL test_state() 的夹具没有显式写 ${field} —— 它在靠 ..Default::default() 继承`);
+        console.log(`FAIL ${fxName}() 的夹具没有显式写 ${field} —— 它在靠 ..Default::default() 继承`);
         console.log(`      修法：在 BookOptions 字面量里写明 ${field}: <true|false>，并说明为何与生产默认值不同`);
       }
     }
@@ -1037,7 +1051,7 @@ if (FIX_ROOT) {
         const around = fx.slice(Math.max(0, m.index - 700), m.index);
         if (!/试[具夹]|显式|夹具|默认值/.test(around)) {
           bad++;
-          console.log(`FAIL test_state() 把 ${field} 显式设成 ${m[1]}，但上面没有一句说明为什么`);
+          console.log(`FAIL ${fxName}() 把 ${field} 显式设成 ${m[1]}，但上面没有一句说明为什么`);
         }
       }
     }

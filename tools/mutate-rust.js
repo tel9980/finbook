@@ -18,6 +18,7 @@ const CORE = (name) => ["test", "-p", "fincore", "--lib", "user::tests::"];
 // v1.8.21「导入导出闭环」的三个新 target。这类功能最典型的失效是
 // 「界面点得动、文件也下来了，但数据其实没进去/没出来」，所以每条都要有变异守着。
 const XLSX = (name) => ["test", "-p", "finweb", "--test", "export_xlsx", "--", name];
+const STATIC = (name) => ["test", "-p", "finweb", "--test", "static_cache", "--", name];
 const ROUND = (name) => ["test", "-p", "finweb", "--test", "roundtrip", "--", name];
 // imports.rs 的测试都在 `mod tests` 里，全路径是 `imports::tests::<name>`
 const FIMPORT = (name) => ["test", "-p", "findb", "--lib", `imports::tests::${name}`];
@@ -379,6 +380,32 @@ const MUT = [
     from: "            SizeAbove::new(1024)",
     to: "            SizeAbove::new(u16::MAX)",
     cmd: XLSX("big_responses_are_gzipped_but_xlsx_is_not"),
+  },
+  {
+    // 本年累计偷偷退回「读区间列」→ 首页「今年累计赚多少」变成「这个月赚多少」，
+    // 两个数各自都像对的，只有年终才发现对不上。
+    name: "⑲ 本年累计读成区间发生额",
+    file: "crates/findb/src/advanced.rs",
+    from: "            Flow::Ytd => r.ytd_credit - r.ytd_debit,",
+    to: "            Flow::Ytd => r.credit - r.debit,",
+    cmd: FADV("financial_ytd_matches_scanning_from_january"),
+  },
+  {
+    // 带版本号的静态资源又变回每次回源验证 → 手机每次打开都重下 211KB。
+    // 这是性能退化，不会报错，只能靠这类测试守。
+    name: "⑲ 版本化静态资源不再长缓存",
+    file: "crates/finweb/src/handlers.rs",
+    from: "                    if versioned {",
+    to: "                    if false {",
+    cmd: STATIC("versioned_asset_is_cacheable_for_a_year"),
+  },
+  {
+    // 首页也被缓存 → 升级后用户浏览器里钉着旧的 ?v=，拿旧脚本打新接口。
+    name: "⑲ 首页被缓存住",
+    file: "crates/finweb/src/handlers.rs",
+    from: "    let mut r = Html(html.replace(\"{{V}}\", &state.assets_ver)).into_response();\n    r.headers_mut().insert(\n        header::CACHE_CONTROL,\n        axum::http::HeaderValue::from_static(\"no-cache\"),\n    );",
+    to: "    let r = Html(html.replace(\"{{V}}\", &state.assets_ver)).into_response();",
+    cmd: STATIC("index_html_is_never_cached"),
   },
 ];
 

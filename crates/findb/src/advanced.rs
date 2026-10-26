@@ -1936,6 +1936,45 @@ pub fn financial_totals(
     from: Period,
     scope: Option<&fincore::user::User>,
 ) -> DbResult<FinTotals> {
+    fin_totals_impl(db, period, from, scope, Flow::Range)
+}
+
+/// 与 [`financial_totals`] 同口径，但损益取**本年累计**（1 月至 `period`）。
+///
+/// 为什么单独有这个函数：首页要同时显示「这个月赚多少」和「今年累计赚多少」。
+/// 原来后者是再调一次 `financial_totals(db, cur, 1 月, ..)` —— 那是一组**不同的
+/// 查询键**，等于把整本账又扫了一遍（6000 张凭证规模下约 8ms）。
+///
+/// 其实不用扫：余额快照里 `ytd_debit/ytd_credit` 本来就是「1 月至本期」的累计
+/// 发生额（`BalanceSnapshot::load_raw` 已经算好了），资产/负债又都是**时点数**，
+/// 与区间无关。所以只要把 `from` 传成 `period`（查询键与 `financial_totals` 完全
+/// 相同，命中同一份缓存），再把损益读成 `ytd_*`，累计数就白拿了。
+///
+/// **调用时 `from` 必须等于 `period`**，否则这笔账会退化成再扫一遍全表。
+pub fn financial_ytd(
+    db: &Db,
+    period: Period,
+    scope: Option<&fincore::user::User>,
+) -> DbResult<FinTotals> {
+    fin_totals_impl(db, period, period, scope, Flow::Ytd)
+}
+
+/// 损益取数用哪一列发生额
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Flow {
+    /// 区间发生额（`debit/credit`）：`from..=period`
+    Range,
+    /// 本年累计发生额（`ytd_debit/ytd_credit`）：1 月至 `period`
+    Ytd,
+}
+
+fn fin_totals_impl(
+    db: &Db,
+    period: Period,
+    from: Period,
+    scope: Option<&fincore::user::User>,
+    flow: Flow,
+) -> DbResult<FinTotals> {
     use crate::balances::{BalanceQuery, BalanceSnapshot};
     let mut bq = BalanceQuery::range(from, period);
     if let Some(u) = scope {
@@ -1952,13 +1991,21 @@ pub fn financial_totals(
         pl_bq = pl_bq.with_user_scope(u);
     }
     let pl_snap = BalanceSnapshot::load(db, &pl_bq)?;
+    // 损益取数：`Flow::Ytd` 读本年累计列，其余读区间列。两者都来自**同一份**
+    // 快照，所以「本期」和「本年累计」不需要各扫一遍全表。
     let occ = |code: &str| {
         let r = pl_snap.for_account(code, None);
-        r.credit - r.debit // 收入类贷方正
+        match flow {
+            Flow::Range => r.credit - r.debit, // 收入类贷方正
+            Flow::Ytd => r.ytd_credit - r.ytd_debit,
+        }
     };
     let exp = |code: &str| {
         let r = pl_snap.for_account(code, None);
-        r.debit - r.credit // 费用类借方正
+        match flow {
+            Flow::Range => r.debit - r.credit, // 费用类借方正
+            Flow::Ytd => r.ytd_debit - r.ytd_credit,
+        }
     };
     // 流动资产 ≈ 货币资金 + 交易性金融资产 + 应收 + 预付 + 其他应收 + 存货
     let cur_asset = b("1001")
@@ -3068,6 +3115,50 @@ mod tests {
         let sum: Money = mine.iter().map(|d| d.amount).fold(Money::ZERO, |x, y| x + y);
         assert_eq!(sum, t.cost, "成本构成合计应等于营业成本");
         assert_eq!(t.cost, m("20000"));
+    }
+
+    /// 本年累计净利润：读快照的 `ytd_*` 列，必须与「从年初再扫一遍」完全一致。
+    ///
+    /// 这条测试守的是一个很容易被"优化"掉的等价关系：`financial_ytd` 为了
+    /// 省一次全表扫，不再用 `financial_totals(db, cur, 年初, ..)`，而是命中同一份
+    /// 快照读本年累计列。哪天有人动了 `load_raw` 里 `ytd_from` 的算法（比如跨年
+    /// 时该不该含建账前的 `debit_accum`），两边就会分叉——首页显示的年累计与
+    /// 利润表的年累计对不上，而两个数各自都"看着对"。
+    #[test]
+    fn financial_ytd_matches_scanning_from_january() {
+        let db = tmpdb("fin_ytd_eq");
+        let start = Period::new(2026, 1).unwrap();
+        // 1 月：一笔收入 + 一笔费用（累计从 1 月起算）
+        post(&db, start, 1, &[("112201", "50000", "0"), ("600101", "0", "50000")]);
+        post(&db, start, 2, &[("660201", "8000", "0"), ("1001", "0", "8000")]);
+        // 3 月：成本类支出（5101 制造费用，最容易被漏的那一类）
+        let p = Period::new(2026, 3).unwrap();
+        post(&db, p, 1, &[("112201", "20000", "0"), ("600101", "0", "20000")]);
+        post(&db, p, 2, &[("510105", "6000", "0"), ("220201", "0", "6000")]);
+
+        let by_scan = financial_totals(&db, p, start, None).unwrap();
+        let by_ytd = financial_ytd(&db, p, None).unwrap();
+
+        assert_eq!(
+            by_ytd.revenue, by_scan.revenue,
+            "本年累计收入必须与从 1 月扫到本期一致"
+        );
+        assert_eq!(by_ytd.cost, by_scan.cost, "本年累计成本必须一致（含制造费用）");
+        assert_eq!(
+            by_ytd.net_profit, by_scan.net_profit,
+            "本年累计净利润必须一致——首页就是显示这个数"
+        );
+        // 数也得对：收入 70000，成本 6000 + 费用 8000 → 净利 56000
+        assert_eq!(by_ytd.revenue, m("70000"));
+        assert_eq!(by_ytd.net_profit, m("56000"));
+
+        // 时点数与区间无关：资产负债合计与「本期」那份必须相同
+        let cur = financial_totals(&db, p, p, None).unwrap();
+        assert_eq!(by_ytd.total_asset, cur.total_asset);
+        assert_eq!(by_ytd.total_liab, cur.total_liab);
+        assert_eq!(by_ytd.equity, cur.equity);
+        // 而本期净利只有 3 月那两笔：20000 - 6000
+        assert_eq!(cur.net_profit, m("14000"));
     }
 
     /// 余额快照缓存：写完立刻读，必须看到新数。

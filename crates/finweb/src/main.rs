@@ -266,7 +266,11 @@ fn static_dir() -> PathBuf {
 fn asset_version() -> String {
     let dir = static_dir();
     let mut latest: u128 = 0;
-    for name in ["app.js", "style.css", "util.js"] {
+    // 必须与 index.html 里带 `?v=` 的**每一个**脚本/样式表对应上。
+    // 漏一个，那个文件单独改动时版本号不变 → 浏览器按旧 URL 拿到旧的缓存副本
+    // （静态资源现在带一年期 `immutable`，漏项不再是「下次回源就对了」而是
+    // 「一直错到别的文件也被改」）。`icons.js` 曾经就漏在这份清单外。
+    for name in ["app.js", "style.css", "util.js", "icons.js"] {
         if let Ok(meta) = std::fs::metadata(dir.join(name)) {
             if let Ok(m) = meta.modified() {
                 if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {

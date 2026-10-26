@@ -90,11 +90,33 @@ async fn spa_fallback(State(state): State<Arc<WebState>>, req: axum::extract::Re
         };
     }
     use tower::ServiceExt;
+    // 带 `?v=` 的资源可以长期缓存：`index.html` 里的 `{{V}}` 会替换成静态文件
+    // mtime 推出的版本号，**内容一变 URL 就变**，所以让浏览器一年内不再回源是安全的。
+    // 不带 `?v=` 的直接访问（手输 /app.js、favicon 之类）必须回源验证，
+    // 否则升级后用户会拿着旧脚本撞新接口。
+    let versioned = req
+        .uri()
+        .query()
+        .map(|q| q.split('&').any(|kv| kv.starts_with("v=")))
+        .unwrap_or(false);
     tower_http::services::ServeDir::new(state.static_dir.clone())
         .oneshot(req)
         .await
         // tower-http 的响应体类型映射为 axum Body
-        .map(|resp| resp.map(axum::body::Body::new))
+        .map(|resp| {
+            let (mut parts, body) = resp.map(axum::body::Body::new).into_parts();
+            if parts.status.is_success() {
+                parts.headers.insert(
+                    header::CACHE_CONTROL,
+                    if versioned {
+                        axum::http::HeaderValue::from_static("public, max-age=31536000, immutable")
+                    } else {
+                        axum::http::HeaderValue::from_static("no-cache")
+                    },
+                );
+            }
+            Response::from_parts(parts, body)
+        })
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
@@ -948,7 +970,15 @@ async fn serve_index(State(state): State<Arc<WebState>>) -> Response {
                 .into_response();
         }
     };
-    Html(html.replace("{{V}}", &state.assets_ver)).into_response()
+    // 首页**绝不能被缓存**：它带 `{{V}}` 占位符替换，缓存住就等于把「升级前的
+    // 资源版本号」钉在用户浏览器里，升级后拿旧脚本打新接口。措辞用 `no-cache`
+    // 而不是 `no-store`：允许存，但每次必须回源验证（304 很便宜）。
+    let mut r = Html(html.replace("{{V}}", &state.assets_ver)).into_response();
+    r.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    r
 }
 
 // ---------------------------------------------------------------------------
@@ -3099,10 +3129,11 @@ async fn get_dashboard(
 /// `financial_analysis` / `money_position`），**不另算一套**。首页自己算一遍
 /// 的下场是「首页说赚 10 万，点进利润表是 8.5 万」，而两边都"看起来对"。
 fn home_brief(db: &findb::Db, cur: Period) -> Result<HomeBrief, AppError> {
-    let year_from = Period::new(cur.year(), 1).unwrap_or(cur);
-
     let t = findb::advanced::financial_totals(db, cur, cur, None)?;
-    let ytd = findb::advanced::financial_totals(db, cur, year_from, None)?;
+    // 本年累计：不再用 `financial_totals(db, cur, 年初, ..)`——那是另一组查询键，
+    // 等于把整本账重扫一遍（6000 张凭证规模下约 8ms）。快照里已经算好了
+    // 1 月至本期的累计发生额，`financial_ytd` 命中同一份缓存直接读它。
+    let ytd = findb::advanced::financial_ytd(db, cur, None)?;
     // 上月净利润：只为了算环比。"这个月赚 8 万"本身没有意义，老板真正想
     // 知道的是"比上个月好还是差"。取不到（建账首月）就当 0。
     let prev_np = findb::advanced::financial_totals(db, cur.prev(), cur.prev(), None)
