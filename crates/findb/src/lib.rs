@@ -121,6 +121,12 @@ impl AsConn for rusqlite::Transaction<'_> {
 /// 任何一次写入都会让旧键不再被命中，最坏情况只是多留了几份过期快照。
 /// 因此这里只需要一个上限，超出就整体清空——比维护 LRU 简单得多，
 /// 而且清空的代价只是下一批查询变回原速。
+///
+/// 已知边界（刻意接受，别以为是漏洞）：缓存跟着 `Db` 走，**别的进程**写同一个
+/// 账套文件不会让本进程的缓存失效。桌面版独占账套文件；网页版每个请求
+/// `BookRegistry::open` 都新建一个 `Db`（新连接），缓存在请求结束时就丢了，
+/// 下一个请求自然是新数据。真要跨进程共享账套，得换成按文件 mtime 或
+/// `PRAGMA data_version` 做键——那时再改这里。
 #[derive(Default)]
 pub(crate) struct SnapCache {
     map: std::collections::HashMap<String, std::sync::Arc<crate::balances::BalanceSnapshot>>,
