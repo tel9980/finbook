@@ -275,3 +275,62 @@ async fn party_with_two_identities_shows_net() {
     assert_eq!(cust["net_is_receivable"], false, "客户行净额方向应翻成我欠他：{b}");
     assert_eq!(supp["net_is_receivable"], false, "供应商行仍是我欠他：{b}");
 }
+
+/// 进入账套时的「当前期间」必须是**当前期间**，不是建账首月。
+///
+/// 曾经的实现是 `select_book` 里取 `db.options().start_period`，后果：
+/// 账套结到 2026-09 之后，网页一登录仍停在 2026-01，首页「本期经营结果」
+/// 「钱在哪」整块显示的是建账首月的数，而且不会自己动。桌面版一直是
+/// `periods::current_period`（最后一个已结账期间的下一期），网页版没跟上。
+#[tokio::test]
+async fn selecting_a_book_lands_on_current_period_not_start_period() {
+    let (state, _dir, _tmp) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 2026-01 录一张并记账、结账 → 当前期间应推进到 2026-02
+    let id = voucher(
+        &state,
+        &sid,
+        202601,
+        "2026-01-15",
+        1,
+        serde_json::json!([
+            {"line":0,"summary":"挂账","account_code":"112201","debit":"100","credit":"0","aux":{"customer":"C01"}},
+            {"line":1,"summary":"收入","account_code":"600101","debit":"0","credit":"100"}
+        ]),
+    )
+    .await;
+    post_voucher(&state, &sid, id).await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post("/api/periods/202601/close", &sid, serde_json::json!({})))
+        .await
+        .unwrap();
+    let st = resp.status();
+    let txt = body_string(resp).await;
+    assert_eq!(st, StatusCode::OK, "结账应成功：{txt}");
+
+    // 重新进一次账套（就是登录后点账套那一步）
+    let st = select_book(&state, &sid, "b1").await;
+    assert_eq!(st, StatusCode::OK);
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/dashboard", &sid))
+        .await
+        .unwrap();
+    let txt = body_string(resp).await;
+    let d: serde_json::Value = serde_json::from_str(&txt).expect("dashboard 应是 JSON");
+    assert_eq!(
+        d["closed_upto"], "2026-01",
+        "前置条件：应已结账到 2026-01：{txt}"
+    );
+    assert_eq!(
+        d["current_period"], "2026-02",
+        "进账套后当前期间应停在「最后一个已结账期间的下一期」，不是建账首月 2026-01：{txt}"
+    );
+    // 首页那几个数字也得是 2026-02 的（这个月没录凭证 → 0），
+    // 而不是 2026-01 那 100
+    assert_eq!(
+        d["brief"]["revenue"], "0.00",
+        "首页应显示当前期间（2026-02）的数，不是建账首月的：{txt}"
+    );
+}

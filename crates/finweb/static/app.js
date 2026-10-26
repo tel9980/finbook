@@ -2703,14 +2703,24 @@ function homeHero(d) {
 // ===========================================================================
 async function viewDashboard(main) {
   main.innerHTML = `<h2>我的工作台</h2><div class="muted">加载中…</div>`;
-  let d;
-  try { d = await api("/dashboard"); } catch (e) { main.innerHTML = `<h2>我的工作台</h2><div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; return; }
-  let status = { admin_set: false };
-  try { status = await api("/setup/status"); } catch (e) {}
+  // 三个接口互不依赖，必须并行发。串行等的时候，手机上 4G 每一次往返
+  // 都是 150–300ms，首屏白等的时间就是三次 RTT 之和（实测服务端三段
+  // 263ms，串行到用户手上接近 1 秒）。
+  const [dRes, statusRes, wbRes] = await Promise.allSettled([
+    api("/dashboard"),
+    api("/setup/status"),
+    api(`/workbench?periods=${Number(state.wbPeriods) || 12}`),
+  ]);
+  if (dRes.status !== "fulfilled") {
+    const msg = (dRes.reason && dRes.reason.message) || String(dRes.reason);
+    main.innerHTML = `<h2>我的工作台</h2><div class="muted" style="color:var(--err)">${esc(msg)}</div>`;
+    return;
+  }
+  const d = dRes.value;
+  const status = statusRes.status === "fulfilled" ? statusRes.value : { admin_set: false };
   let wb = null;
-  try {
-    wb = await api(`/workbench?periods=${Number(state.wbPeriods) || 12}`);
-  } catch (e) { toast(`工作台数据加载失败：${e.message}`, "err"); }
+  if (wbRes.status === "fulfilled") wb = wbRes.value;
+  else { const m = (wbRes.reason && wbRes.reason.message) || String(wbRes.reason); toast(`工作台数据加载失败：${m}`, "err"); }
   const adminBanner = status.admin_set
     ? `<div class="banner set">✅ 管理员账号已设定</div>`
     : `<div class="banner unset">🔧 管理员账号未设定 —— 首次成功登录的账号将自动成为系统管理员。</div>`;

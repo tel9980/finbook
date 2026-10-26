@@ -34,6 +34,8 @@ use tracing::error;
 
 use crate::dto::*;
 use crate::realm::{RealmBook, RealmDb};
+use tower_http::compression::predicate::{NotForContentType, Predicate, SizeAbove};
+use tower_http::compression::CompressionLayer;
 use crate::state::{
     clear_cookie_header, parse_money_checked, parse_period, period_param, period_range_param,
     period_to_str, AppError, CurrentUser, RealmUser, WebState,
@@ -847,6 +849,19 @@ pub fn router(state: Arc<WebState>) -> Router {
         ))
         // M-9 统一 fallback：/api/* 未匹配 → 已登录 404 / 未登录 401；其余走静态资源
         .fallback(spa_fallback)
+        // 压缩。放在最外层（最后 .layer）= 连静态资源和 fallback 一起压：
+        // app.js 800KB → gzip 后 207KB，手机 4G 上首屏少下 0.6MB；
+        // /api/* 的 JSON 同理（凭证列表、报表都是几倍冗余的文本）。
+        //
+        // 已经压过的类型不再压：xlsx / zip 内部就是 deflate，再 gzip 一遍
+        // 体积不变、CPU 白烧，大导出还会明显变慢。
+        .layer(CompressionLayer::new().compress_when(
+            SizeAbove::new(1024)
+                .and(NotForContentType::new("application/zip"))
+                .and(NotForContentType::new(
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )),
+        ))
         .with_state(state)
 }
 
@@ -2299,9 +2314,17 @@ async fn select_book(
     if !allowed {
         return Err(AppError::forbidden("无权访问该账套"));
     }
-    // 进入账套时把会话当前期间同步为该账套启用期间
+    // 进入账套时把会话当前期间同步为该账套的**当前期间**（最后一个已结账
+    // 期间的下一期），不是启用期间。桌面版就是这么做的
+    // （crates/finui/src/state.rs 的 `periods::current_period`）。
+    //
+    // 曾经这里取值是 `db.options().start_period`，后果是：账套结账推到 2026-10
+    // 之后，网页一进来仍停在 2025-01，首页整块「本期经营结果」「钱在哪」
+    // 显示的是建账首月的数，且不会自己动——老板以为系统算错了。
     if let Ok(db) = state.db_for(&key) {
-        let ymm = db.options().start_period.ymm();
+        let ymm = periods::current_period(&db)
+            .unwrap_or_else(|_| db.options().start_period)
+            .ymm();
         state.sessions.set_period(&user.token, ymm);
         drop(db);
     }
@@ -3094,10 +3117,14 @@ fn home_brief(db: &findb::Db, cur: Period) -> Result<HomeBrief, AppError> {
         Some((t.net_profit.to_f64() / t.revenue.to_f64() * 100.0 * 10.0).round() / 10.0)
     };
 
-    // 成本构成 Top 3：老板一定会问"钱都花哪了"，最大的几块直接摆出来
+    // 成本构成 Top 3：老板一定会问"钱都花哪了"，最大的几块直接摆出来。
+    //
+    // 用 cost_drivers_of 而不是 financial_analysis：后者为了画整年趋势要
+    // 逐月调 financial_totals（10 个月 = 10 次全表扫），而这里只要三条。
+    // 实测首页 233ms 里有 160ms 是这么白烧的。
     let mut cost_top = Vec::new();
-    if let Ok(a) = findb::advanced::financial_analysis(db, cur, None) {
-        for d in a.cost_drivers.iter().take(3) {
+    if let Ok(drivers) = findb::advanced::cost_drivers_of(db, cur, cur, None) {
+        for d in drivers.iter().take(3) {
             if d.amount.is_zero() {
                 continue;
             }

@@ -79,7 +79,15 @@ pub fn get(db: &Db, code: &str) -> DbResult<Option<Account>> {
 
 /// 构建科目表（含树形关系）
 pub fn chart(db: &Db) -> DbResult<Chart> {
-    chart_of(db.conn())
+    // 走连接级缓存：科目表在一个请求里会被取几十次（每条分录补辅助核算、
+    // 每次余额查询、每张报表都取），而它只在改科目时才变。命中条件是
+    // 连接累计写行数没变，所以改完科目立刻就是新的。
+    if let Some(c) = db.chart_cache_get() {
+        return Ok(c);
+    }
+    let c = chart_of(db.conn())?;
+    db.chart_cache_put(&c);
+    Ok(c)
 }
 
 /// 同 `chart`，但只依赖连接：凭证守卫要在自己的事务里取科目表，

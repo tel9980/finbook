@@ -337,3 +337,47 @@ async fn upload_rejects_non_finbook_file() {
         "拒绝理由要说人话（提到「账套」）：{body}"
     );
 }
+
+/// 大响应要 gzip，xlsx 不要 gzip。
+///
+/// 前端 `app.js` 是 780KB、科目表 JSON 几十 KB，手机上走公网时这一层直接决定
+/// 「打开要几秒」。而 xlsx 本身是 zip，再压一遍只是白烧 CPU、还会把
+/// `Content-Length` 变成未知（进度条没了）。
+///
+/// 两个方向都要守：**该压的压了**、**不该压的没压**。只断言前者的话，
+/// 哪天有人把整条链路改成「全部压缩」，这个测试照样绿。
+#[tokio::test]
+async fn big_responses_are_gzipped_but_xlsx_is_not() {
+    let (state, _dir, _tmp) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // ① 科目表 JSON（约 199 条）→ 应 gzip
+    let mut req = authed_get("/api/accounts", &sid);
+    req.headers_mut()
+        .insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
+    let resp = handlers::router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get(header::CONTENT_ENCODING).map(|v| v.to_str().unwrap()),
+        Some("gzip"),
+        "大 JSON 响应应当 gzip"
+    );
+    assert_eq!(
+        resp.headers().get(header::VARY).map(|v| v.to_str().unwrap()),
+        Some("accept-encoding"),
+        "压缩层要声明 Vary: accept-encoding，否则缓存会把压缩体发给不支持的客户端"
+    );
+    let _ = body_string(resp).await;
+
+    // ② xlsx 导出 → 不压
+    let mut req = authed_get("/api/export/accounts", &sid);
+    req.headers_mut()
+        .insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
+    let resp = handlers::router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        resp.headers().get(header::CONTENT_ENCODING).is_none(),
+        "xlsx 本身已经是 zip 了，不应再压一层"
+    );
+    let _ = body_string(resp).await;
+}

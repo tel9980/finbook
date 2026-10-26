@@ -115,10 +115,32 @@ impl AsConn for rusqlite::Transaction<'_> {
     }
 }
 
+/// 余额快照的进程内缓存（见 `balances::BalanceSnapshot::load_shared`）。
+///
+/// 键里已经带了「本连接累计写行数」，所以不需要在写入时主动清理：
+/// 任何一次写入都会让旧键不再被命中，最坏情况只是多留了几份过期快照。
+/// 因此这里只需要一个上限，超出就整体清空——比维护 LRU 简单得多，
+/// 而且清空的代价只是下一批查询变回原速。
+#[derive(Default)]
+pub(crate) struct SnapCache {
+    map: std::collections::HashMap<String, std::sync::Arc<crate::balances::BalanceSnapshot>>,
+}
+
+/// 缓存条数上限。一个报表页最多用 3~4 份快照，32 条足够覆盖
+/// 「来回切几个期间看数」的桌面端用法。
+const SNAP_CACHE_CAP: usize = 32;
+
 /// 账套数据库连接
 pub struct Db {
     conn: Connection,
     path: PathBuf,
+    snap_cache: std::sync::Mutex<SnapCache>,
+    /// 科目表缓存：(本连接累计写行数, 科目表)。
+    ///
+    /// 科目表在一个请求里会被取几十次（每条分录补齐辅助核算、每次余额查询、
+    /// 每张报表），而它只在「改科目」时变。键同样用 `total_changes()`——
+    /// 任何科目增删改都会让它变大，缓存自然失效，不需要在任何写入口埋钩子。
+    chart_cache: std::sync::Mutex<Option<(i64, fincore::account::Chart)>>,
 }
 
 impl Db {
@@ -143,7 +165,12 @@ impl Db {
         }
         let conn = Connection::open(&path)?;
         schema::apply_pragmas(&conn)?;
-        Ok(Self { conn, path })
+        Ok(Self {
+            conn,
+            path,
+            snap_cache: Default::default(),
+            chart_cache: Default::default(),
+        })
     }
 
     /// 把 WAL 中的已提交页写回主数据库文件并截断 WAL。
@@ -185,7 +212,12 @@ impl Db {
         }
         let conn = Connection::open(&path)?;
         schema::init(&conn)?;
-        let db = Self { conn, path };
+        let db = Self {
+            conn,
+            path,
+            snap_cache: Default::default(),
+            chart_cache: Default::default(),
+        };
         db.seed_builtin(opts, seed_admin)?;
         Ok(db)
     }
@@ -206,6 +238,8 @@ impl Db {
         let db = Self {
             conn,
             path: PathBuf::from(":memory:"),
+            snap_cache: Default::default(),
+            chart_cache: Default::default(),
         };
         db.seed_builtin(opts, seed_admin)?;
         Ok(db)
@@ -287,6 +321,44 @@ impl Db {
             rusqlite::TransactionBehavior::Immediate,
         )?)
     }
+    /// 取一份缓存的余额快照（键已含连接级写入计数，见 `BalanceSnapshot::cache_key`）
+    pub(crate) fn snap_cache_get(
+        &self,
+        key: &str,
+    ) -> Option<std::sync::Arc<crate::balances::BalanceSnapshot>> {
+        // 中毒锁不影响正确性：缓存只是加速，拿不到就重算
+        let c = self.snap_cache.lock().unwrap_or_else(|e| e.into_inner());
+        c.map.get(key).cloned()
+    }
+
+    pub(crate) fn snap_cache_put(
+        &self,
+        key: String,
+        snap: std::sync::Arc<crate::balances::BalanceSnapshot>,
+    ) {
+        let mut c = self.snap_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if c.map.len() >= SNAP_CACHE_CAP {
+            c.map.clear();
+        }
+        c.map.insert(key, snap);
+    }
+
+    /// 科目表缓存（见 `chart_cache` 字段的说明）
+    pub(crate) fn chart_cache_get(&self) -> Option<fincore::account::Chart> {
+        let gen = self.conn.total_changes() as i64;
+        let c = self.chart_cache.lock().unwrap_or_else(|e| e.into_inner());
+        match c.as_ref() {
+            Some((g, ch)) if *g == gen => Some(ch.clone()),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn chart_cache_put(&self, chart: &fincore::account::Chart) {
+        let gen = self.conn.total_changes() as i64;
+        let mut c = self.chart_cache.lock().unwrap_or_else(|e| e.into_inner());
+        *c = Some((gen, chart.clone()));
+    }
+
     #[inline]
     pub fn path(&self) -> &Path {
         &self.path

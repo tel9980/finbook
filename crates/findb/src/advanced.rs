@@ -1977,10 +1977,13 @@ pub fn financial_totals(
     let cur_liab =
         (b("2001") + b("2201") + b("2202") + b("2203") + b("2211") + b("2221") + b("2241"))
             .negated(); // 负债贷方余额为负，取负得正数
+    // 科目表只读一次。原来这两个合计各读一遍科目表，而 financial_analysis
+    // 要逐月调这个函数，10 个月就是 20 次全表读——纯浪费。
+    let accounts = crate::accounts::list(db)?;
     let total_asset = {
         // 全部 1 开头资产类（借方正）合计
         let mut s = Money::ZERO;
-        for a in crate::accounts::list(db)?.iter().filter(|a| {
+        for a in accounts.iter().filter(|a| {
             matches!(a.category, fincore::account::AcctCategory::Asset) && a.code.len() == 4
         }) {
             s += b(&a.code);
@@ -1989,7 +1992,7 @@ pub fn financial_totals(
     };
     let total_liab = {
         let mut s = Money::ZERO;
-        for a in crate::accounts::list(db)?.iter().filter(|a| {
+        for a in accounts.iter().filter(|a| {
             matches!(a.category, fincore::account::AcctCategory::Liability) && a.code.len() == 4
         }) {
             s += b(&a.code).negated();
@@ -2329,6 +2332,72 @@ fn flag_series(vals: &[Money]) -> Vec<bool> {
     f.iter().map(|x| (x - mean).abs() > 2.0 * std).collect()
 }
 
+/// 营业成本构成的科目清单：6401 主营业务成本、6402 其他业务成本，
+/// 后面再跟上全部**成本类末级科目**（5101 制造费用、510101 房租…）。
+///
+/// 为什么要有这个共享清单：`financial_totals` 的净利润口径已经把成本类
+/// 科目算进"营业成本"，成本构成就必须列在同一份清单上。两处各写一遍的
+/// 后果是"明细加起来对不上合计"，这是最容易被老板当场质疑的一类不一致。
+pub fn cost_driver_accounts(db: &Db) -> DbResult<Vec<(String, String)>> {
+    let mut out: Vec<(String, String)> = vec![
+        ("6401".to_string(), "主营业务成本".to_string()),
+        ("6402".to_string(), "其他业务成本".to_string()),
+    ];
+    let accounts = crate::accounts::list(db)?;
+    let is_leaf = |code: &str| !accounts.iter().any(|x| x.code.starts_with(code) && x.code != code);
+    for a in accounts.iter() {
+        if !matches!(a.category, fincore::account::AcctCategory::Cost) || !is_leaf(&a.code) {
+            continue;
+        }
+        out.push((a.code.clone(), a.name.clone()));
+    }
+    Ok(out)
+}
+
+/// 某区间的营业成本构成（首页「钱花哪了 Top3」专用）。
+///
+/// 与 `financial_analysis(..).cost_drivers` 的差别只在**取数范围**：
+/// 这里只装一个剔除结转的快照、只算成本这一类；那边为了画整年趋势要
+/// 逐月调 `financial_totals`（10 个月 = 10 次全表扫，实测 168ms）。
+/// 首页只要前三条，为它算一整年的时间序列纯属浪费——优化前首页
+/// 233ms 里有 160ms 花在这上面。
+pub fn cost_drivers_of(
+    db: &Db,
+    period: Period,
+    from: Period,
+    scope: Option<&fincore::user::User>,
+) -> DbResult<Vec<DriverItem>> {
+    use crate::balances::{BalanceQuery, BalanceSnapshot};
+    let mut bq = BalanceQuery::range(from, period).with_exclude_carry(true);
+    if let Some(u) = scope {
+        bq = bq.with_user_scope(u);
+    }
+    let snap = BalanceSnapshot::load(db, &bq)?;
+    let mut out: Vec<DriverItem> = Vec::new();
+    for (code, name) in cost_driver_accounts(db)? {
+        let r = snap.for_account(&code, None);
+        // 成本类都是借方科目，支出为正
+        let amount = r.debit - r.credit;
+        if amount.is_zero() {
+            continue;
+        }
+        out.push(DriverItem {
+            code,
+            name,
+            amount,
+            prev_amount: fincore::Money::ZERO,
+        });
+    }
+    // 金额大的排前面：老板要的是"钱主要花哪了"，不是科目表顺序
+    out.sort_by(|x, y| {
+        y.amount
+            .to_f64()
+            .partial_cmp(&x.amount.to_f64())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(out)
+}
+
 /// 计算 [1月, period] 区间的逐月趋势与异常，并给出指标内因构成
 pub fn financial_analysis(
     db: &Db,
@@ -2497,26 +2566,22 @@ pub fn financial_analysis(
             }
         })
         .collect();
-    {
-        let accounts = crate::accounts::list(db)?;
-        let is_leaf = |code: &str| !accounts.iter().any(|x| x.code.starts_with(code) && x.code != code);
-        for a in accounts.iter() {
-            if !matches!(a.category, fincore::account::AcctCategory::Cost) || !is_leaf(&a.code) {
-                continue;
-            }
-            let cur = exp(&snap_cur, &a.code);
-            let prv = exp(&snap_prev, &a.code);
-            // 两个月都没发生额的不占位，否则成本构成里全是一排 0
-            if cur.is_zero() && prv.is_zero() {
-                continue;
-            }
-            cost_drivers.push(DriverItem {
-                code: a.code.clone(),
-                name: a.name.clone(),
-                amount: cur,
-                prev_amount: prv,
-            });
+    for (code, name) in cost_driver_accounts(db)?.into_iter().skip(2) {
+        // skip(2)：前两条 6401/6402 上面已经加过了，这里只补成本类科目
+        let cur = exp(&snap_cur, &code);
+        let prv = exp(&snap_prev, &code);
+        // 两个月都没发生额的不占位，否则成本构成里全是一排 0
+        if cur.is_zero() && prv.is_zero() {
+            continue;
         }
+        cost_drivers.push(DriverItem {
+            code,
+            name,
+            amount: cur,
+            prev_amount: prv,
+        });
+    }
+    {
         // 金额大的排前面：老板要的是"钱主要花哪了"，不是科目表顺序
         cost_drivers.sort_by(|x, y| y.amount.to_f64().partial_cmp(&x.amount.to_f64()).unwrap_or(std::cmp::Ordering::Equal));
     }
@@ -2943,6 +3008,14 @@ mod tests {
             if acc.starts_with("1002") {
                 aux.bank = Some("B01".into());
             }
+            // 应收/应付科目强制要客户/供应商维度，测试里补一个占位档案编码；
+            // 不补的话 save 会被校验拦下（「核算客户，必须填写客户」）。
+            if acc.starts_with("1122") {
+                aux.customer = Some("C01".into());
+            }
+            if acc.starts_with("2202") {
+                aux.supplier = Some("S01".into());
+            }
             v.push_entry(Entry {
                 debit: m(d),
                 credit: m(c),
@@ -2952,6 +3025,91 @@ mod tests {
         }
         let id = crate::vouchers::save(db, &mut v).unwrap();
         crate::vouchers::post(db, id, "p").unwrap();
+    }
+
+    /// 首页「钱花哪了 Top3」用的 `cost_drivers_of` 必须与
+    /// `financial_analysis` 的成本构成**同口径**。
+    ///
+    /// 这两个函数分开之后最容易出的错就是：一个把 5101 制造费用算进去、
+    /// 另一个没算，于是首页净利润减掉 15000 的成本，点开明细却只有 0。
+    #[test]
+    fn cost_drivers_of_matches_financial_analysis() {
+        let db = tmpdb("cost_drivers_eq");
+        let p = Period::new(2026, 3).unwrap();
+        // 一笔收入 + 两笔成本：房租记在 5101 制造费用下（成本类，最容易被漏），
+        // 另一笔走 6401 主营业务成本
+        post(&db, p, 1, &[("112201", "30000", "0"), ("600101", "0", "30000")]);
+        post(
+            &db,
+            p,
+            2,
+            &[("510105", "15000", "0"), ("220201", "0", "15000")],
+        );
+        // 贷方用现金：只要借贷平衡，这条测试关心的是成本构成口径，不是科目语义
+        post(&db, p, 3, &[("6401", "5000", "0"), ("1001", "0", "5000")]);
+
+        let a = financial_analysis(&db, p, None).unwrap();
+        let mine = cost_drivers_of(&db, p, p, None).unwrap();
+
+        let map = |v: &[DriverItem]| {
+            let mut m = std::collections::BTreeMap::new();
+            for d in v.iter().filter(|d| !d.amount.is_zero()) {
+                m.insert(d.code.clone(), d.amount);
+            }
+            m
+        };
+        assert_eq!(
+            map(&a.cost_drivers),
+            map(&mine),
+            "两处成本构成口径必须一致，否则「明细加起来对不上合计」"
+        );
+        // 合计也得对得上 financial_totals 的营业成本
+        let t = financial_totals(&db, p, p, None).unwrap();
+        let sum: Money = mine.iter().map(|d| d.amount).fold(Money::ZERO, |x, y| x + y);
+        assert_eq!(sum, t.cost, "成本构成合计应等于营业成本");
+        assert_eq!(t.cost, m("20000"));
+    }
+
+    /// 余额快照缓存：写完立刻读，必须看到新数。
+    ///
+    /// 缓存的键里带了 `total_changes()`，这条测试守的就是那个「一漏一个字段
+    /// 就把旧结果当新结果发出去」的风险。
+    #[test]
+    fn snapshot_cache_sees_new_voucher() {
+        use crate::balances::{BalanceQuery, BalanceSnapshot};
+        let db = tmpdb("snap_cache");
+        let p = Period::new(2026, 4).unwrap();
+        post(&db, p, 1, &[("112201", "1000", "0"), ("600101", "0", "1000")]);
+
+        let q = BalanceQuery::period(p).with_exclude_carry(true);
+        let first = BalanceSnapshot::load(&db, &q).unwrap();
+        assert_eq!(first.for_account("600101", None).credit, m("1000"));
+
+        post(&db, p, 2, &[("112201", "500", "0"), ("600101", "0", "500")]);
+
+        let second = BalanceSnapshot::load(&db, &q).unwrap();
+        assert_eq!(
+            second.for_account("600101", None).credit,
+            m("1500"),
+            "缓存没失效：写入之后仍然读到旧快照"
+        );
+    }
+
+    /// 科目表缓存：新增科目之后必须立刻能取到。
+    #[test]
+    fn chart_cache_sees_new_account() {
+        let db = tmpdb("chart_cache");
+        assert!(crate::accounts::chart(&db).unwrap().get("660901").is_none());
+        let a = fincore::account::Account::new(
+            "660901",
+            "办公费",
+            fincore::account::AcctCategory::Expense,
+        );
+        crate::accounts::insert(&db, &a).unwrap();
+        assert!(
+            crate::accounts::chart(&db).unwrap().get("660901").is_some(),
+            "缓存没失效：新建的科目取不到"
+        );
     }
 
     #[test]

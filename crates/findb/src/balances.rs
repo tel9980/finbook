@@ -159,6 +159,63 @@ pub struct BalanceSnapshot {
 impl BalanceSnapshot {
     /// 加载快照
     pub fn load(db: &Db, q: &BalanceQuery) -> DbResult<Self> {
+        Ok((*Self::load_shared(db, q)?).clone())
+    }
+
+    /// 带进程内缓存的加载：同一连接、同一取数条件只算一次。
+    ///
+    /// 为什么要缓存：`load` 的扫描条件是 `e.period <= to`，**没有下界**——
+    /// `from` 之前的分录要逐行读出来在 Rust 里累加到「期初」，所以
+    /// 「取一个月的余额」和「取两年的余额」一样慢（实测 7.9ms vs 7.3ms，
+    /// 1980 张凭证）。一个首页要近 30 次这样的快照（3 次 financial_totals
+    /// 各 2 次、financial_analysis 逐月 20 次、money_position 若干），
+    /// 一次报表页也要 2~3 次。缓存之后同样的活只剩 3~4 次真实扫描。
+    ///
+    /// 失效：键里带 `total_changes()`——这是 SQLite 连接级的累计写行数，
+    /// 本连接任何一次 INSERT/UPDATE/DELETE 都会让它变大，所以「写完再读」
+    /// 一定读到新值。网页端每个请求一条新连接（天然新鲜），桌面端一个进程
+    /// 一条连接（写入都走它自己），两种用法都成立。
+    pub fn load_shared(db: &Db, q: &BalanceQuery) -> DbResult<std::sync::Arc<Self>> {
+        let start = db.options().start_period;
+        let key = Self::cache_key(db, q, start);
+        if let Some(hit) = db.snap_cache_get(&key) {
+            return Ok(hit);
+        }
+        let snap = std::sync::Arc::new(Self::load_raw(db, q)?);
+        db.snap_cache_put(key, snap.clone());
+        Ok(snap)
+    }
+
+    /// 缓存键：影响取数结果的**全部**输入。
+    ///
+    /// 漏一个字段的后果不是"慢一点"，而是"报表显示上一次的口径"，
+    /// 所以宁可把整个 BalanceQuery 都摊进来。
+    fn cache_key(db: &Db, q: &BalanceQuery, start: Period) -> String {
+        format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            start.ymm(),
+            q.from.ymm(),
+            q.to.ymm(),
+            q.code_from.as_deref().unwrap_or(""),
+            q.code_to.as_deref().unwrap_or(""),
+            q.aux
+                .as_ref()
+                .map(|a| serde_json::to_string(a).unwrap_or_default())
+                .unwrap_or_default(),
+            q.only_leaf,
+            q.non_zero_only,
+            q.max_level.map(|v| v as i64).unwrap_or(-1),
+            q.posted_only,
+            q.exclude_carry,
+            format!(
+                "{}|{}",
+                q.prepared_by.as_deref().unwrap_or(""),
+                db.conn().total_changes()
+            ),
+        )
+    }
+
+    fn load_raw(db: &Db, q: &BalanceQuery) -> DbResult<Self> {
         let start = db.options().start_period;
         // 本年累计只在「报告期与建账期同一年」时才包含建账前的累计发生额。
         // 跨年后，begin_balance 里的 debit_accum/credit_accum 属于上一年，

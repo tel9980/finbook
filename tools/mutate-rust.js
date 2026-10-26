@@ -25,6 +25,9 @@ const FIMPORT = (name) => ["test", "-p", "findb", "--lib", `imports::tests::${na
 const FBATCH = (name) => ["test", "-p", "fincore", "--lib", `batch::aux::tests::${name}`];
 // v1.8.24 网页版首页首屏：数字全由凭证推出，错一位老板就按错的数做决定
 const HOME = (name) => ["test", "-p", "finweb", "--test", "home_brief", "--", name];
+// v1.8.25 性能优化。优化最阴的失效不是「变慢」，是「变快但算错」——
+// 缓存把旧结果当新结果发出去、口径为了提速悄悄缩窄，都是静默错数。
+const FADV = (name) => ["test", "-p", "findb", "--lib", `advanced::tests::${name}`];
 
 const MUT = [
   {
@@ -331,6 +334,52 @@ const MUT = [
     to: "        both: false,",
     cmd: HOME("party_with_two_identities_shows_net"),
   },
+  {
+    // 进账套仍停在「建账首月」→ 结了 9 个月的账，首页整块显示的是 1 月的数，
+    // 而且不会自己动。老板只会得出一个结论：系统算错了。
+    name: "⑱ 进账套的当前期间退回建账首月",
+    file: "crates/finweb/src/handlers.rs",
+    from: "        let ymm = periods::current_period(&db)\n            .unwrap_or_else(|_| db.options().start_period)\n            .ymm();",
+    to: "        let ymm = db.options().start_period.ymm();",
+    cmd: HOME("selecting_a_book_lands_on_current_period_not_start_period"),
+  },
+  {
+    // 快照缓存的键里去掉写入计数 → 录完凭证、看报表还是旧数字，
+    // 而且刷新也没用（同一个连接）。这是"优化出来的错"里最难查的一种。
+    name: "⑱ 余额快照缓存的键忽略写入计数",
+    file: "crates/findb/src/balances.rs",
+    from: "                q.prepared_by.as_deref().unwrap_or(\"\"),\n                db.conn().total_changes()",
+    to: "                q.prepared_by.as_deref().unwrap_or(\"\"),\n                0i64",
+    cmd: FADV("snapshot_cache_sees_new_voucher"),
+  },
+  {
+    // 科目表缓存不校验写入计数 → 新建的科目永远取不到，界面"新建成功了"
+    // 但下拉框里没有，用户会以为保存失败反复点。
+    name: "⑱ 科目表缓存不校验写入计数",
+    file: "crates/findb/src/lib.rs",
+    from: "            Some((g, ch)) if *g == gen => Some(ch.clone()),",
+    to: "            Some((_g, ch)) => Some(ch.clone()),",
+    cmd: FADV("chart_cache_sees_new_account"),
+  },
+  {
+    // 首页成本构成退回「只算 6401/6402」→ 首页净利润减掉了房租水电，
+    // 点开明细却是空的，两处口径打架（v1.8.13 修过的老毛病）
+    name: "⑱ 成本构成漏掉制造费用",
+    file: "crates/findb/src/advanced.rs",
+    from: "        if !matches!(a.category, fincore::account::AcctCategory::Cost) || !is_leaf(&a.code) {",
+    to: "        if true {",
+    cmd: FADV("cost_drivers_of_matches_financial_analysis"),
+  },
+  {
+    // 大响应不再 gzip → 手机打开首页要下 780KB 的 app.js。
+    // 门槛抬到 u16::MAX（这是该参数的合法上限）等于「全都不压」，
+    // 但比删掉整个 layer 好：仍然编译得过，变异测的是行为而不是语法。
+    name: "⑱ 大响应不再 gzip",
+    file: "crates/finweb/src/handlers.rs",
+    from: "            SizeAbove::new(1024)",
+    to: "            SizeAbove::new(u16::MAX)",
+    cmd: XLSX("big_responses_are_gzipped_but_xlsx_is_not"),
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */
@@ -352,8 +401,16 @@ function counts(out) {
   }
   return { passed, failed };
 }
+// 可选过滤：`node tools/mutate-rust.js ⑱` 只跑名字里含该串的变异。
+// 没有过滤参数时跑全部（CI 走这条）。调参时别为了验一条去等四十分钟。
+const FILTER = (process.argv[2] || "").startsWith("--") ? "" : process.argv[2] || "";
+if (FILTER && !MUT.some((m) => m.name.includes(FILTER))) {
+  console.error(`没有名字含「${FILTER}」的变异`);
+  process.exit(2);
+}
+const RUN = FILTER ? MUT.filter((m) => m.name.includes(FILTER)) : MUT;
 const backups = new Map();
-for (const m of MUT) if (!backups.has(m.file)) backups.set(m.file, fs.readFileSync(m.file, "utf8"));
+for (const m of RUN) if (!backups.has(m.file)) backups.set(m.file, fs.readFileSync(m.file, "utf8"));
 
 // --list：只把变异清单打成 JSON，不执行。让 tools/check-ci.js 检查「清单是否已过期」
 // （源码改了但 from 串对不上 = 这条变异形同虚设，而且会被读成「检查放过了」）。
@@ -368,7 +425,7 @@ if (process.argv.includes("--list")) {
 let bad = 0;
 let notRun = 0;
 try {
-  for (const m of MUT) {
+  for (const m of RUN) {
     const src = backups.get(m.file);
     const { out: mutated, ok } = applyMut(src, m.from, m.to);
     if (!ok) {
@@ -410,8 +467,8 @@ try {
 }
 console.log(
   bad === 0 && notRun === 0
-    ? `\n全部 ${MUT.length} 个变异都被对应测试拦下，源码已还原`
-    : `\n${bad} 个变异没被拦下 / 没生效（共 ${MUT.length} 个${notRun ? `，其中 ${notRun} 个是测试根本没跑` : ""}）`
+    ? `\n全部 ${RUN.length} 个变异都被对应测试拦下，源码已还原`
+    : `\n${bad} 个变异没被拦下 / 没生效（共 ${RUN.length} 个${notRun ? `，其中 ${notRun} 个是测试根本没跑` : ""}）`
 );
 // “测试没跑”不能算成功：源码改坏了但测试命令没匹配到任何用例时，
 // 旧逻辑只累计 notRun，最终仍 exit 0，等于把变异测试变成摆设。

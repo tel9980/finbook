@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/fincore", "crates/findb", "crates/finui", "crates/finbook", "crates/finweb"]
 
 [workspace.package]
-version = "1.8.24"
+version = "1.8.25"
 edition = "2021"
 license = "MIT"
 authors = ["FinBook"]
@@ -25,7 +25,7 @@ axum = { version = "0.7", features = ["multipart"] }
 axum-extra = { version = "0.9", features = ["cookie"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["fs", "trace", "catch-panic"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "catch-panic", "compression-gzip"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.8"
 # 开放 API 密钥哈希：快哈希（sha2）而非 argon2。
