@@ -17,11 +17,17 @@
 # 自己造。init 完成后主服务才启动；挂载没挂上时 init 起的也是空卷，问题照样
 # 暴露得出来。
 
+# ── 镜像版本 ─────────────────────────────────────────────────────
+# 升版本只改这一处：下面 init 与 finbook 两个服务都引用它。
+# 两处必须**永远一致** —— init 用旧镜像、主服务用新镜像时，建目录那步可能
+# 跑在一个还不存在的新布局上（或反过来），出错时日志只会说「目录就绪」。
+x-finbook-image: &finbook-image ghcr.io/tel9980/finbook:1.8.24
+
 services:
   # 一次性初始化：建 /data/books，把属主改成 finbook(10001)。
   # 需要 root，因为新建的 bind mount 目录默认属于 root。
   init:
-    image: ghcr.io/tel9980/finbook:1.8.20
+    image: *finbook-image
     user: root
     entrypoint:
       - /bin/sh
@@ -36,7 +42,7 @@ services:
     restart: "no"
 
   finbook:
-    image: ghcr.io/tel9980/finbook:1.8.20
+    image: *finbook-image
     container_name: finbook
     depends_on:
       init:

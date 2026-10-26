@@ -284,7 +284,7 @@ node tools/mutate-rust.js           # 改坏 Rust 源码，验证对应测试真
 镜像已发到 GitHub Container Registry，不用自己在服务器上编译：
 
 ```
-ghcr.io/tel9980/finbook:1.8.20   精确版本，生产钉这个
+ghcr.io/tel9980/finbook:1.8.24   精确版本，生产钉这个
 ghcr.io/tel9980/finbook:1.8      次版本，自动收补丁
 ghcr.io/tel9980/finbook:latest   最新正式版
 ```
@@ -333,7 +333,12 @@ environment:
 
 **升级**
 
-改 compose 里的镜像 tag → `Deploy`。数据在 `./data`，容器重建不丢。
+改 compose 顶上那一行 `x-finbook-image: &finbook-image ghcr.io/tel9980/finbook:1.8.24`
+里的版本号 → `Deploy`。`init` 与 `finbook` 两个服务都引用这个锚点，所以只改一处
+——**别**分别改两个 `image:`，两边不同版本时 init 建目录与主服务启动会跑在不同
+镜像上，出错时日志只会说「数据目录就绪」，看不出问题。
+
+数据在 `./data`，容器重建不丢。
 跨大版本前先备份：`./data` 整个目录拷走就是全部数据（`realm.db` + `books/*.fbk`）。
 热备份用 `deploy/backup.sh`，它走 SQLite 在线备份 API 而不是直接 `cp`（§6.1）。
 
