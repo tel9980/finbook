@@ -7861,6 +7861,7 @@ async function viewSettle(main) {
       ${can("voucher_new") ? `<button class="btn ghost" id="st-manual-diff" title="实收/实付与挂账有零头时，把差异记入损益，被核销方一次结清">差异核销</button>` : ""}
       ${can("voucher_new") ? `<button class="btn ghost" id="st-manual-cross" title="A 的付款冲 B 的货款 / 三方抵账：借方与贷方分录的科目或往来单位可以不同，系统自动出一张过渡凭证把两边接上">跨单位互抵</button>` : ""}
       <button class="btn ghost" id="st-aging">账龄分析</button>
+      <button class="btn ghost" id="st-aging-xlsx" title="把账龄表导出成 Excel（同一份取数，界面上的数字即文件里的数字）">账龄导出</button>
       <button class="btn ghost" id="st-records">核销记录</button>
     </div>
     <div class="muted" id="st-sum" style="margin-bottom:8px">加载中…</div>
@@ -8171,6 +8172,9 @@ async function viewSettle(main) {
       toast(r.bridge_voucher_id ? `已互抵，过渡凭证 #${r.bridge_voucher_id}（到凭证列表记账后即入账）` : "已互抵", "ok");
       load();
     } catch (e) { toast(e.message, "err"); }
+  };
+  if ($("#st-aging-xlsx", main)) $("#st-aging-xlsx", main).onclick = () => {
+    downloadUrl(`/api/settle/aging/xlsx?account=${encodeURIComponent(acct())}&upto=${encodeURIComponent(upto())}`);
   };
   if ($("#st-aging", main)) $("#st-aging", main).onclick = async () => {
     try {
@@ -11459,6 +11463,55 @@ function openAccountEditor(main, acc) {
 }
 
 // ---------------- 期初建账 ----------------
+// 导入整本《期初收集表》。
+//
+// 为什么单开一个入口而不是塞进「数据导入」：收集表是四张纸一起看的，只导一张纸
+// 就会出现「应收台账有数、资产负债表没数」这种合起来不对的状态。后端也是先算平
+// 再落库，不平整批拒绝。
+function openImportCollection() {
+  const mask = modal(`
+    <h3>导入期初收集表</h3>
+    <p class="muted" style="font-size:12px;line-height:1.7;margin:0 0 14px">
+      上传工厂填好的<b>《期初收集表.xlsx》</b>（四张纸：① 客户应收 ② 供应商应付 ③ 账户余额 ④ 基本资料）。
+      会一次做完三件事：建往来台账（算账龄、出对账单用）、写 112201/220201 的科目期初、写各账户与实收资本的期初。
+      <br>期初<b>借贷不平会整批拒绝</b>，并告诉你差多少 —— 不会写进半个账套。
+    </p>
+    <label style="display:block;margin-bottom:12px">选择文件
+      <input id="ic-file" type="file" accept=".xlsx,.xls,.ods" style="width:100%;margin-top:4px" />
+    </label>
+    <div class="muted" id="ic-msg" style="min-height:18px;font-size:12px;line-height:1.5"></div>
+    <div class="foot"><button class="btn primary" id="ic-ok">开始导入</button><button class="btn ghost" id="ic-cancel">取消</button></div>
+  `);
+  const msg = (t) => { const el = $("#ic-msg", mask); if (el) el.innerHTML = t; };
+  $("#ic-cancel", mask).onclick = () => mask.remove();
+  $("#ic-ok", mask).onclick = async () => {
+    const f = ($("#ic-file", mask).files || [])[0];
+    if (!f) { msg('<span style="color:var(--err)">先选一个 .xlsx 文件</span>'); return; }
+    const okBtn = $("#ic-ok", mask);
+    okBtn.disabled = true;
+    msg(`正在导入 ${esc(f.name)}…`);
+    const fd = new FormData();
+    fd.append("file", f);
+    try {
+      const r = await api("/books/opening-sheet", { method: "POST", body: fd, timeout: 5 * 60 * 1000 });
+      mask.remove();
+      const warn = (r.warnings || []).length ? `；注意 ${r.warnings.length} 条提示` : "";
+      toast(`已导入：应收 ${r.ar} 笔、应付 ${r.ap} 笔、科目期初 ${r.begin} 条（借 ${r.debit_total} = 贷 ${r.credit_total}）${warn}`, "ok");
+      if ((r.warnings || []).length) {
+        modal(`<h3>导入完成，有几处要你确认</h3>
+          <div class="muted u-sm" style="line-height:1.8">${r.warnings.map(esc).join("<br>")}</div>
+          <div class="foot"><button class="btn primary" id="iw-ok">我知道了</button></div>`);
+        $("#iw-ok", document.getElementById("modal-root")).onclick = () => closeModal();
+      }
+      state.beginDraft = null;
+      goView("begin", { force: true });
+    } catch (e) {
+      okBtn.disabled = false;
+      msg(`<span style="color:var(--err)">${esc(e.message)}</span>`);
+    }
+  };
+}
+
 async function viewBegin(main) {
   main.innerHTML = `<h2>期初建账</h2><div class="muted">加载中…</div>`;
   let rows, accounts;
@@ -11541,6 +11594,7 @@ function renderBegin(main, rows) {
         ${can("opening") ? `<button class="btn" id="bg-batch">批量粘贴期初</button>` : ""}
         <div class="spacer"></div>
         ${can("export") ? `<button class="btn ghost" id="bg-export" title="导出已保存的期初余额（科目编码/名称/方向/期初/累计），改完可以导回">导出 Excel</button>` : ""}
+        ${can("opening") ? `<button class="btn ghost" id="bg-collect" title="上传填好的《期初收集表.xlsx》：客户应收/供应商应付/账户余额/实收资本一次导完，先算平再落库">导入期初收集表</button>` : ""}
         ${can("opening") ? `<button class="btn primary" id="bg-save">保存全部</button>` : ""}
       </div>
       <div class="panel" style="padding:0;overflow:auto;max-height:60vh">
@@ -11569,6 +11623,7 @@ function renderBegin(main, rows) {
     paintTotals();
     $all(".bg-code", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].account_code = inp.value.trim(); });
     if ($("#bg-export")) $("#bg-export").addEventListener("click", () => downloadUrl("/api/export/begin"));
+    if ($("#bg-collect")) $("#bg-collect").addEventListener("click", () => openImportCollection());
     $all(".bg-dir", main).forEach((sel) => sel.onchange = () => { draft[+sel.dataset.i].dir = sel.value; paintTotals(); });
     $all(".bg-yb", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].yb = inp.value; paintTotals(); });
     $all(".bg-ad", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].ad = inp.value; paintTotals(); });

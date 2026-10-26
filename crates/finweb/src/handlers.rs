@@ -296,6 +296,12 @@ pub fn router(state: Arc<WebState>) -> Router {
             "/api/books/import",
             post(import_book).layer(axum::extract::DefaultBodyLimit::max(MAX_IMPORT_BOOK_BYTES)),
         )
+        // 导入整本《期初收集表》（四张纸一次导完，先算平再落库）
+        .route(
+            "/api/books/opening-sheet",
+            post(import_opening_sheet)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_IMPORT_BOOK_BYTES)),
+        )
         .route("/api/login", post(post_login))
         .route("/api/logout", post(post_logout))
         // 平台安全中心（仅管理员）：口令策略 / 登录审计 / 锁定账号
@@ -787,6 +793,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/settle/records", get(list_settle_records))
         .route("/api/settle/unsettle", post(unsettle_endpoint))
         .route("/api/settle/aging", get(get_settle_aging))
+        .route("/api/settle/aging/xlsx", get(export_settle_aging_xlsx))
         // 往来对冲单（应收 ↔ 应付相互抵销：借 应付 / 贷 应收，两端各自 FIFO 核销）
         .route("/api/settle/offsets", get(list_offsets).post(create_offset))
         .route("/api/settle/offsets/:id/audit", post(audit_offset))
@@ -14060,6 +14067,114 @@ async fn get_settle_aging(
     })))
 }
 
+/// 往来账龄**导出成 Excel**（同一份取数，只是换成文件）。
+///
+/// 为什么单做一件事：账龄表现在只能截图。老板要发给客户、或者存档给会计，
+/// 截图既不能改也不能算。这里与 `/api/settle/aging` 走同一条取数路径
+/// （`findb::settle::aging`），所以界面上的数字与文件里的数字不会分叉。
+async fn export_settle_aging_xlsx(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    let account = q.get("account").cloned().unwrap_or_else(|| "1122".into());
+    let account = account.trim().to_string();
+    if account.is_empty() {
+        return Err(AppError::bad_request("缺少往来科目 account"));
+    }
+    let upto = q
+        .get("upto")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
+    let as_of = q
+        .get("as_of")
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| chrono::Local::now().date_naive());
+    let by_year = q.get("scheme").map(|s| s == "year").unwrap_or(false);
+    let buckets = if by_year {
+        fincore::engine::aging::buckets_by_year()
+    } else {
+        fincore::engine::aging::buckets_by_days()
+    };
+    let db = &user.db;
+    let lines = findb::settle::aging(db, &account, upto, as_of, &buckets, None)?;
+    let party = findb::settle::party_kind_in(db, &account);
+    let names: std::collections::HashMap<String, String> = findb::auxs::list(
+        db,
+        &fincore::AuxQuery::kind(party),
+    )?
+    .into_iter()
+    .map(|a| (a.code, a.name))
+    .collect();
+
+    let mut headers: Vec<String> = vec![
+        if party == fincore::AuxKind::Customer { "客户编码".into() } else { "供应商编码".into() },
+        if party == fincore::AuxKind::Customer { "客户名称".into() } else { "供应商名称".into() },
+    ];
+    for b in &buckets {
+        headers.push(b.label.to_string());
+    }
+    headers.push("往来余额".into());
+    headers.push("其中预收预付".into());
+    headers.push("净额".into());
+    headers.push("最久天数".into());
+
+    let mut sheet = crate::xlsxout::Sheet::plain(
+        "往来账龄",
+        &headers.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        &{
+            use crate::xlsxout::ColFmt;
+            let mut c = vec![ColFmt::Text, ColFmt::Text];
+            for _ in &buckets {
+                c.push(ColFmt::Money);
+            }
+            c.push(ColFmt::Money);
+            c.push(ColFmt::Money);
+            c.push(ColFmt::Money);
+            c.push(ColFmt::Int);
+            c
+        },
+    );
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let (mut t_sum, mut t_net, mut t_credit) = (Money::ZERO, Money::ZERO, Money::ZERO);
+    let mut bucket_sum = vec![Money::ZERO; buckets.len()];
+    for l in &lines {
+        let mut r = vec![
+            l.key.clone(),
+            names.get(&l.key).cloned().unwrap_or_default(),
+        ];
+        for (i, m) in l.amounts.iter().enumerate() {
+            r.push(m.fmt_plain());
+            if let Some(slot) = bucket_sum.get_mut(i) {
+                *slot += *m;
+            }
+        }
+        r.push(l.total.fmt_plain());
+        r.push(l.credit_total.fmt_plain());
+        r.push(l.net().fmt_plain());
+        r.push(l.max_days.to_string());
+        t_sum += l.total;
+        t_credit += l.credit_total;
+        t_net += l.net();
+        rows.push(r);
+    }
+    let mut total_row = vec!["".to_string(), "合计".to_string()];
+    for m in &bucket_sum {
+        total_row.push(m.fmt_plain());
+    }
+    total_row.push(t_sum.fmt_plain());
+    total_row.push(t_credit.fmt_plain());
+    total_row.push(t_net.fmt_plain());
+    total_row.push(String::new());
+    rows.push(total_row);
+    let em = vec![rows.len() - 1];
+    sheet.rows = rows;
+    sheet = sheet.with_emphasis(em);
+    let fname = format!("往来账龄_{}_{}.xlsx", account, as_of.format("%Y%m%d"));
+    build_xlsx(&[sheet], &fname, "往来账龄")
+}
+
 // ---- 往来对账单（对标金蝶「客户对账单」：按期间出账单 + 客户回签确认）----
 
 #[derive(Deserialize)]
@@ -17065,6 +17180,50 @@ fn unpack_book_upload(
     Err(AppError::bad_request(
         "不认识这个文件格式：需要 .fbk 账套文件，或本系统导出的备份 .zip",
     ))
+}
+
+/// 导入期初收集表：上传填好的《期初收集表.xlsx》→ 往来台账 + 科目期初一次落库。
+///
+/// 与「数据导入」里的期初导入不同：那个吃单张纸的 CSV/Excel，这个吃**整本四张纸**的
+/// 收集表，并且先算平再写——不平就整批拒绝，不留半个账套。
+async fn import_opening_sheet(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Opening)?;
+    let mut data: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::bad_request(format!("上传解析失败：{e}")))?
+    {
+        if field.name() == Some("file") {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::bad_request(format!("读取上传内容失败：{e}")))?;
+            data = Some(bytes.to_vec());
+        }
+    }
+    let data = data.ok_or_else(|| AppError::bad_request("缺少文件字段 file"))?;
+    if data.is_empty() {
+        return Err(AppError::bad_request("上传文件为空"));
+    }
+    let r = findb::opening_book::import_collection_sheet(&user.db, &data, &user.username())?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "ar": r.ar.ok,
+        "ap": r.ap.ok,
+        "begin": r.begin_ok,
+        "arap_ok": r.arap_ok,
+        "debit_total": r.debit_total.fmt_plain(),
+        "credit_total": r.credit_total.fmt_plain(),
+        "auto_profit": r.auto_profit.fmt_plain(),
+        "warnings": r.ar.warnings.iter().chain(r.ap.warnings.iter())
+            .chain(r.balances.warnings.iter()).chain(r.equity.warnings.iter())
+            .cloned().collect::<Vec<_>>(),
+    })))
 }
 
 /// 导入账套：上传 .fbk（或含 .fbk 的备份 zip）→ 校验 → 落库到 books_dir → 注册

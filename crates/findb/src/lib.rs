@@ -24,6 +24,7 @@ pub mod docflow;
 pub mod exports;
 pub mod funds;
 pub mod imports;
+pub mod opening_book;
 pub mod inventory2;
 pub mod invoices;
 pub mod landedcost;

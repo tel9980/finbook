@@ -33,6 +33,7 @@ const FADV = (name) => ["test", "-p", "findb", "--lib", `advanced::tests::${name
 // 勾了页码纸上没有、选了横向还是竖的、账套参数被拒了却照样存进去。
 const FPRINT = (name) => ["test", "-p", "fincore", "--lib", `print::tests::${name}`];
 const OPT = (name) => ["test", "-p", "finweb", "--test", "options_print", "--", name];
+const OBOOK = (name) => ["test", "-p", "findb", "--test", "opening_book", "--", name];
 // v1.8.28 套打：凭证/账簿/单据也走账套里的纸张设置。失效形态是"设置对了但纸上没变"。
 const FPFORM = (name) => ["test", "-p", "findb", "--lib", `printform::tests::${name}`];
 // 账套参数结构校验（fincore::BookOptions::validate）
@@ -471,6 +472,38 @@ const MUT = [
     from: '        if !matches!(\n            self.budget_control.trim(),\n            "" | "off" | "warn" | "strong"\n        ) {',
     to: '        if false {',
     cmd: FOPT("options_validation_catches_silent_misconfigurations"),
+  },
+  {
+    // 往来台账不写科目期初 → 账龄表上有欠款、资产负债表一分没有（本轮最想守住的一条）
+    name: "㉒ 期初收集表只导台账不写科目期初",
+    file: "crates/findb/src/opening_book.rs",
+    from: '    if res.ar.total.is_positive() {\n        begin_rows.push(("112201".to_string(), res.ar.total));\n    }',
+    to: "",
+    cmd: OBOOK("collection_sheet_lands_in_ledger_and_opening_balances"),
+  },
+  {
+    // 不平也放行 → 试算平衡开账就不平，后面每个月都歪
+    name: "㉒ 期初不平也照单全收",
+    file: "crates/findb/src/opening_book.rs",
+    from: "    if debit != credit {",
+    to: "    if false {",
+    cmd: OBOOK("unbalanced_sheet_is_rejected_and_nothing_is_written"),
+  },
+  {
+    // 不是收集表也当收集表导 → 导进去一片空，用户以为成功了
+    name: "㉒ 随便什么表都当收集表",
+    file: "crates/findb/src/opening_book.rs",
+    from: "    if ar_sheet.is_none() || ap_sheet.is_none() || bal_sheet.is_none() {",
+    to: "    if false {",
+    cmd: OBOOK("non_collection_workbook_is_rejected_with_a_readable_reason"),
+  },
+  {
+    // 账龄导出不认往来科目 → 导出来的表永远是 1122 的，导出 2202 时用户不知道
+    name: "㉒ 账龄导出写死应收科目",
+    file: "crates/finweb/src/handlers.rs",
+    from: '    let account = q.get("account").cloned().unwrap_or_else(|| "1122".into());\n    let account = account.trim().to_string();',
+    to: '    let account = "1122".to_string();',
+    cmd: XLSX("settle_aging_export_as_xlsx"),
   },
   {
     // 业务默认科目不查末级：填了一级科目照样存得进，等到点"发货"才炸

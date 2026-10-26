@@ -535,6 +535,59 @@ pub fn read_xlsx_bytes(bytes: &[u8]) -> Result<Vec<Vec<String>>, fincore::FinErr
     Ok(rows)
 }
 
+/// 读出**所有** sheet（名字 + 行）；`read_xlsx_bytes` 只读第一张。
+///
+/// 期初收集表是一个工作簿四张纸（客户应收/供应商应付/账户余额/基本资料），
+/// 只读第一张等于只导了客户。
+pub fn read_xlsx_sheets(bytes: &[u8]) -> Result<Vec<(String, Vec<Vec<String>>)>, fincore::FinError> {
+    check_zip_bomb(bytes)?;
+    use calamine::{open_workbook_auto_from_rs, Data, Reader};
+    let mut wb = open_workbook_auto_from_rs(Cursor::new(bytes))
+        .map_err(|e| fincore::FinError::io(format!("打开 Excel 失败：{e}")))?;
+    let names = wb.sheet_names().to_vec();
+    if names.is_empty() {
+        return Err(fincore::FinError::msg("Excel 无 sheet"));
+    }
+    const MAX_IMPORT_ROWS: usize = 200_000;
+    const MAX_IMPORT_CELLS: usize = 2_000_000;
+    let mut out = Vec::new();
+    for name in names {
+        let range = wb
+            .worksheet_range(&name)
+            .map_err(|e| fincore::FinError::io(format!("读取 sheet「{name}」失败：{e}")))?;
+        if range.height() > MAX_IMPORT_ROWS
+            || range.height().saturating_mul(range.width()) > MAX_IMPORT_CELLS
+        {
+            return Err(fincore::FinError::validate(format!(
+                "「{name}」规模过大（{} 行 × {} 列），最多支持 {MAX_IMPORT_ROWS} 行 / {MAX_IMPORT_CELLS} 个单元格",
+                range.height(),
+                range.width()
+            )));
+        }
+        let mut rows = Vec::new();
+        for row in range.rows() {
+            let cells: Vec<String> = row
+                .iter()
+                .map(|c| match c {
+                    Data::String(s) => s.clone(),
+                    Data::Int(n) => n.to_string(),
+                    Data::Float(f) => format!("{f}"),
+                    Data::Bool(b) => b.to_string(),
+                    Data::DateTime(d) => d.to_string(),
+                    Data::DateTimeIso(s) => s.clone(),
+                    Data::DurationIso(s) => s.clone(),
+                    _ => String::new(),
+                })
+                .collect();
+            if !cells.is_empty() {
+                rows.push(cells);
+            }
+        }
+        out.push((name, rows));
+    }
+    Ok(out)
+}
+
 /// 把 Excel 行列表转成 CSV 文本（每行用逗号连接），复用 CSV 解析逻辑
 pub fn xlsx_to_csv_text(rows: &[Vec<String>]) -> String {
     rows.iter()

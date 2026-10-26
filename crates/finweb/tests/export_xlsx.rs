@@ -126,6 +126,39 @@ async fn four_statements_export_as_xlsx() {
     }
 }
 
+/// 往来账龄也能导出成 Excel。
+///
+/// 账龄表以前只能截图：老板发给客户、存档给会计，截图既不能改也不能算。
+/// 这条测试只证明「接口能出一份结构正确的 xlsx」，数字对不对由
+/// `finweb` 的 `/api/settle/aging` 与 `findb::settle::aging` 的测试负责——
+/// 两边走的是同一条取数路径。
+#[tokio::test]
+async fn settle_aging_export_as_xlsx() {
+    let (state, _dir, _tmp) = test_state();
+    let sid = boss_in_b1(&state).await;
+    fetch_xlsx(&state, &sid, "/api/settle/aging/xlsx?account=1122").await;
+    // 按年分档（与天数分档走不同的桶）也要能出
+    fetch_xlsx(&state, &sid, "/api/settle/aging/xlsx?account=1122&scheme=year").await;
+
+    // 应付也要能导：文件名与表头都得跟着科目走。
+    // 只测 1122 的话，"写死 1122"这个错法照样绿灯 —— 而它会让会计把应付账龄
+    // 当应收发给客户。
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/settle/aging/xlsx?account=2202", &sid))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let disp = resp
+        .headers()
+        .get(header::CONTENT_DISPOSITION)
+        .map(|v| v.to_str().unwrap_or("").to_string())
+        .unwrap_or_default();
+    assert!(
+        disp.contains("2202") || disp.contains("%E5%BA%94%E4%BB%98"),
+        "导出文件名要带上科目/往来类型，否则两个文件分不清：{disp}"
+    );
+}
+
 /// 未登录一律 401，不能因为「反正是只读导出」就放行
 #[tokio::test]
 async fn exports_require_login() {
