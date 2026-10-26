@@ -557,6 +557,7 @@ impl LoginView {
             budget_control: String::new(),
             doc_prefixes: Default::default(),
             require_audit: false, // 审核环节已移除（未记账 → 记账两态）
+            print: Default::default(),
             voucher_words: fincore::chart::default_voucher_words(),
         };
         // 内置默认管理员 admin（口令 admin123，首次登录强制改密），与 Web 端口径一致

@@ -150,6 +150,7 @@ fn main() {
         budget_control: String::new(),
         doc_prefixes: Default::default(),
         voucher_words: fincore::chart::default_voucher_words(),
+        print: Default::default(),
     };
     // 「其他应收款/其他应付款」按往来单位挂辅助，避免挂到员工名下
     opts.biz_accounts.ar = "112201".into();

@@ -97,6 +97,7 @@ pub fn build(path: &Path) {
         doc_prefixes: Default::default(),
         require_audit: false,
         voucher_words: fincore::chart::default_voucher_words(),
+        print: Default::default(),
     };
     let db = Db::create_no_admin(path, &opts).expect("create");
 

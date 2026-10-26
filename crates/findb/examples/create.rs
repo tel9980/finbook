@@ -26,6 +26,7 @@ fn main() {
         doc_prefixes: Default::default(),
         require_audit: false, // 审核环节已移除（未记账 → 记账两态）
         voucher_words: fincore::chart::default_voucher_words(),
+        print: Default::default(),
     };
     // 不内置固定管理员：首次登录输入的账号与密码即为系统管理员
     let db = Db::create_no_admin(&path, &opts).expect("create");

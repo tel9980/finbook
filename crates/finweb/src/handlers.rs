@@ -3066,17 +3066,17 @@ async fn put_options(
     let db = &user.db;
     // 落库前校验：非法启用期间会灌进会话并污染年度累计口径，后续 first_day/last_day panic
     period_checked(opts.start_period.ymm())?;
-    if opts.code_scheme.is_empty()
-        || opts.code_scheme.len() > 8
-        || opts.code_scheme.iter().any(|s| !(1..=12u8).contains(s))
-    {
-        return Err(AppError::bad_request(
-            "科目编码级长非法（每级 1-12 位，最多 8 级）",
-        ));
+    // 字段校验统一走 `BookOptions::validate()`。
+    //
+    // 原来这里手写了一遍「级长 / 凭证字号」检查，桌面端参数页又只校了
+    // 「期间能解析」「级长能解析成数字」—— 同一个字段两端规则不同，这类分叉
+    // 最后都表现成「网页存得进、桌面存不进」或者反过来，使用者只会觉得
+    // 「保存按钮有时候不灵」。校验留在 fincore，两端共用。
+    let problems = opts.validate();
+    if !problems.is_empty() {
+        return Err(AppError::bad_request(problems.join("；")));
     }
-    if opts.voucher_words.is_empty() || opts.voucher_words.iter().any(|w| w.trim().is_empty()) {
-        return Err(AppError::bad_request("凭证字号不能为空"));
-    }
+    // set_options 内部还会补一道「业务默认科目必须存在且是末级」的查库校验
     db.set_options(&opts)?;
     Ok(Json(json!({"ok": true})))
 }
@@ -14447,8 +14447,47 @@ async fn print_balance_sheet(
             Box::new(fincore::report::to_begin),
         ],
     )?;
-    let html = crate::report_html::report_table_html(&t, &user.company, "元");
+    let html = crate::report_html::report_table_html(&t, &user.company, "元", &print_opts_from_q(db.options().print, &q));
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
+}
+
+/// 打印页的「试打」覆盖：`?po_font=9&po_orient=landscape…`
+///
+/// 设置页的「试打一张」要能在**保存之前**看到效果，否则用户只能「改 → 存 → 去报表 →
+/// 打印 → 发现不对 → 回来再改」。这里只覆盖这次请求的渲染，不写库 —— 参数非法一律
+/// 忽略并沿用账套设置，宁可打不出新样式也不要打个 500。
+fn print_opts_from_q(mut po: fincore::PrintOptions, q: &HashMap<String, String>) -> fincore::PrintOptions {
+    let get = |k: &str| q.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
+    if let Some(v) = get("po_orient") {
+        if matches!(v, "auto" | "portrait" | "landscape") {
+            po.orientation = v.to_string();
+        }
+    }
+    if let Some(v) = get("po_font").and_then(|v| v.parse::<u8>().ok()) {
+        if (9..=14).contains(&v) {
+            po.font_pt = v;
+        }
+    }
+    if let Some(v) = get("po_margin").and_then(|v| v.parse::<u8>().ok()) {
+        if (5..=30).contains(&v) {
+            po.margin_mm = v;
+        }
+    }
+    let flag = |k: &str, cur: bool| match get(k) {
+        Some("1") => true,
+        Some("0") => false,
+        _ => cur,
+    };
+    po.show_company = flag("po_company", po.show_company);
+    po.show_printed_at = flag("po_time", po.show_printed_at);
+    po.show_page_no = flag("po_pageno", po.show_page_no);
+    po.show_signatures = flag("po_sign", po.show_signatures);
+    if let Some(v) = get("po_signline") {
+        if !v.is_empty() {
+            po.sign_line = v.to_string();
+        }
+    }
+    po
 }
 
 fn to_ytd(k: fincore::report::AmountKind) -> fincore::report::AmountKind {
@@ -14496,7 +14535,7 @@ async fn print_income_statement(
         to,
         vec![Box::new(fincore::report::identity), Box::new(to_ytd)],
     )?;
-    let html = crate::report_html::report_table_html(&t, &user.company, "元");
+    let html = crate::report_html::report_table_html(&t, &user.company, "元", &print_opts_from_q(db.options().print, &q));
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -14536,7 +14575,7 @@ async fn print_cash_flow(
     let (from, to) = report_range(&state, &user, &q)?;
     let cf = findb::reports::cash_flow_statement(&db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
-    let html = crate::report_html::cash_flow_html(&cf, &user.company, &subtitle);
+    let html = crate::report_html::cash_flow_html(&cf, &user.company, &subtitle, &print_opts_from_q(db.options().print, &q));
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -14550,7 +14589,7 @@ async fn print_equity_statement(
     let (from, to) = report_range(&state, &user, &q)?;
     let stmt = findb::reports::equity_statement(&db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
-    let html = crate::report_html::equity_html(&stmt, &user.company, &subtitle);
+    let html = crate::report_html::equity_html(&stmt, &user.company, &subtitle, &print_opts_from_q(db.options().print, &q));
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 

@@ -586,7 +586,7 @@ impl AccountView {
                 if a.disabled { "停用" } else { "启用" }.to_string(),
             ]);
         }
-        match crate::views::export::run_export(&sh, "会计科目", "会计科目", mode) {
+        match crate::views::export::run_export(&sh, "会计科目", "会计科目", mode, &ctx.db().options()) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }

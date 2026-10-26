@@ -29,6 +29,10 @@ const HOME = (name) => ["test", "-p", "finweb", "--test", "home_brief", "--", na
 // v1.8.25 性能优化。优化最阴的失效不是「变慢」，是「变快但算错」——
 // 缓存把旧结果当新结果发出去、口径为了提速悄悄缩窄，都是静默错数。
 const FADV = (name) => ["test", "-p", "findb", "--lib", `advanced::tests::${name}`];
+// v1.8.27 打印版式（fincore::print）。失效形态全是"看起来没动静"：
+// 勾了页码纸上没有、选了横向还是竖的、账套参数被拒了却照样存进去。
+const FPRINT = (name) => ["test", "-p", "fincore", "--lib", `print::tests::${name}`];
+const OPT = (name) => ["test", "-p", "finweb", "--test", "options_print", "--", name];
 
 const MUT = [
   {
@@ -406,6 +410,39 @@ const MUT = [
     from: "    let mut r = Html(html.replace(\"{{V}}\", &state.assets_ver)).into_response();\n    r.headers_mut().insert(\n        header::CACHE_CONTROL,\n        axum::http::HeaderValue::from_static(\"no-cache\"),\n    );",
     to: "    let r = Html(html.replace(\"{{V}}\", &state.assets_ver)).into_response();",
     cmd: STATIC("index_html_is_never_cached"),
+  },
+  {
+    // 页码开关失效 → 设置里勾了页码，纸上不出现（旧内核忽略页边距盒子也是这个症状，
+    // 所以只有测试能分辨"我们的代码没生成"和"浏览器不支持"）
+    name: "⑳ 勾了页码却不生成页边距盒子",
+    file: "crates/fincore/src/print.rs",
+    from: "        if self.show_page_no {",
+    to: "        if false {",
+    cmd: FPRINT("page_number_can_be_turned_off"),
+  },
+  {
+    // 选了横向仍按纵向出纸：A4 纵向印 12 列的明细账，右边两列直接被裁掉
+    name: "⑳ 选横向也不横向",
+    file: "crates/fincore/src/print.rs",
+    from: '            "landscape" => true,',
+    to: '            "landscape" => false,',
+    cmd: FPRINT("explicit_orientation_wins_over_column_count"),
+  },
+  {
+    // 打印设置的结构校验不并进账套参数校验 → 越界字号存得进去，打印时才崩
+    name: "⑳ 打印设置不进账套参数校验",
+    file: "crates/fincore/src/account.rs",
+    from: "        out.extend(self.print.problems());",
+    to: "        // out.extend(self.print.problems());",
+    cmd: OPT("out_of_range_print_settings_are_rejected_with_the_value"),
+  },
+  {
+    // 业务默认科目不查末级：填了一级科目照样存得进，等到点"发货"才炸
+    name: "⑳ 业务默认科目不查末级",
+    file: "crates/findb/src/accounts.rs",
+    from: "                if !chart.is_leaf(code) {",
+    to: "                if false {",
+    cmd: OPT("biz_account_must_be_a_leaf_account"),
   },
 ];
 

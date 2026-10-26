@@ -672,7 +672,7 @@ impl LedgerView {
         for row in sh.rows.iter_mut() {
             row.insert(0, format!("{} {}", self.code, name));
         }
-        match crate::views::export::run_export(&sh, &title, &print_title, mode) {
+        match crate::views::export::run_export(&sh, &title, &print_title, mode, &ctx.db().options()) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }

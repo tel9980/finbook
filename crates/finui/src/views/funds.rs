@@ -534,7 +534,7 @@ impl FundsView {
             }
         };
         let title = format!("{name}（{}）", ctx.period().label());
-        match crate::views::export::run_export(&sh, name, &title, mode) {
+        match crate::views::export::run_export(&sh, name, &title, mode, &ctx.db().options()) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }
@@ -2121,7 +2121,7 @@ impl BudgetAnalysisView {
                     ]);
                 }
                 let title = format!("预算分析（{} 年度）", year);
-                match crate::views::export::run_export(&sh, "预算分析", &title, mode) {
+                match crate::views::export::run_export(&sh, "预算分析", &title, mode, &ctx.db().options()) {
                     Ok(m) => ctx.info(m),
                     Err(e) => ctx.error(e),
                 }
@@ -2490,7 +2490,7 @@ impl CostView {
             }
         };
         let title = format!("{name}（{}）", ctx.period().label());
-        match crate::views::export::run_export(&sh, name, &title, mode) {
+        match crate::views::export::run_export(&sh, name, &title, mode, &ctx.db().options()) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }

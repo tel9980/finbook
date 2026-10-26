@@ -172,6 +172,79 @@ impl OptionsView {
 
         ui.add_space(14.0);
         ui.separator();
+        ui.label(RichText::new("打印预览").strong());
+        ui.label(
+            RichText::new("这些是账套级设置：改完保存，本账套所有报表打印都用同一套版式")
+                .weak(),
+        );
+        egui::Grid::new("print_options")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("纸张方向");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut o.print.orientation, "auto".to_string(), "自动（列多转横向）");
+                    ui.radio_value(&mut o.print.orientation, "portrait".to_string(), "纵向");
+                    ui.radio_value(&mut o.print.orientation, "landscape".to_string(), "横向");
+                });
+                ui.end_row();
+
+                ui.label("正文字号");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut o.print.font_pt)
+                            .range(9..=14)
+                            .suffix(" pt"),
+                    );
+                    ui.label(
+                        RichText::new("9–14；列多或内容长时调小些，能少折几行")
+                            .weak(),
+                    );
+                });
+                ui.end_row();
+
+                ui.label("页边距");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut o.print.margin_mm)
+                            .range(5..=30)
+                            .suffix(" mm"),
+                    );
+                    ui.label(RichText::new("针式打印机一般要留宽些").weak());
+                });
+                ui.end_row();
+
+                ui.label("页眉页脚");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut o.print.show_company, "编制单位");
+                    ui.checkbox(&mut o.print.show_printed_at, "打印时间");
+                    ui.checkbox(&mut o.print.show_page_no, "页码");
+                    ui.checkbox(&mut o.print.show_signatures, "落款");
+                });
+                ui.end_row();
+
+                ui.label("落款文字");
+                ui.add_sized(
+                    [380.0, 22.0],
+                    egui::TextEdit::singleline(&mut o.print.sign_line),
+                );
+                ui.end_row();
+            });
+        ui.label(
+            RichText::new(
+                "页码靠浏览器的「页边距盒子」实现（第 N 页/共 M 页）。\
+                 旧内核（Chrome 131 之前等）会整块忽略而不报错 —— 表现为勾了页码但纸上没有，\
+                 这时候改用新版浏览器，或者把页码关掉。",
+            )
+            .weak(),
+        );
+        let probs = o.print.problems();
+        if !probs.is_empty() {
+            ui.colored_label(egui::Color32::from_rgb(0xB4, 0x6A, 0x00), probs.join("；"));
+        }
+
+        ui.add_space(14.0);
+        ui.separator();
         ui.label(RichText::new("账套信息").strong());
         let path = ctx
             .st

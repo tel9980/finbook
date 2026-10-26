@@ -493,7 +493,7 @@ impl AuxView {
             ]);
         }
         let name = format!("{}档案", self.kind.label());
-        match crate::views::export::run_export(&sh, &name, &name, mode) {
+        match crate::views::export::run_export(&sh, &name, &name, mode, &ctx.db().options()) {
             Ok(m) => ctx.info(m),
             Err(x) => ctx.error(x),
         }

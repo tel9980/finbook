@@ -11865,6 +11865,13 @@ async function viewOptions(main) {
   main.innerHTML = `<h2>账套参数</h2><div class="muted">加载中…</div>`;
   let o;
   try { o = await api("/options"); } catch (e) { main.innerHTML = `<h2>账套参数</h2><div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; return; }
+  // 打印设置：老账套没有这个字段时用与 fincore::print::PrintOptions 一致的默认值
+  const p = Object.assign({
+    orientation: "auto", font_pt: 11, margin_mm: 12,
+    show_company: true, show_printed_at: true, show_page_no: true, show_signatures: true,
+    sign_line: "制表：　　　　　审核：　　　　　负责人：",
+  }, o.print || {});
+  const pOr = p.orientation, pFnt = p.font_pt, pMar = p.margin_mm;
   main.innerHTML = `
     <h2>账套参数</h2>
     <div class="panel" style="max-width:640px">
@@ -11893,8 +11900,48 @@ async function viewOptions(main) {
         <label>单据前缀 <input id="op-pfx-po" value="${esc(((o.doc_prefixes || {}).po) || "")}" placeholder="CG" title="采购订单" style="width:56px" /> <input id="op-pfx-so" value="${esc(((o.doc_prefixes || {}).so) || "")}" placeholder="XS" title="销售订单" style="width:56px" /> <input id="op-pfx-req" value="${esc(((o.doc_prefixes || {}).req) || "")}" placeholder="QG" title="请购单" style="width:56px" /> <input id="op-pfx-quo" value="${esc(((o.doc_prefixes || {}).quo) || "")}" placeholder="BJ" title="报价单" style="width:56px" /> <input id="op-pfx-prod" value="${esc(((o.doc_prefixes || {}).prod) || "")}" placeholder="SC" title="生产订单" style="width:56px" /></label>
       </div>
       <p class="muted" style="font-size:12px">启用期间与科目级长影响科目编码校验与凭证编号，修改请谨慎；已开账后不建议改动。</p>
+      <h3 style="margin:18px 0 4px">打印预览</h3>
+      <p class="muted" style="font-size:12px;margin-top:0">账套级设置：存一次，本账套所有报表打印都用同一套版式（桌面版也读这里）。</p>
+      <div class="field" style="display:flex;gap:20px;flex-wrap:wrap;align-items:end">
+        <label>纸张方向
+          <select id="op-print-orient">
+            <option value="auto" ${pOr === "auto" ? "selected" : ""}>自动（列多转横向）</option>
+            <option value="portrait" ${pOr === "portrait" ? "selected" : ""}>纵向</option>
+            <option value="landscape" ${pOr === "landscape" ? "selected" : ""}>横向</option>
+          </select>
+        </label>
+        <label>正文字号 <input id="op-print-font" type="number" min="9" max="14" value="${pFnt}" style="width:64px" /> pt</label>
+        <label>页边距 <input id="op-print-margin" type="number" min="5" max="30" value="${pMar}" style="width:64px" /> mm</label>
+      </div>
+      <div class="field" style="display:flex;gap:20px;flex-wrap:wrap">
+        <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-print-company" ${p.show_company ? "checked" : ""} />编制单位</label>
+        <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-print-time" ${p.show_printed_at ? "checked" : ""} />打印时间</label>
+        <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-print-pageno" ${p.show_page_no ? "checked" : ""} />页码</label>
+        <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-print-sign" ${p.show_signatures ? "checked" : ""} />落款</label>
+      </div>
+      <div class="field"><label>落款文字（制表 / 审核 / 负责人，可自行改）</label><input id="op-print-signline" value="${esc(p.sign_line)}" /></div>
+      <div class="toolbar" style="margin-top:6px">
+        <button class="btn ghost" id="op-print-preview">试打一张（按上面设置，未保存也生效）</button>
+        <span class="muted" style="font-size:12px">页码靠浏览器「页边距盒子」实现，Chrome 131 之前的旧内核会整块忽略——勾了页码纸上却没有，就用新版浏览器。</span>
+      </div>
       ${can("sys_option") ? `<div class="foot" style="margin-top:10px"><button class="btn primary" id="op-save">保存参数</button></div>` : `<p class="muted">无修改权限（需要 sys_option）</p>`}
     </div>`;
+  const prev = $("#op-print-preview");
+  if (prev) prev.addEventListener("click", () => {
+    // 未保存也能试：把当前表单里的版式直接拼进打印页的地址栏参数
+    const q = new URLSearchParams({
+      po_orient: $("#op-print-orient").value,
+      po_font: $("#op-print-font").value,
+      po_margin: $("#op-print-margin").value,
+      po_company: $("#op-print-company").checked ? "1" : "0",
+      po_time: $("#op-print-time").checked ? "1" : "0",
+      po_pageno: $("#op-print-pageno").checked ? "1" : "0",
+      po_sign: $("#op-print-sign").checked ? "1" : "0",
+      po_signline: $("#op-print-signline").value,
+    });
+    const cur = state.current || "";
+    window.open(`/api/reports/trial-balance/print?from=${encodeURIComponent(cur)}&to=${encodeURIComponent(cur)}&${q}`, "_blank");
+  });
   const save = $("#op-save");
   if (save) save.addEventListener("click", async () => {
     const scheme = $("#op-scheme").value.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => n > 0);
@@ -11918,6 +11965,17 @@ async function viewOptions(main) {
         req: $("#op-pfx-req").value.trim(), quo: $("#op-pfx-quo").value.trim(),
         prod: $("#op-pfx-prod").value.trim(),
       },
+      // 整个对象覆盖式保存：不把 print 带回去，用户刚调好的版式会被重置成默认
+      print: Object.assign({}, p, {
+        orientation: $("#op-print-orient").value,
+        font_pt: Math.min(14, Math.max(9, parseInt($("#op-print-font").value, 10) || p.font_pt)),
+        margin_mm: Math.min(30, Math.max(5, parseInt($("#op-print-margin").value, 10) || p.margin_mm)),
+        show_company: $("#op-print-company").checked,
+        show_printed_at: $("#op-print-time").checked,
+        show_page_no: $("#op-print-pageno").checked,
+        show_signatures: $("#op-print-sign").checked,
+        sign_line: $("#op-print-signline").value,
+      }),
       biz_accounts: {
         ar: $("#op-biz-ar").value.trim() || "112201",
         ap: $("#op-biz-ap").value.trim() || "220201",
@@ -11927,8 +11985,12 @@ async function viewOptions(main) {
         fund: $("#op-biz-fund").value.trim() || "100201",
       },
     });
-    try { await api("/options", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); toast("已保存账套参数", "ok"); }
-    catch (e) { toast(e.message, "err"); }
+    try {
+      await api("/options", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      // 用服务端实际存下的对象回填：否则再点一次保存会把这次的值又覆盖回旧值
+      o = Object.assign({}, o, body);
+      toast("已保存账套参数", "ok");
+    } catch (e) { toast(e.message, "err"); }
   });
 }
 

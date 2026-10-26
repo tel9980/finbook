@@ -133,7 +133,7 @@ impl BudgetAlertsView {
                         a.over_amount.fmt_plain(),
                     ]);
                 }
-                match crate::views::export::run_export(&sh, "预算预警", "预算预警", mode) {
+                match crate::views::export::run_export(&sh, "预算预警", "预算预警", mode, &ctx.db().options()) {
                     Ok(m) => ctx.info(m),
                     Err(e) => ctx.error(e),
                 }

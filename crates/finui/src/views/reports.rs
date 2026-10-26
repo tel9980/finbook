@@ -384,7 +384,7 @@ impl ReportsView {
         };
         let file_name = format!("{name}_{}", self.to);
         let title = format!("{name}（{}）", self.to);
-        match crate::views::export::run_export(&sh, &file_name, &title, mode) {
+        match crate::views::export::run_export(&sh, &file_name, &title, mode, &ctx.db().options()) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }

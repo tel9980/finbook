@@ -97,6 +97,52 @@ pub fn chart_of(conn: &rusqlite::Connection) -> DbResult<Chart> {
     Ok(Chart::with_accounts(scheme, list_of(conn)?))
 }
 
+/// 校验「业务凭证默认科目」是否真的能记账：必须存在，且必须是末级科目。
+///
+/// ## 为什么必须查这一道
+///
+/// `biz_accounts` 的六个编码被收付款单、发货收入、暂估入库、盘点等十几条自动生成
+/// 凭证的路径直接拿去当分录科目用。填错了（比如填一级科目 `1122`）不会有任何提示：
+/// 平时看不出来，等到某天点「发货」时才报「科目不能直接记账」，而那时候单据已经
+/// 开出去了，人只会觉得「系统坏了」，不会想到是半年前账套参数里填错一位。
+///
+/// 返回空表示通过。科目表为空（尚未建科目）时返回空 —— 建账向导允许「先设参数、
+/// 后建科目」，这时候报错会挡住正常流程。
+pub fn check_biz_accounts(chart: &Chart, biz: &fincore::account::BizAccounts) -> Vec<String> {
+    let mut out = Vec::new();
+    if chart.all().is_empty() {
+        return out;
+    }
+    for (label, code) in [
+        ("应收科目", &biz.ar),
+        ("应付科目", &biz.ap),
+        ("收入科目", &biz.income),
+        ("销项税科目", &biz.tax_sales),
+        ("暂估材料科目", &biz.material),
+        ("默认资金账户", &biz.fund),
+    ] {
+        let code = code.trim();
+        if code.is_empty() {
+            // 空值的结构问题由 `BookOptions::validate` 报，这里不重复
+            continue;
+        }
+        match chart.get(code) {
+            None => out.push(format!(
+                "业务凭证默认科目「{label}」{code} 在科目表里不存在 —— 自动生成凭证时会直接失败"
+            )),
+            Some(a) => {
+                if !chart.is_leaf(code) {
+                    out.push(format!(
+                        "业务凭证默认科目「{label}」{} {code} 不是末级科目 —— 分录只能记在末级科目上",
+                        a.name
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
 pub fn insert(db: &Db, a: &Account) -> DbResult<()> {
     db.conn().execute(
         "INSERT INTO account(code,name,category,dir,aux_mask,unit,currency,has_qty,is_cash,is_bank,

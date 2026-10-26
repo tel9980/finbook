@@ -844,7 +844,7 @@ impl BeginView {
                 },
             ]);
         }
-        match crate::views::export::run_export(&sh, "期初余额", "期初余额", mode) {
+        match crate::views::export::run_export(&sh, "期初余额", "期初余额", mode, &ctx.db().options()) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }
@@ -991,6 +991,7 @@ mod reversible_tests {
             doc_prefixes: Default::default(),
             require_audit: false,
             voucher_words: fincore::chart::default_voucher_words(),
+            print: Default::default(),
         };
         findb::Db::create(&path, &opts).expect("建测试账套")
     }

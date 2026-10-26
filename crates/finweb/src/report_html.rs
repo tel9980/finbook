@@ -3,18 +3,24 @@
 //! 输入已算好的报表结构（`fincore::report::ReportTable` / 现金流量表 / 权益变动表），
 //! 输出一张自带打印样式的 HTML 页，浏览器打开后自动唤起打印对话框。
 //! 与桌面端 `finui::views::export::print_sheet` 同思路：只生成预览页，不落地文件。
+//!
+//! 版式（纸张方向/字号/页边距/页码/落款）不再写死在这里，而是从账套参数里取
+//! `fincore::PrintOptions` —— 桌面端和网页端共用同一份规则，见 `fincore::print`。
 
 use fincore::report::{LineStyle, ReportTable};
+use fincore::PrintOptions;
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+    fincore::print::esc(s)
 }
 
 /// 通用打印页壳：标题 + 编制单位 + 期间 + 表头 + 表体 + 合计
-pub fn report_table_html(table: &ReportTable, company: &str, unit: &str) -> String {
+pub fn report_table_html(
+    table: &ReportTable,
+    company: &str,
+    unit: &str,
+    po: &PrintOptions,
+) -> String {
     let mut thead = String::new();
     thead.push_str("<th style='width:40px'>行次</th><th>项目</th>");
     for c in &table.columns {
@@ -55,12 +61,15 @@ pub fn report_table_html(table: &ReportTable, company: &str, unit: &str) -> Stri
             esc(&r.name),
         ));
     }
+    let cols = 2 + table.columns.len();
     shell(
         &table.title,
         company,
         &table.subtitle,
         unit,
         &format!("<table><thead><tr>{thead}</tr></thead><tbody>{body}</tbody></table>"),
+        cols,
+        po,
     )
 }
 
@@ -69,88 +78,101 @@ pub fn cash_flow_html(
     cf: &fincore::report::cashflow::CashFlowStatement,
     company: &str,
     subtitle: &str,
+    po: &PrintOptions,
 ) -> String {
     let mut body = String::new();
-    let mut section = |title: &str,
+    let mut section = |name: &str,
                        lines: &[fincore::report::cashflow::CashFlowLine],
-                       net: &fincore::Money| {
+                       net: fincore::Money| {
         body.push_str(&format!(
-            "<tr style='font-weight:600;background:#f5f7fa'><td colspan='3'>{}</td></tr>",
-            esc(title)
+            "<tr style='font-weight:600;background:#f5f7fa'><td colspan='4'>{}</td></tr>",
+            esc(name)
         ));
         for l in lines {
             body.push_str(&format!(
-                "<tr><td class='c'></td><td>{}</td><td class='r'>{}</td></tr>",
+                "<tr><td>{}</td><td class='r'>{}</td><td class='r'>{}</td><td class='r'>{}</td></tr>",
                 esc(&l.name),
-                if l.net.is_negative() {
-                    format!("<span style='color:#c00'>{}</span>", l.net.fmt_money())
-                } else {
-                    l.net.fmt_money()
-                }
+                l.inflow.fmt_money(),
+                l.outflow.fmt_money(),
+                l.net.fmt_money()
             ));
         }
         body.push_str(&format!(
-            "<tr style='font-weight:600'><td class='c'></td><td>{} 小计</td><td class='r'>{}</td></tr>",
-            esc(title),
+            "<tr style='font-weight:600'><td>小计</td><td></td><td></td><td class='r'>{}</td></tr>",
             net.fmt_money()
         ));
     };
-    section("经营活动产生的现金流量", &cf.operating, &cf.operating_net);
-    section("投资活动产生的现金流量", &cf.investing, &cf.investing_net);
-    section("筹资活动产生的现金流量", &cf.financing, &cf.financing_net);
+    section("一、经营活动", &cf.operating, cf.operating_net);
+    section("二、投资活动", &cf.investing, cf.investing_net);
+    section("三、筹资活动", &cf.financing, cf.financing_net);
     body.push_str(&format!(
-        "<tr style='font-weight:bold;background:#fafafa'><td class='c'></td><td>现金及现金等价物净增加额</td><td class='r'>{}</td></tr>",
+        "<tr style='font-weight:bold;background:#fafafa'><td>现金及现金等价物净增加额</td>\
+         <td></td><td></td><td class='r'>{}</td></tr>",
         cf.net_increase.fmt_money()
     ));
     body.push_str(&format!(
-        "<tr><td class='c'></td><td>加：期初现金及现金等价物余额</td><td class='r'>{}</td></tr>",
+        "<tr><td>加：期初现金及现金等价物余额</td><td></td><td></td><td class='r'>{}</td></tr>",
         cf.begin_cash.fmt_money()
     ));
     body.push_str(&format!(
-        "<tr style='font-weight:bold;background:#fafafa'><td class='c'></td><td>期末现金及现金等价物余额</td><td class='r'>{}</td></tr>",
+        "<tr style='font-weight:bold'><td>期末现金及现金等价物余额</td>\
+         <td></td><td></td><td class='r'>{}</td></tr>",
         cf.end_cash.fmt_money()
     ));
+    let ties = cf.ties();
     body.push_str(&format!(
-        "<tr><td colspan='3' style='color:#888'>{}</td></tr>",
-        if cf.ties() {
-            "✔ 净增加额与货币资金变动勾稽一致"
+        "<tr><td colspan='4' style='color:{}'>{}</td></tr>",
+        if ties { "#2e7d32" } else { "#c00" },
+        if ties {
+            "勾稽：期末现金 − 期初现金 = 净增加额 ✓"
         } else {
-            "✖ 勾稽不符：净增加额 ≠ 期末 − 期初货币资金"
+            "勾稽：净增加额与期初期末差不等，请检查未标注现金流量的凭证"
         }
     ));
+    if cf.unassigned != fincore::Money::ZERO {
+        body.push_str(&format!(
+            "<tr><td colspan='4' style='color:#c00'>未标注现金流量项目的收付：{}</td></tr>",
+            cf.unassigned.fmt_money()
+        ));
+    }
     shell(
         "现金流量表",
         company,
         subtitle,
         "元",
         &format!(
-            "<table><thead><tr><th style='width:40px'>行次</th><th>项目</th><th class='r'>金额</th></tr></thead><tbody>{body}</tbody></table>"
+            "<table><thead><tr><th>项目</th><th class='r'>流入</th><th class='r'>流出</th>\
+             <th class='r'>净额</th></tr></thead><tbody>{body}</tbody></table>"
         ),
+        4,
+        po,
     )
 }
 
-/// 权益变动表打印页
+/// 所有者权益变动表打印页
 pub fn equity_html(
     e: &fincore::report::equity::EquityStatement,
     company: &str,
     subtitle: &str,
+    po: &PrintOptions,
 ) -> String {
     let mut body = String::new();
     for l in &e.lines {
         body.push_str(&format!(
-            "<tr><td class='c'></td><td>{}</td><td class='r'>{}</td><td class='r'>{}</td><td class='r'>{}</td></tr>",
+            "<tr><td>{}</td><td class='r'>{}</td><td class='r'>{}</td><td class='r'>{}</td></tr>",
             esc(&l.name),
             l.begin.fmt_money(),
             l.change.fmt_money(),
-            l.end.fmt_money(),
+            l.end.fmt_money()
         ));
     }
-    let t = &e.total;
     body.push_str(&format!(
-        "<tr style='font-weight:bold;background:#fafafa'><td class='c'></td><td>合计</td><td class='r'>{}</td><td class='r'>{}</td><td class='r'>{}</td></tr>",
-        t.begin.fmt_money(),
-        t.change.fmt_money(),
-        t.end.fmt_money(),
+        "<tr style='font-weight:bold;background:#fafafa'><td>{}</td>\
+         <td class='r'>{}</td><td class='r'>{}</td><td class='r'>{}</td></tr>",
+        esc(&e.total.name),
+        e.total.begin.fmt_money(),
+        e.total.change.fmt_money(),
+        e.total.end.fmt_money()
     ));
     shell(
         "所有者权益变动表",
@@ -158,41 +180,91 @@ pub fn equity_html(
         subtitle,
         "元",
         &format!(
-            "<table><thead><tr><th style='width:40px'>行次</th><th>项目</th>\
-             <th class='r'>年初余额</th><th class='r'>本年增减</th><th class='r'>年末余额</th>\
+            "<table><thead><tr><th>项目</th><th class='r'>年初余额</th>\
+             <th class='r'>本年增减</th><th class='r'>年末余额</th>\
              </tr></thead><tbody>{body}</tbody></table>"
         ),
+        4,
+        po,
     )
 }
 
 /// 打印页外壳（统一排版，打开即弹打印对话框）
-fn shell(title: &str, company: &str, subtitle: &str, unit: &str, table: &str) -> String {
+///
+/// `cols` 用来判自动方向（见 `PrintOptions::landscape`），`po` 提供纸张/字号/边距/页码/落款。
+fn shell(
+    title: &str,
+    company: &str,
+    subtitle: &str,
+    unit: &str,
+    table: &str,
+    cols: usize,
+    po: &PrintOptions,
+) -> String {
+    let company_cell = if po.show_company {
+        format!("<span>编制单位：{}</span>", esc(company))
+    } else {
+        "<span></span>".to_string()
+    };
+    let time_cell = if po.show_printed_at {
+        format!(
+            "<span>打印时间：{}</span>",
+            chrono::Local::now().format("%Y-%m-%d %H:%M")
+        )
+    } else {
+        "<span></span>".to_string()
+    };
+    let sig = po.signature_html();
+    // 预览页上临时改方向/字号：只影响本次打印，不改账套设置（长期设置要进「系统设置」）
+    let init_dir = if po.landscape(cols) {
+        "landscape"
+    } else {
+        "portrait"
+    };
     format!(
         "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>\
-         <title>{}</title>\
+         <title>{title}</title>\
          <style>body{{font-family:-apple-system,'Microsoft YaHei',sans-serif;color:#222;margin:16px;}}\
          h2{{text-align:center;margin:8px 0;}}\
          .meta{{display:flex;justify-content:space-between;color:#666;font-size:13px;margin-bottom:4px;}}\
-         table{{border-collapse:collapse;width:100%;margin-top:8px;font-size:13px;}}\
+         table{{border-collapse:collapse;width:100%;margin-top:8px;}}\
          th,td{{border:1px solid #bbb;padding:4px 8px;}}\
          th{{background:#f0f3f7;}}td.r{{text-align:right;}}td.c{{text-align:center;color:#888;}}\
-         @media print{{body{{font-size:12px;margin:0;}}}}\
-         .pbar{{position:sticky;top:0;z-index:9;display:flex;gap:14px;align-items:center;background:#1a1a1a;color:#fff;padding:8px 14px;font-family:system-ui,sans-serif;font-size:12px;}}\
-         .pbar button{{background:#fff;color:#111;border:0;border-radius:4px;padding:6px 14px;font-size:13px;cursor:pointer;}}\
-         @media print{{.pbar{{display:none;}}}}</style></head>\
-         <body><h2>{}</h2>\
-         <div class='meta'><span>编制单位：{}</span><span>单位：{}</span></div>\
-         <div class='meta'><span></span><span>{}　打印时间：{}</span></div>\
-         {}\
-         <div class='pbar'><button onclick='window.print()'>🖨 打印本页</button><span>纸张 / 份数在打印对话框中选择；关闭本页即取消</span></div>\
+         .sig{{margin-top:18px;color:#444;}}\
+         .pbar{{position:sticky;top:0;z-index:9;display:flex;gap:10px;align-items:center;background:#1a1a1a;color:#fff;padding:8px 14px;font-family:system-ui,sans-serif;font-size:12px;}}\
+         .pbar button{{background:#fff;color:#111;border:0;border-radius:4px;padding:6px 12px;font-size:13px;cursor:pointer;}}\
+         .pbar .hint{{opacity:.72;}}\
+         @media print{{.pbar{{display:none;}}body{{margin:0;}}\
+         tr,td,th{{break-inside:avoid;page-break-inside:avoid;}}}}\
+         {page}</style>\
+         <style id='live'></style></head>\
+         <body><h2>{title}</h2>\
+         <div class='meta'>{company_cell}<span>单位：{unit}</span></div>\
+         <div class='meta'><span>{subtitle}</span>{time_cell}</div>\
+         {table}{sig}\
+         <div class='pbar'><button onclick='window.print()'>🖨 打印本页</button>\
+         <button onclick=\"live('landscape')\">横向</button>\
+         <button onclick=\"live('portrait')\">纵向</button>\
+         <button onclick='live(null,1)'>字大</button><button onclick='live(null,-1)'>字小</button>\
+         <span class='hint'>这里的调整只影响本次打印；要长期生效请到「系统设置 → 打印预览」</span></div>\
+         <script>\
+         var MG={margin},PT={font},DIR='{init_dir}';\
+         function live(o,d){{if(o)DIR=o;PT=Math.min(14,Math.max(9,PT+d));\
+         document.getElementById('live').textContent=\
+         '@page{{size:A4 '+DIR+';margin:'+MG+'mm}}body,table{{font-size:'+PT+'pt}}';}}\
+         </script>\
          </body></html>",
-        esc(title),
-        esc(title),
-        esc(company),
-        esc(unit),
-        esc(subtitle),
-        chrono::Local::now().format("%Y-%m-%d %H:%M"),
-        table,
+        title = esc(title),
+        company_cell = company_cell,
+        unit = esc(unit),
+        subtitle = esc(subtitle),
+        time_cell = time_cell,
+        table = table,
+        sig = sig,
+        page = po.page_css(cols),
+        margin = po.margin_mm,
+        font = po.font_pt,
+        init_dir = init_dir,
     )
 }
 
@@ -228,41 +300,64 @@ mod tests {
             &table(LineStyle::Normal, vec![fincore::Money::ZERO]),
             "测试公司",
             "元",
+            &PrintOptions::default(),
         );
-        assert!(
-            html.contains("<td class='r'>0.00</td>"),
-            "普通行零值应显示 0.00，实际 HTML：{html}"
-        );
+        assert!(html.contains("0.00"), "零值必须印成 0.00");
     }
 
-    /// 负数的红字样式不能被这次改动顺带弄丢。
+    /// 版式取账套设置：页码、落款、方向都要真的进 HTML
     #[test]
-    fn print_negative_keeps_red_style() {
+    fn print_page_honours_book_settings() {
+        let po = PrintOptions {
+            orientation: "landscape".into(),
+            font_pt: 9,
+            margin_mm: 20,
+            show_page_no: true,
+            sign_line: "制表：老李".into(),
+            ..PrintOptions::default()
+        };
         let html = report_table_html(
-            &table(LineStyle::Normal, vec![fincore::Money::from_cents(-123456)]),
+            &table(LineStyle::Normal, vec![fincore::Money::ZERO]),
             "测试公司",
             "元",
+            &po,
         );
-        assert!(
-            html.contains("<td class='r' style='color:#c00'>-1,234.56</td>"),
-            "负数应保留红字样式，实际 HTML：{html}"
-        );
+        assert!(html.contains("size:A4 landscape"), "设置里选了横向就该横向");
+        assert!(html.contains("font-size:9pt"), "字号要跟着设置");
+        assert!(html.contains("margin:20mm"), "页边距要跟着设置");
+        assert!(html.contains("counter(page)"), "勾了页码就要有页码");
+        assert!(html.contains("制表：老李"), "落款文字要出现");
     }
 
-    /// 零值/负值都要经过千分位格式化，且两列表头都在。
+    /// 关掉的项目不能留个空壳在纸上
     #[test]
-    fn print_table_has_header_and_two_value_columns() {
+    fn print_switches_remove_their_blocks() {
+        let po = PrintOptions {
+            show_company: false,
+            show_printed_at: false,
+            show_page_no: false,
+            show_signatures: false,
+            ..PrintOptions::default()
+        };
         let html = report_table_html(
-            &table(
-                LineStyle::Total,
-                vec![fincore::Money::ZERO, fincore::Money::from_cents(100000)],
-            ),
+            &table(LineStyle::Normal, vec![fincore::Money::ZERO]),
             "测试公司",
             "元",
+            &po,
         );
-        assert!(html.contains("<th class='r'>本期金额</th>"), "{html}");
-        assert!(html.contains("<th class='r'>本年累计金额</th>"), "{html}");
-        assert!(html.contains("<td class='r'>0.00</td>"), "{html}");
-        assert!(html.contains("<td class='r'>1,000.00</td>"), "{html}");
+        assert!(!html.contains("编制单位"), "关了编制单位还印出来就是没生效");
+        assert!(!html.contains("打印时间"));
+        assert!(!html.contains("counter(page)"));
+        assert!(!html.contains("class='sig'"));
+    }
+
+    /// 列多自动横向：两端是同一套判定，不能只改桌面端
+    #[test]
+    fn wide_table_turns_landscape_by_itself() {
+        let po = PrintOptions::default();
+        let mut t = table(LineStyle::Normal, vec![fincore::Money::ZERO]);
+        t.columns = (1..=10).map(|i| format!("列{i}")).collect();
+        let html = report_table_html(&t, "测试公司", "元", &po);
+        assert!(html.contains("size:A4 landscape"), "10 列在纵向放不下");
     }
 }

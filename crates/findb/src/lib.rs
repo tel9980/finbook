@@ -392,7 +392,21 @@ impl Db {
     pub fn options(&self) -> BookOptions {
         options_of(&self.conn)
     }
+    /// 写账套参数。
+    ///
+    /// **落库前一律校验**：桌面端、网页端、建账向导三条路径都经过这里，校验放在
+    /// 界面里迟早会被某条路径漏掉。结构性问题（级长越界、空编码）由
+    /// [`BookOptions::validate`] 挡；「业务默认科目必须存在且是末级」要查库，
+    /// 由 [`crate::accounts::check_biz_accounts`] 挡 —— 后者不挡的话，填了个一级
+    /// 科目也不会报错，直到某天点「发货」才失败，那时单据已经开出去了。
     pub fn set_options(&self, o: &BookOptions) -> DbResult<()> {
+        let mut problems = o.validate();
+        if let Ok(chart) = crate::accounts::chart(self) {
+            problems.extend(crate::accounts::check_biz_accounts(&chart, &o.biz_accounts));
+        }
+        if !problems.is_empty() {
+            return Err(fincore::FinError::Validate(problems.join("；")).into());
+        }
         let s = serde_json::to_string(o)?;
         self.meta_set("options", &s)
     }

@@ -430,7 +430,7 @@ impl VoucherList {
         }
         let file_name = format!("凭证列表_{}_{}", self.from, self.to);
         let title = format!("凭证列表（{} ~ {}）", self.from, self.to);
-        match crate::views::export::run_export(&sh, &file_name, &title, mode) {
+        match crate::views::export::run_export(&sh, &file_name, &title, mode, &ctx.db().options()) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }

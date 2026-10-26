@@ -214,39 +214,87 @@ pub fn batch_template_sheets(data_name: &str, tpl: &fincore::batch::Template) ->
 }
 
 /// 生成可打印的 HTML（自带打印样式，自动唤起打印对话框）
-fn sheet_to_html(sheet: &Sheet, title: &str) -> String {
+///
+/// 版式规则全部来自 `fincore::print`（与网页端共用一份）：纸张方向、字号、页边距、
+/// 页码、落款。这里只负责把 `Sheet` 拼成表体。
+///
+/// 对齐方式按**列内容**判断，而不是「最后一列右对齐」：凭证清单、明细账、档案列表
+/// 的最后一列都是备注或摘要，硬性右对齐会把整列文字顶到右边，看着像排版坏了。
+fn sheet_to_html(sheet: &Sheet, title: &str, opts: &fincore::account::BookOptions) -> String {
+    let po = &opts.print;
     let title = escape_html(title);
+    let cols = sheet.headers.len().max(1);
+    // 每列是不是金额列（决定右对齐 + 等宽数字）
+    let money_cols: Vec<bool> = (0..cols)
+        .map(|c| fincore::print::is_money_column(sheet.rows.iter().filter_map(|r| r.get(c))))
+        .collect();
     let mut rows = String::new();
     for r in &sheet.rows {
         rows.push_str("<tr>");
-        for c in r {
-            rows.push_str(&format!("<td>{}</td>", escape_html(c)));
+        for c in 0..cols {
+            let cell = r.get(c).map(|s| s.as_str()).unwrap_or("");
+            if money_cols[c] {
+                rows.push_str(&format!("<td class='r'>{}</td>", escape_html(cell)));
+            } else {
+                rows.push_str(&format!("<td>{}</td>", escape_html(cell)));
+            }
         }
         rows.push_str("</tr>\n");
     }
     let mut headers = String::new();
-    for h in &sheet.headers {
-        headers.push_str(&format!("<th>{}</th>", escape_html(h)));
+    for (i, h) in sheet.headers.iter().enumerate() {
+        let cls = if money_cols.get(i).copied().unwrap_or(false) {
+            " class='r'"
+        } else {
+            ""
+        };
+        headers.push_str(&format!("<th{cls}>{}</th>", escape_html(h)));
     }
+    let company = if po.show_company {
+        format!("<div class='sub'>编制单位：{}</div>", escape_html(&opts.company))
+    } else {
+        String::new()
+    };
+    let printed_at = if po.show_printed_at {
+        format!(
+            "<div class='sub'>打印时间：{}</div>",
+            chrono::Local::now().format("%Y-%m-%d %H:%M")
+        )
+    } else {
+        String::new()
+    };
+    let sig = po.signature_html();
     format!(
         r#"<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <title>{title}</title>
 <style>
   body {{ font-family: "Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif; color:#111; margin:24px; }}
-  h1 {{ font-size:18px; text-align:center; margin:0 0 12px; }}
-  table {{ border-collapse:collapse; width:100%; font-size:13px; }}
+  h1 {{ font-size:18px; text-align:center; margin:0 0 6px; }}
+  .sub {{ text-align:center; color:#555; font-size:12px; }}
+  table {{ border-collapse:collapse; width:100%; margin-top:10px; }}
   th, td {{ border:1px solid #999; padding:4px 8px; text-align:left; }}
   th {{ background:#eef3f7; }}
-  td:last-child, th:last-child {{ text-align:right; font-variant-numeric:tabular-nums; }}
+  td.r, th.r {{ text-align:right; font-variant-numeric:tabular-nums; }}
+  .sig {{ margin-top:18px; color:#444; }}
   @media print {{ body {{ margin:0; }} }}
+  {page}
 </style>
 <script>window.onload=function(){{ setTimeout(function(){{ window.print(); }}, 300); }};</script>
 </head><body>
 <h1>{title}</h1>
+{company}{printed_at}
 <table><thead><tr>{headers}</tr></thead><tbody>
 {rows}</tbody></table>
-</body></html>"#
+{sig}
+</body></html>"#,
+        title = title,
+        company = company,
+        printed_at = printed_at,
+        headers = headers,
+        rows = rows,
+        sig = sig,
+        page = po.page_css(cols),
     )
 }
 
@@ -260,11 +308,15 @@ fn escape_html(s: &str) -> String {
 
 /// 打印预览：生成 HTML 用默认浏览器打开并自动弹出打印对话框。
 /// 不落 Excel/CSV 文件，满足"普通账户只能打印、不能导出"的管控。
-pub fn print_sheet(sheet: &Sheet, title: &str) -> Result<String, String> {
+pub fn print_sheet(
+    sheet: &Sheet,
+    title: &str,
+    opts: &fincore::account::BookOptions,
+) -> Result<String, String> {
     if sheet.is_empty() {
         return Err("没有可打印的数据".to_string());
     }
-    print_html_content(title, &sheet_to_html(sheet, title))
+    print_html_content(title, &sheet_to_html(sheet, title, opts))
 }
 
 /// 把一个现成的打印 HTML 写入零时文件并用系统默认浏览器打开（自动唤起打印）。
@@ -305,11 +357,12 @@ pub fn run_export(
     file_name: &str,
     print_title: &str,
     mode: ExportMode,
+    opts: &fincore::account::BookOptions,
 ) -> Result<String, String> {
     match mode {
         ExportMode::Excel => export_sheet(sh, file_name, true),
         ExportMode::Csv => export_sheet(sh, file_name, false),
-        ExportMode::Print => print_sheet(sh, print_title),
+        ExportMode::Print => print_sheet(sh, print_title, opts),
     }
 }
 

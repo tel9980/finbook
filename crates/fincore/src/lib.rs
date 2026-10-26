@@ -23,6 +23,7 @@ pub mod engine;
 pub mod error;
 pub mod money;
 pub mod period;
+pub mod print;
 pub mod report;
 pub mod user;
 pub mod voucher;
@@ -38,6 +39,7 @@ pub use balance::{
 pub use error::{FinError, Issues};
 pub use money::Money;
 pub use period::Period;
+pub use print::PrintOptions;
 pub use user::{Perm, Role, User};
 pub use voucher::{AuxRef, Entry, Voucher, VoucherSource, VoucherStatus};
 

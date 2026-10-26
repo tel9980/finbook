@@ -126,7 +126,7 @@ impl LogsView {
                 l.detail.clone(),
             ]);
         }
-        match crate::views::export::run_export(&sh, "操作日志", "操作日志", mode) {
+        match crate::views::export::run_export(&sh, "操作日志", "操作日志", mode, &ctx.db().options()) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }

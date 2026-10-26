@@ -1,0 +1,293 @@
+//! 打印版式（纸张、字号、页边距、页码、落款）。
+//!
+//! ## 为什么放在 fincore 而不是各自的界面层
+//!
+//! 桌面端（`finui::views::export`）和网页端（`finweb::report_html`）各有自己的
+//! HTML 拼装代码，但**版式规则必须只有一份**。分叉的后果不是编译错误，而是
+//! 「网页打印有页码、桌面打印没有」「网页横向、桌面竖向」这种谁也说不清的差异 ——
+//! 没有人会同时打开两处源码比对，而用户只会说「打印出来怪怪的」。
+//!
+//! 所以：设置结构（[`PrintOptions`]）+ CSS 生成（[`page_css`]）+ 落款（[`signature_html`]）
+//! 都在这里，两端只负责拼表体。
+
+use serde::{Deserialize, Serialize};
+
+/// 列数超过这个值就默认改横向：A4 纵向扣掉页边距后约 186mm，
+/// 一列内容（日期/摘要/数量金额）平均要占 20mm 以上，8 列就已经挤到折行。
+pub const AUTO_LANDSCAPE_COLS: usize = 8;
+
+/// 打印设置（存在账套参数里，跟随账套而不是跟随某台电脑）。
+///
+/// 跟随账套的理由：小工厂常常「办公室打报表、宿舍看电脑」，跟着机器走会让同一份
+/// 报表在两台机器上打出两种版式；而账套本来就是「这套账的口径」。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PrintOptions {
+    /// 纸张方向：`auto`（按列数决定）/ `portrait` / `landscape`
+    pub orientation: String,
+    /// 正文字号（pt），9–14
+    pub font_pt: u8,
+    /// 页边距（mm），5–30
+    pub margin_mm: u8,
+    /// 显示「编制单位」
+    pub show_company: bool,
+    /// 显示「打印时间」
+    pub show_printed_at: bool,
+    /// 显示页码（第 N 页 / 共 M 页）
+    pub show_page_no: bool,
+    /// 显示落款（制表 / 审核 / 负责人）
+    pub show_signatures: bool,
+    /// 落款文字，可自行改（比如加上店名或「复核」）
+    pub sign_line: String,
+}
+
+impl Default for PrintOptions {
+    fn default() -> Self {
+        Self {
+            orientation: "auto".to_string(),
+            font_pt: 11,
+            margin_mm: 12,
+            show_company: true,
+            show_printed_at: true,
+            show_page_no: true,
+            show_signatures: true,
+            sign_line: "制表：　　　　　审核：　　　　　负责人：".to_string(),
+        }
+    }
+}
+
+impl PrintOptions {
+    /// 实际是否横向打印；`cols` 是这张表的列数（用于 `auto`）
+    pub fn landscape(&self, cols: usize) -> bool {
+        match self.orientation.as_str() {
+            "landscape" => true,
+            "portrait" => false,
+            // 认不出来的值按 auto 走：脏配置不该让打印直接报错
+            _ => cols > AUTO_LANDSCAPE_COLS,
+        }
+    }
+
+    pub fn orientation_label(&self) -> &'static str {
+        match self.orientation.as_str() {
+            "landscape" => "横向",
+            "portrait" => "纵向",
+            _ => "自动",
+        }
+    }
+
+    /// 结构校验（不查库）：返回空表示通过。
+    ///
+    /// 只挡「一定是错的」：范围越界、方向拼不出来。至于科目存不存在、是不是末级，
+    /// 那是查库才能判断的语义校验，放在 findb 层（见 `findb::accounts::check_biz_accounts`）。
+    pub fn problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !matches!(self.orientation.as_str(), "auto" | "portrait" | "landscape") {
+            out.push(format!(
+                "打印方向只能是 自动/纵向/横向，当前是「{}」",
+                self.orientation
+            ));
+        }
+        if !(9..=14).contains(&self.font_pt) {
+            out.push(format!("打印字号应在 9–14 之间，当前是 {}", self.font_pt));
+        }
+        if !(5..=30).contains(&self.margin_mm) {
+            out.push(format!("页边距应在 5–30 毫米之间，当前是 {}", self.margin_mm));
+        }
+        if self.show_signatures && self.sign_line.trim().is_empty() {
+            out.push("选了显示落款，但落款文字是空的".to_string());
+        }
+        out
+    }
+
+    /// 生成 `@page` 与基础排版 CSS（两端共用）。
+    ///
+    /// 页码用 `@page` 的页边距盒子（`@bottom-right`）实现：这是浏览器里唯一能拿到
+    /// `counter(page)` 的地方。旧浏览器（Chrome < 131 等）不认识页边距盒子，
+    /// 会**整块忽略**而不报错 —— 表现为「设置里勾了页码但纸上没有」，所以界面上
+    /// 的说明文字要讲清楚这个前提，别让人以为是功能没做。
+    pub fn page_css(&self, cols: usize) -> String {
+        let size = if self.landscape(cols) {
+            "A4 landscape"
+        } else {
+            "A4 portrait"
+        };
+        let mut css = format!(
+            "@page{{size:{size};margin:{m}mm;",
+            m = self.margin_mm
+        );
+        if self.show_page_no {
+            css.push_str(
+                "@bottom-right{content:\"第 \" counter(page) \" 页 / 共 \" counter(pages) \" 页\";\
+                 font-size:9pt;color:#666;}",
+            );
+        }
+        css.push('}');
+        css.push_str(&format!(
+            "body{{font-size:{pt}pt;}}\
+             table{{border-collapse:collapse;width:100%;font-size:{pt}pt;}}\
+             thead{{display:table-header-group;}}\
+             tr,td,th{{break-inside:avoid;page-break-inside:avoid;}}",
+            pt = self.font_pt
+        ));
+        css
+    }
+
+    /// 落款 HTML；关闭时返回空串（调用方直接拼接即可，不会多出空行）
+    pub fn signature_html(&self) -> String {
+        if !self.show_signatures {
+            return String::new();
+        }
+        format!(
+            "<div class='sig'>{}</div>",
+            crate::print::esc(&self.sign_line)
+        )
+    }
+}
+
+/// HTML 转义（打印内容里有客户名、摘要，可能带 `<` 和 `&`）
+pub fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// 这一列是不是「金额列」——决定打印时的对齐方式。
+///
+/// 原来的写法是「最后一列右对齐」，那是个把报表结构硬编码进样式的假设：凭证清单、
+/// 明细账、档案列表的最后一列都是备注或摘要，结果是**整列文字被推到右边**。
+/// 改成按内容判断：非空单元格里有九成以上能解析成金额，才算金额列。
+pub fn is_money_column<S: AsRef<str>>(cells: impl Iterator<Item = S>) -> bool {
+    let mut total = 0usize;
+    let mut numeric = 0usize;
+    for c in cells {
+        let t = c.as_ref().trim();
+        if t.is_empty() {
+            continue;
+        }
+        total += 1;
+        if is_number_like(t) {
+            numeric += 1;
+        }
+    }
+    total > 0 && numeric * 10 >= total * 9
+}
+
+/// 单个单元格是否金钱样式：允许千分位、正负号、会计括号、货币符号。
+pub fn is_number_like(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let t = t
+        .trim_start_matches(['¥', '￥', '$'])
+        .trim_start_matches('+')
+        .trim();
+    let t = if let Some(inner) = t.strip_prefix('(').and_then(|x| x.strip_suffix(')')) {
+        inner.trim()
+    } else {
+        t
+    };
+    let t = t.strip_prefix('-').unwrap_or(t).trim();
+    if t.is_empty() {
+        return false;
+    }
+    let mut seen_dot = false;
+    for ch in t.chars() {
+        match ch {
+            ',' | ' ' => {}
+            '.' if !seen_dot => seen_dot = true,
+            c if c.is_ascii_digit() => {}
+            _ => return false,
+        }
+    }
+    // 至少要有一位数字，否则「...」也会被当成金额
+    t.chars().any(|c| c.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_auto_and_sane() {
+        let p = PrintOptions::default();
+        assert_eq!(p.orientation_label(), "自动");
+        assert!(p.problems().is_empty(), "{:?}", p.problems());
+        assert!(!p.landscape(6), "6 列在 A4 纵向放得下");
+        assert!(p.landscape(9), "9 列自动改横向");
+    }
+
+    #[test]
+    fn explicit_orientation_wins_over_column_count() {
+        let mut p = PrintOptions::default();
+        p.orientation = "portrait".into();
+        assert!(!p.landscape(30), "显式选纵向就该听用户的");
+        p.orientation = "landscape".into();
+        assert!(p.landscape(2));
+    }
+
+    #[test]
+    fn page_css_carries_size_margin_font_and_break_rules() {
+        let p = PrintOptions::default();
+        let css = p.page_css(4);
+        assert!(css.contains("size:A4 portrait"), "{css}");
+        assert!(css.contains("margin:12mm"), "{css}");
+        assert!(css.contains("font-size:11pt"), "{css}");
+        // 跨页时行不能被切成两半，表头要重复
+        assert!(css.contains("break-inside:avoid"), "{css}");
+        assert!(css.contains("display:table-header-group"), "{css}");
+    }
+
+    #[test]
+    fn page_number_can_be_turned_off() {
+        let mut p = PrintOptions::default();
+        assert!(p.page_css(3).contains("counter(page)"));
+        p.show_page_no = false;
+        assert!(!p.page_css(3).contains("counter(page)"), "关掉页码后不能再输出页边距盒子");
+    }
+
+    #[test]
+    fn signature_respects_toggle_and_escapes() {
+        let mut p = PrintOptions::default();
+        assert!(p.signature_html().contains("制表"));
+        p.show_signatures = false;
+        assert_eq!(p.signature_html(), "");
+        p.show_signatures = true;
+        p.sign_line = "<b>制表</b>".into();
+        assert!(p.signature_html().contains("&lt;b&gt;"), "落款里的字符要转义");
+    }
+
+    #[test]
+    fn out_of_range_settings_are_reported_with_the_value() {
+        let mut p = PrintOptions::default();
+        p.font_pt = 30;
+        p.margin_mm = 1;
+        p.orientation = "sideways".into();
+        let probs = p.problems();
+        assert!(probs.iter().any(|x| x.contains("30")), "{probs:?}");
+        assert!(probs.iter().any(|x| x.contains("当前是 1")), "{probs:?}");
+        assert!(probs.iter().any(|x| x.contains("sideways")), "{probs:?}");
+    }
+
+    #[test]
+    fn money_column_is_detected_by_content_not_position() {
+        // 备注列：最后一列但全是文字 → 不能右对齐
+        let notes = ["月结 30 天", "现结", ""];
+        assert!(!is_money_column(notes.into_iter().map(|s| s.to_string())));
+        // 金额列：带千分位与括号负数
+        let money = ["1,234.56", "(1,000.00)", "0.00"];
+        assert!(is_money_column(money.into_iter().map(|s| s.to_string())));
+    }
+
+    #[test]
+    fn number_like_accepts_accounting_forms() {
+        for s in ["1,234.56", "-5", "(1,000.00)", "¥88.00", "0.00", "12 "] {
+            assert!(is_number_like(s), "{s} 应被认成金额");
+        }
+        for s in ["", "  ", "月结", "...", "12,34,5x", "2026-10-26"] {
+            assert!(!is_number_like(s), "{s} 不该被认成金额");
+        }
+    }
+}

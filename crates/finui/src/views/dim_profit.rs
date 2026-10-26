@@ -191,7 +191,7 @@ impl DimProfitView {
                     ]);
                 }
                 let title = format!("多维损益（{} · {}）", p.label(), self.dim.label());
-                match crate::views::export::run_export(&sh, "多维损益", &title, mode) {
+                match crate::views::export::run_export(&sh, "多维损益", &title, mode, &ctx.db().options()) {
                     Ok(m) => ctx.info(m),
                     Err(e) => ctx.error(e),
                 }

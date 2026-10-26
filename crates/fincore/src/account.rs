@@ -733,6 +733,13 @@ pub struct BookOptions {
     /// 单据号前缀自定义（键：po/so/req/quo/prod；空/缺省用内置默认 CG/XS/QG/BJ/SC）
     #[serde(default)]
     pub doc_prefixes: std::collections::BTreeMap<String, String>,
+    /// 打印版式（纸张方向/字号/页边距/页码/落款）
+    ///
+    /// 存在账套参数里而不是本机配置：同一份报表在办公室和宿舍两台电脑上打出两种
+    /// 版式是没道理的，「这套账的打印口径」本来就属于账套。
+    /// 旧账套没有该字段时用默认值（`#[serde(default)]`），不追溯改存量行为。
+    #[serde(default)]
+    pub print: crate::print::PrintOptions,
     /// 凭证字号方案
     pub voucher_words: Vec<String>,
 }
@@ -790,8 +797,58 @@ impl Default for BookOptions {
             biz_accounts: BizAccounts::default(),
             budget_control: String::new(),
             doc_prefixes: std::collections::BTreeMap::new(),
+            print: crate::print::PrintOptions::default(),
             voucher_words: vec!["记".to_string()],
         }
+    }
+}
+
+impl BookOptions {
+    /// 结构校验（不查库）：返回空表示通过，否则每项是一句给人看的中文。
+    ///
+    /// ## 为什么放在这一层，而不是让界面对自己校验
+    ///
+    /// 写账套参数的路径有三条：桌面「账套参数」页、网页 `PUT /api/options`、建账向导。
+    /// 校验写进界面，就等于「哪条路径忘了调，哪条路径就能写进脏数据」—— 网页端原来
+    /// 自己校了期间/级长/凭证字，桌面端只校了「期间能解析」「级长能解析成数字」，
+    /// 同一个字段两端规则不同，这类分叉最后都表现为「网页存得进、桌面存不进」或者
+    /// 反过来，而使用者只会认为「保存按钮有时候不灵」。
+    ///
+    /// 这里只挡**一定是错的**（范围越界、空科目编码）。科目存不存在、是不是末级，
+    /// 要查库才能判断，放在 findb 层（`findb::accounts::check_biz_accounts`）。
+    pub fn validate(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.code_scheme.is_empty() {
+            out.push("科目编码级长不能为空（如 4-2-2-2）".to_string());
+        } else if self.code_scheme.len() > 8 {
+            out.push(format!("科目编码最多 8 级，当前 {} 级", self.code_scheme.len()));
+        } else if let Some(bad) = self.code_scheme.iter().find(|s| !(1..=12u8).contains(*s)) {
+            out.push(format!("科目编码每级应为 1–12 位，当前有 {bad} 位"));
+        }
+        if self.voucher_words.iter().any(|w| w.trim().is_empty()) {
+            out.push("凭证字号不能有空白项（多个用逗号分隔，如 记,收,付）".to_string());
+        }
+        if self.base_currency.trim().is_empty() {
+            out.push("本位币不能为空（一般为 CNY）".to_string());
+        }
+        for (label, code) in [
+            ("应收科目", &self.biz_accounts.ar),
+            ("应付科目", &self.biz_accounts.ap),
+            ("收入科目", &self.biz_accounts.income),
+            ("销项税科目", &self.biz_accounts.tax_sales),
+            ("暂估材料科目", &self.biz_accounts.material),
+            ("默认资金账户", &self.biz_accounts.fund),
+        ] {
+            if code.trim().is_empty() {
+                out.push(format!("业务凭证默认科目「{label}」不能为空"));
+            } else if !code.trim().chars().all(|c| c.is_ascii_alphanumeric()) {
+                out.push(format!(
+                    "业务凭证默认科目「{label}」应填科目编码（如 112201），当前是「{code}」"
+                ));
+            }
+        }
+        out.extend(self.print.problems());
+        out
     }
 }
 
