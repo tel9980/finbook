@@ -2615,6 +2615,89 @@ async function logout() {
 }
 
 // ===========================================================================
+// ---------------------------------------------------------------------------
+// 首页首屏：本期经营结果 + 钱在哪
+//
+// 这两块必须并排：利润是**账面**赚的，「钱在哪」是真正压在外面的钱。
+// 小厂常见的死法是账面赚钱、钱全压在客户手里 —— 只看净利润看不出来。
+// 数据全部来自 /api/dashboard 的 brief 字段（后端复用报表那条取数路径）。
+// ---------------------------------------------------------------------------
+function homeHero(d) {
+  const b = d && d.brief;
+  if (!b) return "";
+  const np = moneyNum(b.net_profit);
+  const ncls = np > 0 ? "pos" : np < 0 ? "neg" : "flat";
+  const diff = moneyNum(b.net_profit_diff);
+  const diffTxt = diff === 0
+    ? "与上月持平"
+    : `较上月 ${diff > 0 ? "▲" : "▼"} <b>${moneyFmt(Math.abs(diff))}</b>`;
+  const marginTxt = b.margin == null ? "" : ` · 利润率 <b>${pctFmt(b.margin)}</b>`;
+  const costTop = (b.cost_top || [])
+    .map((c) => `<b>${esc(c.name)}</b> ${esc(c.amount)}`).join(" · ");
+  const unposted = Number(b.unposted) > 0
+    ? `<div class="hh-warn">⚠ ${Number(b.unposted)} 张凭证还没记账，未计入上面的数字</div>` : "";
+
+  const m = b.money || {};
+  const netR = !!m.net_is_receivable;
+  const extra = [];
+  if (moneyNum(m.advance_out) !== 0) extra.push(`预付供应商 ${esc(m.advance_out)}`);
+  if (moneyNum(m.advance_in) !== 0) extra.push(`预收客户 ${esc(m.advance_in)}`);
+  const overdue = Number(m.overdue_90_count) > 0
+    ? `<div class="hh-warn">⚠ ${Number(m.overdue_90_count)} 家客户的钱超过 90 天没收回，共 ${esc(m.overdue_90)}，该催了</div>` : "";
+
+  // 账龄：60 天黄、90 天红。老板扫一眼就知道先打哪个电话。
+  const partyRow = (p) => {
+    const days = Number(p.max_days) || 0;
+    const dcls = days >= 90 ? "age w90" : days >= 60 ? "age w60" : "age";
+    // 同一家既是客户又是供应商（宏源那种）：把另一边和净额一起写出来，
+    // 否则老板看到两行「他欠我 15,000」「我欠他 28,000」还得自己心算。
+    const both = p.both
+      ? `<span class="both">另一方向 ${esc(p.also)}，净${p.net_is_receivable ? "他欠我" : "我欠他"} <span class="nett">${esc(p.net)}</span></span>`
+      : "";
+    return `<div class="hm-row">
+      <span class="nm" title="${esc(p.name)}">${esc(p.name)}${both}</span>
+      <span class="amt">${esc(p.amount)}</span>
+      <span class="${dcls}">${days}天</span>
+    </div>`;
+  };
+  const list = (arr, emptyTxt) => (arr && arr.length)
+    ? arr.map(partyRow).join("")
+    : `<div class="hm-empty">${emptyTxt}</div>`;
+
+  return `
+  <section class="home-hero">
+    <div class="hh">
+      <div class="hh-head"><span>本期经营结果</span><span>${esc(b.period)}</span></div>
+      <div>
+        <div class="hh-np ${ncls}"><span class="cur">¥</span>${esc(b.net_profit)}</div>
+        <div class="hh-sub">${diffTxt}${marginTxt}</div>
+      </div>
+      <div class="hh-pair">
+        <div><span class="k">营业收入</span><b>${esc(b.revenue)}</b></div>
+        <div><span class="k">营业成本</span><b>${esc(b.cost)}</b></div>
+        <div><span class="k">本年累计净利润</span><b>${esc(b.net_profit_ytd)}</b></div>
+      </div>
+      ${costTop ? `<div class="hh-cost">钱都花哪了：${costTop}</div>` : ""}
+      ${unposted}
+    </div>
+    <div class="hh">
+      <div class="hh-head"><span>钱在哪</span><span>别人欠我 / 我欠别人</span></div>
+      <div class="hm-grid">
+        <div class="hm"><span class="k">别人欠我</span><b class="pos">${esc(m.receivable)}</b></div>
+        <div class="hm"><span class="k">我欠别人</span><b class="neg">${esc(m.payable)}</b></div>
+        <div class="hm"><span class="k">手头现金</span><b>${esc(m.cash)}</b></div>
+        <div class="hm"><span class="k">净头寸（${netR ? "别人欠我" : "我欠别人"}）</span><b class="${netR ? "pos" : "neg"}">${esc(m.net)}</b></div>
+      </div>
+      ${extra.length ? `<div class="hh-cost">另有：${extra.join(" · ")}</div>` : ""}
+      <div class="hm-lists">
+        <div><h5>欠我最多的客户</h5>${list(m.top_customers, "还没有赊账")}</div>
+        <div><h5>我欠最多的供应商</h5>${list(m.top_suppliers, "没有欠款")}</div>
+      </div>
+      ${overdue}
+    </div>
+  </section>`;
+}
+
 // 我的工作台：账套状态（凭证数等固定卡）+ 按岗位权限动态拼装的
 // 业务卡片 / 我的待办 / 多期趋势（GET /api/workbench，无新权限位）
 // ===========================================================================
@@ -2682,6 +2765,7 @@ async function viewDashboard(main) {
     <h2>我的工作台</h2>
     ${adminBanner}
     ${firstRun}
+    ${homeHero(d)}
     ${wbHtml.todo}
     <details class="wb-ref" ${firstRun ? "" : "open"}>
       <summary class="u-dim u-sm">账套概况</summary>

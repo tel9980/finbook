@@ -3066,7 +3066,125 @@ async fn get_dashboard(
         vouchers: v,
         entries: e,
         accounts: a,
+        brief: home_brief(db, cur).ok(),
     }))
+}
+
+/// 首页首屏两块：本期赚没赚（利润口径）+ 钱在哪（往来口径）
+///
+/// 取数全部复用报表那条路径（`findb::advanced::financial_totals` /
+/// `financial_analysis` / `money_position`），**不另算一套**。首页自己算一遍
+/// 的下场是「首页说赚 10 万，点进利润表是 8.5 万」，而两边都"看起来对"。
+fn home_brief(db: &findb::Db, cur: Period) -> Result<HomeBrief, AppError> {
+    let year_from = Period::new(cur.year(), 1).unwrap_or(cur);
+
+    let t = findb::advanced::financial_totals(db, cur, cur, None)?;
+    let ytd = findb::advanced::financial_totals(db, cur, year_from, None)?;
+    // 上月净利润：只为了算环比。"这个月赚 8 万"本身没有意义，老板真正想
+    // 知道的是"比上个月好还是差"。取不到（建账首月）就当 0。
+    let prev_np = findb::advanced::financial_totals(db, cur.prev(), cur.prev(), None)
+        .map(|x| x.net_profit)
+        .unwrap_or(fincore::Money::ZERO);
+    let nc = t.net_profit;
+
+    // 利润率：收入为 0 时不显示（不是 0%，是"没法算"）
+    let margin = if t.revenue.is_zero() {
+        None
+    } else {
+        Some((t.net_profit.to_f64() / t.revenue.to_f64() * 100.0 * 10.0).round() / 10.0)
+    };
+
+    // 成本构成 Top 3：老板一定会问"钱都花哪了"，最大的几块直接摆出来
+    let mut cost_top = Vec::new();
+    if let Ok(a) = findb::advanced::financial_analysis(db, cur, None) {
+        for d in a.cost_drivers.iter().take(3) {
+            if d.amount.is_zero() {
+                continue;
+            }
+            cost_top.push(HomeDriver {
+                name: d.name.clone(),
+                amount: d.amount.fmt_money(),
+            });
+        }
+    }
+
+    // 没记账的凭证：这些**没算进**上面的收入/成本/净利润，必须当面说清楚，
+    // 否则老板看到"这个月只赚这么点"根本不知道是自己还没记账。
+    let (draft, audited, _, _) = findb::vouchers::status_summary(db, cur).unwrap_or((0, 0, 0, 0));
+
+    // 账龄以「当月最后一天」为基准：用今天算会让补录上个月的凭证显示成 0 天。
+    let as_of = month_end(cur);
+    let mp = findb::advanced::money_position(db, cur, as_of, None)
+        .unwrap_or_else(|_| empty_money_position());
+
+    let party = |p: &findb::advanced::PartyMoney| HomeParty {
+        code: p.code.clone(),
+        name: p.name.clone(),
+        amount: p.amount.fmt_money(),
+        max_days: p.max_days,
+        also: p.also.fmt_money(),
+        net: p.net_with().fmt_money(),
+        net_is_receivable: p.net_is_receivable(),
+        both: !p.also.is_zero(),
+    };
+    let net = mp.net();
+    Ok(HomeBrief {
+        period: period_to_str(cur),
+        revenue: t.revenue.fmt_money(),
+        cost: t.cost.fmt_money(),
+        net_profit: t.net_profit.fmt_money(),
+        net_profit_ytd: ytd.net_profit.fmt_money(),
+        net_profit_prev: prev_np.fmt_money(),
+        net_profit_diff: (nc - prev_np).fmt_money(),
+        margin,
+        cost_top,
+        unposted: draft + audited,
+        money: HomeMoney {
+            receivable: mp.receivable.fmt_money(),
+            payable: mp.payable.fmt_money(),
+            advance_out: mp.advance_out.fmt_money(),
+            advance_in: mp.advance_in.fmt_money(),
+            cash: mp.cash.fmt_money(),
+            net: net.fmt_money(),
+            net_is_receivable: net >= fincore::Money::ZERO,
+            overdue_90: mp.overdue_90.fmt_money(),
+            overdue_90_count: mp.overdue_90_count,
+            top_customers: mp.top_customers.iter().map(&party).collect(),
+            top_suppliers: mp.top_suppliers.iter().map(&party).collect(),
+        },
+    })
+}
+
+/// 当月最后一天（账龄基准）
+fn month_end(p: Period) -> chrono::NaiveDate {
+    let first = chrono::NaiveDate::from_ymd_opt(p.year(), p.month(), 1);
+    let next = if p.month() == 12 {
+        chrono::NaiveDate::from_ymd_opt(p.year() + 1, 1, 1)
+    } else {
+        chrono::NaiveDate::from_ymd_opt(p.year(), p.month() + 1, 1)
+    };
+    match (first, next) {
+        (Some(f), Some(n)) => n.pred_opt().unwrap_or(f),
+        _ => chrono::Local::now().date_naive(),
+    }
+}
+
+/// 「钱在哪」取数失败时的空壳：首页显示 0，不让整页 500。
+fn empty_money_position() -> findb::advanced::MoneyPosition {
+    use fincore::Money;
+    findb::advanced::MoneyPosition {
+        receivable: Money::ZERO,
+        payable: Money::ZERO,
+        advance_in: Money::ZERO,
+        advance_out: Money::ZERO,
+        cash: Money::ZERO,
+        receivable_gross: Money::ZERO,
+        payable_gross: Money::ZERO,
+        top_customers: Vec::new(),
+        top_suppliers: Vec::new(),
+        overdue_90: Money::ZERO,
+        overdue_90_count: 0,
+    }
 }
 
 /// 我的工作台：按岗位权限动态聚合业务卡片 / 我的待办 / 多期趋势。

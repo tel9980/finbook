@@ -1618,3 +1618,70 @@ details.wb-ref .card .v { font-size: 14px; }
 .subtab:hover { color: var(--fg); }
 .subtab.on { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
 .subtab:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+/* ===========================================================================
+   首页首屏：本期经营结果 + 钱在哪
+   两块必须并排：利润是账面赚的，「钱在哪」是真正压在外面的钱。
+   =========================================================================== */
+.home-hero {
+  display: grid; gap: 14px; margin: 14px 0 18px;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+}
+.hh {
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg); padding: 16px 18px; box-shadow: var(--shadow);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.hh-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  font-size: 12px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--muted);
+}
+.hh-np {
+  font-size: 40px; font-weight: 800; letter-spacing: -.045em; line-height: 1;
+  font-variant-numeric: tabular-nums; color: var(--text);
+}
+.hh-np.pos { color: var(--ok); }
+.hh-np.neg { color: var(--err); }
+.hh-np.flat { color: var(--muted); }
+.hh-np .cur { font-size: 22px; font-weight: 700; opacity: .55; margin-right: 2px; }
+.hh-sub { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+.hh-sub b { color: var(--text); font-weight: 700; }
+.hh-pair { display: flex; gap: 24px; flex-wrap: wrap; }
+.hh-pair > div { display: flex; flex-direction: column; gap: 3px; }
+.hh-pair .k, .hm .k { font-size: 12px; color: var(--muted); }
+.hh-pair b, .hm b {
+  font-size: 20px; font-weight: 700; letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+}
+.hh-cost { font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+.hh-cost b { color: var(--text); font-weight: 600; }
+.hh-warn {
+  font-size: 12.5px; color: var(--warn); background: var(--warn-bg);
+  border: 1px solid rgba(180, 83, 9, .15); border-radius: var(--r-md);
+  padding: 7px 10px; line-height: 1.6;
+}
+.hm-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px;
+}
+.hm { display: flex; flex-direction: column; gap: 3px; }
+.hm b.pos { color: var(--ok); }
+.hm b.neg { color: var(--err); }
+.hm-lists { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.hm-lists h5 {
+  margin: 0 0 6px; font-size: 12px; font-weight: 700; color: var(--muted);
+  letter-spacing: .03em;
+}
+.hm-row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 4px 0; border-bottom: 1px dashed var(--z-200); font-size: 13px;
+}
+.hm-row:last-child { border-bottom: 0; }
+.hm-row .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hm-row .amt { font-variant-numeric: tabular-nums; font-weight: 700; }
+.hm-row .age { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.hm-row .age.w60 { color: var(--warn); }
+.hm-row .age.w90 { color: var(--err); font-weight: 700; }
+.hm-row .both { font-size: 11px; color: var(--muted); }
+.hm-row .nett { font-size: 11px; color: var(--text); font-weight: 700; }
+.hm-empty { font-size: 12.5px; color: var(--muted); }

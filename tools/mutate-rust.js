@@ -23,6 +23,8 @@ const ROUND = (name) => ["test", "-p", "finweb", "--test", "roundtrip", "--", na
 const FIMPORT = (name) => ["test", "-p", "findb", "--lib", `imports::tests::${name}`];
 // 批量粘贴解析（fincore）：表头按列名取值、停用/上级/备注还原
 const FBATCH = (name) => ["test", "-p", "fincore", "--lib", `batch::aux::tests::${name}`];
+// v1.8.24 网页版首页首屏：数字全由凭证推出，错一位老板就按错的数做决定
+const HOME = (name) => ["test", "-p", "finweb", "--test", "home_brief", "--", name];
 
 const MUT = [
   {
@@ -294,6 +296,40 @@ const MUT = [
     from: "                        aux: line.aux.clone(),",
     to: "                        aux: AuxRef::default(),",
     cmd: ROUND("期初数量与分户导出后能导回"),
+  },
+  {
+    // 成本口径退回只算 6401/6402 → 房租水电（510105 制造费用）整块消失在利润表外，
+    // 净利润虚高。这是 v1.8.12 修过的老 bug，首页换了界面也不能把它放回来。
+    name: "⑰ 首页成本口径退回只算 6401/6402",
+    file: "crates/findb/src/advanced.rs",
+    from: '    let cost = exp("6401") + exp("6402") + unrecovered_cost;',
+    to: '    let cost = exp("6401") + exp("6402");',
+    cmd: HOME("home_brief_is_derived_from_vouchers"),
+  },
+  {
+    // 利润率写死 0% → 老板看到"这月白干"（实际是 77%）
+    name: "⑰ 首页利润率永远 0%",
+    file: "crates/finweb/src/handlers.rs",
+    from: "        Some((t.net_profit.to_f64() / t.revenue.to_f64() * 100.0 * 10.0).round() / 10.0)",
+    to: "        Some(0.0)",
+    cmd: HOME("home_brief_is_derived_from_vouchers"),
+  },
+  {
+    // 没记账的凭证不再提示 → 老板看到"这个月只赚这么点"却不知道是自己没记账
+    name: "⑰ 首页不提示未记账凭证",
+    file: "crates/finweb/src/handlers.rs",
+    from: "        unposted: draft + audited,",
+    to: "        unposted: 0,",
+    cmd: HOME("draft_vouchers_warn_but_do_not_count"),
+  },
+  {
+    // 同名客户/供应商不标「同一家两种身份」→ 宏源那种一厂两面被当成两家，
+    // 一个欠我 15,000、一个我欠他 28,000，老板要自己心算
+    name: "⑰ 首页不标同一家的两种身份",
+    file: "crates/finweb/src/handlers.rs",
+    from: "        both: !p.also.is_zero(),",
+    to: "        both: false,",
+    cmd: HOME("party_with_two_identities_shows_net"),
   },
 ];
 

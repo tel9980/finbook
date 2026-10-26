@@ -389,6 +389,87 @@ pub struct Dashboard {
     pub vouchers: i64,
     pub entries: i64,
     pub accounts: i64,
+    /// 首页首屏那两块（本期赚没赚 + 钱在哪）。取数失败时为 None，首页照常显示，
+    /// 不会因为某张报表算不出来就整页报错。
+    pub brief: Option<HomeBrief>,
+}
+
+/// 首页首屏：本期赚没赚 + 钱在哪
+///
+/// 这两块必须并排出现才看得懂：利润是**账面**赚的，「钱在哪」是真正压在外面的
+/// 钱。小厂常见的死法是账面赚钱、钱全压在客户手里 —— 只看净利润看不出来。
+#[derive(Serialize)]
+pub struct HomeBrief {
+    /// 统计期间（YYYY-MM）
+    pub period: String,
+    /// 营业收入（本期）
+    pub revenue: String,
+    /// 营业成本（本期；口径含未结转的制造费用，与利润表一致）
+    pub cost: String,
+    /// 净利润（本期）
+    pub net_profit: String,
+    /// 本年累计净利润
+    pub net_profit_ytd: String,
+    /// 上月净利润（只看环比才有意义）
+    pub net_profit_prev: String,
+    /// 本月 − 上月（正=改善）
+    pub net_profit_diff: String,
+    /// 利润率 %（收入为 0 时缺省）
+    pub margin: Option<f64>,
+    /// 成本构成 Top 3（"钱都花哪了"）
+    pub cost_top: Vec<HomeDriver>,
+    /// 没记账的凭证张数（草稿 + 已审未记）—— 这些没算进上面任何数字
+    pub unposted: i64,
+    pub money: HomeMoney,
+}
+
+#[derive(Serialize)]
+pub struct HomeDriver {
+    pub name: String,
+    pub amount: String,
+}
+
+/// 「钱在哪」：应收应付合到一起看
+#[derive(Serialize)]
+pub struct HomeMoney {
+    /// 别人欠我（客户应收未收）
+    pub receivable: String,
+    /// 我欠别人（供应商应付未付）
+    pub payable: String,
+    /// 我预付出去的（供应商欠我货）
+    pub advance_out: String,
+    /// 客户预收我的（我欠客户钱/货）
+    pub advance_in: String,
+    /// 手头能动用的钱（现金 + 银行）
+    pub cash: String,
+    /// 净头寸 = 应收 + 预付 − 应付 − 预收
+    pub net: String,
+    /// 净头寸方向：true = 别人欠我的多
+    pub net_is_receivable: bool,
+    /// 超过 90 天没收回的应收
+    pub overdue_90: String,
+    pub overdue_90_count: usize,
+    pub top_customers: Vec<HomeParty>,
+    pub top_suppliers: Vec<HomeParty>,
+}
+
+/// 一户往来：金额 + 账龄 + 「同一家两种身份」的轧差
+#[derive(Serialize)]
+pub struct HomeParty {
+    pub code: String,
+    pub name: String,
+    /// 本方向未结金额
+    pub amount: String,
+    /// 最老一笔的天数
+    pub max_days: i64,
+    /// 另一身份方向的金额（同一家既欠我又被我欠时才有）
+    pub also: String,
+    /// 轧差后净额（永远是正数，方向看 net_is_receivable）
+    pub net: String,
+    /// 净额方向：true = 他欠我
+    pub net_is_receivable: bool,
+    /// 这家同时是客户和供应商
+    pub both: bool,
 }
 
 /// 科目余额表行（对外契约：方向已展开、金额已格式化，前端直接渲染）
