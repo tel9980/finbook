@@ -6,7 +6,7 @@
 |---|---|
 | **记账的人（会计 / 老板娘）** | **[docs/日常记账手册.md](docs/日常记账手册.md)** ← 只看这一个就够 |
 | 第一次装机、照着截图走一遍 | [docs/新手使用说明.txt](docs/新手使用说明.txt) |
-| 想知道某个功能怎么用 | [docs/功能参考.md](docs/功能参考.md)（§4.1 – §4.83） |
+| 想知道某个功能怎么用 | [docs/功能参考.md](docs/功能参考.md)（§4.1 – §4.85） |
 | 开发 / 运维 / 要装起来跑 | 本文件 |
 | 部署 Web 端到服务器 | [DEPLOY.md](DEPLOY.md) |
 | 用 Dockge / docker compose 一键部署 | [deploy/docker-compose.yml](deploy/docker-compose.yml) → 说明见 [DEPLOY.md §4.5](DEPLOY.md) |
@@ -370,7 +370,7 @@ cc-rs 调 `x86_64-w64-mingw32-gcc`。删了它 job 会在 cc-rs 那一步报
 | 套件 | 数量 |
 |------|------|
 | `fincore`（纯计算引擎） | 183 |
-| `findb`（持久化 + DAO + 安全闸门） | 413 |
+| `findb`（持久化 + DAO + 安全闸门） | 416 |
 | `findb` 端到端 `core_loop` | 21 |
 | `findb` 端到端 `ext_loop` | 7 |
 | `findb` 端到端 `opening_book`（期初收集表） | 3 |
@@ -380,16 +380,20 @@ cc-rs 调 `x86_64-w64-mingw32-gcc`。删了它 job 会在 cc-rs 那一步报
 | `finweb` `aux_preset.rs` | 4 |
 | `finweb` `batch_paste.rs` | 13 |
 | `finweb` REST API 集成 | 194 |
-| `finweb` 客户视图 API | 9 |
+| `finweb` 客户视图 API（含催款单口径与账龄基准日） | 12 |
 | `finweb` 导入导出 xlsx 闭环 | 8 |
 | `finweb` 导出→导回数据往返 | 8 |
 | `finweb` 首页首屏（经营结果 + 钱在哪） | 5 |
 | `finweb` 静态资源缓存头 | 3 |
 | `finweb` 打印设置与参数校验 | 9 |
 | `finweb` 期初收集表上传 | 3 |
-| **小计** | **972** |
+| **小计** | **978** |
 | Playwright E2E | 103 |
 
+> **2026-10-27 v1.8.36 校准**：小计 972→**978**（`findb` 413→416：催款单只算真正欠的钱、
+> 只有预收时拒绝生成、供应商开票算应付不算预付；`finweb` 客户视图 9→12：催款金额不含预收、
+> 催款单导出带明细、账龄基准日缺省期末）。变异下限 58→**61**。
+>
 > **2026-10-27 v1.8.31 校准**：小计 969→**972**（`finweb` lib 26→28：`state::tests::engine_error_keeps_its_own_wording`、
 > `realm::tests::legacy_single_column_device_binding_is_migrated`；REST API 集成 193→194）。新增的两条不是为新功能——
 > 是三条变异暴露出来的**假守卫**：它们各自指向一条请求根本走不到的代码，CI 上有过偶然红、本地却一直是绿的。
@@ -673,7 +677,7 @@ finbook/
 ├── docs/
 │   ├── 日常记账手册.md            # 给会计看的：照着记就行
 │   ├── 新手使用说明.txt           # 第一次装机的图文步骤
-│   ├── 功能参考.md                # 本文 §4 的完整版（§4.1 – §4.83）
+│   ├── 功能参考.md                # 本文 §4 的完整版（§4.1 – §4.85）
 │   ├── 客户管理模块设计.md         # 模块设计文档（有 CI 校验引用有效性）
 │   ├── 多租户套帐架构设计.md
 │   ├── releases/                 # 每个版本改了什么

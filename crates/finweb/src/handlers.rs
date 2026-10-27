@@ -457,6 +457,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/export/payroll", get(export_payroll))
         .route("/api/export/claims", get(export_claims))
         .route("/api/export/dunning", get(export_dunning))
+        .route("/api/export/dunning/xlsx", get(export_dunning_xlsx))
         .route(
             "/api/export/schedules",
             get(list_export_schedules).post(save_export_schedule),
@@ -6540,6 +6541,137 @@ async fn export_dunning(
     Ok(csv_response(&format!("dunning_{}_{}.csv", kind, period.ymm()), rows))
 }
 
+
+/// 催款单 / 对账函导出成 Excel：**带明细**。
+///
+/// CSV 那份（`/api/export/dunning`）只有一行汇总 —— 客户问「是哪几张单凑的 5 万」
+/// 时没法回答，会计只能回凭证里手工抄单一号。这里出两个 Sheet：汇总 + 逐单明细。
+///
+/// 明细里带「方向」列：预收/预付是我方欠对方的钱，**不计入**应收合计。
+/// 没有这一列的话，客户预存 3 万会被算成欠 3 万（v1.8.36 之前的真实 bug）。
+async fn export_dunning_xlsx(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Export)?;
+    let db = &user.db;
+    let period = period_param(q.get("period"), current_period(&state, &user))?;
+    let kind = q
+        .get("kind")
+        .map(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("ar");
+    if kind != "ar" && kind != "ap" {
+        return Err(AppError::bad_request("kind 必须是 ar 或 ap"));
+    }
+    let all = findb::settle::dunning_list(db, Some(kind), None)?;
+    let list: Vec<_> = all
+        .into_iter()
+        .filter(|d| d.period.ymm() == period.ymm())
+        .collect();
+    let type_label = if kind == "ar" { "催款单" } else { "对账函" };
+    let head = if kind == "ar" { "应收金额" } else { "应付金额" };
+    let owed_head = if kind == "ar" { "应收" } else { "应付" };
+    let adv_head = if kind == "ar" { "预收" } else { "预付" };
+
+    let mut summary_rows: Vec<Vec<String>> = Vec::new();
+    let mut detail_rows: Vec<Vec<String>> = Vec::new();
+    let mut mean: Money = Money::ZERO;
+    for d in &list {
+        mean = mean + d.owed_total();
+        summary_rows.push(vec![
+            d.no.clone(),
+            d.date.format("%Y-%m-%d").to_string(),
+            type_label.to_string(),
+            d.account.clone(),
+            d.party_code.clone(),
+            d.party_name.clone(),
+            d.owed_total().fmt_plain(),
+            d.advance_total().fmt_plain(),
+            d.item_count.to_string(),
+            match d.status.as_str() {
+                "draft" => "草稿",
+                "sent" => "已发出",
+                "settled" => "已结清",
+                "cancelled" => "已作废",
+                other => other,
+            }
+            .to_string(),
+            d.memo.clone(),
+        ]);
+        for it in &d.detail {
+            detail_rows.push(vec![
+                d.no.clone(),
+                d.party_code.clone(),
+                d.party_name.clone(),
+                it.doc_no.clone(),
+                it.date.clone(),
+                it.summary.clone(),
+                it.amount.fmt_plain(),
+                if findb::settle::dunning_item_is_owed(&it.direction) {
+                    owed_head.to_string()
+                } else {
+                    adv_head.to_string()
+                },
+            ]);
+        }
+    }
+
+    let mut cols = vec![crate::xlsxout::ColFmt::Text; 6];
+    cols.push(crate::xlsxout::ColFmt::Money);
+    cols.push(crate::xlsxout::ColFmt::Money);
+    cols.push(crate::xlsxout::ColFmt::Int);
+    cols.push(crate::xlsxout::ColFmt::Text);
+    cols.push(crate::xlsxout::ColFmt::Text);
+    let mut sheet = crate::xlsxout::Sheet::titled(
+        type_label,
+        &format!("{} {}", type_label, period.label()),
+        &format!("共 {} 张 · {} 合计 {}", list.len(), owed_head, mean.fmt_money()),
+        &[
+            "单号", "日期", "类型", "科目", "客商编码", "客商名称", head, adv_head, "笔数", "状态",
+            "备注",
+        ],
+        &cols,
+    )
+    .with_rows(summary_rows);
+
+    let dcols = vec![
+        crate::xlsxout::ColFmt::Text,
+        crate::xlsxout::ColFmt::Text,
+        crate::xlsxout::ColFmt::Text,
+        crate::xlsxout::ColFmt::Text,
+        crate::xlsxout::ColFmt::Text,
+        crate::xlsxout::ColFmt::Text,
+        crate::xlsxout::ColFmt::Money,
+        crate::xlsxout::ColFmt::Text,
+    ];
+    let dsheet = crate::xlsxout::Sheet::titled(
+        "明细",
+        &format!("{}明细 {}", type_label, period.label()),
+        "方向为「预收/预付」的行是我方欠对方的钱，不计入合计",
+        &[
+            "单号", "客商编码", "客商名称", "单据号", "日期", "摘要", "金额", "方向",
+        ],
+        &dcols,
+    )
+    .with_rows(detail_rows.clone());
+
+    db.log(
+        user.username(),
+        "导出",
+        "导出催款单 Excel",
+        &format!(
+            "{} {} {} 张 {} 行明细",
+            period.label(),
+            type_label,
+            list.len(),
+            detail_rows.len()
+        ),
+    )?;
+    let fname = format!("{}_{}_{}.xlsx", kind, type_label, period.ymm());
+    build_xlsx(&[sheet, dsheet], &fname, "催款单")
+}
 
 // ---------------------------------------------------------------------------
 // 报表渲染
@@ -14024,10 +14156,16 @@ async fn get_settle_aging(
         .get("upto")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
+    // 基准日缺省 = 查询期间的**最后一天**，不是「今天」。
+    //
+    // 桌面端一直是 `upto.last_day()`（crates/finui/src/views/settle_view.rs:208）。
+    // 网页端缺省「今天」的后果：查 2026-03 的账龄，所有单据都显示成「210 天」，
+    // 全落在最老的那一档；同一份数据桌面端显示 3 天、网页显示 210 天，
+    // 导出的 Excel 跟网页一致 —— 两个答案，谁也不敢拿去给老板看。
     let as_of = q
         .get("as_of")
         .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
-        .unwrap_or_else(|| chrono::Local::now().date_naive());
+        .unwrap_or_else(|| upto.last_day());
     let by_year = q.get("scheme").map(|s| s == "year").unwrap_or(false);
     let buckets = if by_year {
         fincore::engine::aging::buckets_by_year()

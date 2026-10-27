@@ -1133,6 +1133,28 @@ pub struct DunningItem {
     pub date: String,
     pub summary: String,
     pub amount: Money,
+    /// 方向：「应收/应付」= 对方欠我方（催收对象）；「预收/预付」= 我方欠对方。
+    ///
+    /// 老账套里已经存下的催款单没有这个字段（`serde(default)` 得到空串），
+    /// **空串一律按应收/应付处理** —— 那些单据生成时还没有方向概念，
+    /// 把它们的金额改成预收等于篡改历史单据。
+    #[serde(default)]
+    pub direction: String,
+}
+
+/// 明细行是否属于「对方欠我方」的那一侧。
+pub fn dunning_item_is_owed(direction: &str) -> bool {
+    // 空串 = 老数据（见 DunningItem.direction 的注释）
+    direction.is_empty() || direction == "应收" || direction == "应付"
+}
+
+fn dunning_dir_label(kind: &str, owed: bool) -> &'static str {
+    match (kind, owed) {
+        ("ar", true) => "应收",
+        ("ar", false) => "预收",
+        ("ap", true) => "应付",
+        _ => "预付",
+    }
 }
 
 /// 催款单 / 对账函
@@ -1156,6 +1178,27 @@ pub struct Dunning {
     pub created_at: String,
     pub sent_at: String,
     pub detail: Vec<DunningItem>,
+}
+
+impl Dunning {
+    /// 对方真正欠我方的合计（催款单上的「应向我方支付」就是这个数）。
+    pub fn owed_total(&self) -> Money {
+        self.detail
+            .iter()
+            .filter(|i| dunning_item_is_owed(&i.direction))
+            .map(|i| i.amount)
+            .fold(Money::ZERO, |a, b| a + b)
+    }
+
+    /// 我方欠对方的合计（预收/预付）。挂在同一张单上是为了让客户看得懂
+    /// 「你给我 5 万、我先收了 3 万、实际还欠 2 万」——但这一行**不是**催收金额。
+    pub fn advance_total(&self) -> Money {
+        self.detail
+            .iter()
+            .filter(|i| !dunning_item_is_owed(&i.direction))
+            .map(|i| i.amount)
+            .fold(Money::ZERO, |a, b| a + b)
+    }
 }
 
 fn map_dunning(r: &rusqlite::Row) -> rusqlite::Result<Dunning> {
@@ -1299,8 +1342,18 @@ pub fn dunning_create(
         account.trim()
     };
     let upto = Period::from_date(date);
+    // 方向归一：与 `aging()` 用同一套规则 —— 贷方性质科目（2202 等）的分录要翻号，
+    // 翻完「正数 = 对方欠我方/我方欠对方」才是同一个方向。
+    //
+    // 不翻会怎样：应付账款的分录本来就是贷方，`signed()` 是负数，一张正常的
+    // 供应商发票会被判成「预付」。
+    let flip = match crate::accounts::chart(db).ok().as_ref().and_then(|c| c.get(account)) {
+        Some(a) => a.dir == fincore::account::Direction::Credit,
+        None => account.starts_with('2'),
+    };
     let mut items: Vec<DunningItem> = Vec::new();
     let mut amount = Money::ZERO;
+    let mut owed_count: i64 = 0;
     for e in open_entries(db, account, upto, false)? {
         let aux = fincore::voucher::AuxRef::from_key(&e.aux_key);
         let p = if kind == "ar" {
@@ -1315,12 +1368,26 @@ pub fn dunning_create(
         if amt.is_zero() {
             continue;
         }
-        amount += amt;
+        let signed = if flip {
+            e.signed().negated()
+        } else {
+            e.signed()
+        };
+        // `open()` 是绝对值（`abs(signed) - settled`），方向只能从 signed 上看。
+        // 以前直接 `amount += amt` —— 客户预存 3 万（贷方）会被算成「应向我方支付 3 万」，
+        // 账龄页把它单列在「其中预收」，催款单却加进合计：同一份数据两个口径。
+        let owed = !signed.is_negative();
+        let direction = dunning_dir_label(kind, owed).to_string();
+        if owed {
+            amount += amt;
+            owed_count += 1;
+        }
         items.push(DunningItem {
             doc_no: format!("{}-{}", e.word, e.no),
             date: e.date.format("%Y-%m-%d").to_string(),
             summary: e.summary.clone(),
             amount: amt,
+            direction,
         });
     }
     for o in arap_opening_list(db, Some(kind))? {
@@ -1332,7 +1399,10 @@ pub fn dunning_create(
         if Period::from_date(d).ymm() > upto.ymm() {
             continue;
         }
+        // 期初单据的金额入库时就要求为正、且方向由 kind 决定（ar=应收 / ap=应付），
+        // 所以它恒在「对方欠我方」那一侧。
         amount += o.amount;
+        owed_count += 1;
         items.push(DunningItem {
             doc_no: format!(
                 "期初 {}",
@@ -1345,12 +1415,27 @@ pub fn dunning_create(
             date: o.doc_date.clone(),
             summary: "往来期初".to_string(),
             amount: o.amount,
+            direction: dunning_dir_label(kind, true).to_string(),
         });
     }
     if items.is_empty() {
         return Err(
             fincore::FinError::msg("该客商在所选科目下无未核销单据（或期初），无需催款").into(),
         );
+    }
+    if amount.is_zero() {
+        // 只有预收/预付，一分钱也不欠。以前这种情况会生成一张「金额 0」的催款单，
+        // 客户收到的是「应向我方支付 0.00 元」加一串预收明细 —— 比不发还糟。
+        let adv: Money = items
+            .iter()
+            .filter(|i| !dunning_item_is_owed(&i.direction))
+            .map(|i| i.amount)
+            .fold(Money::ZERO, |a, b| a + b);
+        return Err(fincore::FinError::msg(format!(
+            "该客商只有预收/预付 {}，没有欠款，不需要催款",
+            adv.fmt_plain()
+        ))
+        .into());
     }
     let no = dunning_next_no(db, upto)?;
     let detail = serde_json::to_string(&items)
@@ -1368,7 +1453,7 @@ pub fn dunning_create(
             party,
             party_name.trim(),
             crate::money_param(amount),
-            items.len() as i64,
+            owed_count,
             memo,
             who,
             dunning_now(),
@@ -1554,6 +1639,162 @@ mod tests {
     use super::*;
     use crate::tests::mem;
     use fincore::voucher::{AuxRef, Entry, Voucher};
+
+    /// 造一张两行凭证并过账，返回凭证 id。
+    fn post_two(
+        db: &Db,
+        p: Period,
+        day: u32,
+        no: i32,
+        debit: (&str, Money, Option<(&str, &str)>),
+        credit: (&str, Money, Option<(&str, &str)>),
+    ) -> i64 {
+        let aux_of = |a: Option<(&str, &str)>| match a {
+            None => AuxRef::default(),
+            Some(("customer", code)) => AuxRef {
+                customer: Some(code.to_string()),
+                ..Default::default()
+            },
+            Some(("supplier", code)) => AuxRef {
+                supplier: Some(code.to_string()),
+                ..Default::default()
+            },
+            Some((_, code)) => AuxRef {
+                customer: Some(code.to_string()),
+                ..Default::default()
+            },
+        };
+        let d = NaiveDate::from_ymd_opt(p.year(), p.month(), day).unwrap();
+        let mut v = Voucher::new(p, d, "记", no);
+        v.push_entry(Entry {
+            debit: debit.1,
+            credit: Money::ZERO,
+            aux: aux_of(debit.2),
+            ..Entry::new(1, debit.0, "借")
+        });
+        v.push_entry(Entry {
+            debit: Money::ZERO,
+            credit: credit.1,
+            aux: aux_of(credit.2),
+            ..Entry::new(2, credit.0, "贷")
+        });
+        let vid = crate::vouchers::save(db, &mut v).unwrap();
+        crate::vouchers::post(db, vid, "poster").unwrap();
+        vid
+    }
+
+    fn m(s: &str) -> Money {
+        Money::parse(s).unwrap()
+    }
+
+    /// 客户既欠 5000 又预存 3000：催款单上的**催收金额只能是 5000**。
+    ///
+    /// 回归：`dunning_create` 原来用 `e.open()`（绝对值）累加，预存那笔也被算进
+    /// 「应向我方支付」—— 客户收到一张 8000 的催款单，其中 3000 是他自己的钱。
+    /// 账龄页把预收单列在「其中预收」，两处口径打架。
+    #[test]
+    fn dunning_counts_only_what_is_actually_owed() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        // 应收 5000
+        post_two(
+            &db,
+            p,
+            5,
+            1,
+            ("112201", m("5000"), Some(("customer", "C01"))),
+            ("1001", m("5000"), None),
+        );
+        // 预收 3000
+        post_two(
+            &db,
+            p,
+            8,
+            2,
+            ("1001", m("3000"), None),
+            ("112201", m("3000"), Some(("customer", "C01"))),
+        );
+
+        let d = dunning_create(
+            &db,
+            "ar",
+            "1122",
+            "C01",
+            "客户甲",
+            NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            "",
+            "boss",
+        )
+        .unwrap();
+        assert_eq!(d.amount, m("5000"), "催收金额只能是真正欠的 5000");
+        assert_eq!(d.item_count, 1, "明细行数只数欠款那一侧");
+        assert_eq!(d.owed_total(), m("5000"));
+        assert_eq!(d.advance_total(), m("3000"), "预收要单独列出来");
+        assert_eq!(d.detail.len(), 2, "两种方向的单据都要能看到");
+        assert!(d.detail.iter().any(|i| i.direction == "预收"));
+        assert!(d.detail.iter().any(|i| i.direction == "应收"));
+    }
+
+    /// 只有预收、一分不欠：不能生成催款单（以前会出一张 0.00 元的单子）。
+    #[test]
+    fn dunning_refuses_when_nothing_is_owed() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        post_two(
+            &db,
+            p,
+            8,
+            1,
+            ("1001", m("3000"), None),
+            ("112201", m("3000"), Some(("customer", "C01"))),
+        );
+        let err = dunning_create(
+            &db,
+            "ar",
+            "1122",
+            "C01",
+            "客户甲",
+            NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            "",
+            "boss",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("不需要催款"), "错误要说清原因：{err}");
+        assert!(err.contains("预收"), "错误要指出那是预收：{err}");
+    }
+
+    /// 应付方向：供应商开票（贷方）是**应付**，不是预付。
+    ///
+    /// 回归：贷方性质科目不翻号的话，`signed()` 是负数，一张正常的供应商发票
+    /// 会被判成「预付」—— 对账函上一条应付都不显示。
+    #[test]
+    fn dunning_treats_supplier_invoice_as_payable() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        post_two(
+            &db,
+            p,
+            6,
+            1,
+            ("1001", m("4000"), None),
+            ("220201", m("4000"), Some(("supplier", "S01"))),
+        );
+        let d = dunning_create(
+            &db,
+            "ap",
+            "2202",
+            "S01",
+            "供应商甲",
+            NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            "",
+            "boss",
+        )
+        .unwrap();
+        assert_eq!(d.amount, m("4000"), "供应商开票 4000 应该是对账函上的应付");
+        assert_eq!(d.advance_total(), Money::ZERO);
+        assert_eq!(d.detail[0].direction, "应付");
+    }
 
     /// 同一客户既有凭证又有期初挂账时，账龄**必须合并成一行**、金额相加。
     ///

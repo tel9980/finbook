@@ -40,6 +40,10 @@ const OBOOK = (name) => ["test", "-p", "findb", "--test", "opening_book", "--", 
 const FPFORM = (name) => ["test", "-p", "findb", "--lib", `printform::tests::${name}`];
 // 账套参数结构校验（fincore::BookOptions::validate）
 const FOPT = (name) => ["test", "-p", "fincore", "--lib", `account::tests::${name}`];
+// v1.8.36 应收应付：催款单口径 + 账龄基准日 + 催款单导出明细。
+// 这三处的共同失效形态是「文件/页面都正常，只有数字是错的」——客户收到错的催款单。
+const FSETTLE = (name) => ["test", "-p", "findb", "--lib", `settle::tests::${name}`];
+const FCUST = (name) => ["test", "-p", "finweb", "--test", "customers", "--", name];
 
 const MUT = [
   {
@@ -544,6 +548,30 @@ const MUT = [
     from: "                if !chart.is_leaf(code) {",
     to: "                if false {",
     cmd: OPT("biz_account_must_be_a_leaf_account"),
+  },
+  {
+    // 预收/预付被当成欠款累加 → 客户预存 300 变成「应向我方支付 1300」
+    name: "㉔ 催款单把预收也当欠款",
+    file: "crates/findb/src/settle.rs",
+    from: "        let owed = !signed.is_negative();",
+    to: "        let owed = true;",
+    cmd: FSETTLE("dunning_counts_only_what_is_actually_owed"),
+  },
+  {
+    // 账龄基准日回退成「今天」→ 查 1 月的账龄全落最老一档，与桌面端两个答案
+    name: "㉔ 账龄基准日回退成今天",
+    file: "crates/finweb/src/handlers.rs",
+    from: "        .unwrap_or_else(|| upto.last_day());",
+    to: "        .unwrap_or_else(|| chrono::Local::now().date_naive());",
+    cmd: FCUST("settle_aging_defaults_to_period_end"),
+  },
+  {
+    // 催款单导出只剩汇总 Sheet → 客户问「哪几张单凑的」答不上来
+    name: "㉔ 催款单导出丢掉明细表",
+    file: "crates/finweb/src/handlers.rs",
+    from: 'build_xlsx(&[sheet, dsheet], &fname, "催款单")',
+    to: 'build_xlsx(&[sheet], &fname, "催款单")',
+    cmd: FCUST("dunning_export_xlsx_has_detail"),
   },
 ];
 

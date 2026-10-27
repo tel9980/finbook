@@ -621,3 +621,138 @@ async fn customer_dunning_endpoint_lists_records() {
         "缺失客户的催款记录应 404"
     );
 }
+
+/// 预收：借 1001 现金 / 贷 112201（挂客户辅助）=「客户先给钱」。
+async fn post_advance(state: &Arc<WebState>, sid: &str, date: &str, cust: &str, amount: &str) {
+    let ym = date.replace('-', "");
+    let period: i32 = ym[..6].parse().expect("日期应能推出 YYYYMM");
+    let req = authed_post(
+        "/api/vouchers",
+        sid,
+        serde_json::json!({
+            "id": 0, "period": period, "date": date, "word": "记", "no": 0,
+            "attachments": 0, "memo": "",
+            "entries": [
+                { "line": 1, "account_code": "1001", "summary": "收",
+                  "debit": amount, "credit": "0" },
+                { "line": 2, "account_code": "112201", "summary": "预收",
+                  "debit": "0", "credit": amount, "aux": { "customer": cust } }
+            ]
+        }),
+    );
+    let resp = handlers::router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "录预收凭证：{}",
+        body_string(resp).await
+    );
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let vid = v["id"].as_i64().expect("应返回凭证 id");
+    for step in ["audit", "sign", "post"] {
+        let req = authed_post(
+            &format!("/api/vouchers/{vid}/{step}"),
+            sid,
+            serde_json::json!({}),
+        );
+        let resp = handlers::router(state.clone()).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{step} 应成功");
+    }
+}
+
+/// 催款单的「应收金额」只算真正欠的钱，客户预存的要单列。
+///
+/// 这条守的是**用户会直接受害**的口径：以前预收被当成欠款累加，
+/// 客户存了 300 就变成「应向我方支付 1300」，客户收到会直接翻脸。
+#[tokio::test]
+async fn dunning_amount_excludes_advance() {
+    let (state, books_dir, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    mk_customer(&state, &sid, "C01", "客户甲").await;
+    post_ar(&state, &sid, "2026-01-05", "C01", "1000").await;
+    post_advance(&state, &sid, "2026-01-08", "C01", "300").await;
+
+    let d = {
+        let db = findb::Db::open(books_dir.join("b1.fbk")).expect("打开账套");
+        let dt = chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
+        findb::settle::dunning_create(&db, "ar", "", "C01", "客户甲", dt, "", "boss").unwrap()
+    };
+    assert_eq!(d.amount.fmt_plain(), "1000.00", "只算欠款 1000，不含预收 300");
+    assert_eq!(d.advance_total().fmt_plain(), "300.00", "预收要单列出来");
+    assert_eq!(d.item_count, 1);
+}
+
+/// 催款单导出成 Excel：有汇总也有明细（CSV 只有一行汇总，答不了「哪几张单」）。
+#[tokio::test]
+async fn dunning_export_xlsx_has_detail() {
+    let (state, books_dir, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    mk_customer(&state, &sid, "C01", "客户甲").await;
+    post_ar(&state, &sid, "2026-01-05", "C01", "1000").await;
+    {
+        let db = findb::Db::open(books_dir.join("b1.fbk")).expect("打开账套");
+        let dt = chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
+        findb::settle::dunning_create(&db, "ar", "", "C01", "客户甲", dt, "", "boss").unwrap();
+    }
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/export/dunning/xlsx?period=2026-01&kind=ar",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(ct.contains("spreadsheetml"), "应是 xlsx：{ct}");
+    let bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..2], b"PK", "xlsx 是 zip 包");
+    // 两个 Sheet 的名字都写在 zip 的文件名里
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("sheet1.xml") && raw.contains("sheet2.xml"), "应有汇总+明细两个 Sheet");
+}
+
+/// 账龄基准日缺省 = 查询期间的最后一天（不是「今天」）。
+///
+/// 回归：网页端缺省「今天」，查 2026-01 的账龄时一张 1 月 5 日的单据会被算成
+/// 290 多天、全落在最老的一档；桌面端是期末，两边对不上。
+#[tokio::test]
+async fn settle_aging_defaults_to_period_end() {
+    let (state, _books_dir, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    mk_customer(&state, &sid, "C01", "客户甲").await;
+    post_ar(&state, &sid, "2026-01-05", "C01", "1000").await;
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/settle/aging?account=1122&upto=2026-01", &sid))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value =
+        serde_json::from_str(&body_string(resp).await).unwrap();
+    let row = &v["rows"][0];
+    let buckets = row["amounts"].as_array().expect("每档一个数");
+    // 金额在 JSON 里是带千分位的字符串（"1,000.00"），要剥掉逗号再比
+    let num = |v: &serde_json::Value| -> f64 {
+        v.as_str()
+            .map(|s| s.replace(',', ""))
+            .or_else(|| v.as_f64().map(|f| f.to_string()))
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0)
+    };
+    let first = num(&buckets[0]);
+    assert!(
+        (first - 1000.0).abs() < 0.01,
+        "1月5日的单据在1月31日基准下应落在 0-30 天档（{first}）：{v}"
+    );
+    assert!(
+        buckets.iter().skip(1).all(|b| num(b) == 0.0),
+        "不应有单据落到更老的档：{v}"
+    );
+}

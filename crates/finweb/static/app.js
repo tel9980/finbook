@@ -8008,8 +8008,8 @@ async function viewSettle(main) {
   };
   function openDunningDetail(d) {
     const m = modal(`<h3>${esc(d.no)} · ${d.kind === "ar" ? "催款单" : "对账函"} <span class="muted" style="font-size:12px">${esc(d.party_code)} ${esc(d.party_name || "")}</span></h3>
-      <table class="grid" id="dn-table"><thead><tr><th>单据</th><th>日期</th><th>摘要</th><th class="num">金额</th></tr></thead><tbody>${(d.detail || []).map((x) => `<tr><td>${esc(x.doc_no)}</td><td>${esc(x.date)}</td><td>${esc(x.summary)}</td><td class="num">${fmt(x.amount)}</td></tr>`).join("")}
-      <tr><td colspan="3"><b>合计</b></td><td class="num"><b>${fmt(d.amount)}</b></td></tr></tbody></table>
+      <table class="grid" id="dn-table"><thead><tr><th>单据</th><th>日期</th><th>摘要</th><th>方向</th><th class="num">金额</th></tr></thead><tbody>${(d.detail || []).map((x) => `<tr><td>${esc(x.doc_no)}</td><td>${esc(x.date)}</td><td>${esc(x.summary)}</td><td>${esc(x.direction || (d.kind === "ar" ? "应收" : "应付"))}</td><td class="num">${fmt(x.amount)}</td></tr>`).join("")}
+      <tr><td colspan="4"><b>${d.kind === "ar" ? "应收" : "应付"}合计</b></td><td class="num"><b>${fmt(d.amount)}</b></td></tr>${(d.detail || []).some((x) => x.direction && x.direction !== "应收" && x.direction !== "应付") ? `<tr><td colspan="4" class="muted">其中预收/预付（我方欠对方，不计入上面的合计）</td><td class="num muted">${fmt((d.detail || []).filter((x) => x.direction === "预收" || x.direction === "预付").reduce((s2, x) => s2 + (x.amount || 0), 0))}</td></tr>` : ""}</tbody></table>
       <div class="muted" style="font-size:12px;margin-top:6px">${esc(d.memo || "")}</div>
       <div class="foot"><button class="btn ghost" id="dn-print">打印预览</button><button class="btn ghost" id="dn-close">关闭</button></div>`);
     $("#dn-close", m).onclick = closeModal;
@@ -8037,14 +8037,9 @@ async function viewSettle(main) {
       const kind = prompt("类型：ar=催款单 / ap=对账函", "ar");
       if (!kind || !["ar", "ap"].includes(kind.trim())) { toast("类型必须是 ar 或 ap", "err"); return; }
       const period = $("#st-upto", main).value.trim() || state.current;
-      const r = await api(`/export/dunning?period=${encodeURIComponent(period)}&kind=${encodeURIComponent(kind.trim())}`);
-      const blob = new Blob([r], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `dunning_${kind.trim()}_${period}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      // 导 Excel 而不是 CSV：CSV 只有一行汇总，客户问「哪几张单凑的 5 万」答不上来。
+      // xlsx 有两个 Sheet：汇总 + 逐单明细（明细带方向，预收/预付不计入合计）。
+      downloadUrl(`/api/export/dunning/xlsx?period=${encodeURIComponent(period)}&kind=${encodeURIComponent(kind.trim())}`);
       toast("导出完成", "ok");
     } catch (e) { toast(e.message, "err"); }
   };
