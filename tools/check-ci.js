@@ -462,6 +462,43 @@ for (const m of rustList.cases) {
 }
 console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在源码里定位`);
 
+// ---- 2.45 Windows 构建只在打 tag 时做，push 上只 check ----------------------
+//
+// v1.8.32 把 ci.yml 里那个完整的 release 交叉编译换成了 `cargo check`：
+// 原来那个 job 单它一个 26.5 分钟，CPU 时间比其余所有 job 加起来还多，而它的
+// 产物**没人用**（发行包由 release.yml 的 desktop-windows 另建）。
+//
+// 这条检查守两件事，两件都会悄悄回到最坏状态：
+//   ① ci.yml 里不许再出现 release 的 windows 交叉编译（否则 CI 又变 26 分钟）；
+//   ② 它也不许被整段删掉 —— 那样 Windows 特有的 `#[cfg(windows)]` 分支在
+//      push 阶段完全没人看，错到打 tag 才发现，而 tag 往往是一次性的。
+//   ③ release.yml 必须仍然在 tag 上真编出 exe（否则「挪到 tag」变成「没人编」）。
+{
+  const ciSrc = fs.readFileSync(".github/workflows/ci.yml", "utf8");
+  const relSrc = fs.readFileSync(".github/workflows/release.yml", "utf8");
+  const heavy = /cargo\s+build[^\n]*--release[^\n]*--target\s+x86_64-pc-windows-gnu/;
+  if (heavy.test(ciSrc)) {
+    console.log(
+      "FAIL ci.yml 又在 push 阶段做 Windows release 交叉编译了（那是 26 分钟的那个 job；" +
+        "发行包交给 release.yml，push 上只需 cargo check）"
+    );
+    bad++;
+  }
+  if (!/check-windows:/.test(ciSrc) || !/cargo\s+check[^\n]*--target\s+x86_64-pc-windows-gnu/.test(ciSrc)) {
+    console.log(
+      "FAIL ci.yml 缺少 Windows 目标的 cargo check —— push 阶段就没人看 Windows 分支了"
+    );
+    bad++;
+  }
+  if (!heavy.test(relSrc)) {
+    console.log(
+      "FAIL release.yml 不再在 tag 上交叉编译 Windows release —— 「挪到 tag」变成了「没人编」"
+    );
+    bad++;
+  }
+  console.log("Windows 构建分工：push 只 check，tag 才 release（ci.yml / release.yml 一致）");
+}
+
 // ---- 2.5 测试夹具不许靠继承内控闸门的默认值 --------------------------------
 //
 // 扫**每一个**测试代码里的 `BookOptions` 字面量，要求显式写出 `enable_audit` 与

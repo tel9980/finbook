@@ -336,6 +336,22 @@ cargo test --workspace
 .\e2e\run-local.ps1
 ```
 
+### 8.1 CI 里哪些在 push 上跑、哪些只在 tag 上跑
+
+| job | 触发 | 为什么这么分 |
+|-----|------|--------------|
+| Test / Clippy / Audit / Deny / Udeps / 4 片变异 / Coverage / E2E / Docker smoke | push + PR | 都是「错了要当场知道」的东西 |
+| **Check (Windows x64 target)**：`cargo check --target x86_64-pc-windows-gnu -p finbook -p finweb` | push + PR | 只要证明 `#[cfg(windows)]` 分支编得过，2~3 分钟 |
+| **Desktop (Windows x64)**：真正的 release 交叉编译 + 打包 | **仅 tag**（`release.yml`） | 打包产物只有发版才有人要 |
+
+这条分界是 v1.8.32 定的：原来 push 阶段有一个完整的 Windows release 交叉编译，
+**单它一个 26.5 分钟**，CPU 时间比其余所有 job 加起来还多，而它的产物没人用
+（发行包由 `release.yml` 另建一遍）。现在 push 只 `cargo check`。
+
+代价说清：`check` 不覆盖**链接阶段**的错（缺 mingw 库、导出符号冲突）。那类错
+只在打 tag 时暴露。`tools/check-ci.js` 第 2.45 项盯着这条分界，两个方向都会报红：
+把 release 编译加回 `ci.yml`、或者把 `check-windows` 整段删掉。
+
 **测试基线**（这几行不允许下降；下降就是有人删了测试而不是修好了什么）：
 
 | 套件 | 数量 |

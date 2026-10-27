@@ -234,28 +234,29 @@ jobs:
             target/release/finbook
             target/release/finweb
 
-  # ── release 构建产物（Windows x64，mingw 交叉编译） ──────────────────
-  build-windows:
-    name: Build (Windows x64)
+  # ── Windows 目标能否编译（**只 check，不链接、不 release**） ──────────
+  #
+  # 原来这里是一个完整的 release 交叉编译（finbook.exe + finweb.exe），
+  # 单它一个就占 26.5 分钟 —— 比其他所有 job 加起来还长，是整个 CI 的瓶颈。
+  # 而它的产物**没人用**：Windows 发行包在 release.yml 的 desktop-windows 里
+  # 另建一遍（且只建 finbook.exe）。等于每次 push 都白等 26 分钟。
+  #
+  # 现在：push 只 `cargo check`（不链接，所以连 mingw 都不用装，2~3 分钟），
+  # 真正的 release 编译挪到 tag 触发（release.yml）。代价要说清：
+  # check 不覆盖**链接阶段**的错（缺 mingw 库、导出符号冲突等），那类问题
+  # 只能在打 tag 时暴露 —— 但那种错极少，且修它本来就只需要改链接参数。
+  check-windows:
+    name: Check (Windows x64 target)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@v2
-      - name: 安装 mingw-w64
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
-      - name: 交叉编译 release
-        run: cargo build --release --locked --target x86_64-pc-windows-gnu -p finbook -p finweb
-      - name: 上传产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: finbook-windows-x64
-          path: |
-            target/x86_64-pc-windows-gnu/release/finbook.exe
-            target/x86_64-pc-windows-gnu/release/finweb.exe
+      - name: 交叉 check（finbook + finweb）
+        run: cargo check --locked --target x86_64-pc-windows-gnu -p finbook -p finweb
 
   # ── Web 端到端（Playwright：真实浏览器 + 真实 finweb 服务） ───────────
   e2e:
