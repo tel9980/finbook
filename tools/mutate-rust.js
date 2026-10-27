@@ -172,10 +172,7 @@ const MUT = [
     file: "crates/finweb/src/handlers.rs",
     from: "            .remove_by_username_and_device(&username, &device_id);",
     to: "            .remove_by_username(&username);",
-    // 集成测试用的是全新 realm，旧库形态根本不存在 → 搬不搬都看不出来。
-    // 这条要在 realm 自己修：构造「单列有值、集合表空」，重开库必须搬过去。
-    cmd: ["test", "-p", "finweb", "--lib",
-          "realm::tests::legacy_single_column_device_binding_is_migrated"],
+    cmd: API("platform_device_binding_and_reset"),
   },
   {
     // 上限退回 1 台：第三台就不该被拒了
