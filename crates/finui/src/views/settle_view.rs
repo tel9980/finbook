@@ -70,6 +70,8 @@ pub struct SettleView {
     pub only_open: bool,
     pub entries: Vec<OpenEntry>,
     pub records: Vec<SettleRecord>,
+    /// 撤销核销时要撤的金额（留空 = 整条撤销该记录）
+    pub unsettle_amount: String,
     /// 借方（被核销方）选中行
     pub sel_from: Option<i64>,
     /// 贷方（核销方）选中行
@@ -133,6 +135,7 @@ impl Default for SettleView {
             only_open: true,
             entries: Vec::new(),
             records: Vec::new(),
+            unsettle_amount: String::new(),
             sel_from: None,
             sel_to: None,
             amount: String::new(),
@@ -671,7 +674,17 @@ impl SettleView {
 
     fn show_records(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         ui.separator();
-        ui.label(RichText::new("已核销记录").strong());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("已核销记录").strong());
+            ui.add_space(12.0);
+            ui.label("撤销金额");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.unsettle_amount)
+                    .desired_width(110.0)
+                    .hint_text("留空=整条"),
+            );
+            ui.label(RichText::new("先填金额再点「取消」，可只撤销一部分").weak());
+        });
         let rows = std::mem::take(&mut self.records);
         let names: Vec<String> = rows
             .iter()
@@ -720,12 +733,28 @@ impl SettleView {
 
         if let Some(id) = drop {
             if ctx.can(Perm::VoucherNew) {
-                let r = findb::settle::unsettle(ctx.db(), id);
-                if ctx.handle(r).is_some() {
-                    ctx.log("往来", "取消核销", &format!("#{id}"));
-                    ctx.info("已取消该笔核销");
-                    self.dirty = true;
+                let raw = self.unsettle_amount.trim().to_string();
+                if raw.is_empty() {
+                    let r = findb::settle::unsettle(ctx.db(), id);
+                    if ctx.handle(r).is_some() {
+                        ctx.log("往来", "取消核销", &format!("#{id}"));
+                        ctx.info("已取消该笔核销");
+                        self.dirty = true;
+                    }
+                } else {
+                    match Money::parse(&raw) {
+                        Ok(amt) => {
+                            let r = findb::settle::unsettle_part(ctx.db(), id, amt);
+                            if let Some(left) = ctx.handle(r) {
+                                ctx.log("往来", "部分撤销核销", &format!("#{id} 撤销 {amt}"));
+                                ctx.info(format!("已撤销 {}，余 {}", amt.fmt_money(), left.fmt_money()));
+                                self.dirty = true;
+                            }
+                        }
+                        Err(e) => ctx.error(format!("撤销金额「{raw}」不是合法金额：{e}")),
+                    }
                 }
+                self.unsettle_amount.clear();
             }
         }
     }

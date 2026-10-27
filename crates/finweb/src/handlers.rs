@@ -13807,6 +13807,12 @@ struct SettleRunReq {
 #[derive(Deserialize)]
 struct UnsettleReq {
     pub id: i64,
+    /// 只撤销这么多（缺省 = 整条撤销）。
+    ///
+    /// 核销三张单共 5 万，事后发现其中一张该是 3 万 —— 以前只能整条撤销再重录，
+    /// 撤销的瞬间三张单全变「未核销」，账龄立刻虚高。
+    #[serde(default)]
+    pub amount: Option<String>,
 }
 
 /// 通用往来互抵请求：借方挂账 + 贷方挂账，科目/往来单位可以不同
@@ -14200,14 +14206,35 @@ async fn unsettle_endpoint(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::settle::unsettle(&db, req.id)?;
-    db.log(
-        user.username(),
-        "往来",
-        "取消核销",
-        &format!("记录#{}", req.id),
-    )?;
-    Ok(Json(json!({ "ok": true })))
+    // 带了金额就是部分撤销；没带或为空串就是整条撤销
+    let part = match req.amount.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => Some(fincore::Money::parse(s).map_err(|e| {
+            AppError::bad_request(format!("撤销金额「{s}」不是合法金额：{e}"))
+        })?),
+        _ => None,
+    };
+    match part {
+        Some(amount) => {
+            let left = findb::settle::unsettle_part(&db, req.id, amount)?;
+            db.log(
+                user.username(),
+                "往来",
+                "部分撤销核销",
+                &format!("记录#{} 撤销 {amount}，余 {left}", req.id),
+            )?;
+            Ok(Json(json!({ "ok": true, "left": left.fmt_plain() })))
+        }
+        None => {
+            findb::settle::unsettle(&db, req.id)?;
+            db.log(
+                user.username(),
+                "往来",
+                "取消核销",
+                &format!("记录#{}", req.id),
+            )?;
+            Ok(Json(json!({ "ok": true, "left": "0.00" })))
+        }
+    }
 }
 
 async fn get_settle_aging(

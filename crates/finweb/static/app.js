@@ -8218,9 +8218,26 @@ async function viewSettle(main) {
     try {
       const d = await api(`/settle/records?account=${encodeURIComponent(acct())}`);
       const rows2 = d.rows || [];
-      $("#st-extra", main).innerHTML = `<div class="panel"><b>核销记录</b><table class="grid" style="margin-top:6px"><thead><tr><th>期间</th><th>往来对象</th><th class="num">金额</th><th>操作人</th><th>时间</th><th></th></tr></thead><tbody>${rows2.length ? rows2.map((r) => `<tr><td>${esc(r.period)}</td><td>${esc(r.aux_key || "—")}</td><td class="num">${esc(r.amount)}</td><td>${esc(r.settled_by)}</td><td>${esc(r.settled_at)}</td><td>${can("voucher_new") ? `<button class="btn sm ghost" data-unsettle="${r.id}">取消核销</button>` : ""}</td></tr>`).join("") : `<tr><td colspan="6" class="muted">暂无记录</td></tr>`}</tbody></table></div>`;
-      $all("[data-unsettle]", main).forEach((b) => b.onclick = async () => {
-        try { await post("/settle/unsettle", { id: parseInt(b.dataset.unsettle, 10) }); toast("已取消", "ok"); $("#st-records", main).click(); } catch (e) { toast(e.message, "err"); }
+      $("#st-extra", main).innerHTML = `<div class="panel"><b>核销记录</b><table class="grid" style="margin-top:6px"><thead><tr><th>期间</th><th>往来对象</th><th class="num">金额</th><th>操作人</th><th>时间</th><th></th></tr></thead><tbody>${rows2.length ? rows2.map((r) => `<tr><td>${esc(r.period)}</td><td>${esc(r.aux_key || "—")}</td><td class="num">${esc(r.amount)}</td><td>${esc(r.settled_by)}</td><td>${esc(r.settled_at)}</td><td>${can("voucher_new") ? `<button class="btn sm ghost" data-unsettle="${r.id}" data-amount="${esc(r.amount)}">取消核销</button>` : ""}</td></tr>`).join("") : `<tr><td colspan="6" class="muted">暂无记录</td></tr>`}</tbody></table></div>`;
+      $all("[data-unsettle]", main).forEach((b) => b.onclick = () => {
+        // 取消核销可以只撤一部分：核销三张单共 5 万、事后发现其中一张该是 3 万时，
+        // 整条撤销的瞬间三张单全变「未核销」，账龄立刻虚高。
+        const id = parseInt(b.dataset.unsettle, 10);
+        const amt = b.dataset.amount || "";
+        modal(`<h3>取消核销</h3>
+          <p class="muted">这条核销记录金额 <b>${esc(amt)}</b>。填写要撤销的金额；填全额（或留空）就是整条撤销。</p>
+          <label>撤销金额 <input id="us-amt" value="${esc(amt)}" style="width:140px"></label>
+          <div class="row" style="margin-top:12px"><button class="btn" id="us-ok">确定</button><button class="btn ghost" id="us-cancel">取消</button></div>`);
+        $("#us-cancel").onclick = closeModal;
+        $("#us-ok").onclick = async () => {
+          const v = ($("#us-amt").value || "").trim();
+          try {
+            await post("/settle/unsettle", { id, amount: v === "" ? null : v });
+            closeModal();
+            toast("已撤销", "ok");
+            $("#st-records", main).click();
+          } catch (e) { toast(e.message, "err"); }
+        };
       });
     } catch (e) { toast(e.message, "err"); }
   };

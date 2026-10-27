@@ -141,6 +141,17 @@ pub fn current_period(db: &Db) -> DbResult<Period> {
     }
 }
 
+/// 同 [`current_period`]，但只依赖连接，可在事务内调用。
+///
+/// 核销要在一个写事务里同时「读结账线 → 写核销记录」，两步之间不能有窗口：
+/// 否则刚判完「当前期没结账」，期间就被别人结了账，核销记录落进已结账期间。
+pub fn current_period_of(conn: &rusqlite::Connection) -> DbResult<Period> {
+    match closed_upto_of(conn)? {
+        Some(u) => Ok(u.next()),
+        None => Ok(crate::options_of(conn).start_period),
+    }
+}
+
 /// 某期间是否允许录入凭证
 pub fn is_open(db: &Db, p: Period) -> DbResult<bool> {
     Ok(!is_closed(db, p)? && p >= db.options().start_period)

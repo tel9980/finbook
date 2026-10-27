@@ -44,9 +44,10 @@ const FLIB = (name) => ["test", "-p", "findb", "--lib", `tests::${name}`];
 const SOPEN = (name) => ["test", "-p", "finweb", "--test", "settle_open_page", "--", name];
 // 账套参数结构校验（fincore::BookOptions::validate）
 const FOPT = (name) => ["test", "-p", "fincore", "--lib", `account::tests::${name}`];
+const FSETTLE = (name) => ["test", "-p", "findb", "--lib", `settle::tests::${name}`];
+const FUNS = (name) => ["test", "-p", "finweb", "--test", "settle_unsettle_api", "--", name];
 // v1.8.36 应收应付：催款单口径 + 账龄基准日 + 催款单导出明细。
 // 这三处的共同失效形态是「文件/页面都正常，只有数字是错的」——客户收到错的催款单。
-const FSETTLE = (name) => ["test", "-p", "findb", "--lib", `settle::tests::${name}`];
 const FCUST = (name) => ["test", "-p", "finweb", "--test", "customers", "--", name];
 
 const MUT = [
@@ -627,7 +628,41 @@ const MUT = [
     to: 'build_xlsx(&[sheet], &fname, "催款单")',
     cmd: FCUST("dunning_export_xlsx_has_detail"),
   },
-];
+  {
+    name: "㉒ 撤销不看结账线",
+    file: "crates/findb/src/settle.rs",
+    from: "        if rec.period <= upto {",
+    to: "        if false {",
+    cmd: FSETTLE("unsettle_refuses_records_in_a_closed_period"),
+  },
+  {
+    name: "㉒ 部分撤销不夹住记录金额",
+    file: "crates/findb/src/settle.rs",
+    from: "    if amount > rec.amount {",
+    to: "    if false {",
+    cmd: FSETTLE("unsettle_part_rejects_more_than_the_record"),
+  },
+  {
+    name: "㉒ 核销记录仍按单据期间",
+    file: "crates/findb/src/settle.rs",
+    from: "    let rec_period = crate::periods::current_period_of(tx)?;",
+    to: "    let rec_period = f.period;",
+    cmd: FSETTLE("settle_record_is_dated_by_the_settlement_period_not_the_invoice"),
+  },
+  {
+    name: "㉒ 撤到零不删记录",
+    file: "crates/findb/src/settle.rs",
+    from: "    if left.is_zero() {",
+    to: "    if false {",
+    cmd: FSETTLE("unsettle_part_reduces_the_record_and_reopens_the_amount"),
+  },
+  {
+    name: "㉒ 空串被当成非法金额",
+    file: "crates/finweb/src/handlers.rs",
+    from: "        Some(s) if !s.is_empty() => Some(fincore::Money::parse(s).map_err(|e| {",
+    to: "        Some(s) => Some(fincore::Money::parse(s).map_err(|e| {",
+    cmd: FUNS("blank_amount_means_full_unsettle"),
+  },];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */
 function applyMut(src, from, to) {

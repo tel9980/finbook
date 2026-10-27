@@ -215,6 +215,16 @@ pub fn settle_in_tx(
     let old_amount = Money::parse_or_zero(&existing);
     let new_amount = old_amount + amount;
 
+    // 这条记录记在**哪个期间**：记「核销发生的期间」，不是「被核销单据的期间」。
+    //
+    // 以前写的是 `f.period`，于是 11 月收到客户还 8 月的货款，台账里这笔核销记在
+    // 202608。两个后果：①账面上看不出「钱是哪个月收的」；②8 月可能已经结账，
+    // 而结账后本该谁也动不了 8 月 —— 却还能往里面塞核销记录。
+    //
+    // 改成当前期间之后，规则自洽：新增核销永远落在未结账的当前期，
+    // 撤销时若记录所在期间已结账就拒绝（见 `unsettle` / `unsettle_part`）。
+    let rec_period = crate::periods::current_period_of(tx)?;
+
     tx.execute(
         "INSERT INTO settle_record(period,account_code,aux_key,from_entry,to_entry,amount,
             settled_by,settled_at)
@@ -222,7 +232,7 @@ pub fn settle_in_tx(
          ON CONFLICT(from_entry,to_entry) DO UPDATE SET
              amount=excluded.amount, settled_by=excluded.settled_by, settled_at=excluded.settled_at",
         rusqlite::params![
-            f.period.ymm(),
+            rec_period.ymm(),
             f.account_code,
             f.aux_key,
             from_entry,
@@ -236,11 +246,77 @@ pub fn settle_in_tx(
     Ok(id)
 }
 
+/// 撤销一条核销记录（全额）。
+///
+/// **已结账期间的记录不允许撤销**：账龄、未核销额都是「截至某期」的数，
+/// 结账之后把它改掉，等于让已经出过的报表对不上账 —— 而报表是给人签过字的。
+/// 要改就只能先反结账，那条路有日志、有明确意图。
 pub fn unsettle(db: &Db, id: i64) -> DbResult<()> {
-    db.conn().execute(
-        "DELETE FROM settle_record WHERE id=?1",
+    let tx = db.write_tx()?;
+    let rec = record_of(&tx, id)?;
+    guard_not_closed(&tx, &rec)?;
+    tx.execute("DELETE FROM settle_record WHERE id=?1", rusqlite::params![id])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// 部分撤销：把一条核销记录减掉 `amount`，减到 0 就整条删掉。
+///
+/// 现实场景：11 月收到 5 万，先核销了三张单共 5 万；第二天发现其中一张应该是 3 万、
+/// 另外 2 万挂在下个月的单上。以前只能整条撤销再重录 —— 撤销的瞬间三张单全变成
+/// 「未核销」，账龄立刻虚高，而且这段时间里别人看到的数就是错的。
+///
+/// 守卫：金额必须 `0 < amount <= 记录金额`；记录所在期间已结账则拒绝。
+pub fn unsettle_part(db: &Db, id: i64, amount: Money) -> DbResult<Money> {
+    if amount <= Money::ZERO {
+        return Err(fincore::FinError::validate("撤销金额必须大于零").into());
+    }
+    let tx = db.write_tx()?;
+    let rec = record_of(&tx, id)?;
+    guard_not_closed(&tx, &rec)?;
+    if amount > rec.amount {
+        return Err(fincore::FinError::msg(format!(
+            "撤销金额 {amount} 超过这条核销记录本身的金额 {}",
+            rec.amount
+        ))
+        .into());
+    }
+    let left = rec.amount - amount;
+    if left.is_zero() {
+        tx.execute("DELETE FROM settle_record WHERE id=?1", rusqlite::params![id])?;
+    } else {
+        tx.execute(
+            "UPDATE settle_record SET amount=?1 WHERE id=?2",
+            rusqlite::params![crate::money_param(left), id],
+        )?;
+    }
+    tx.commit()?;
+    Ok(left)
+}
+
+fn record_of(conn: &Connection, id: i64) -> DbResult<SettleRecord> {
+    conn.query_row(
+        &format!("SELECT {COLS} FROM settle_record WHERE id=?1"),
         rusqlite::params![id],
-    )?;
+        map_rec,
+    )
+    .optional()?
+    .ok_or_else(|| fincore::FinError::not_found("核销记录").into())
+}
+
+/// 记录所在期间已结账 → 拒绝改动。
+fn guard_not_closed(tx: &rusqlite::Transaction, rec: &SettleRecord) -> DbResult<()> {
+    if let Some(upto) = crate::periods::closed_upto_of(tx)? {
+        if rec.period <= upto {
+            return Err(fincore::FinError::msg(format!(
+                "这条核销记在 {}，该期间已结账（已结至 {}）——已结账期间的核销不能撤销。\
+                 确需更正请先反结账，再改动。",
+                rec.period.label(),
+                upto.label()
+            ))
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -2886,4 +2962,107 @@ mod tests {
                 .unwrap();
         assert!(r.is_none(), "无应收时不应生成凭证");
     }
+    /// 取某科目下一条未核销分录的 id（按借贷方向挑）。
+    fn open_id(db: &Db, upto: Period, want_debit: bool) -> i64 {
+        let rows = open_entries(db, "1122", upto, false).unwrap();
+        rows.iter()
+            .find(|r| want_debit && r.debit > Money::ZERO || !want_debit && r.credit > Money::ZERO)
+            .unwrap_or_else(|| panic!("找不到{}方的未核销分录", if want_debit { "借" } else { "贷" }))
+            .entry_id
+    }
+
+    /// 核销记录记在**核销发生的期间**，不是被核销单据的期间。
+    ///
+    /// 回归：原来写的是 `f.period`，于是 2 月收 1 月的货款，台账里那笔记在 202601 ——
+    /// 而 1 月已经结账。既看不出钱是哪个月收的，又等于往已结账期间里塞了记录。
+    #[test]
+    fn settle_record_is_dated_by_the_settlement_period_not_the_invoice() {
+        let db = mem();
+        let p1 = Period::new(2026, 1).unwrap();
+        let p2 = Period::new(2026, 2).unwrap();
+        // 1 月：卖货挂应收 5000
+        post_two(&db, p1, 5, 1, ("112201", m("5000"), Some(("customer", "C01"))), ("1001", m("5000"), None));
+        crate::periods::close(&db, p1, "tester", false).unwrap();
+        // 2 月：客户还钱
+        post_two(&db, p2, 8, 2, ("1001", m("5000"), None), ("112201", m("5000"), Some(("customer", "C01"))));
+
+        let ar = open_id(&db, p2, true);
+        let cash = open_id(&db, p2, false);
+        settle(&db, ar, cash, m("5000"), "tester").unwrap();
+
+        let recs = list(&db, "112201").unwrap();
+        assert_eq!(recs.len(), 1);
+        assert_eq!(
+            recs[0].period,
+            p2,
+            "核销发生在 2 月，记录就该记 202602；记成 202601 等于往已结账期间塞记录"
+        );
+    }
+
+    /// 已结账期间的核销记录不许撤销 —— 账龄是「截至某期」的数，
+    /// 结账后改掉它，等于让已经出过的报表对不上账。
+    #[test]
+    fn unsettle_refuses_records_in_a_closed_period() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        post_two(&db, p, 5, 1, ("112201", m("5000"), Some(("customer", "C01"))), ("1001", m("5000"), None));
+        post_two(&db, p, 8, 2, ("1001", m("5000"), None), ("112201", m("5000"), Some(("customer", "C01"))));
+        let ar = open_id(&db, p, true);
+        let cash = open_id(&db, p, false);
+        settle(&db, ar, cash, m("5000"), "tester").unwrap();
+        let id = list(&db, "112201").unwrap()[0].id;
+
+        crate::periods::close(&db, p, "tester", false).unwrap();
+        let err = unsettle(&db, id).unwrap_err().to_string();
+        assert!(err.contains("已结账"), "期望提示已结账，实际：{err}");
+        assert_eq!(list(&db, "112201").unwrap().len(), 1, "拒绝之后记录必须还在");
+
+        // 反结账之后可以撤
+        crate::periods::unclose(&db, p, "tester").unwrap();
+        unsettle(&db, id).unwrap();
+        assert!(list(&db, "112201").unwrap().is_empty());
+    }
+
+    /// 部分撤销：5 万撤 2 万，剩 3 万，未核销额同步回来。
+    #[test]
+    fn unsettle_part_reduces_the_record_and_reopens_the_amount() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        post_two(&db, p, 5, 1, ("112201", m("50000"), Some(("customer", "C01"))), ("1001", m("50000"), None));
+        post_two(&db, p, 8, 2, ("1001", m("50000"), None), ("112201", m("50000"), Some(("customer", "C01"))));
+        let ar = open_id(&db, p, true);
+        let cash = open_id(&db, p, false);
+        settle(&db, ar, cash, m("50000"), "tester").unwrap();
+        let id = list(&db, "112201").unwrap()[0].id;
+
+        let left = unsettle_part(&db, id, m("20000")).unwrap();
+        assert_eq!(left, m("30000"));
+        assert_eq!(settled_of(db.conn(), ar).unwrap(), m("30000"));
+        // 应收单重新露出 2 万
+        let open = open_entries(&db, "1122", p, false).unwrap();
+        let ar_row = open.iter().find(|r| r.entry_id == ar).unwrap();
+        assert_eq!(ar_row.debit - ar_row.settled, m("20000"));
+
+        // 撤到 0 就整条删掉
+        let left = unsettle_part(&db, id, m("30000")).unwrap();
+        assert_eq!(left, Money::ZERO);
+        assert!(list(&db, "112201").unwrap().is_empty(), "撤到 0 应整条删除");
+    }
+
+    /// 撤销金额不能超过这条记录本身。
+    #[test]
+    fn unsettle_part_rejects_more_than_the_record() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        post_two(&db, p, 5, 1, ("112201", m("5000"), Some(("customer", "C01"))), ("1001", m("5000"), None));
+        post_two(&db, p, 8, 2, ("1001", m("5000"), None), ("112201", m("5000"), Some(("customer", "C01"))));
+        let ar = open_id(&db, p, true);
+        let cash = open_id(&db, p, false);
+        settle(&db, ar, cash, m("3000"), "tester").unwrap();
+        let id = list(&db, "112201").unwrap()[0].id;
+        let err = unsettle_part(&db, id, m("5000")).unwrap_err().to_string();
+        assert!(err.contains("超过"), "期望提示超过记录金额，实际：{err}");
+        assert_eq!(list(&db, "112201").unwrap()[0].amount, m("3000"));
+    }
+
 }
