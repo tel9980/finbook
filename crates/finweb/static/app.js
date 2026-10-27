@@ -7861,7 +7861,7 @@ async function viewSettle(main) {
       ${can("voucher_new") ? `<button class="btn ghost" id="st-manual-diff" title="实收/实付与挂账有零头时，把差异记入损益，被核销方一次结清">差异核销</button>` : ""}
       ${can("voucher_new") ? `<button class="btn ghost" id="st-manual-cross" title="A 的付款冲 B 的货款 / 三方抵账：借方与贷方分录的科目或往来单位可以不同，系统自动出一张过渡凭证把两边接上">跨单位互抵</button>` : ""}
       <button class="btn ghost" id="st-aging">账龄分析</button>
-      <button class="btn ghost" id="st-aging-xlsx" title="把账龄表导出成 Excel（同一份取数，界面上的数字即文件里的数字）">账龄导出</button>
+      ${can("export") ? `<button class="btn ghost" id="st-aging-xlsx" title="把账龄表导出成 Excel（同一份取数，界面上的数字即文件里的数字）">账龄导出</button>` : ""}
       <button class="btn ghost" id="st-records">核销记录</button>
     </div>
     <div class="muted" id="st-sum" style="margin-bottom:8px">加载中…</div>
