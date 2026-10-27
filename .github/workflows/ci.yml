@@ -275,17 +275,33 @@ jobs:
           targets: x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@v2
       - name: 安装 mingw-w64（构建脚本要为目标平台编 C，见上方注释）
-        # 单独给这一步限时 + 重试：apt 偶尔卡在 mirror 上，卡住的 apt 会把后面
-        # 的编译全挤掉，最后以一个说不清的 cancelled 收场。限时 8 分钟 + 三次重试，
-        # 失败时明确报「装不上 mingw」，而不是「整个 job 超时」。
-        timeout-minutes: 8
+        # 单独给这一步限时 + 重试：apt 会卡在 mirror 上（v1.8.37 那次 8 分钟整超时，
+        # 同一次 CI 里 e2e 的 apt 也吃了 9.7 分钟 —— 是同一个病）。卡住的 apt 会把
+        # 后面的编译全挤掉，最后以一个说不清的 cancelled 收场。
+        #
+        # 三个加固，缺一个都还是会被 apt 拖死：
+        #   1. 每条命令单独的超时（`timeout 240`）：`apt-get update` 卡住时不连累 install
+        #   2. `Acquire::Retries` + `Timeout`：apt 自己的重试，别一层层靠外层循环
+        #   3. `--no-install-recommends`：`gcc-mingw-w64-x86-64` 的 recommends 会拖进
+        #      g++/libstdc++ 等一大堆，实际只需要 C 编译器（cc-rs 只用 gcc）
+        timeout-minutes: 12
         run: |
+          export DEBIAN_FRONTEND=noninteractive
+          # 一行写完：这个仓库的 check-ci 会逐行检查引号是否成对（多人改 yaml 时真踩过），
+          # 跨行续写的引号串会被它判为「引号不成对」。长一点无所谓。
+          OPT="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::ForceIPv4=true"
           for i in 1 2 3; do
-            sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64 && exit 0
-            echo "第 ${i} 次安装失败，10 秒后重试"
-            sleep 10
+            echo "=== 第 ${i} 次 ==="
+            sudo timeout 240 apt-get $OPT update || echo "update 失败或超时，继续试 install（本地索引可能还是可用的）"
+            if sudo timeout 300 apt-get $OPT install -y --no-install-recommends gcc-mingw-w64-x86-64; then
+              echo "mingw 装好了"
+              x86_64-w64-mingw32-gcc --version | head -1
+              exit 0
+            fi
+            echo "第 ${i} 次安装失败，20 秒后重试"
+            sleep 20
           done
-          echo "::error::mingw-w64 装不上（apt 三次都失败）"
+          echo "::error::mingw-w64 装不上（apt 三次都失败）——这是 runners 的 apt/mirror 问题，不是代码问题"
           exit 1
       - name: 交叉 check（finbook + finweb）
         timeout-minutes: 30
