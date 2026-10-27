@@ -7909,6 +7909,10 @@ async function viewSettle(main) {
       <div id="off-list" class="muted" style="margin-top:8px">加载中…</div>
     </div>`;
   let selFrom = null, selTo = null, rows = [];
+  // 未核销分录可能上千条（大账套一次能拉出几百 KB），默认只取前 200 条，
+  // 由服务端给出总数，界面上给「加载更多」。截断了却不告诉用户，
+  // 就会出现「明明还欠着，核销页里找不到那张单」——这才是最坏的错。
+  let pageLimit = 200, pageTotal = 0, pageCut = false;
   const post = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
   const acct = () => $("#st-acct", main).value.trim();
   const acct2 = () => ($("#st-acct2", main) ? $("#st-acct2", main).value.trim() : "");
@@ -7919,7 +7923,10 @@ async function viewSettle(main) {
     const posted = rows.filter((r) => r.posted !== false);
     const draftRows = rows.filter((r) => r.posted === false);
     const sum = (list) => list.reduce((a, r) => a + (parseFloat(String(r.open).replace(/,/g, "")) || 0), 0);
-    let s = `未核销 <b>${posted.length}</b> 笔，合计 <b>${sum(posted).toFixed(2)}</b>`;
+    const shown = posted.length;
+    let s = pageCut
+      ? `未核销 <b>${pageTotal}</b> 笔，已显示前 <b>${shown}</b> 笔（合计 <b>${sum(posted).toFixed(2)}</b> 是已显示部分）`
+      : `未核销 <b>${posted.length}</b> 笔，合计 <b>${sum(posted).toFixed(2)}</b>`;
     if (draftRows.length) s += `　<span class="muted">（另有 ${draftRows.length} 笔未记账，仅供查看、不可核销，合计 ${sum(draftRows).toFixed(2)}）</span>`;
     $("#st-sum", main).innerHTML = s;
     const rowHtml = (r) => {
@@ -7928,7 +7935,10 @@ async function viewSettle(main) {
       ${draft ? `<span class="muted" style="font-size:12px">待记账</span>` : `<button class="btn sm ${selFrom === r.entry_id ? "primary" : "ghost"}" data-from="${r.entry_id}">原单</button>
       <button class="btn sm ${selTo === r.entry_id ? "primary" : "ghost"}" data-to="${r.entry_id}">收/付</button>`}</td></tr>`;
     };
-    $("#st-table", main).innerHTML = `<table class="grid"><thead><tr><th>日期</th><th>凭证号</th><th>往来对象</th><th>摘要</th><th>方向</th><th class="num">发生额</th><th class="num">已核销</th><th class="num">未核销</th><th>选择</th></tr></thead><tbody>${rows.length ? rows.map(rowHtml).join("") : `<tr><td colspan="9" class="muted" style="text-align:center;padding:16px">没有未核销分录</td></tr>`}</tbody></table>`;
+    $("#st-table", main).innerHTML = `<table class="grid"><thead><tr><th>日期</th><th>凭证号</th><th>往来对象</th><th>摘要</th><th>方向</th><th class="num">发生额</th><th class="num">已核销</th><th class="num">未核销</th><th>选择</th></tr></thead><tbody>${rows.length ? rows.map(rowHtml).join("") : `<tr><td colspan="9" class="muted" style="text-align:center;padding:16px">没有未核销分录</td></tr>`}</tbody></table>
+      ${pageCut ? `<div style="margin-top:8px"><button class="btn sm ghost" id="st-more">再显示 200 笔（共 ${pageTotal} 笔）</button> <span class="muted" style="font-size:12px">想直接找到某张单，可在上面「往来对象」里填客户/供应商编码，或先把对方科目填上</span></div>` : ""}`;
+    const more = $("#st-more", main);
+    if (more) more.onclick = () => { pageLimit += 200; load(); };
     // 页面里还有催款单/对账函等按钮也用 data-to（值是 sent/settled 等状态），
     // 不能在全页范围按 data-to 绑定，否则会把它们的点击劫持成核销选择。
     $all("#st-table [data-from]", main).forEach((b) => b.onclick = () => { selFrom = parseInt(b.dataset.from, 10); render(); });
@@ -7939,13 +7949,20 @@ async function viewSettle(main) {
     const a = acct(), a2 = acct2(), u = upto();
     const withDraft = $("#st-draft", main) && $("#st-draft", main).checked ? "&draft=1" : "";
     try {
-      const d = await api(`/settle/open?account=${encodeURIComponent(a)}&upto=${encodeURIComponent(u)}${withDraft}`);
+      pageTotal = 0; pageCut = false;
+      const lim = `&limit=${pageLimit}`;
+      const d = await api(`/settle/open?account=${encodeURIComponent(a)}&upto=${encodeURIComponent(u)}${withDraft}${lim}`);
       rows = d.rows || [];
+      pageTotal = d.total || rows.length;
+      pageCut = !!d.truncated;
       // 互抵对方科目：把两张未核销清单合并，才能同时挑到跨科目（应收 ↔ 应付）的两行
       if (a2 && a2 !== a) {
-        const d2 = await api(`/settle/open?account=${encodeURIComponent(a2)}&upto=${encodeURIComponent(u)}${withDraft}`);
+        const d2 = await api(`/settle/open?account=${encodeURIComponent(a2)}&upto=${encodeURIComponent(u)}${withDraft}${lim}`);
         const seen = new Set(rows.map((r) => r.entry_id));
         (d2.rows || []).forEach((r) => { if (!seen.has(r.entry_id)) rows.push(r); });
+        // 两个科目各算各的总数，互抵页要的是「两边加起来还差多少笔」
+        pageTotal += d2.total || 0;
+        pageCut = pageCut || !!d2.truncated;
       }
       selFrom = selTo = null;
       $("#st-extra", main).innerHTML = "";
@@ -8174,7 +8191,27 @@ async function viewSettle(main) {
   if ($("#st-aging", main)) $("#st-aging", main).onclick = async () => {
     try {
       const d = await api(`/settle/aging?account=${encodeURIComponent(acct())}&upto=${encodeURIComponent(upto())}`);
-      $("#st-extra", main).innerHTML = `<div class="panel"><b>账龄分析（${esc(d.as_of)}）</b><table class="grid" style="margin-top:6px"><thead><tr><th>往来对象</th>${d.buckets.map((b) => `<th class="num">${esc(b)}</th>`).join("")}<th class="num">借方合计</th><th class="num">贷方合计</th><th class="num">净额</th><th class="num">最老天数</th></tr></thead><tbody>${(d.rows || []).length ? d.rows.map((r) => `<tr><td>${esc(r.name || r.key || "—")}</td>${r.amounts.map((x) => `<td class="num">${esc(x)}</td>`).join("")}<td class="num">${esc(r.total)}</td><td class="num">${esc(r.credit_total)}</td><td class="num">${esc(r.net)}</td><td class="num">${r.max_days}</td></tr>`).join("") : `<tr><td colspan="${d.buckets.length + 5}" class="muted">无数据</td></tr>`}</tbody></table></div>`;
+      $("#st-extra", main).innerHTML = `<div class="panel"><b>账龄分析（${esc(d.as_of)}）</b><table class="grid" style="margin-top:6px"><thead><tr><th>往来对象</th>${d.buckets.map((b) => `<th class="num">${esc(b)}</th>`).join("")}<th class="num">借方合计</th><th class="num">贷方合计</th><th class="num">净额</th><th class="num">最老天数</th></tr></thead><tbody>${(d.rows || []).length ? d.rows.map((r) => `<tr><td><a href="#" class="drill" data-drill="${esc(r.key || "")}" title="看这个对象还没核销的单据">${esc(r.name || r.key || "—")}</a></td>${r.amounts.map((x) => `<td class="num">${esc(x)}</td>`).join("")}<td class="num">${esc(r.total)}</td><td class="num">${esc(r.credit_total)}</td><td class="num">${esc(r.net)}</td><td class="num">${r.max_days}</td></tr>`).join("") : `<tr><td colspan="${d.buckets.length + 5}" class="muted">无数据</td></tr>`}</tbody></table>
+      <div id="st-drill" style="margin-top:10px"></div></div>`;
+      // 账龄下钻：会计每天问的第一句是「华达这 5 万是哪几张单」。
+      // 以前要回明细账手翻，现在点名字就看到——取数走 `/settle/open` 的
+      // party 过滤，未核销口径与核销页完全一致，不会出现「账龄有、核销页没有」。
+      $all("[data-drill]", main).forEach((a) => a.onclick = async (ev) => {
+        ev.preventDefault();
+        const key = a.dataset.drill || "";
+        const box = $("#st-drill", main);
+        box.innerHTML = `<div class="muted">加载中…</div>`;
+        try {
+          const u = encodeURIComponent(upto());
+          const d2 = await api(`/settle/open?account=${encodeURIComponent(acct())}&upto=${u}&limit=0${key ? `&party=${encodeURIComponent(key)}` : ""}`);
+          const rs = d2.rows || [];
+          box.innerHTML = `<b>${esc(a.textContent)}　未核销单据 ${esc(d2.total)} 笔，合计 ${esc(d2.sum_debit)}</b>` +
+            `<table class="grid" style="margin-top:6px"><thead><tr><th>日期</th><th>凭证</th><th>摘要</th><th class="num">借方</th><th class="num">贷方</th><th class="num">已核销</th><th class="num">账龄(天)</th></tr></thead><tbody>` +
+            (rs.length ? rs.map((r) => `<tr><td>${esc(r.date)}</td><td>${esc(r.voucher_no || (r.word + "-" + r.no))}</td><td>${esc(r.summary)}</td><td class="num">${esc(r.debit)}</td><td class="num">${esc(r.credit)}</td><td class="num">${esc(r.settled)}</td><td class="num">${r.days != null ? r.days : ""}</td></tr>`).join("")
+              : `<tr><td colspan="7" class="muted">这笔没有未核销单据（可能已核销完，或期初挂账）</td></tr>`) +
+            `</tbody></table>`;
+        } catch (e) { box.innerHTML = `<div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; }
+      });
     } catch (e) { toast(e.message, "err"); }
   };
   if ($("#st-records", main)) $("#st-records", main).onclick = async () => {
@@ -11927,11 +11964,30 @@ async function viewOptions(main) {
     orientation: "auto", font_pt: 11, margin_mm: 12,
     show_company: true, show_printed_at: true, show_page_no: true, show_signatures: true,
     sign_line: "制表：　　　　　审核：　　　　　负责人：",
+    // 套打纸型：凭证/账簿缺省 A4，单据缺省「跟随模板（空串）」
+    voucher_paper: "A4", ledger_paper: "A4", doc_paper: "",
   }, o.print || {});
   const pOr = p.orientation, pFnt = p.font_pt, pMar = p.margin_mm;
   // 套打偏移：老账套没有这两个字段，缺省 0
   const pOx = Number.isFinite(+p.offset_x_mm) ? +p.offset_x_mm : 0;
   const pOy = Number.isFinite(+p.offset_y_mm) ? +p.offset_y_mm : 0;
+  // 纸型下拉：选项与后端 fincore::print::paper_choices() 逐项对应，
+  // 两边各写一份清单的话，加纸型时必然漏掉一头。
+  const PAPER_CHOICES = [
+    ["A4", "A4（210×297）"],
+    ["A5", "A5（210×148）"],
+    ["third", "三等分联（99×210）"],
+    ["241x140", "241×140 连续纸"],
+    ["", "跟随单据模板"],
+  ];
+  const paperSel = (id, cur, allowFollow) => {
+    const v = (cur || "").trim();
+    const opts = PAPER_CHOICES.filter(([k]) => allowFollow || k !== "");
+    const has = opts.some(([k]) => k.toLowerCase() === v.toLowerCase());
+    return `<select id="${id}">${opts
+      .map(([k, l]) => `<option value="${k}" ${has && k.toLowerCase() === v.toLowerCase() ? "selected" : ""}>${l}</option>`)
+      .join("")}${has ? "" : `<option value="${esc(v)}" selected>${esc(v || "跟随单据模板")}</option>`}</select>`;
+  };
   main.innerHTML = `
     <h2>账套参数</h2>
     <div class="panel" style="max-width:640px">
@@ -11984,6 +12040,12 @@ async function viewOptions(main) {
         <label>套打偏移 左右 <input id="op-print-ox" type="number" min="-20" max="20" value="${pOx}" style="width:64px" /> mm</label>
         <label>上下 <input id="op-print-oy" type="number" min="-20" max="20" value="${pOy}" style="width:64px" /> mm</label>
         <span class="muted" style="font-size:12px">正数=向右/向下。凭证、账簿、单据套打走预印纸时用它对位</span>
+      </div>
+      <div class="field" style="display:flex;gap:20px;flex-wrap:wrap;align-items:end">
+        <label>凭证纸型 ${paperSel("op-print-vpaper", p.voucher_paper, false)}</label>
+        <label>账簿纸型 ${paperSel("op-print-lpaper", p.ledger_paper, false)}</label>
+        <label>单据纸型 ${paperSel("op-print-dpaper", p.doc_paper, true)}</label>
+        <span class="muted" style="font-size:12px">凭证多为 A5 / 241×140 连续纸；账簿 A4；单据可「跟随单据模板」</span>
       </div>
       <div class="toolbar" style="margin-top:6px">
         <button class="btn ghost" id="op-print-preview">试打一张（按上面设置，未保存也生效）</button>
@@ -12044,6 +12106,9 @@ async function viewOptions(main) {
         sign_line: $("#op-print-signline").value,
         offset_x_mm: clampI16($("#op-print-ox").value, p.offset_x_mm),
         offset_y_mm: clampI16($("#op-print-oy").value, p.offset_y_mm),
+        voucher_paper: $("#op-print-vpaper").value,
+        ledger_paper: $("#op-print-lpaper").value,
+        doc_paper: $("#op-print-dpaper").value,
       }),
       biz_accounts: {
         ar: $("#op-biz-ar").value.trim() || "112201",

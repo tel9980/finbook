@@ -153,6 +153,40 @@ async fn out_of_range_paper_offset_is_rejected() {
     assert!(body.contains("80"), "要把填错的值带出来：{body}");
 }
 
+/// 套打纸型：三种纸各有各的档，存住且能拦住认不出来的值。
+///
+/// 为什么必须分三档：小厂里凭证常是 A5 或 241×140 连续纸、账簿是 A4、
+/// 收付款单是 A5 或三等分联 —— 一个全局纸型必然有一头打歪。
+#[tokio::test]
+async fn paper_sizes_survive_save_and_reload() {
+    let (state, sid, _g) = ready().await;
+    let mut o = get_options(&state, &sid).await;
+    assert_eq!(o["print"]["voucher_paper"], "A4", "老账套默认凭证 A4：{o}");
+    assert_eq!(o["print"]["doc_paper"], "", "单据默认跟随模板：{o}");
+
+    o["print"]["voucher_paper"] = json!("A5");
+    o["print"]["ledger_paper"] = json!("A4");
+    o["print"]["doc_paper"] = json!("third");
+    let (st, body) = put_options(&state, &sid, &o).await;
+    assert_eq!(st, StatusCode::OK, "合法纸型应保存成功：{body}");
+
+    let back = get_options(&state, &sid).await;
+    assert_eq!(back["print"]["voucher_paper"], "A5", "凭证纸型没存住：{back}");
+    assert_eq!(back["print"]["doc_paper"], "third", "单据纸型没存住：{back}");
+}
+
+#[tokio::test]
+async fn unknown_paper_size_is_rejected() {
+    let (state, sid, _g) = ready().await;
+    let mut o = get_options(&state, &sid).await;
+    // B5 不是支持的纸型：悄悄兜底成 A4 会让用户以为设置生效了，实际还在打歪
+    o["print"]["voucher_paper"] = json!("B5");
+    let (st, body) = put_options(&state, &sid, &o).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "认不出的纸型必须被拦：{body}");
+    assert!(body.contains("纸型"), "要讲清是纸型的问题：{body}");
+    assert!(body.contains("B5"), "要把填错的值带出来：{body}");
+}
+
 /// 试打一张：`?po_ox=` 覆盖**本次**渲染、不写库。没有这条，用户只能
 /// 「改 → 存 → 去报表 → 打印 → 发现偏 → 回来再改」。
 #[tokio::test]

@@ -38,6 +38,10 @@ const OPT = (name) => ["test", "-p", "finweb", "--test", "options_print", "--", 
 const OBOOK = (name) => ["test", "-p", "findb", "--test", "opening_book", "--", name];
 // v1.8.28 套打：凭证/账簿/单据也走账套里的纸张设置。失效形态是"设置对了但纸上没变"。
 const FPFORM = (name) => ["test", "-p", "findb", "--lib", `printform::tests::${name}`];
+// 建账/导入账套的参数校验（v1.8.38）
+const FLIB = (name) => ["test", "-p", "findb", "--lib", `tests::${name}`];
+// 未核销清单分页（v1.8.38）
+const SOPEN = (name) => ["test", "-p", "finweb", "--test", "settle_open_page", "--", name];
 // 账套参数结构校验（fincore::BookOptions::validate）
 const FOPT = (name) => ["test", "-p", "fincore", "--lib", `account::tests::${name}`];
 // v1.8.36 应收应付：催款单口径 + 账龄基准日 + 催款单导出明细。
@@ -497,7 +501,9 @@ const MUT = [
     // 凭证套打自己写死纸张 → 账套里设的页码/偏移对凭证不生效（历史分叉复现）
     name: "㉑ 凭证套打不认账套版式",
     file: "crates/findb/src/printform.rs",
-    from: 'page = po.page_box_css("A4 landscape", 10)',
+    // v1.8.38 起这行改成按纸型取值，靶子跟着挪（老靶子已不存在，
+    // 不挪的话这条变异会静默失效 —— 「看着在守，其实没守」）
+    from: 'page = po.page_box_css(&po.paper_css(fincore::print::PaperUse::Voucher), 10)',
     to: 'page = String::new()',
     cmd: FPFORM("voucher_form_honours_paper_offset_and_page_numbers"),
   },
@@ -508,6 +514,54 @@ const MUT = [
     from: '        if !matches!(\n            self.budget_control.trim(),\n            "" | "off" | "warn" | "strong"\n        ) {',
     to: '        if false {',
     cmd: FOPT("options_validation_catches_silent_misconfigurations"),
+  },
+  {
+    // 建账/导入不过校验 → 建出一个「三天后才发现设置填错」的账套
+    name: "㉓ 建账不校验账套参数",
+    file: "crates/findb/src/lib.rs",
+    from: '        let problems = Self::validate_options_for_new_book(opts);\n        if !problems.is_empty() {',
+    to: '        let problems = Self::validate_options_for_new_book(opts);\n        if false {',
+    cmd: FLIB("create_rejects_invalid_options"),
+  },
+  {
+    // 总数按本页算 → 翻页时「共 N 笔」变小，会计会以为钱少了
+    name: "㉓ 未核销总数跟着页走",
+    file: "crates/finweb/src/handlers.rs",
+    from: '        "total": total,\n        "returned": page.len(),',
+    to: '        "total": page.len(),\n        "returned": page.len(),',
+    cmd: SOPEN("settle_open_pages_without_losing_the_total"),
+  },
+  {
+    // 截断了却不说 → 表现是「这单明明还欠着，核销页里找不到」
+    name: "㉓ 截断了却不说",
+    file: "crates/finweb/src/handlers.rs",
+    from: '        "truncated": limit != 0 && offset + page.len() < total,',
+    to: '        "truncated": false,',
+    cmd: SOPEN("settle_open_pages_without_losing_the_total"),
+  },
+  {
+    // 账龄天数按「今天」而不是期间末 → 与账龄表的 max_days 不同基准，两处对不上
+    name: "㉓ 下钻天数不按期间末算",
+    file: "crates/finweb/src/handlers.rs",
+    from: '    v["days"] = serde_json::json!((as_of - e.date).num_days().max(0));',
+    to: '    v["days"] = serde_json::json!(0);',
+    cmd: SOPEN("settle_open_drills_into_one_party_with_age_in_days"),
+  },
+  {
+    // 凭证纸型不生效 → 选了 A5 还在打 A4，套打必然歪
+    name: "㉓ 凭证不认选定的纸型",
+    file: "crates/findb/src/printform.rs",
+    from: '        page = po.page_box_css(&po.paper_css(fincore::print::PaperUse::Voucher), 10)',
+    to: '        page = po.page_box_css("A4 landscape", 10)',
+    cmd: FPFORM("voucher_and_ledger_honour_the_chosen_paper"),
+  },
+  {
+    // 账簿整块不认 PrintOptions → 偏移/页码/纸型对它全部无效（历史缺陷复现）
+    name: "㉓ 账簿套打不认账套版式",
+    file: "crates/findb/src/printform.rs",
+    from: '        page_css = po.page_box_css(&po.paper_css(fincore::print::PaperUse::Ledger), 10),',
+    to: '        page_css = String::new(),',
+    cmd: FPFORM("voucher_and_ledger_honour_the_chosen_paper"),
   },
   {
     // 往来台账不写科目期初 → 账龄表上有欠款、资产负债表一分没有（本轮最想守住的一条）

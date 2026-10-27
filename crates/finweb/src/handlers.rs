@@ -13746,6 +13746,20 @@ async fn clear_bank(
 // 往来核销（与桌面端对齐）
 // ---------------------------------------------------------------------------
 
+/// 未核销清单里额外带「挂了几天」。
+///
+/// 账龄表只给「最老天数」，答不了「华达这 5 万是哪几张单、各挂了多久」——
+/// 而这正是催款时第一句要问的。天数按 `upto` 期间最后一天算，与账龄表的
+/// `max_days` 同一个基准，两处不能一个按今天、一个按期末。
+fn open_entry_json_with_days(
+    e: &findb::settle::OpenEntry,
+    as_of: chrono::NaiveDate,
+) -> serde_json::Value {
+    let mut v = open_entry_json(e);
+    v["days"] = serde_json::json!((as_of - e.date).num_days().max(0));
+    v
+}
+
 fn open_entry_json(e: &findb::settle::OpenEntry) -> serde_json::Value {
     json!({
         "entry_id": e.entry_id,
@@ -13808,6 +13822,13 @@ struct SettleCrossReq {
     pub date: String,
 }
 
+/// 核销「未核销清单」默认返回多少行、最多多少行。
+///
+/// 默认 200：一屏十几行，200 行足够翻；上限 2000 是防止有人写 `limit=999999`
+/// 把 700KB 的包又拉回来。
+const DEFAULT_SETTLE_OPEN_LIMIT: usize = 200;
+const MAX_SETTLE_OPEN_LIMIT: usize = 2000;
+
 async fn get_settle_open(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -13836,19 +13857,66 @@ async fn get_settle_open(
         .unwrap_or(false);
     // 可选的往来单位过滤（customer=C01 / supplier=S01），推送到 SQL 层面过滤
     let party_filter = q.get("party").map(|s| s.trim()).filter(|s| !s.is_empty());
+    // 关键字过滤：单据号 / 摘要 / 往来单位编码。核销时会计常常只记得「那张 0031 号单」，
+    // 让他能在 200 行里捞，而不是让前端去遍历全量（大账套那是 700KB）。
+    let kw = q
+        .get("q")
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
     let db = &user.db;
     let mut rows =
         findb::settle::open_entries_with(&db, account.trim(), upto, include_all, !include_draft, party_filter.as_deref())?;
     if !include_all {
         rows.retain(|e| e.is_open());
     }
+    if let Some(kw) = kw.as_deref() {
+        rows.retain(|e| {
+            e.settle_no.to_lowercase().contains(kw)
+                || e.summary.to_lowercase().contains(kw)
+                || e.aux_key.to_lowercase().contains(kw)
+                || format!("{}-{}", e.word, e.no).to_lowercase().contains(kw)
+                || e.no.to_string().contains(kw)
+        });
+    }
+    // 合计与笔数在**分页之前**算：核销页要显示的「共 N 笔、应收合计 X」不能随着
+    // 你往后翻页而变小 —— 那会让人以为钱变少了。
+    let total = rows.len();
     let draft_cnt = rows.iter().filter(|e| !e.posted).count();
+    let sum_debit: fincore::Money = rows.iter().fold(fincore::Money::ZERO, |a, r| a + r.open().max(fincore::Money::ZERO));
+    let sum_credit: fincore::Money = rows.iter().fold(fincore::Money::ZERO, |a, r| a + (-r.open()).max(fincore::Money::ZERO));
+    // 分页：默认给 200 行。**为什么默认就截断而不保持「全量」**：v1.8.36 实测
+    // 单科目 1980 张凭证时这个接口返回 222.9KB，6000 张会到近 700KB，
+    // 而核销时人一次只看得到十几行。要全量就显式传 limit=0。
+    let limit = q
+        .get("limit")
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_SETTLE_OPEN_LIMIT)
+        .min(MAX_SETTLE_OPEN_LIMIT);
+    let offset = q
+        .get("offset")
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    let page: Vec<&findb::settle::OpenEntry> = if limit == 0 {
+        rows.iter().collect()
+    } else {
+        rows.iter().skip(offset).take(limit).collect()
+    };
     Ok(Json(json!({
         "account": account.trim(),
         "upto": period_to_str(upto),
         "include_draft": include_draft,
         "draft_count": draft_cnt,
-        "rows": rows.iter().map(open_entry_json).collect::<Vec<_>>(),
+        "total": total,
+        "returned": page.len(),
+        "offset": offset,
+        "limit": limit,
+        "sum_debit": sum_debit.fmt_plain(),
+        "sum_credit": sum_credit.fmt_plain(),
+        "truncated": limit != 0 && offset + page.len() < total,
+        "rows": page
+            .iter()
+            .map(|e| open_entry_json_with_days(e, upto.last_day()))
+            .collect::<Vec<_>>(),
     })))
 }
 

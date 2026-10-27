@@ -114,6 +114,10 @@ pub struct SettleView {
     pub st_from: String,
     pub st_to: String,
     pub st_memo: String,
+    /// 账龄下钻：选中的往来对象（`customer=C01` 形式的 aux_key）
+    pub drill_key: Option<String>,
+    /// 账龄下钻：该对象还没核销完的分录
+    pub drill_rows: Vec<OpenEntry>,
     /// 自动核销的二次确认
     pub confirm_auto: bool,
     pub dirty: bool,
@@ -157,6 +161,8 @@ impl Default for SettleView {
                 .iter()
                 .map(|m| m.fmt_plain())
                 .collect(),
+            drill_key: None,
+            drill_rows: Vec::new(),
             confirm_auto: false,
             statements: Vec::new(),
             st_kind: "ar".to_string(),
@@ -1075,6 +1081,12 @@ impl SettleView {
             .iter()
             .map(|l| Self::aux_name(ctx, &findb::balances::aux_key_frag(&l.key, party)))
             .collect();
+        // 下钻要的是 `customer=C01` 形式的 aux_key，表格显示用的是名称；
+        // 两列内容算一次，别在渲染循环里重复拼字符串。
+        let aux_keys: Vec<String> = lines
+            .iter()
+            .map(|l| findb::balances::aux_key_frag(&l.key, party))
+            .collect();
         let buckets = self.buckets.clone();
         let mut cols = vec![widgets::TCol::new("往来单位", 190.0)];
         for b in &buckets {
@@ -1088,7 +1100,28 @@ impl SettleView {
         widgets::grid(ui, "settle_aging", &cols, lines.len(), 24.0, |i, c, ui| {
             let l = &lines[i];
             if c == 0 {
-                ui.label(&names[i]);
+                let picked = self.drill_key.as_deref() == Some(aux_keys[i].as_str());
+                if ui
+                    .selectable_label(picked, &names[i])
+                    .on_hover_text("点一下看这个对象还没核销的单据")
+                    .clicked()
+                {
+                    self.drill_key = Some(aux_keys[i].clone());
+                    self.drill_rows = match findb::settle::open_entries_with(
+                        ctx.db(),
+                        &self.account,
+                        upto,
+                        false,
+                        true,
+                        Some(&aux_keys[i]),
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            ctx.toast(format!("取未核销单据失败：{e}"));
+                            Vec::new()
+                        }
+                    };
+                }
             } else if c <= bucket_n {
                 widgets::amount_label(ui, l.amounts.get(c - 1).copied().unwrap_or(Money::ZERO));
             } else if c == bucket_n + 1 {
@@ -1114,7 +1147,70 @@ impl SettleView {
         });
 
         ui.add_space(10.0);
+        self.show_drill(ui, upto);
+        ui.add_space(10.0);
         self.show_bad_debt(ctx, ui, &lines, &buckets);
+    }
+
+    /// 账龄下钻：某个往来对象还没核销的单据。
+    ///
+    /// 账龄表只回答「最老 148 天」，答不了「这 5 万是哪几张单、各挂多久」——
+    /// 而这正是催款时第一句要问的。口径与核销页一致（只认已记账、未核销），
+    /// 所以不会出现「账龄里有、核销页找不到」。
+    fn show_drill(&self, ui: &mut Ui, upto: Period) {
+        let Some(key) = self.drill_key.as_deref() else {
+            return;
+        };
+        let as_of = upto.last_day();
+        widgets::card(ui, &format!("未核销单据　{key}"), |ui| {
+            if self.drill_rows.is_empty() {
+                ui.label(
+                    RichText::new("这笔没有未核销单据（可能已核销完，或只是期初挂账）").weak(),
+                );
+                return;
+            }
+            let total: Money = self.drill_rows.iter().map(|e| e.open()).sum();
+            ui.label(
+                RichText::new(format!(
+                    "共 {} 笔，未核销合计 {}",
+                    self.drill_rows.len(),
+                    total.fmt_money()
+                ))
+                .strong(),
+            );
+            let cols = vec![
+                widgets::TCol::new("日期", 100.0),
+                widgets::TCol::new("凭证号", 110.0),
+                widgets::TCol::new("摘要", 240.0),
+                widgets::TCol::new("借方", 120.0).right(),
+                widgets::TCol::new("贷方", 120.0).right(),
+                widgets::TCol::new("已核销", 110.0).right(),
+                widgets::TCol::new("未核销", 110.0).right(),
+                widgets::TCol::new("账龄", 80.0).right(),
+            ];
+            let rows = &self.drill_rows;
+            widgets::grid(ui, "settle_drill", &cols, rows.len(), 24.0, |i, c, ui| {
+                let e = &rows[i];
+                match c {
+                    0 => {
+                        ui.label(e.date.format("%Y-%m-%d").to_string());
+                    }
+                    1 => {
+                        ui.label(format!("{}-{:04}", e.word, e.no));
+                    }
+                    2 => {
+                        ui.label(&e.summary);
+                    }
+                    3 => widgets::amount_label(ui, e.debit),
+                    4 => widgets::amount_label(ui, e.credit),
+                    5 => widgets::amount_label(ui, e.settled),
+                    6 => widgets::amount_label(ui, e.open()),
+                    _ => {
+                        ui.label(format!("{} 天", (as_of - e.date).num_days().max(0)));
+                    }
+                }
+            });
+        });
     }
 
     /// 坏账准备测算：比例可改，结果只用于参考

@@ -153,7 +153,7 @@ pub fn voucher_form_html(
 <title>记账凭证</title>
 <style>{VOUCHER_CSS}{PBAR_CSS}{page}</style>
 </head><body>{PRINT_BAR}{forms}</body></html>"#,
-        page = po.page_box_css("A4 landscape", 10)
+        page = po.page_box_css(&po.paper_css(fincore::print::PaperUse::Voucher), 10)
     )
 }
 
@@ -344,7 +344,7 @@ pub fn ledger_form_html(
     format!(
         r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>{title}</title>
-<style>{LEDGER_CSS}{PBAR_CSS}{page}</style>
+<style>{LEDGER_CSS}{PBAR_CSS}{page_css}</style>
 </head><body>
 {PB}<div class="lhead">
   <span class="ltitle">{title}</span>
@@ -371,6 +371,9 @@ pub fn ledger_form_html(
         acct = esc(&ledger.account_name),
         company = esc(company),
         period = esc(&ledger.period_label),
+        // 纸张与偏移：账簿原来整块不认账套设置（`po` 收进来了却没人用），
+        // 所以凭证能调对位、账簿不能 —— 同一个针式打印机上两种纸表现不同。
+        page_css = po.page_box_css(&po.paper_css(fincore::print::PaperUse::Ledger), 10),
         page = esc(&page),
         head = head_row,
         rows = body,
@@ -1293,7 +1296,54 @@ mod tests {
         q.show_page_no = false;
         let html = voucher_form_html("某某公司", "2026-09", &prints, true, &q);
         assert!(!html.contains("counter(page)"), "关了页码就不能有页边距盒子");
-        assert!(html.contains("size:A4 landscape"), "凭证套打固定横向 A4");
+        assert!(html.contains("size:A4 landscape"), "没选纸型时凭证仍是横向 A4");
+    }
+
+    /// 纸型可选：小厂的凭证纸常常是 A5 或 241×140 连续纸，而凭证套打原来写死
+    /// `A4 landscape` —— 纸不对，套打就打歪，且没有任何设置能救。
+    #[test]
+    fn voucher_and_ledger_honour_the_chosen_paper() {
+        let chart = sample_chart();
+        let v = sample_voucher();
+        let aux = |_: &fincore::AuxRef| "".to_string();
+        let prints = vec![voucher_print_from(&v, &chart, &aux)];
+
+        let mut p = po();
+        p.voucher_paper = "A5".to_string();
+        let html = voucher_form_html("某某公司", "2026-09", &prints, true, &p);
+        assert!(html.contains("size:A5 landscape"), "选了 A5 就该是 A5：{html}");
+        assert!(!html.contains("size:A4 landscape"), "不能两套纸型同时出现");
+
+        p.voucher_paper = "241x140".to_string();
+        let html = voucher_form_html("某某公司", "2026-09", &prints, true, &p);
+        assert!(html.contains("size:241mm 140mm"), "自定义尺寸要原样进 @page");
+
+        // 认不出来的值不该让人打不出纸：兜底 A4，同时保存时会被 problems() 挡住
+        p.voucher_paper = "B5".to_string();
+        assert!(p.problems().iter().any(|m| m.contains("凭证套打纸型")), "B5 应报错");
+        let html = voucher_form_html("某某公司", "2026-09", &prints, true, &p);
+        assert!(html.contains("size:A4 landscape"), "脏值兜底 A4");
+
+        // 账簿原来整块不认 PrintOptions（`po` 收进来没人用），偏移也就对它无效
+        let mut p = po();
+        p.ledger_paper = "A5".to_string();
+        p.offset_x_mm = 4;
+        let ledger = LedgerPrint {
+            title: "明细账".to_string(),
+            account_name: "库存现金".to_string(),
+            period_label: "2026-09".to_string(),
+            rows: vec![],
+            begin_dir: "借".to_string(),
+            begin_balance: Money::ZERO,
+            page_from_1: false,
+        };
+        let html = ledger_form_html("某某公司", &ledger, &p);
+        assert!(html.contains("size:A5 landscape"), "账簿纸型要生效：{html}");
+        assert!(
+            html.contains("margin:10mm 6mm 10mm 14mm"),
+            "账簿也要吃套打偏移（基础 10mm，向右 4）：{html}"
+        );
+        assert!(html.contains("counter(page)"), "账簿套打也要有页码");
     }
 
     #[test]

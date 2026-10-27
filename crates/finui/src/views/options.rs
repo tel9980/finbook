@@ -295,6 +295,55 @@ impl OptionsView {
                     );
                 });
                 ui.end_row();
+
+                // 三种纸同时在小厂里用：凭证 A5/241 连续纸、账簿 A4、单据 A5/三等分。
+                // 一个全局纸型必然有一头打歪，所以分三档。
+                ui.label("套打纸型");
+                ui.vertical(|ui| {
+                    let choices = fincore::print::paper_choices();
+                    for (label, val) in [
+                        ("凭证", &mut o.print.voucher_paper),
+                        ("账簿", &mut o.print.ledger_paper),
+                        ("单据", &mut o.print.doc_paper),
+                    ] {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            let cur = if val.trim().is_empty() {
+                                "跟随单据模板".to_string()
+                            } else {
+                                choices
+                                    .iter()
+                                    .find(|(v, _)| v.eq_ignore_ascii_case(val.trim()))
+                                    .map(|(_, l)| l.to_string())
+                                    .unwrap_or_else(|| val.clone())
+                            };
+                            egui::ComboBox::from_id_salt(format!("paper_{label}"))
+                                .selected_text(cur)
+                                .show_ui(ui, |ui| {
+                                    for (v, l) in choices.iter() {
+                                        // 「跟随单据模板」只对单据有意义
+                                        if v.is_empty() && label != "单据" {
+                                            continue;
+                                        }
+                                        if ui
+                                            .selectable_label(
+                                                val.eq_ignore_ascii_case(v),
+                                                *l,
+                                            )
+                                            .clicked()
+                                        {
+                                            *val = v.to_string();
+                                        }
+                                    }
+                                });
+                        });
+                    }
+                    ui.label(
+                        RichText::new("凭证多为 A5 或 241×140 连续纸；账簿 A4；单据跟随模板")
+                            .weak(),
+                    );
+                });
+                ui.end_row();
             });
         ui.label(
             RichText::new(

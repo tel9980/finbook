@@ -199,6 +199,30 @@ impl Db {
     ///
     /// 用于 Web 服务端「首次登录即管理员」的初始化流程：账套建好后用户表为空，
     /// 第一个成功登录的账号会被自动创建为系统管理员。
+    /// 建账前把参数一次校完：结构（`BookOptions::validate`）+ 业务默认科目。
+    ///
+    /// ## 为什么建账也要校
+    ///
+    /// v1.8.27 把参数校验收敛到了 `set_options`（唯一落库入口），但**建账不走它**：
+    /// `create_with` 直接把 `opts` 写进 meta。于是「新建/导入账套时把 biz_accounts
+    /// 填成 1122（非末级）、budget_control 拼成 warning」这类错误账套能**建成功**，
+    /// 要等到第一次在参数页点保存才报错 —— 那时业务已经在跑，用户只会觉得
+    /// 「保存按钮有时候不灵」，而真正的问题是三天前建账时填错的。
+    ///
+    /// ## 为什么能在这儿查科目
+    ///
+    /// 建账时账套里还什么都没有，但紧接着 `seed_builtin` 就会灌 `default_accounts()`。
+    /// 拿这份内置表建一个临时 `Chart` 去查，等价于查建完之后的账套，且不需要先落盘。
+    pub fn validate_options_for_new_book(opts: &BookOptions) -> Vec<String> {
+        let mut problems = opts.validate();
+        let chart = fincore::Chart::with_accounts(
+            fincore::CodeScheme(opts.code_scheme.clone()),
+            fincore::chart::default_accounts(),
+        );
+        problems.extend(crate::accounts::check_biz_accounts(&chart, &opts.biz_accounts));
+        problems
+    }
+
     pub fn create_no_admin<P: AsRef<Path>>(path: P, opts: &BookOptions) -> DbResult<Self> {
         Self::create_with(path, opts, false)
     }
@@ -211,6 +235,15 @@ impl Db {
         let path = path.as_ref().to_path_buf();
         if path.exists() {
             return Err(FinError::msg(format!("文件已存在，未覆盖：{}", path.display())).into());
+        }
+        // 先校参数再建文件：宁可建不出来，也不要建出一个「要用三天才发现设置填错」的账套
+        let problems = Self::validate_options_for_new_book(opts);
+        if !problems.is_empty() {
+            return Err(FinError::Validate(format!(
+                "账套参数不合法：{}",
+                problems.join("；")
+            ))
+            .into());
         }
         if let Some(dir) = path.parent() {
             if !dir.as_os_str().is_empty() {
@@ -240,6 +273,15 @@ impl Db {
     }
 
     fn in_memory_with(opts: &BookOptions, seed_admin: bool) -> DbResult<Self> {
+        // 与 create_with 同一条规矩：内存账套也是账套，夹具里的参数写错要当场报
+        let problems = Self::validate_options_for_new_book(opts);
+        if !problems.is_empty() {
+            return Err(FinError::Validate(format!(
+                "账套参数不合法：{}",
+                problems.join("；")
+            ))
+            .into());
+        }
         let conn = Connection::open_in_memory()?;
         schema::init(&conn)?;
         let db = Self {
@@ -800,6 +842,50 @@ pub(crate) mod tests {
         assert!(a > 100, "内置科目表应有一百多个科目，实际 {a}");
         assert_eq!(db.options().base_currency, "CNY");
         assert!(users::get(&db, "admin").unwrap().is_some());
+    }
+
+    /// 建账与导入账套也要过同一套参数校验。
+    ///
+    /// 这条守的是「**建出一个三天后才发现设置填错的账套**」：v1.8.27 把校验收进
+    /// `Db::set_options`，但建账走的是 `create_with`，那条路当时没校 —— 于是
+    /// 默认科目写成 `1122`（非末级）、预算控制拼成 `warning`，账套照样建得出来，
+    /// 要等到第一次在参数页点保存才报错，那时业务已经在跑了。
+    #[test]
+    fn create_rejects_invalid_options() {
+        let dir = std::env::temp_dir().join(format!("fb_badbook_{}", std::process::id()));
+        let _ = std::fs::remove_file(&dir);
+
+        let mut o = BookOptions::default();
+        o.biz_accounts.ar = "1122".to_string(); // 非末级
+        let err = match Db::create_no_admin(&dir, &o) {
+            Ok(_) => panic!("非末级应收科目应当拒绝建账"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("1122"), "要指出是哪个科目：{err}");
+        assert!(err.contains("末级"), "要讲清错在哪：{err}");
+        assert!(!dir.exists(), "校验失败不应留下半个账套文件");
+
+        o.biz_accounts.ar = "112201".to_string();
+        o.budget_control = "warning".to_string(); // 拼错
+        let err = match Db::create_no_admin(&dir, &o) {
+            Ok(_) => panic!("拼错的预算控制应当拒绝建账"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("warning"), "要把填错的值带出来：{err}");
+
+        // 改对之后必须能建成，别把好人也拦了
+        o.budget_control = "warn".to_string();
+        let db = Db::create_no_admin(&dir, &o).expect("合法参数应当建账成功");
+        assert_eq!(db.options().budget_control, "warn");
+        drop(db);
+        let _ = std::fs::remove_file(&dir);
+        // 路径没有扩展名，WAL/SHM 就是在原路径后面加后缀
+        let mut wal = dir.clone().into_os_string();
+        wal.push("-wal");
+        let _ = std::fs::remove_file(wal);
+        let mut shm = dir.clone().into_os_string();
+        shm.push("-shm");
+        let _ = std::fs::remove_file(shm);
     }
 
     /// 汇率与数量/单价必须满精度落库。Money 的 Display 会截到 2 位，

@@ -16,6 +16,68 @@ use serde::{Deserialize, Serialize};
 /// 一列内容（日期/摘要/数量金额）平均要占 20mm 以上，8 列就已经挤到折行。
 pub const AUTO_LANDSCAPE_COLS: usize = 8;
 
+/// 套打用纸：凭证 / 账簿 / 单据三种用途各留一档。
+///
+/// 为什么不是「一个全局纸型」：小厂的现实是**三种纸同时在用**——凭证是 A5 或
+/// 241×140 连续纸、账簿是 A4、收付款单是 A5 或三等分联。一个全局纸型必然有一头
+/// 打歪，而打歪的表现是「内容压在线上的格子里」，不像字小一点那样能将就。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaperUse {
+    /// 记账凭证
+    Voucher,
+    /// 明细账 / 总账
+    Ledger,
+    /// 订单 / 收付款单
+    Doc,
+}
+
+/// 可选纸型：`(值, 界面标签)`。桌面端与网页端都从这里取，避免两端各写一份清单。
+///
+/// `""` 只对单据有意义（= 跟随单据模板自带的纸型），凭证/账簿选了它按 A4 走。
+pub fn paper_choices() -> [(&'static str, &'static str); 5] {
+    [
+        ("A4", "A4（210×297）"),
+        ("A5", "A5（210×148）"),
+        ("third", "三等分联（99×210）"),
+        ("241x140", "241×140 连续纸（针式）"),
+        ("", "跟随单据模板"),
+    ]
+}
+
+/// 把纸型值解析成 CSS `@page size` 片段；`None` = 空或认不出来。
+///
+/// 认不出来时**不报错也不猜**，由 [`PrintOptions::problems`] 在保存时挡住，
+/// 打印这一刻按兜底值走（脏配置不该让人打不出纸）。
+pub fn paper_size_css(value: &str, landscape: bool) -> Option<String> {
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    let base = if v.eq_ignore_ascii_case("a4") {
+        "A4".to_string()
+    } else if v.eq_ignore_ascii_case("a5") {
+        "A5".to_string()
+    } else if v.eq_ignore_ascii_case("third") {
+        // 三等分联纸不是标准名，只能给尺寸
+        return Some("99mm 210mm".to_string());
+    } else if let Some((w, h)) = v.split_once('x').or_else(|| v.split_once('X')) {
+        let w: i32 = w.trim().parse().ok()?;
+        let h: i32 = h.trim().parse().ok()?;
+        if !(50..=600).contains(&w) || !(50..=600).contains(&h) {
+            return None;
+        }
+        // 自定义尺寸必须显式写死方向，否则浏览器按自己的规则猜
+        return Some(format!("{w}mm {h}mm"));
+    } else {
+        return None;
+    };
+    Some(if landscape {
+        format!("{base} landscape")
+    } else {
+        base
+    })
+}
+
 /// 打印设置（存在账套参数里，跟随账套而不是跟随某台电脑）。
 ///
 /// 跟随账套的理由：小工厂常常「办公室打报表、宿舍看电脑」，跟着机器走会让同一份
@@ -43,6 +105,12 @@ pub struct PrintOptions {
     pub offset_x_mm: i16,
     /// 套打纵向偏移（毫米，正=向下）
     pub offset_y_mm: i16,
+    /// 凭证套打纸型（空 = A4）
+    pub voucher_paper: String,
+    /// 账簿套打纸型（空 = A4）
+    pub ledger_paper: String,
+    /// 单据套打纸型（空 = 跟随单据模板自带的纸型）
+    pub doc_paper: String,
 }
 
 impl Default for PrintOptions {
@@ -58,6 +126,9 @@ impl Default for PrintOptions {
             sign_line: "制表：　　　　　审核：　　　　　负责人：".to_string(),
             offset_x_mm: 0,
             offset_y_mm: 0,
+            voucher_paper: "A4".to_string(),
+            ledger_paper: "A4".to_string(),
+            doc_paper: String::new(),
         }
     }
 }
@@ -114,7 +185,49 @@ impl PrintOptions {
                 self.offset_y_mm
             ));
         }
+        for (label, value, allow_empty) in [
+            ("凭证", &self.voucher_paper, false),
+            ("账簿", &self.ledger_paper, false),
+            ("单据", &self.doc_paper, true),
+        ] {
+            if value.trim().is_empty() && allow_empty {
+                continue;
+            }
+            if paper_size_css(value, true).is_none() {
+                out.push(format!(
+                    "{label}套打纸型无法识别：「{value}」—— 可选 A4 / A5 / third / 241x140"
+                ));
+            }
+        }
         out
+    }
+
+    /// 某种用途的实际纸型值（已兜底：凭证/账簿空值按 A4，单据空值返回空＝跟随模板）
+    pub fn paper_of(&self, use_: PaperUse) -> &str {
+        match use_ {
+            PaperUse::Voucher => {
+                if self.voucher_paper.trim().is_empty() {
+                    "A4"
+                } else {
+                    &self.voucher_paper
+                }
+            }
+            PaperUse::Ledger => {
+                if self.ledger_paper.trim().is_empty() {
+                    "A4"
+                } else {
+                    &self.ledger_paper
+                }
+            }
+            PaperUse::Doc => &self.doc_paper,
+        }
+    }
+
+    /// 某种用途的 `@page size` 片段；认不出来时按 A4 横向兜底。
+    pub fn paper_css(&self, use_: PaperUse) -> String {
+        paper_size_css(self.paper_of(use_), true)
+            .or_else(|| paper_size_css("A4", true))
+            .unwrap_or_else(|| "A4 landscape".to_string())
     }
 
     /// 只生成 `@page`（纸张 + 四边页边距 + 页码），**不含字号**。
