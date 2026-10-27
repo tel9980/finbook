@@ -11525,14 +11525,44 @@ function openImportCollection() {
       会一次做完三件事：建往来台账（算账龄、出对账单用）、写 112201/220201 的科目期初、写各账户与实收资本的期初。
       <br>期初<b>借贷不平会整批拒绝</b>，并告诉你差多少 —— 不会写进半个账套。
     </p>
+    <p class="muted" style="font-size:12px;line-height:1.7;margin:0 0 12px">
+      还没有表？<a href="#" id="ic-tpl" style="color:var(--accent)">下载空模板</a> ——
+      里面已经列好你这个账套的科目、客户、供应商（编码名称都填好了），只需填金额。
+    </p>
     <label style="display:block;margin-bottom:12px">选择文件
       <input id="ic-file" type="file" accept=".xlsx,.xls,.ods" style="width:100%;margin-top:4px" />
     </label>
     <div class="muted" id="ic-msg" style="min-height:18px;font-size:12px;line-height:1.5"></div>
-    <div class="foot"><button class="btn primary" id="ic-ok">开始导入</button><button class="btn ghost" id="ic-cancel">取消</button></div>
+    <div class="foot"><button class="btn ghost" id="ic-preview">先预检（不落库）</button><button class="btn primary" id="ic-ok">开始导入</button><button class="btn ghost" id="ic-cancel">取消</button></div>
   `);
   const msg = (t) => { const el = $("#ic-msg", mask); if (el) el.innerHTML = t; };
   $("#ic-cancel", mask).onclick = () => mask.remove();
+  $("#ic-tpl", mask).onclick = (e) => { e.preventDefault(); downloadUrl("/books/opening-sheet/template"); };
+  // 预检：期初是边整理边填的，整本填完之前唯一能验证的办法以前只有「导一次试试」。
+  // 预检走同一条后端路径，只算平不落库 —— 改一天、验一天。
+  $("#ic-preview", mask).onclick = async () => {
+    const f = ($("#ic-file", mask).files || [])[0];
+    if (!f) { msg('<span style="color:var(--err)">先选一个 .xlsx 文件</span>'); return; }
+    const btn = $("#ic-preview", mask);
+    btn.disabled = true;
+    msg(`正在预检 ${esc(f.name)}…`);
+    const fd = new FormData();
+    fd.append("file", f);
+    try {
+      const r = await api("/books/opening-sheet/preview", { method: "POST", body: fd, timeout: 5 * 60 * 1000 });
+      const diff = parseFloat(String(r.diff || "0").replace(/,/g, "")) || 0;
+      const warn = (r.warnings || []).length
+        ? `<br><b>${r.warnings.length} 条提示</b>：<div style="margin-top:4px">${r.warnings.map(esc).join("<br>")}</div>`
+        : "";
+      msg(`<span style="color:var(--ok)">预检通过，没有落库</span> ——
+        应收 ${r.ar} 笔、应付 ${r.ap} 笔、科目期初 ${r.begin} 条；
+        借 ${r.debit_total} = 贷 ${r.credit_total}${diff ? `（差 ${r.diff}）` : ""}${warn}`);
+    } catch (e) {
+      msg(`<span style="color:var(--err)">${esc(e.message)}</span>`);
+    } finally {
+      btn.disabled = false;
+    }
+  };
   $("#ic-ok", mask).onclick = async () => {
     const f = ($("#ic-file", mask).files || [])[0];
     if (!f) { msg('<span style="color:var(--err)">先选一个 .xlsx 文件</span>'); return; }
@@ -11644,6 +11674,7 @@ function renderBegin(main, rows) {
         <div class="spacer"></div>
         ${can("export") ? `<button class="btn ghost" id="bg-export" title="导出已保存的期初余额（科目编码/名称/方向/期初/累计），改完可以导回">导出 Excel</button>` : ""}
         ${can("opening") ? `<button class="btn ghost" id="bg-collect" title="上传填好的《期初收集表.xlsx》：客户应收/供应商应付/账户余额/实收资本一次导完，先算平再落库">导入期初收集表</button>` : ""}
+      ${can("opening") ? `<button class="btn ghost" id="bg-tpl" title="下载空模板：已列好你这个账套的科目、客户、供应商，只需填金额">下载期初模板</button>` : ""}
         ${can("opening") ? `<button class="btn primary" id="bg-save">保存全部</button>` : ""}
       </div>
       <div class="panel" style="padding:0;overflow:auto;max-height:60vh">
@@ -11673,6 +11704,7 @@ function renderBegin(main, rows) {
     $all(".bg-code", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].account_code = inp.value.trim(); });
     if ($("#bg-export")) $("#bg-export").addEventListener("click", () => downloadUrl("/api/export/begin"));
     if ($("#bg-collect")) $("#bg-collect").addEventListener("click", () => openImportCollection());
+    if ($("#bg-tpl")) $("#bg-tpl").addEventListener("click", () => downloadUrl("/books/opening-sheet/template"));
     $all(".bg-dir", main).forEach((sel) => sel.onchange = () => { draft[+sel.dataset.i].dir = sel.value; paintTotals(); });
     $all(".bg-yb", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].yb = inp.value; paintTotals(); });
     $all(".bg-ad", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].ad = inp.value; paintTotals(); });

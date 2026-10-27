@@ -302,6 +302,14 @@ pub fn router(state: Arc<WebState>) -> Router {
             post(import_opening_sheet)
                 .layer(axum::extract::DefaultBodyLimit::max(MAX_IMPORT_BOOK_BYTES)),
         )
+        // 同上但只体检不落库：期初是边整理边填的，能随时先看一眼平不平
+        .route(
+            "/api/books/opening-sheet/preview",
+            post(preview_opening_sheet)
+                .layer(axum::extract::DefaultBodyLimit::max(MAX_IMPORT_BOOK_BYTES)),
+        )
+        // 空模板（已预填当前账套的科目/客户/供应商清单）
+        .route("/api/books/opening-sheet/template", get(opening_sheet_template))
         .route("/api/login", post(post_login))
         .route("/api/logout", post(post_logout))
         // 平台安全中心（仅管理员）：口令策略 / 登录审计 / 锁定账号
@@ -17427,12 +17435,8 @@ fn unpack_book_upload(
 ///
 /// 与「数据导入」里的期初导入不同：那个吃单张纸的 CSV/Excel，这个吃**整本四张纸**的
 /// 收集表，并且先算平再写——不平就整批拒绝，不留半个账套。
-async fn import_opening_sheet(
-    State(_state): State<Arc<WebState>>,
-    user: CurrentUser,
-    mut multipart: axum::extract::Multipart,
-) -> Result<Json<serde_json::Value>, AppError> {
-    user.require(Perm::Opening)?;
+/// 从 multipart 里取出 `file` 字段（期初收集表的三个入口共用）。
+async fn sheet_upload(mut multipart: axum::extract::Multipart) -> Result<Vec<u8>, AppError> {
     let mut data: Option<Vec<u8>> = None;
     while let Some(field) = multipart
         .next_field()
@@ -17451,6 +17455,74 @@ async fn import_opening_sheet(
     if data.is_empty() {
         return Err(AppError::bad_request("上传文件为空"));
     }
+    Ok(data)
+}
+
+/// 《期初收集表》的空模板：已预填当前账套的科目、客户、供应商清单。
+async fn opening_sheet_template(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    user.require(Perm::Opening)?;
+    let chart = findb::accounts::chart(&user.db)?;
+    let accounts: Vec<&fincore::account::Account> = chart
+        .all()
+        .into_iter()
+        .filter(|a| chart.is_leaf(&a.code))
+        .collect();
+    let customers = findb::auxs::list(
+        &user.db,
+        &AuxQuery {
+            kind: Some(fincore::AuxKind::Customer),
+            include_disabled: false,
+            ..Default::default()
+        },
+    )?;
+    let suppliers = findb::auxs::list(
+        &user.db,
+        &AuxQuery {
+            kind: Some(fincore::AuxKind::Supplier),
+            include_disabled: false,
+            ..Default::default()
+        },
+    )?;
+    let sheets = crate::sheets::opening_collection_template(&accounts, &customers, &suppliers);
+    build_xlsx(&sheets, "期初收集表.xlsx", "期初收集表")
+}
+
+/// 只体检不落库 —— 与正式导入走同一条代码路径，只是不写。
+async fn preview_opening_sheet(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Opening)?;
+    let data = sheet_upload(multipart).await?;
+    let r = findb::opening_book::preview_collection_sheet(&user.db, &data)?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "dry_run": true,
+        "ar": r.ar.ok,
+        "ap": r.ap.ok,
+        "begin": r.begin_ok,
+        "arap_ok": r.arap_ok,
+        "debit_total": r.debit_total.fmt_plain(),
+        "credit_total": r.credit_total.fmt_plain(),
+        "diff": (r.debit_total - r.credit_total).fmt_plain(),
+        "auto_profit": r.auto_profit.fmt_plain(),
+        "warnings": r.ar.warnings.iter().chain(r.ap.warnings.iter())
+            .chain(r.balances.warnings.iter()).chain(r.equity.warnings.iter())
+            .cloned().collect::<Vec<_>>(),
+    })))
+}
+
+async fn import_opening_sheet(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Opening)?;
+    let data = sheet_upload(multipart).await?;
     let r = findb::opening_book::import_collection_sheet(&user.db, &data, &user.username())?;
     Ok(Json(serde_json::json!({
         "ok": true,

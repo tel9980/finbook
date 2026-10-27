@@ -24,6 +24,8 @@ const STATIC = (name) => ["test", "-p", "finweb", "--test", "static_cache", "--"
 const ROUND = (name) => ["test", "-p", "finweb", "--test", "roundtrip", "--", name];
 // imports.rs 的测试都在 `mod tests` 里，全路径是 `imports::tests::<name>`
 const FIMPORT = (name) => ["test", "-p", "findb", "--lib", `imports::tests::${name}`];
+// 期初收集表闭环（下载模板 → 填 → 预检 → 导入）的集成测试
+const LOOP = (name) => ["test", "-p", "finweb", "--test", "opening_sheet_loop", "--", name];
 // 批量粘贴解析（fincore）：表头按列名取值、停用/上级/备注还原
 const FBATCH = (name) => ["test", "-p", "fincore", "--lib", `batch::auxiliary::tests::${name}`];
 // v1.8.24 网页版首页首屏：数字全由凭证推出，错一位老板就按错的数做决定
@@ -662,7 +664,29 @@ const MUT = [
     from: "        Some(s) if !s.is_empty() => Some(fincore::Money::parse(s).map_err(|e| {",
     to: "        Some(s) => Some(fincore::Money::parse(s).map_err(|e| {",
     cmd: FUNS("blank_amount_means_full_unsettle"),
-  },];
+  },
+  {
+    name: "㉓ 预检其实也落库",
+    file: "crates/findb/src/opening_book.rs",
+    from: "    if dry_run {\n        return Ok(res);\n    }",
+    to: "    if false {\n        return Ok(res);\n    }",
+    cmd: LOOP("preview_does_not_write_then_import_does"),
+  },
+  {
+    name: "㉓ 模板不预填科目清单",
+    file: "crates/finweb/src/sheets.rs",
+    from: "        .filter(|a| a.code.chars().next().is_some_and(|c| c == '1' || c == '2'))",
+    to: "        .filter(|_a| false)",
+    cmd: LOOP("template_carries_the_current_books_account_codes"),
+  },
+  {
+    name: "㉓ 不平也预检通过",
+    file: "crates/findb/src/opening_book.rs",
+    from: "    if debit != credit {\n        let diff = debit - credit;",
+    to: "    if false {\n        let diff = debit - credit;",
+    cmd: LOOP("preview_rejects_an_unbalanced_sheet"),
+  },
+];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */
 function applyMut(src, from, to) {

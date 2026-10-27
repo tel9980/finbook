@@ -231,6 +231,26 @@ fn find_sheet<'a>(
 
 /// 导入整本《期初收集表》。返回每张纸的明细统计；不平衡直接报错不落库。
 pub fn import_collection_sheet(db: &Db, bytes: &[u8], who: &str) -> DbResult<CollectionImport> {
+    collection_sheet_impl(db, bytes, who, false)
+}
+
+/// 只体检、不落库。
+///
+/// 期初数据是**边整理边填**的：今天填了客户应收，后天补银行账户。整本填完之前
+/// 谁也不知道平不平，而唯一能验证的办法以前只有「导一次试试」—— 导进去一半、
+/// 发现不平、再想办法清掉，成本高到没人愿意试第二次。
+///
+/// 所以把「解析 + 校验 + 算平」和「落库」拆开：预检走同一条代码路径，只是不写。
+pub fn preview_collection_sheet(db: &Db, bytes: &[u8]) -> DbResult<CollectionImport> {
+    collection_sheet_impl(db, bytes, "", true)
+}
+
+fn collection_sheet_impl(
+    db: &Db,
+    bytes: &[u8],
+    who: &str,
+    dry_run: bool,
+) -> DbResult<CollectionImport> {
     let sheets = crate::imports::read_xlsx_sheets(bytes)?;
     let mut res = CollectionImport::default();
 
@@ -364,6 +384,11 @@ pub fn import_collection_sheet(db: &Db, bytes: &[u8], who: &str) -> DbResult<Col
             diff.fmt_money()
         ))
         .into());
+    }
+
+    // ---- 预检到此为止：解析、校验、算平都做完了，但不写
+    if dry_run {
+        return Ok(res);
     }
 
     // ---- 全部通过，开始落库
