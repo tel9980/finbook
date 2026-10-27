@@ -73,10 +73,14 @@ jobs:
           done
           echo "::error::等待 CI 超时，拒绝发布"
           exit 1
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: 全量测试（发布门禁）
-        run: cargo test --workspace --locked
+      # 这一 job 以前还会再跑一遍 `cargo test --workspace`，作为「发布门禁」。
+      # 那是重复的，而且比 CI 弱：CI 那边除了 test 还有变异测试（67 条）、clippy、
+      # E2E、audit/deny/udeps。既然上面已经**等到了同一 SHA 的 CI 全绿**，再跑一遍
+      # 只是把发版时间乘二 —— v1.8.38 实测 Release 21.2 分钟里 15.8 分钟花在这上面
+      # （Windows 桌面 job 加固后只要 2.7 分钟）。
+      #
+      # 删掉的是重复的那一遍，不是门禁：门禁就是上面那次 CI。真要手动跑，
+      # 本地 `cargo test --workspace` 与 CI 完全等价。
 
   # ── 桌面版（Linux x64） ──────────────────────────────────────────────
   desktop-linux:

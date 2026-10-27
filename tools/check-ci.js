@@ -620,6 +620,36 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
   console.log("发版路径：release.yml 的 Windows job 与 ci.yml 同一套 apt 加固 + 限时");
 }
 
+// ---- 2.49 发版门禁不许重复跑一遍 CI 已经跑过的东西 -------------------------
+//
+// v1.8.38 实测：Release 21.2 分钟里 **15.8 分钟**花在 verify 的
+// `cargo test --workspace --locked` 上 —— 而同一个 SHA 的 CI 才 8.3 分钟、
+// 刚刚全绿（且 CI 那边还多跑了 67 条变异、clippy、E2E、audit）。
+// 也就是说那一遍不但重复，还比门禁弱。
+//
+// 这一项盯着：release.yml 的 verify 不许再出现 `cargo test`；
+// 同时它必须保留「等同一 SHA 的 CI 变绿」那一步（否则门禁就真的没了）。
+{
+  const relSrc = fs.readFileSync(".github/workflows/release.yml", "utf8");
+  if (/^\s*(run:\s*)?cargo test/m.test(relSrc)) {
+    console.log(
+      "FAIL release.yml 又在发版门禁里跑 `cargo test` 了 —— " +
+        "\n     同一个 SHA 的 CI 已经跑过全套（还更多：变异/clippy/E2E/audit），" +
+        "\n     重复一遍等于把发版时间乘二（v1.8.38 实测多花 15.8 分钟）。"
+    );
+    bad++;
+  }
+  const waitsCi = /actions\/workflows\/ci\.yml\/runs\?head_sha=/.test(relSrc);
+  if (!waitsCi) {
+    console.log(
+      "FAIL release.yml 不再等同一 SHA 的 CI 变绿 —— " +
+        "\n     测试可以删（CI 跑过了），但「等它绿」这一步是门禁本身，删了就等于谁都能发版。"
+    );
+    bad++;
+  }
+  console.log("发版门禁：等同一 SHA 的 CI 全绿，不重复跑 cargo test");
+}
+
 // ---- 2.5 测试夹具不许靠继承内控闸门的默认值 --------------------------------
 //
 // 扫**每一个**测试代码里的 `BookOptions` 字面量，要求显式写出 `enable_audit` 与

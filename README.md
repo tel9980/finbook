@@ -399,6 +399,25 @@ cargo test --workspace
 代价说清：`check` 不覆盖**链接阶段**的错（缺 mingw 库、导出符号冲突）。那类错
 只在打 tag 时暴露。
 
+### 8.2 发版路径（tag 之后那 20 分钟花在哪）
+
+`release.yml` 一次跑四条 job：`Verify tag & tests` → 三个构建（Linux 桌面 / Windows
+桌面 / finweb）→ `Publish`。
+
+两个数（v1.8.38 实测，同一版修前修后）：
+
+| | 修前 | 修后 | 改了什么 |
+|---|---|---|---|
+| Release 壁钟 | **68.1 min**（还只是「没跑完」） | **21.2 min** | 见下两行 |
+| `Desktop (Windows x64)` | 卡死在 `apt-get update`，无上限 | **2.7 min** | mingw 安装与 ci.yml 同一套加固（`timeout`/`Retries`/`ForceIPv4`/`--no-install-recommends`）+ job 限时 40 分钟 |
+| `Verify tag & tests` | **15.8 min** | ~1 min | 删掉重复的 `cargo test --workspace`——它等的那次 CI 已经跑过全套，且更多 |
+
+判断顺序值得记下来：先看**哪一条 job 占了壁钟的大头**，再看那条 job 内部哪一步最
+长。v1.8.38 的两次都是这个顺序查出来的（一次是 apt，一次是重复的测试），
+凭印象猜会先怀疑「Windows 交叉编译慢」——那不是原因，加固后它只要 2.7 分钟。
+
+`tools/check-ci.js` 第 2.48 / 2.49 项分别盯着这两件事，改坏任一半都会报红。
+
 注意 `check-windows` 里**仍然要装 mingw-w64**，别顺手删掉：`cargo check` 不链接
 rustc 的产物，但**构建脚本照跑** —— 依赖里 bundled 的 C 代码（sqlite 等）会经
 cc-rs 调 `x86_64-w64-mingw32-gcc`。删了它 job 会在 cc-rs 那一步报
