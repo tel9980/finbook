@@ -347,10 +347,10 @@ cargo test --workspace
 | `findb` 端到端 `opening_book`（期初收集表） | 3 |
 | `findb` 端到端 `oxide_demo` | 2 |
 | `finui` | 59 |
-| `finweb` lib | 26 |
+| `finweb` lib | 28 |
 | `finweb` `aux_preset.rs` | 4 |
 | `finweb` `batch_paste.rs` | 13 |
-| `finweb` REST API 集成 | 193 |
+| `finweb` REST API 集成 | 194 |
 | `finweb` 客户视图 API | 9 |
 | `finweb` 导入导出 xlsx 闭环 | 8 |
 | `finweb` 导出→导回数据往返 | 8 |
@@ -358,9 +358,14 @@ cargo test --workspace
 | `finweb` 静态资源缓存头 | 3 |
 | `finweb` 打印设置与参数校验 | 9 |
 | `finweb` 期初收集表上传 | 3 |
-| **小计** | **969** |
+| **小计** | **972** |
 | Playwright E2E | 103 |
 
+> **2026-10-27 v1.8.31 校准**：小计 969→**972**（`finweb` lib 26→28：`state::tests::engine_error_keeps_its_own_wording`、
+> `realm::tests::legacy_single_column_device_binding_is_migrated`；REST API 集成 193→194）。新增的两条不是为新功能——
+> 是三条变异暴露出来的**假守卫**：它们各自指向一条请求根本走不到的代码，CI 上有过偶然红、本地却一直是绿的。
+> 变异下限不变（58），但其中 3 条换了靶子。
+>
 > **2026-10-27 v1.8.30 校准**：新增 1 条（`fincore` 183：应收/应付会计能导出、
 > 其余岗位不能，防止为省事把 `Export` 加进会计组），小计 968→**969**。变异下限 56→**58**。
 >

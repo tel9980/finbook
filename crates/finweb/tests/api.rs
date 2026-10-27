@@ -20074,6 +20074,41 @@ async fn carry_forward_twice_explains_it_was_already_carried() {
     );
 }
 
+/// 引擎校验错误不能被套上「导入数据有误」的万能前缀。
+///
+/// `state.rs` 的 `From<FinError>` 曾把**任何**引擎错误都改写成
+/// 「导入数据有误：<原文>」——而记账、结转、结账都不是导入操作。用户看到
+/// 「导入数据有误」会去检查导入的 Excel，其实那一行都没导入过。
+#[tokio::test]
+async fn engine_validation_errors_are_not_labelled_as_import_errors() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 借 1000 / 贷 900：借贷不平，必被引擎拒
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/vouchers",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": 202601, "date": "2026-01-15", "word": "记",
+                "no": 1, "attachments": 0, "memo": "不平",
+                "entries": [
+                    { "line": 1, "account_code": "1001", "summary": "收", "debit": "1000", "credit": "0" },
+                    { "line": 2, "account_code": "6401", "summary": "费", "debit": "0", "credit": "900" }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    let st = resp.status();
+    let b = body_string(resp).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "借贷不平必须被拒：{b}");
+    assert!(
+        !b.contains("导入数据有误"),
+        "记账不是导入操作，不该带「导入数据有误」前缀：{b}"
+    );
+}
+
 /// ⑤ 会计必须能读账套参数（否则看不到「本账套开了审核环节」这个事实）。
 ///
 /// 实测：会计访问 `/api/options` 返回 403，前端 `state.bookOptions` 一直是 null，

@@ -1259,3 +1259,60 @@ pub fn ensure_book_admin(db: &Db, ru: &RealmUser) -> DbResult<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 旧库的「单列 device_id」必须在打开时搬进 realm_user_device。
+    ///
+    /// 不搬的后果**不报任何错**：升级后所有账号的设备绑定静默消失，等于给全员
+    /// 解绑 —— 症状是「谁都能登」，而绑定相关的界面看起来一切正常。
+    /// 这条测试直接构造旧库形态（单列有值、集合表空），再关掉重开。
+    #[test]
+    fn legacy_single_column_device_binding_is_migrated() {
+        let dir = std::env::temp_dir().join(format!("fb-realm-mig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("realm.db");
+
+        let r = RealmDb::open(&path).unwrap();
+        r.create_user(
+            "u1",
+            "用户一",
+            "Init@123456",
+            false,
+            false,
+            &PasswordPolicy::default(),
+        )
+        .unwrap();
+
+        // 把库造成「升级前的样子」：单列有绑定，集合表里没有。
+        {
+            let conn = r.inner.lock().unwrap();
+            conn.execute("DELETE FROM realm_user_device", []).unwrap();
+            conn.execute(
+                "UPDATE realm_user SET device_id = 'dev-legacy' WHERE username = 'u1'",
+                [],
+            )
+            .unwrap();
+        }
+        drop(r);
+
+        let r2 = RealmDb::open(&path).unwrap();
+        // 先看集合表本身：`device_allowed` 在「一台都没绑」时是放行的，
+        // 只看它会把「没搬过来」当成「正常」。
+        assert_eq!(
+            r2.bound_device_count("u1").unwrap(),
+            1,
+            "打开旧库时没把单列 device_id 搬进 realm_user_device —— \
+             升级后全部账号静默解绑，且不报任何错"
+        );
+        assert!(
+            r2.device_allowed("u1", "dev-legacy").unwrap(),
+            "旧库里已有的设备绑定必须在打开时搬进 realm_user_device —— \
+             不搬等于升级后给全部账号静默解绑，且不会报错"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

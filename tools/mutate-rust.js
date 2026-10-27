@@ -103,13 +103,21 @@ const MUT = [
     file: "crates/finweb/src/state.rs",
     from: "        AppError::BadRequest(e.to_string())",
     to: '        AppError::BadRequest(format!("导入数据有误：{e}"))',
-    cmd: API("carry_forward_twice_explains_it_was_already_carried"),
+    // 结转重复那条走的是 handlers 自己拼的 AppError::bad_request，
+    // POST 一张不平的凭证也在 handlers 里就被拦下 —— 两条都不经过 From<FinError>，
+    // 所以改这里它们都看不见 → 一直「放过了」。这条只能直接测转换本身。
+    cmd: ["test", "-p", "finweb", "--lib",
+          "state::tests::engine_error_keeps_its_own_wording"],
   },
   {
-    name: "⑧ 提示改成原来那句「损益发生额均为零」",
-    file: "crates/fincore/src/engine/period_end.rs",
-    from: "        return Err(FinError::msg(\n            \"本期各损益类科目的净发生额均为 0，没有可结转的分录\",\n        ));",
-    to: '        return Err(FinError::msg("本期没有需要结转的损益类科目（损益发生额均为零）"));',
+    name: "⑧ 重复结转不再说明「已结转过」",
+    // 原来改的是引擎里「净发生额均为 0」那句话术 —— 但请求根本走不到那里：
+    // handlers 在调用引擎之前已经查过本期结转凭证并直接返回「已结转过」。
+    // 变异指向一条**不可达的路径**，测试只能靠运气（CI 上偶然红过）。
+    // 改成把守卫的条件关掉，才真正考验测试守不守这件事。
+    file: "crates/finweb/src/handlers.rs",
+    from: "    if !carried.is_empty() && rows.iter().all(|r| r.debit.round2().eq(&r.credit.round2())) {",
+    to: "    if false {",
     cmd: API("carry_forward_twice_explains_it_was_already_carried"),
   },
   {
@@ -164,7 +172,10 @@ const MUT = [
     file: "crates/finweb/src/handlers.rs",
     from: "            .remove_by_username_and_device(&username, &device_id);",
     to: "            .remove_by_username(&username);",
-    cmd: API("platform_device_binding_and_reset"),
+    // 集成测试用的是全新 realm，旧库形态根本不存在 → 搬不搬都看不出来。
+    // 这条要在 realm 自己修：构造「单列有值、集合表空」，重开库必须搬过去。
+    cmd: ["test", "-p", "finweb", "--lib",
+          "realm::tests::legacy_single_column_device_binding_is_migrated"],
   },
   {
     // 上限退回 1 台：第三台就不该被拒了
@@ -186,13 +197,17 @@ const MUT = [
   },
   {
     // 旧库的绑定不迁移过去 → 升级后所有账号静默解绑
+    // 原来的变异是 `let moved: usize = 0; let _ = conn.execute(...)` —— 只丢掉了
+    // 行数，SQL 照样执行，什么都拦不住（这也是它「一直放过了」的原因之一）。
+    // 真要不搬，得让 SELECT 一行都选不出来。
     name: "设备绑定不迁移旧库（旧账号静默解绑）",
     file: "crates/finweb/src/realm.rs",
-    from:
-      "        let moved = conn.execute(\n            \"INSERT OR IGNORE INTO realm_user_device(username, device_id, bound_at, last_seen)",
-    to:
-      "        let moved: usize = 0; let _ = conn.execute(\n            \"INSERT OR IGNORE INTO realm_user_device(username, device_id, bound_at, last_seen)",
-    cmd: API("platform_device_binding_and_reset"),
+    from: "             FROM realm_user WHERE device_id <> ''\",",
+    to: "             FROM realm_user WHERE 1 = 0\",",
+    // 集成测试用的是全新 realm，旧库形态根本不存在 → 搬不搬都看不出来。
+    // 这条要在 realm 自己修：构造「单列有值、集合表空」，重开库必须搬过去。
+    cmd: ["test", "-p", "finweb", "--lib",
+          "realm::tests::legacy_single_column_device_binding_is_migrated"],
   },
   {
     // 出纳签字默认关 → 回到「新建账套一出生就在默认绕过出纳」

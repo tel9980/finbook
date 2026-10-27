@@ -1130,6 +1130,29 @@ pub fn parse_money_checked(s: &str) -> Result<fincore::Money, AppError> {
 
 #[cfg(test)]
 mod tests {
+
+    /// 引擎错误经 `From<FinError>` 转成 HTTP 错误时，必须原样保留引擎的说法。
+    ///
+    /// 这条测的是转换本身：`From<FinError>` 是全局的，任何一处 `?` 都经过它，
+    /// 一旦在这里加上「导入数据有误：」，结转/记账/结账全都会被说成导入错误。
+    /// 历史上真的发生过，而**当时没有任何测试守它**——因为现有 HTTP 路径都在
+    /// 调用引擎之前就自己做了校验，转换这一层根本没被走到。
+    #[test]
+    fn engine_error_keeps_its_own_wording() {
+        let e: AppError = fincore::FinError::msg("科目表缺少「本年利润」科目").into();
+        let body = match e {
+            AppError::BadRequest(m) => m,
+            _ => panic!("引擎校验错误应是 400"),
+        };
+        assert!(
+            !body.contains("导入数据有误"),
+            "记账/结转不是导入操作，不该带「导入数据有误」前缀：{body}"
+        );
+        assert!(
+            body.contains("本年利润"),
+            "引擎的原话必须原样透给用户，否则用户不知道该补哪个科目：{body}"
+        );
+    }
     use super::*;
 
     /// 期间参数：缺失/空白 → 默认值；**存在但解析不了 → 必须 400**。
