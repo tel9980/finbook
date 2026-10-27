@@ -496,6 +496,15 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
     );
     bad++;
   }
+  // check 不链接，但**构建脚本照跑**：bundled 的 C 代码（sqlite 等）要经 cc-rs 调
+  // x86_64-w64-mingw32-gcc 为目标平台编译。删掉 mingw 安装，job 会在 40 秒处报
+  // `failed to find tool "x86_64-w64-mingw32-gcc"`（v1.8.32 第一次跑就是这么红的）。
+  if (/check-windows:/.test(ciSrc) && !/gcc-mingw-w64/.test(ciSrc)) {
+    console.log(
+      "FAIL ci.yml 的 check-windows 没装 mingw-w64 —— cargo check 也要构建脚本为目标平台编 C"
+    );
+    bad++;
+  }
   console.log("Windows 构建分工：push 只 check，tag 才 release（ci.yml / release.yml 一致）");
 }
 
