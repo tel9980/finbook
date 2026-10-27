@@ -25,7 +25,7 @@ const ROUND = (name) => ["test", "-p", "finweb", "--test", "roundtrip", "--", na
 // imports.rs 的测试都在 `mod tests` 里，全路径是 `imports::tests::<name>`
 const FIMPORT = (name) => ["test", "-p", "findb", "--lib", `imports::tests::${name}`];
 // 批量粘贴解析（fincore）：表头按列名取值、停用/上级/备注还原
-const FBATCH = (name) => ["test", "-p", "fincore", "--lib", `batch::aux::tests::${name}`];
+const FBATCH = (name) => ["test", "-p", "fincore", "--lib", `batch::auxiliary::tests::${name}`];
 // v1.8.24 网页版首页首屏：数字全由凭证推出，错一位老板就按错的数做决定
 const HOME = (name) => ["test", "-p", "finweb", "--test", "home_brief", "--", name];
 // v1.8.25 性能优化。优化最阴的失效不是「变慢」，是「变快但算错」——
@@ -263,7 +263,7 @@ const MUT = [
     // 表头按列名取值退回「整行都是表头词才算表头」→ 导出的五列文件粘回来
     // 会把表头行当成一条档案，凭空生成「编码 名称」
     name: "⑭ 导出文件表头又被当成数据",
-    file: "crates/fincore/src/batch/aux.rs",
+    file: "crates/fincore/src/batch/auxiliary.rs",
     from: "            if let Some(m) = header_map(&cols) {",
     to: "            if let Some(m) = header_map(&cols).filter(|_| false) {",
     cmd: FBATCH("导出的五列表头不会被当成数据"),
@@ -272,7 +272,7 @@ const MUT = [
     // 只认全等表头（不认「客户编码」这种带前缀的）→ 粘贴框里自家示例
     // 复制进来就多一条垃圾档案
     name: "⑭ 表头不认类别前缀",
-    file: "crates/fincore/src/batch/aux.rs",
+    file: "crates/fincore/src/batch/auxiliary.rs",
     from: '        } else if c.ends_with("编码") || c.ends_with("代码") || c.ends_with("编号") {',
     to: "        } else if false {",
     cmd: FBATCH("带类别前缀的表头也认得"),

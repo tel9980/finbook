@@ -81,7 +81,7 @@ impl AuxView {
                 .clicked()
                 && ctx.can(Perm::AuxEdit)
             {
-                let tpl = fincore::batch::aux::template(kind);
+                let tpl = fincore::batch::auxiliary::template(kind);
                 let sheets = crate::views::export::batch_template_sheets(
                     &format!("{}档案", kind.label()),
                     &tpl,
@@ -428,7 +428,7 @@ impl AuxView {
             if e.code.trim().is_empty() {
                 // 留空自动编号：与批量粘贴同一规则（库里最大号 +1）
                 let all: Vec<String> = findb::auxs::codes(ctx.db(), e.kind).unwrap_or_default();
-                e.code = fincore::batch::aux::next_code(e.kind, &all);
+                e.code = fincore::batch::auxiliary::next_code(e.kind, &all);
                 self.editing = Some(e.clone());
             }
             let existing: Vec<String> = self

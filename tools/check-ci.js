@@ -660,6 +660,48 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
   console.log("发版路径：release.yml 的 Windows job 与 ci.yml 同一套 apt 加固 + 限时");
 }
 
+// ---- 2.48b Windows 保留文件名：仓库在 Windows 上能不能 clone -----------------
+//
+// v1.8.40 把 Windows check 换到 windows-latest 之后，job 11 秒就红了，日志一句：
+//   error: invalid path 'crates/fincore/src/batch/aux.rs'
+// `aux` 是 Windows 的保留设备名（CON/PRN/AUX/NUL/COM1-9/LPT1-9），git 在 Windows 上
+// 默认 `core.protectNTFS=true` 会**拒绝检出**这样的路径。
+//
+// 也就是说：这个仓库在 Windows 上根本 clone 不下来 —— 而我们的用户就是 Windows 用户，
+// 他们下的是发行包；但任何想从源码在 Windows 上构建的人，第一步就卡住。
+// 这种错在 Linux 上永远不会暴露，只有"换个平台跑一次"才会撞出来。
+{
+  const files = String(
+    execFileSync("git", ["ls-files"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+  )
+    .split("\n")
+    .filter(Boolean);
+  const reserve = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+  const bad = [];
+  for (const f of files) {
+    for (const part of f.split("/")) {
+      const base = part.replace(/\.[^.]*$/, "");
+      if (reserve.test(base)) {
+        bad.push([f, `${part} 的主干名 \`${base}\` 是 Windows 保留设备名`]);
+        break;
+      }
+      if (/[ .]$/.test(part)) {
+        bad.push([f, `${part} 以空格/点结尾（Windows 会静默去掉）`]);
+        break;
+      }
+    }
+  }
+  for (const [f, why] of bad) {
+    console.log(
+      `FAIL ${f} —— ${why}，Windows 上 clone / checkout 会直接失败。` +
+        "\n     改个名（例如 aux.rs → auxiliary.rs），别指望 core.protectNTFS=false 绕过："
+        + "\n     那只是把问题推给每个克隆仓库的人。"
+    );
+    bad++;
+  }
+  console.log("Windows 保留名：受版本控制的路径都能在 Windows 上检出");
+}
+
 // ---- 2.49 发版门禁不许重复跑一遍 CI 已经跑过的东西 -------------------------
 //
 // v1.8.38 实测：Release 21.2 分钟里 **15.8 分钟**花在 verify 的

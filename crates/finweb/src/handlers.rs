@@ -16126,7 +16126,7 @@ struct AuxBatchRowView {
 
 /// 解析并返回预览。不写库 —— 前端把预览给用户看，确认后再调 PUT 导入。
 ///
-/// 解析逻辑复用 `fincore::batch::aux`，与桌面端**同一份代码**：两端解析结果
+/// 解析逻辑复用 `fincore::batch::auxiliary`，与桌面端**同一份代码**：两端解析结果
 /// 必须一致，否则用户会发现「桌面上能粘的，网页上粘不了」。
 async fn parse_aux_batch(
     State(state): State<Arc<WebState>>,
@@ -16137,7 +16137,7 @@ async fn parse_aux_batch(
     let db = &user.db;
     // 库里已有的编码 —— 用来标「这个编码已经有了」，避免用户以为导进去了
     let existing = auxs::codes(&db, req.kind)?;
-    let parsed = fincore::batch::aux::parse(&req.text, req.kind, &existing);
+    let parsed = fincore::batch::auxiliary::parse(&req.text, req.kind, &existing);
     let rows: Vec<AuxBatchRowView> = parsed
         .rows
         .iter()

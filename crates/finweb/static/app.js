@@ -11811,7 +11811,7 @@ function renderAux(main, rows, kind) {
 
 /// 辅助档案的批量粘贴窗口。
 ///
-/// 与桌面端 `views/aux_batch.rs` 同一套解析（在后端 `fincore::batch::aux`），
+/// 与桌面端 `views/aux_batch.rs` 同一套解析（在后端 `fincore::batch::auxiliary`），
 /// 两边的写法支持必须一致 —— 用户会发现「桌面上能粘的，网页上粘不了」。
 function openAuxBatch(main, kind) {
   const label = AUX_KINDS.find((k) => k.code === kind).label;

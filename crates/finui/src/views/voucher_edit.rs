@@ -1530,7 +1530,7 @@ impl VoucherEdit {
                 ctx.error("名称不能为空");
             } else {
                 let existing = findb::auxs::codes(ctx.db(), k).unwrap_or_default();
-                let code = fincore::batch::aux::next_code(k, &existing);
+                let code = fincore::batch::auxiliary::next_code(k, &existing);
                 let e = fincore::AuxEntity::new(k, code.clone(), name);
                 match findb::auxs::insert(ctx.db(), &e) {
                     Ok(_) => {

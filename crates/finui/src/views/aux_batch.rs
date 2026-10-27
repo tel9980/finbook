@@ -1,4 +1,4 @@
-//! 辅助档案批量粘贴的**界面部分**（解析逻辑在 `fincore::batch::aux`）。
+//! 辅助档案批量粘贴的**界面部分**（解析逻辑在 `fincore::batch::auxiliary`）。
 //!
 //! 为什么解析不在这个文件里：Web 端也要同一套解析。若各写一份，桌面端支持了
 //! 某种写法而 Web 没支持，用户会得出「这软件有的地方能用有的不能用」。
@@ -10,7 +10,7 @@
 use egui::RichText;
 use fincore::AuxKind;
 
-pub use fincore::batch::aux::{
+pub use fincore::batch::auxiliary::{
     code_prefix, parse, template, to_entities, Parsed, ParsedRow, SkipReason,
 };
 
