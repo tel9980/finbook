@@ -580,6 +580,46 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
   console.log("e2e 浏览器安装：只装 chromium、不带 --with-deps（apt 曾占 9.7 分钟）");
 }
 
+// ---- 2.48 release.yml 的 Windows job 与 ci.yml 同一套加固 -------------------
+//
+// v1.8.38 打 tag 之后 Release 挂了 **45 分钟还没完**，卡在 `Desktop (Windows x64)`。
+// 原因和 v1.8.37 那次 ci.yml 一模一样：`sudo apt-get update && sudo apt-get install -y`
+// 三条命令共享一个不限时的预算，apt 一卡就吃满 job 的默认 6 小时。
+// 当时只加固了 ci.yml（那边只是 `cargo check`），**真正编 Windows 的那条路没动** ——
+// 于是「CI 绿了」并不代表发版不会卡。
+//
+// 这一项盯着两件事，改一处必须改两处：
+//   1. mingw 安装必须带 `timeout` / `Acquire::Retries` / `--no-install-recommends`
+//   2. desktop-windows job 必须有 `timeout-minutes`
+{
+  const relSrc = fs.readFileSync(".github/workflows/release.yml", "utf8");
+  const needs = [
+    ["--no-install-recommends gcc-mingw-w64-x86-64", "`--no-install-recommends`（recommends 会拖进 g++/libstdc++ 一大串）"],
+    ["Acquire::ForceIPv4=true", "`Acquire::ForceIPv4=true`（runners 的 IPv6 常常黑洞，apt 会干等）"],
+    ["Acquire::Retries=5", "apt 自己的重试"],
+    ["timeout 240 apt-get", "`timeout 240` 包住 apt-get（卡住时能往下走，而不是等满整个 job）"],
+  ];
+  for (const [needle, why] of needs) {
+    if (!relSrc.includes(needle)) {
+      console.log(
+        `FAIL release.yml 的 Windows 构建少了 ${why} —— ` +
+          "\n     v1.8.38 就是因为这条没加固，打 tag 之后 Release 卡了 45 分钟。" +
+          "\n     ci.yml 与 release.yml 是两条独立的路，加固要一起做。"
+      );
+      bad++;
+    }
+  }
+  const winBlk = relSrc.split(/\n  (?=[a-z][a-z-]*:\n)/).find((b) => /^desktop-windows:/.test(b)) || "";
+  if (!/timeout-minutes:/.test(winBlk)) {
+    console.log(
+      "FAIL release.yml 的 desktop-windows job 没有 `timeout-minutes` —— " +
+        "\n     不设就是 GitHub 默认 6 小时，apt 一卡就变成「打 tag 之后干等一晚上」。"
+    );
+    bad++;
+  }
+  console.log("发版路径：release.yml 的 Windows job 与 ci.yml 同一套 apt 加固 + 限时");
+}
+
 // ---- 2.5 测试夹具不许靠继承内控闸门的默认值 --------------------------------
 //
 // 扫**每一个**测试代码里的 `BookOptions` 字面量，要求显式写出 `enable_audit` 与

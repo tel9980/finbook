@@ -115,15 +115,37 @@ jobs:
     name: Desktop (Windows x64)
     needs: verify
     runs-on: ubuntu-latest
+    # 这个 job 是整条发版流水线里最长的一段（交叉编译 GUI 约 12~15 分钟）。
+    # 不设限时的话，apt 一卡就是 6 小时默认值 —— v1.8.38 那次 tag 之后
+    # Release 挂了 45 分钟还没完，正是这一句没加固的 `apt-get update` 造成的。
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@v2
-      - name: 安装 mingw-w64
-        run: sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: 安装 mingw-w64（与 ci.yml 同一套加固，改一处要改两处）
+        timeout-minutes: 12
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          # 一行写完：check-ci 会逐行检查引号是否成对（跨行续写的引号串会被判成「引号不成对」）。
+          OPT="-o Acquire::Retries=5 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::ForceIPv4=true"
+          for i in 1 2 3; do
+            echo "=== 第 ${i} 次 ==="
+            sudo timeout 240 apt-get $OPT update || echo "update 失败或超时，继续试 install（本地索引可能还是可用的）"
+            if sudo timeout 300 apt-get $OPT install -y --no-install-recommends gcc-mingw-w64-x86-64; then
+              echo "mingw 装好了"
+              x86_64-w64-mingw32-gcc --version | head -1
+              exit 0
+            fi
+            echo "第 ${i} 次安装失败，20 秒后重试"
+            sleep 20
+          done
+          echo "::error::mingw-w64 装不上（apt 三次都失败）——这是 runners 的 apt/mirror 问题，不是代码问题"
+          exit 1
       - name: build desktop
+        timeout-minutes: 30
         run: cargo build --release --locked --target x86_64-pc-windows-gnu -p finbook
       - name: 生成示例账套
         run: |
