@@ -269,7 +269,10 @@ jobs:
   # ── Web 端到端（Playwright：真实浏览器 + 真实 finweb 服务） ───────────
   e2e:
     name: Web E2E (Playwright)
-    needs: test
+    # **不写 `needs: test`**：这个 job 自己 `cargo build -p finweb`，不消费 test 的
+    # 任何产物。挂上去的后果是把两个 job 串成一条链 —— test 6 分钟绿了它才开始，
+    # 于是壁钟 = test + e2e（实测 5.9 + 11.2 = 17.1 分钟），其余 12 个 job 早就跑完了
+    # 还在转圈。去掉之后两者并行，红的那一方照样让整个 run 红。
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -301,10 +304,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      # chromium 一百多 MB，每次重下就是几分钟。key 用 lockfile 哈希：Playwright
+      # 版本一变（浏览器版本跟着变）自动换缓存，不会拿旧浏览器跑新测试。
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-chromium-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
       - name: 安装 Playwright 与浏览器
         working-directory: e2e
         run: |
-          npm install
+          npm ci
           npx playwright install --with-deps chromium
       - name: 运行 E2E
         working-directory: e2e

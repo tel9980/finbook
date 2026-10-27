@@ -508,6 +508,36 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
   console.log("Windows 构建分工：push 只 check，tag 才 release（ci.yml / release.yml 一致）");
 }
 
+// ---- 2.46 CI 壁钟 = 最长的那条链，不是最慢的那个 job ------------------------
+//
+// v1.8.33 把 e2e 从「test 之后」的串行链上摘下来，并缓存了 Playwright 浏览器。
+// 这两件都很容易被人「顺手恢复原样」：把 `needs: test` 加回去（看着更像有依赖
+// 顺序），或者删掉缓存（省一行 yml）。恢复了不会报错，只会让每次 push 多等 6 分钟
+// —— 这种退化没人会注意到，所以让脚本盯着。
+{
+  const ciSrc = fs.readFileSync(".github/workflows/ci.yml", "utf8");
+  const e2eBlock = (ciSrc.match(/\n  e2e:\n([\s\S]*?)\n  [a-z-]+:\n/) || [])[1] || "";
+  if (!e2eBlock) {
+    console.log("FAIL ci.yml 里找不到 e2e job —— 检查器本身过期了");
+    bad++;
+  } else {
+    if (/^\s+needs:\s*test\s*$/m.test(e2eBlock)) {
+      console.log(
+        "FAIL e2e 又挂回 `needs: test` 了 —— 它自己 cargo build finweb，不消费 test 产物，" +
+          "挂上去只是把两个 job 串成一条链（壁钟 +6 分钟）"
+      );
+      bad++;
+    }
+    if (!/ms-playwright/.test(e2eBlock)) {
+      console.log(
+        "FAIL e2e 不再缓存 Playwright 浏览器 —— chromium 每次重下一百多 MB（壁钟 +3~5 分钟）"
+      );
+      bad++;
+    }
+  }
+  console.log("CI 关键路径：e2e 与 test 并行、浏览器走缓存");
+}
+
 // ---- 2.5 测试夹具不许靠继承内控闸门的默认值 --------------------------------
 //
 // 扫**每一个**测试代码里的 `BookOptions` 字面量，要求显式写出 `enable_audit` 与

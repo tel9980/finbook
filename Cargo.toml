@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/fincore", "crates/findb", "crates/finui", "crates/finbook", "crates/finweb"]
 
 [workspace.package]
-version = "1.8.32"
+version = "1.8.33"
 edition = "2021"
 license = "MIT"
 authors = ["FinBook"]
