@@ -561,7 +561,44 @@ if (FILTER && !MUT.some((m) => m.name.includes(FILTER))) {
   console.error(`没有名字含「${FILTER}」的变异`);
   process.exit(2);
 }
-const RUN = FILTER ? MUT.filter((m) => m.name.includes(FILTER)) : MUT;
+// 分片：`node tools/mutate-rust.js --shard 2/4`。
+// 58 条变异串行要跑近 40 分钟，发一次版等一次；切成 4 片并行能压到 10 分钟出头。
+// 分片按**下标取模**切，保证每条恰好被一个分片跑到，不会漏也不会重。
+// 环境变量 MUT_SHARD 也认（CI 里写环境变量比拼命令行更不容易被引号坑）。
+const shardSpec = (() => {
+  const i = process.argv.indexOf("--shard");
+  if (i > 0 && process.argv[i + 1]) return process.argv[i + 1];
+  return process.env.MUT_SHARD || "";
+})();
+const SHARD = (() => {
+  if (!shardSpec) return null;
+  const m = /^(\d+)\/(\d+)$/.exec(shardSpec.trim());
+  if (!m) {
+    console.error(`--shard 的格式应为 i/N（如 2/4），收到「${shardSpec}」`);
+    process.exit(2);
+  }
+  const idx = Number(m[1]);
+  const n = Number(m[2]);
+  if (idx < 1 || n < 1 || idx > n) {
+    console.error(`--shard 越界：${shardSpec}（i 必须落在 1..N）`);
+    process.exit(2);
+  }
+  return { idx, n };
+})();
+
+const PICKED = FILTER ? MUT.filter((m) => m.name.includes(FILTER)) : MUT;
+const RUN = SHARD
+  ? PICKED.filter((_, i) => i % SHARD.n === SHARD.idx - 1)
+  : PICKED;
+if (RUN.length === 0) {
+  // 空分片静默退出会被读成「全过了」，这比报错危险得多
+  console.error(`本次没有变异可跑（过滤「${FILTER}」，分片 ${shardSpec || "无"}）—— 分片参数写错了？`);
+  process.exit(2);
+}
+// --list 的输出必须是纯 JSON（check-ci 要 JSON.parse），别混进这行标题
+if (SHARD && !process.argv.includes("--list")) {
+  console.log(`分片 ${SHARD.idx}/${SHARD.n}：本次跑 ${RUN.length} 条（合计 ${PICKED.length} 条）\n`);
+}
 const backups = new Map();
 for (const m of RUN) if (!backups.has(m.file)) backups.set(m.file, fs.readFileSync(m.file, "utf8"));
 
@@ -571,7 +608,9 @@ for (const m of RUN) if (!backups.has(m.file)) backups.set(m.file, fs.readFileSy
 // 为什么不让 check-ci.js 自己解析本文件：它得把 JS 字符串字面量再解一遍转义，
 // 两层转义必错。让脚本自己导出真值，别在外部猜。
 if (process.argv.includes("--list")) {
-  process.stdout.write(JSON.stringify({ cases: MUT }, null, 1));
+  // 带上分片时输出该分片的清单：这样「分片是否覆盖全、是否互斥」可以被机械验证，
+  // 而不是靠肉眼看取模对不对。
+  process.stdout.write(JSON.stringify({ cases: RUN }, null, 1));
   process.exit(0);
 }
 

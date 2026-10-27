@@ -191,6 +191,34 @@ try {
       console.log("FAIL mutation job 没有执行 node tools/mutate-rust.js");
       bad++;
     }
+
+    // 分片自检：matrix 的片数列表必须与 `--shard i/N` 里的分母 N 一致。
+    // 这两处写在不同行、由不同人改，只改一处就会让某几条变异**静默不跑**
+    // （分母改大 → 没有分片覆盖那些下标；改小 → 有的下标永远不会被取到），
+    // 而 CI 依旧是绿的。这正是本仓库最怕的失效模式：看着在守，实际没守。
+    const shards = (mutation.strategy &&
+      mutation.strategy.matrix &&
+      mutation.strategy.matrix.shard) || [];
+    const mShard = /--shard\s+\$\{\{\s*matrix\.shard\s*\}\}\/(\d+)/.exec(mutationRuns);
+    if (shards.length === 0) {
+      console.log("FAIL mutation job 没有 matrix.shard —— 分片被删掉了？（58 条串行要 40 分钟）");
+      bad++;
+    } else if (!mShard) {
+      console.log("FAIL mutation job 的 run 里没有 `--shard ${{ matrix.shard }}/N`");
+      bad++;
+    } else {
+      const denom = Number(mShard[1]);
+      const want = Array.from({ length: denom }, (_, i) => i + 1);
+      if (shards.length !== denom) {
+        console.log(
+          `FAIL 分片数不一致：matrix.shard 有 ${shards.length} 片（${shards.join(",")}），但 run 里写的是 /${denom}`
+        );
+        bad++;
+      } else if (shards.join(",") !== want.join(",")) {
+        console.log(`FAIL matrix.shard 应为 1..${denom}，实际是 ${shards.join(",")}`);
+        bad++;
+      }
+    }
   }
   console.log(`YAML 解析通过（${parsed.length} 个 job）：${parsed.join(", ")}`);
 } catch (e) {
@@ -366,6 +394,23 @@ for (const [from, , name] of jsList.cases) {
 console.log(`mutate-check：${jsList.cases.length} 条变异，全部仍能在 app.js 里定位`);
 
 const rustList = listed("tools/mutate-rust.js");
+// 分片数不能超过变异条数，否则必然出现空分片；而空分片在 mutate-rust.js 里是
+// exit(2)（不静默通过），所以这里提前拦一道，省一次跑起来才发现。
+const shardTotal = (() => {
+  try {
+    const doc = require("js-yaml").load(fs.readFileSync(".github/workflows/ci.yml", "utf8"));
+    const st = doc && doc.jobs && doc.jobs.mutation && doc.jobs.mutation.strategy;
+    return (st && st.matrix && st.matrix.shard) || [];
+  } catch (e) {
+    return [];
+  }
+})();
+if (shardTotal.length > rustList.cases.length) {
+  console.log(
+    `FAIL 变异分了 ${shardTotal.length} 片，但只有 ${rustList.cases.length} 条 —— 会出现空分片`
+  );
+  bad++;
+}
 if (rustList.cases.length < MIN_RUST_MUTATIONS) {
   console.log(
     `FAIL mutate-rust 只剩 ${rustList.cases.length} 条变异（下限 ${MIN_RUST_MUTATIONS}）—— ` +
