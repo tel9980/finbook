@@ -157,6 +157,23 @@ async fn settle_aging_export_as_xlsx() {
         disp.contains("2202") || disp.contains("%E5%BA%94%E4%BB%98"),
         "导出文件名要带上科目/往来类型，否则两个文件分不清：{disp}"
     );
+
+    // 导出是数据外带，必须留痕：谁把多少家的往来余额带走了，事后查得到。
+    let logs = handlers::router(state.clone())
+        .oneshot(authed_get("/api/logs?limit=20", &sid))
+        .await
+        .unwrap();
+    assert_eq!(logs.status(), StatusCode::OK);
+    let text = String::from_utf8_lossy(
+        &axum::body::to_bytes(logs.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap(),
+    )
+    .to_string();
+    assert!(
+        text.contains("导出往来账龄"),
+        "账龄导出必须写操作日志（应收会计也有导出权了）：{text}"
+    );
 }
 
 /// 未登录一律 401，不能因为「反正是只读导出」就放行

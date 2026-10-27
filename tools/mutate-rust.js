@@ -14,7 +14,9 @@ const fs = require("fs");
 const { execFileSync } = require("child_process");
 
 const API = (name) => ["test", "-p", "finweb", "--test", "api", "--", name];
-const CORE = (name) => ["test", "-p", "fincore", "--lib", "user::tests::"];
+// 注意：这里曾经写成固定的 "user::tests::"（name 参数被丢掉），效果是「跑所有 user 测试」。
+// 那样一条变异被别的用例顺手拦住，也会显示 PASS，看不出目标用例到底守没守住。
+const CORE = (name) => ["test", "-p", "fincore", "--lib", `user::tests::${name}`];
 // v1.8.21「导入导出闭环」的三个新 target。这类功能最典型的失效是
 // 「界面点得动、文件也下来了，但数据其实没进去/没出来」，所以每条都要有变异守着。
 const XLSX = (name) => ["test", "-p", "finweb", "--test", "export_xlsx", "--", name];
@@ -136,6 +138,24 @@ const MUT = [
     to:
       "                VoucherPost,\n                VoucherUnpost,\n                CashierSign,\n                AccountEdit,\n                AuxEdit,\n                Opening,",
     cmd: CORE("every_role_passes_duty_separation"),
+  },
+  {
+    // 应收/应付会计没有导出权限 → 账龄表只能截图发给客户
+    name: "㉓ 应收会计失去导出权（账龄表只能截图发客户）",
+    file: "crates/fincore/src/user.rs",
+    from: "            Role::Receivables => &[VoucherNew, AuxEdit, Report, FinReport, Export],",
+    to: "            Role::Receivables => &[VoucherNew, AuxEdit, Report, FinReport],",
+    cmd: CORE("ar_ap_clerks_can_export_but_others_cannot"),
+  },
+  {
+    // 反向：为了省事把导出开给所有会计 = 数据外带通道全打开
+    name: "㉓ 导出权限顺手开给会计（数据外带通道全开）",
+    file: "crates/fincore/src/user.rs",
+    // 必须改**真的那个** Accountant 分支：先前插了一条重复 arm，匹配取第一条，
+    // 变异等于没生效（测试照过，被误读成「放过了」）。
+    from: "            Role::Accountant => &[\n                VoucherNew,\n                VoucherEdit,",
+    to: "            Role::Accountant => &[\n                Export,\n                VoucherNew,\n                VoucherEdit,",
+    cmd: CORE("ar_ap_clerks_can_export_but_others_cannot"),
   },
   {
     // 设备绑定 2 台：登录时若又清该账号全部会话，第 2 台会把第 1 台踢下线，

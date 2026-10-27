@@ -194,7 +194,10 @@ impl Role {
         use Perm::*;
         // 备份（Backup）与导出（Export）是数据外带通道：
         // - Backup 仅限系统管理员：普通账户拿不到账套文件副本，防止数据转移
-        // - Export 仅限管理员与财务主管：普通账户只能打印预览（纸面留痕可控）
+        // - Export 仅限管理员、财务主管、应收/应付会计：
+        //   应收应付会计的活就是「把账龄表发给客户」「把应付清单发给老板」，
+        //   不给导出他们就只能截图 —— 于是绕过审计留痕，比开权限更糟。
+        //   其余岗位（会计/出纳/仓管/只读…）仍然只能打印预览（纸面留痕可控）。
         match self {
             Role::Admin => Perm::all(),
             Role::Supervisor => &[
@@ -267,9 +270,9 @@ impl Role {
             Role::Auditor => &[VoucherAudit, VoucherUnaudit, Report, FinReport],
             Role::OrderClerk => &[OrderOps, AuxEdit, Report, PriceView, PriceEdit],
             Role::Keeper => &[Warehouse, Report],
-            Role::Receivables => &[VoucherNew, AuxEdit, Report, FinReport],
+            Role::Receivables => &[VoucherNew, AuxEdit, Report, FinReport, Export],
             Role::Payables => &[
-                OrderOps, VoucherNew, AuxEdit, Report, FinReport, PriceView, PriceEdit,
+                OrderOps, VoucherNew, AuxEdit, Report, FinReport, PriceView, PriceEdit, Export,
             ],
             Role::CostAccountant => &[CostOps, VoucherNew, Report, FinReport],
             Role::Production => &[ProductionOps, Report],
@@ -767,6 +770,42 @@ impl AuditLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 应收/应付会计必须能导出 —— 他们的日常活就是「把账龄表发给客户」
+    /// 「把应付清单发给老板」。以前这两个岗位没有 `Export`，点导出直接 403，
+    /// 于是真正的操作变成截图，而截图既不进日志也不可对账。
+    ///
+    /// 同时钉住反向：会计、出纳、仓管、只读**不能**导出，别为了省事把 Export
+    /// 加进 `Role::Accountant` —— 那等于给所有人开了数据外带通道。
+    #[test]
+    fn ar_ap_clerks_can_export_but_others_cannot() {
+        for r in [Role::Receivables, Role::Payables] {
+            assert!(
+                r.perms().contains(&Perm::Export),
+                "{} 应当能导出（否则账龄表只能截图发给客户）",
+                r.label()
+            );
+        }
+        for r in [
+            Role::Accountant,
+            Role::Cashier,
+            Role::Auditor,
+            Role::OrderClerk,
+            Role::Keeper,
+            Role::CostAccountant,
+            Role::Production,
+            Role::Viewer,
+        ] {
+            assert!(
+                !r.perms().contains(&Perm::Export),
+                "{} 不应拥有导出权限（数据外带通道仅限管理员、财务主管、应收/应付会计）",
+                r.label()
+            );
+        }
+        // 管理员与财务主管一直是有的，别被上面的循环改动带走
+        assert!(Role::Admin.perms().contains(&Perm::Export));
+        assert!(Role::Supervisor.perms().contains(&Perm::Export));
+    }
 
     #[test]
     fn password_roundtrip() {

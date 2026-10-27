@@ -14171,6 +14171,14 @@ async fn export_settle_aging_xlsx(
     let em = vec![rows.len() - 1];
     sheet.rows = rows;
     sheet = sheet.with_emphasis(em);
+    // 导出是数据外带：应收/应付会计现在也有这个权限了，所以要留痕 ——
+    // 谁在什么时候把多少家的往来余额带出去，事后要查得到。
+    db.log(
+        user.username(),
+        "导出",
+        "导出往来账龄",
+        &format!("{} 至 {} · 科目 {} · {} 行", upto.label(), as_of, account, lines.len()),
+    )?;
     let fname = format!("往来账龄_{}_{}.xlsx", account, as_of.format("%Y%m%d"));
     build_xlsx(&[sheet], &fname, "往来账龄")
 }
