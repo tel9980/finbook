@@ -345,9 +345,12 @@ cargo test --workspace
 | **Desktop (Windows x64)**：真正的 release 交叉编译 + 打包 | **仅 tag**（`release.yml`） | 打包产物只有发版才有人要 |
 | **Web E2E (Playwright)**：chromium 走 `actions/cache`，`npm ci` | push + PR | 但**不写 `needs: test`** —— 它自己 build finweb，挂上去只是把两个 job 串成一条链（壁钟 +6 分钟） |
 
-另外一条判断标准（v1.8.33 定）：**CI 壁钟应当接近单个最慢 job 的耗时**。如果壁钟
-明显大于它，一定是 `needs` 把不该串的 job 串起来了。`tools/check-ci.js` 第 2.46 项
-盯着 e2e 这条链（加回 `needs: test`、或删掉浏览器缓存，都报红）。
+另外一条判断标准（v1.8.33 定）：**CI 壁钟应当等于单个最慢 job 的耗时**。如果壁钟
+明显大于它，一定是 `needs` 把不该串的 job 串起来了。
+
+`tools/check-ci.js` 第 2.46 项盯这件事，规则是通用的：**任何 job 声明了
+`needs: test`，就必须有 `actions/download-artifact` 步骤** —— 不消费产物就没有
+排队的理由。另外还盯着 e2e 的浏览器缓存（删掉报红）。
 
 这条分界是 v1.8.32 定的：原来 push 阶段有一个完整的 Windows release 交叉编译，
 **单它一个 26.5 分钟**，CPU 时间比其余所有 job 加起来还多，而它的产物没人用

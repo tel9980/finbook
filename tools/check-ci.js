@@ -535,7 +535,21 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
       bad++;
     }
   }
-  console.log("CI 关键路径：e2e 与 test 并行、浏览器走缓存");
+  // 通用规则：`needs: test` 只有一个正当理由 —— 要下 test 上传的产物。
+  // 不用产物却排队等它，就是把并行改成了串行。e2e 与 docker 都是这么白等过的。
+  const jobBlocks = ciSrc.split(/\n  (?=[a-z][a-z-]*:\n)/).slice(1);
+  for (const blk of jobBlocks) {
+    const name = (blk.match(/^([a-z][a-z-]*):/) || [])[1];
+    if (!name) continue;
+    if (/^\s+needs:\s*test\s*$/m.test(blk) && !/download-artifact/.test(blk)) {
+      console.log(
+        `FAIL ci.yml 的 ${name} 排了 \`needs: test\` 却不下载任何产物 —— ` +
+          "不消费产物的 job 应当与 Test 并行（否则壁钟 = test + 它自己）"
+      );
+      bad++;
+    }
+  }
+  console.log("CI 关键路径：需要 test 产物的才排队，其余并行；浏览器走缓存");
 }
 
 // ---- 2.5 测试夹具不许靠继承内控闸门的默认值 --------------------------------

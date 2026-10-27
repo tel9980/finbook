@@ -141,7 +141,11 @@ jobs:
   # ── Docker 镜像烟雾测试（防止预取层空占位产物被打进镜像） ────────────
   docker:
     name: Docker image smoke test
-    needs: test
+    # 同样**不写 `needs: test`**：这个 job 在镜像里自己 `cargo build --release`
+    # （Dockerfile 多阶段），不消费 test 的任何产物。挂上去的后果与 e2e 完全一样 ——
+    # 等 Test 绿了才开始（实测壁钟 11.2 分钟里，最后 3.7 分钟全是它在跑，而它本来
+    # 可以和 Test 同时跑）。它是**最后一个**被摘下来的，因为它的耗时取决于 Docker
+    # 层缓存命中：命中时 0.3 分钟，未命中时 3.7 分钟 —— 只有看时间线才看得出来。
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
