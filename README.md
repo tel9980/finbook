@@ -319,6 +319,46 @@
 
 ---
 
+## 7.1 本机构建：日常跑 release，别让 debug 把磁盘吃掉
+
+实测同一个仓库（2026-10-27，本机）：
+
+| 目录 | 大小 | 说明 |
+|------|------|------|
+| `target/debug`（连续跑了一周测试之后） | **45 GB** | `incremental` 15 GB、`deps` 27 GB |
+| `target/debug`（`cargo clean --profile dev` 之后重新编译一次） | 8.7 GB | 干净状态的基线 |
+| `target/release` | 543 MB | 与干净 debug 差 16 倍，与累积 debug 差 80 倍 |
+
+也就是说：**debug 产物会随「改代码 → 跑测试」的次数一直涨**（每次改动都往
+`deps/` 里堆一份新的 rlib、往 `incremental/` 里堆一版中间态），涨到 45 GB 时
+里面大部分是早就没用的旧版本。清一次就回到 8.7 GB。
+
+debug 产物大不是「编译选项多」，是 `cargo` 为了增量编译给**每个 crate 的每个 codegen
+单元**存了一份带完整调试信息的中间产物；`--release` 默认 `incremental = false`，中间态
+用完就扔。
+
+所以：
+
+```bash
+# 日常启动（桌面 / 网页服务）都用 release，别用 cargo run 裸跑
+cargo run --release -p finbook        # 桌面版
+cargo run --release -p finweb         # 网页版
+
+# 磁盘被 debug 吃掉之后，只清 dev profile（release 产物保留）
+cargo clean --profile dev             # 实测回收 47.2 GiB
+```
+
+三点补充，免得走弯路：
+
+- **`cargo test` 一定用 debug**（dev profile）。测试要的是「改一行、十几秒出结果」，
+  用 release 跑测试会让反馈周期变成几分钟。所以测试留下的 debug 产物是**正常成本**，
+  定期 `cargo clean --profile dev` 就是。
+- **不要用 `--release` 跑测试**去换磁盘：`cargo test --release` 同样会生成一套 release
+  测试产物，两份加起来更大。
+- **CI 上没有这个问题**：每个 job 都是干净环境，`Swatinem/rust-cache` 只缓存依赖。
+
+---
+
 ## 8. 测试与质量
 
 ```bash

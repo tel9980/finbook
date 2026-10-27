@@ -552,6 +552,34 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
   console.log("CI 关键路径：需要 test 产物的才排队，其余并行；浏览器走缓存");
 }
 
+// ---- 2.47 e2e 装浏览器不许带 --with-deps --------------------------------
+//
+// v1.8.36 那次 CI 的 E2E job 花了 15.2 分钟，其中 **9.7 分钟是 apt**：
+//   npm ci                                    1 秒
+//   npx playwright install --with-deps chromium  ← 浏览器命中缓存，时间全在 apt
+//   npx playwright test                       3.8 分钟
+// 分不清的时候容易怪「浏览器下载慢」，其实缓存是命中的（日志里有
+// `Cache hit occurred on the primary key pw-chromium-…`）。这一项盯着那个尾巴。
+{
+  const ciSrc = fs.readFileSync(".github/workflows/ci.yml", "utf8");
+  if (/playwright\s+install\s+--with-deps/.test(ciSrc)) {
+    console.log(
+      "FAIL ci.yml 的 e2e 又用 `playwright install --with-deps` 了 —— 那一步实测 9.7 分钟，" +
+        "\n     且时间全花在 apt 而非浏览器（缓存命中时 install 本来就是空转）。" +
+        "\n     装库缺失时 playwright 会直接报错变红，那是看得见的失败，不用每天先烧 10 分钟。"
+    );
+    bad++;
+  }
+  if (!/playwright\s+install\s+chromium/.test(ciSrc)) {
+    console.log(
+      "FAIL ci.yml 的 e2e 不再装 chromium 了 —— 缓存未命中时（换了 Playwright 版本）" +
+        "\n     job 会因为找不到浏览器直接失败，看起来像测试写错了"
+    );
+    bad++;
+  }
+  console.log("e2e 浏览器安装：只装 chromium、不带 --with-deps（apt 曾占 9.7 分钟）");
+}
+
 // ---- 2.5 测试夹具不许靠继承内控闸门的默认值 --------------------------------
 //
 // 扫**每一个**测试代码里的 `BookOptions` 字面量，要求显式写出 `enable_audit` 与

@@ -338,11 +338,18 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: pw-chromium-${{ runner.os }}-${{ hashFiles('e2e/package-lock.json') }}
+      # **不要加 `--with-deps`**：浏览器已经在缓存里（命中时 `install` 是空转），
+      # 剩下的只有 `--with-deps` 触发的那次 apt。实测（v1.8.36 那次 CI）：
+      # apt 从 09:28:26 跑到 09:38:09 —— **9.7 分钟**，整个 E2E job 15.2 分钟里的三分之二。
+      # ubuntu-latest 镜像本身已带 chromium 需要的那批库（日志里 libnss3/libglib2.0 全是
+      # "is already the newest version"），缺的只是字体与 xvfb 一类，运行时不依赖。
+      # 如果哪天真缺库，症状是 playwright 启动浏览器直接报 missing library 并让 job 变红 ——
+      # 那是**看得见**的失败，比每天先烧 10 分钟 apt 好。
       - name: 安装 Playwright 与浏览器
         working-directory: e2e
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
       - name: 运行 E2E
         working-directory: e2e
         env:
