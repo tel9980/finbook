@@ -262,62 +262,28 @@ jobs:
   # 装它只多 30~40 秒，比装不上的排查便宜得多。
   check-windows:
     name: Check (Windows x64 target)
-    runs-on: ubuntu-latest
-    # 45 分钟不是「预期耗时 45 分钟」，而是**别让慢跑变成 cancelled**：
-    # 实测热缓存 1.3 分钟，冷一点 3~4 分钟；但这个 job 会因网络/apt 抖动卡住，
-    # 20 分钟的 timeout 一到就变成 cancelled —— 整条 CI 因此红，而原因只是
-    # 「等得久」。宁可慢，也不要把慢报成错（详见 docs/releases/v1.8.34.md）。
-    timeout-minutes: 45
+    # 为什么要换成 windows-latest（v1.8.40 第二次红之后定的）：
+    # 以前在 ubuntu 上装 mingw 交叉 check。那条路依赖 `apt-get` 打 GitHub 的
+    # ubuntu 镜像站 —— v1.8.37 卡过一次 8 分钟，v1.8.40 连卡两次（12 分钟、11.6
+    # 分钟），每次都把「代码有没有 Windows 问题」这个答案变成「apt 今天心情如何」。
+    # windows-latest 自带 MSVC 工具链，bundled 的 C 代码（sqlite 等）由 cl.exe 编，
+    # 全流程不碰 apt、不碰 mirror。
+    #
+    # 代价说清楚：这里 check 的是 msvc 目标，而发行包是 gnu（release.yml 用 mingw
+    # 交叉编）。所以它证明的是「cfg(windows) 分支与依赖在 Windows 上编得过」，
+    # 不是「gnu 链接参数对不对」——后者只能由 release.yml 那一次真编译来证。
+    runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-gnu
+          targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
-      - name: 安装 mingw-w64（构建脚本要为目标平台编 C，见上方注释）
-        # 单独给这一步限时 + 重试：apt 会卡在 mirror 上（v1.8.37 那次 8 分钟整超时，
-        # 同一次 CI 里 e2e 的 apt 也吃了 9.7 分钟 —— 是同一个病）。卡住的 apt 会把
-        # 后面的编译全挤掉，最后以一个说不清的 cancelled 收场。
-        #
-        # 三个加固，缺一个都还是会被 apt 拖死：
-        #   1. 每条命令单独的超时（`timeout 240`）：`apt-get update` 卡住时不连累 install
-        #   2. `Acquire::Retries` + `Timeout`：apt 自己的重试，别一层层靠外层循环
-        #   3. `--no-install-recommends`：`gcc-mingw-w64-x86-64` 的 recommends 会拖进
-        #      g++/libstdc++ 等一大堆，实际只需要 C 编译器（cc-rs 只用 gcc）
-        timeout-minutes: 14
-        run: |
-          export DEBIAN_FRONTEND=noninteractive
-          # 一行写完：这个仓库的 check-ci 会逐行检查引号是否成对（多人改 yaml 时真踩过），
-          # 跨行续写的引号串会被它判为「引号不成对」。长一点无所谓。
-          OPT="-o Acquire::Retries=3 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::ForceIPv4=true"
-          # 总预算 10 分钟：留 4 分钟给「失败也要把话说清楚」，不能让 step timeout
-          # 把这一步变成一句 cancelled —— 那样日志里看不出是 apt 的锅还是代码的锅。
-          deadline=$((SECONDS + 600))
-          have() { x86_64-w64-mingw32-gcc --version | head -1; }
-
-          # 第一次先不 update。runner 镜像自带 apt 索引，装得上就省掉整条 mirror 往返；
-          # v1.8.40 那次 update 连续三次卡在 mirror 上，install 根本没机会跑。
-          if sudo timeout 150 apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64; then
-            echo "mingw 装好了（未 update）"; have; exit 0
-          fi
-
-          echo "没 update 直接装失败，改为带 update 重试"
-          for i in 1 2 3; do
-            if [ $SECONDS -ge $deadline ]; then echo "预算用完，停止重试"; break; fi
-            echo "=== 第 ${i} 次 ==="
-            sudo timeout 120 apt-get $OPT update || echo "update 失败或超时，继续试 install（本地索引可能还是可用的）"
-            if sudo timeout 150 apt-get $OPT install -y --no-install-recommends gcc-mingw-w64-x86-64; then
-              echo "mingw 装好了"; have; exit 0
-            fi
-            sleep 10
-          done
-          echo "::error::mingw-w64 装不上（apt 重试尽失败）——这是 runners 的 apt/mirror 问题，不是代码问题；重跑这个 job 通常就过了"
-          exit 1
       - name: 交叉 check（finbook + finweb）
-        timeout-minutes: 30
-        run: cargo check --locked --target x86_64-pc-windows-gnu -p finbook -p finweb
+        timeout-minutes: 25
+        run: cargo check --locked --target x86_64-pc-windows-msvc -p finbook -p finweb
 
-  # ── Web 端到端（Playwright：真实浏览器 + 真实 finweb 服务） ───────────
   e2e:
     name: Web E2E (Playwright)
     # **不写 `needs: test`**：这个 job 自己 `cargo build -p finweb`，不消费 test 的

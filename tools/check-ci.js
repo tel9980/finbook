@@ -484,9 +484,37 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
     );
     bad++;
   }
-  if (!/check-windows:/.test(ciSrc) || !/cargo\s+check[^\n]*--target\s+x86_64-pc-windows-gnu/.test(ciSrc)) {
+  if (
+    !/check-windows:/.test(ciSrc) ||
+    !/cargo\s+check[^\n]*--target\s+x86_64-pc-windows-msvc/.test(ciSrc)
+  ) {
     console.log(
-      "FAIL ci.yml 缺少 Windows 目标的 cargo check —— push 阶段就没人看 Windows 分支了"
+      "FAIL ci.yml 缺少 Windows 目标的 cargo check（`--target x86_64-pc-windows-msvc`）—— " +
+        "\n     push 阶段就没人看 Windows 分支了"
+    );
+    bad++;
+  }
+  // v1.8.40 连红两次都是 apt：ubuntu + mingw 交叉 check 的可用性等于「今天镜像站
+  // 心情如何」。现在这条路走 windows-latest 自带的 MSVC，全程不碰 apt。
+  const winJob = ciSrc.split(/\n  (?=[a-z0-9][a-z0-9-]*:\n)/).find((b) => /^check-windows:/.test(b)) || "";
+  if (!/runs-on:\s*windows-latest/.test(winJob)) {
+    console.log(
+      "FAIL ci.yml 的 check-windows 不在 windows-latest 上跑 —— " +
+        "\n     在 ubuntu 上就得自己装 mingw，那一步靠 apt 打镜像站，" +
+        "\n     v1.8.37/V1.8.40 三次红全是它。"
+    );
+    bad++;
+  }
+  // 只看非注释行：注释里讲「以前 apt-get 怎么坑的」不算违规（否则这段说明本身
+  // 会被判红，然后有人把说明删掉 —— 最该留下的信息被检查逼走了）。
+  const winCode = winJob
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+  if (/apt-get/.test(winCode)) {
+    console.log(
+      "FAIL ci.yml 的 check-windows 又用 apt 装东西了 —— " +
+        "\n     windows-latest 自带 MSVC，bundled C 代码由 cl.exe 编，不该再碰 apt。"
     );
     bad++;
   }
@@ -499,9 +527,11 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
   // check 不链接，但**构建脚本照跑**：bundled 的 C 代码（sqlite 等）要经 cc-rs 调
   // x86_64-w64-mingw32-gcc 为目标平台编译。删掉 mingw 安装，job 会在 40 秒处报
   // `failed to find tool "x86_64-w64-mingw32-gcc"`（v1.8.32 第一次跑就是这么红的）。
-  if (/check-windows:/.test(ciSrc) && !/gcc-mingw-w64/.test(ciSrc)) {
+  // 注意：这条以前要求 ci.yml 装 mingw-w64。改成 msvc 之后**必须**没有它 ——
+  // 装了反而说明有人把 job 改回 ubuntu+mingw 那条 apt 路。
+  if (/gcc-mingw-w64/.test(ciSrc)) {
     console.log(
-      "FAIL ci.yml 的 check-windows 没装 mingw-w64 —— cargo check 也要构建脚本为目标平台编 C"
+      "FAIL ci.yml 又出现 gcc-mingw-w64 —— Windows check 应当走 windows-latest 的 MSVC"
     );
     bad++;
   }
@@ -607,22 +637,16 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
     ["timeout 120 apt-get $OPT update", "`timeout 120 apt-get $OPT update`（update 卡住时能往下走）"],
     ["deadline=$((SECONDS + 600))", "整个 step 的总预算 `deadline=$((SECONDS + 600))`"],
   ];
-  // ci.yml 与 release.yml 是两条独立的路，加固必须两处一样 —— 这里一起查。
-  const ciSrc2 = fs.readFileSync(".github/workflows/ci.yml", "utf8");
+  // 只剩 release.yml 需要这套 apt 加固：ci.yml 的 Windows check 已改成
+  // windows-latest + msvc，完全不碰 apt（见下面 2.45 第二段）。
   for (const [needle, why] of needs) {
-    for (const [file, src] of [
-      ["release.yml", relSrc],
-      ["ci.yml", ciSrc2],
-    ]) {
-      if (!src.includes(needle)) {
-        console.log(
-          `FAIL ${file} 的 mingw 安装少了 ${why} —— ` +
-            "\n     v1.8.38 因为没加固，打 tag 之后 Release 卡了 45 分钟；" +
-            "\n     v1.8.40 因为 update 死等，CI 红了一次。" +
-            "\n     ci.yml 与 release.yml 是两条独立的路，加固要一起做。"
-        );
-        bad++;
-      }
+    if (!relSrc.includes(needle)) {
+      console.log(
+        `FAIL release.yml 的 mingw 安装少了 ${why} —— ` +
+          "\n     v1.8.38 因为没加固，打 tag 之后 Release 卡了 45 分钟；" +
+          "\n     v1.8.40 因为 update 死等，CI 红了一次。"
+      );
+      bad++;
     }
   }
   const winBlk = relSrc.split(/\n  (?=[a-z][a-z-]*:\n)/).find((b) => /^desktop-windows:/.test(b)) || "";
