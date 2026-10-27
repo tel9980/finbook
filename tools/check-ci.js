@@ -593,20 +593,36 @@ console.log(`mutate-rust：${rustList.cases.length} 条变异，全部仍能在�
 //   2. desktop-windows job 必须有 `timeout-minutes`
 {
   const relSrc = fs.readFileSync(".github/workflows/release.yml", "utf8");
+  // v1.8.40 又栽了一次：update 连续三次卡在 mirror 上，12 分钟整被 step timeout 掐断，
+  // 日志里只剩 cancelled。于是加固又加了两条：
+  //   - 第一次先 `apt-get install`（不 update）：runner 镜像自带索引，装得上就省掉
+  //     整条 mirror 往返，这是唯一一条完全不依赖 mirror 的路
+  //   - 整个 step 一个总预算 `deadline`：宁可提前放弃并把原因说清楚，也不要被
+  //     step timeout 掐成一句 cancelled
   const needs = [
     ["--no-install-recommends gcc-mingw-w64-x86-64", "`--no-install-recommends`（recommends 会拖进 g++/libstdc++ 一大串）"],
     ["Acquire::ForceIPv4=true", "`Acquire::ForceIPv4=true`（runners 的 IPv6 常常黑洞，apt 会干等）"],
-    ["Acquire::Retries=5", "apt 自己的重试"],
-    ["timeout 240 apt-get", "`timeout 240` 包住 apt-get（卡住时能往下走，而不是等满整个 job）"],
+    ["Acquire::Retries=3", "apt 自己的重试"],
+    ["timeout 150 apt-get install", "「先不 update 直接装」那一次（`timeout 150 apt-get install`）"],
+    ["timeout 120 apt-get $OPT update", "`timeout 120 apt-get $OPT update`（update 卡住时能往下走）"],
+    ["deadline=$((SECONDS + 600))", "整个 step 的总预算 `deadline=$((SECONDS + 600))`"],
   ];
+  // ci.yml 与 release.yml 是两条独立的路，加固必须两处一样 —— 这里一起查。
+  const ciSrc2 = fs.readFileSync(".github/workflows/ci.yml", "utf8");
   for (const [needle, why] of needs) {
-    if (!relSrc.includes(needle)) {
-      console.log(
-        `FAIL release.yml 的 Windows 构建少了 ${why} —— ` +
-          "\n     v1.8.38 就是因为这条没加固，打 tag 之后 Release 卡了 45 分钟。" +
-          "\n     ci.yml 与 release.yml 是两条独立的路，加固要一起做。"
-      );
-      bad++;
+    for (const [file, src] of [
+      ["release.yml", relSrc],
+      ["ci.yml", ciSrc2],
+    ]) {
+      if (!src.includes(needle)) {
+        console.log(
+          `FAIL ${file} 的 mingw 安装少了 ${why} —— ` +
+            "\n     v1.8.38 因为没加固，打 tag 之后 Release 卡了 45 分钟；" +
+            "\n     v1.8.40 因为 update 死等，CI 红了一次。" +
+            "\n     ci.yml 与 release.yml 是两条独立的路，加固要一起做。"
+        );
+        bad++;
+      }
     }
   }
   const winBlk = relSrc.split(/\n  (?=[a-z][a-z-]*:\n)/).find((b) => /^desktop-windows:/.test(b)) || "";
