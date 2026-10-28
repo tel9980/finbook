@@ -1333,8 +1333,18 @@ fn import_arap_opening_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResul
             continue;
         }
         if !amount.is_positive() {
+            // 负数不是「填错了」，是「填错了地方」：客户预交、先付定金都很常见，
+            // 但它们属于预收/预付，不进应收/应付台账。只说「必须大于 0」，用户会去
+            // 改成正数蒙过去，于是应收虚增一笔、预收彻底消失。
+            let tip = if kind == "customer" {
+                "客户预交的钱属于预收，请填在「③ 账户余额」的 2203 预收账款，并写上客户编码；\
+                 「① 客户应收」只填客户欠你的正数"
+            } else {
+                "先付给供应商的钱属于预付，请填在「③ 账户余额」的 1123 预付账款，并写上供应商编码；\
+                 「② 供应商应付」只填你欠供应商的正数"
+            };
             res.warnings
-                .push(format!("第 {} 行：金额必须大于 0，已跳过", i + 1));
+                .push(format!("第 {} 行：金额是负数，已跳过 —— {tip}", i + 1));
             res.skipped += 1;
             continue;
         }

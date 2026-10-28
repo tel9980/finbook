@@ -70,10 +70,22 @@ fn money_of(s: &str) -> Option<Money> {
 }
 
 /// 找出表头所在行：返回 `(表头行号, 各列列名)`。
+/// 找表头行。
+///
+/// 两个条件缺一不可：**至少两个非空格**、且含「编码 / 项目」这类列名。
+///
+/// 只看关键词是不够的：模板在表头上方还有标题行和一行说明文字，说明里随口提一句
+/// 「科目」就能把这行认成表头。于是真正的表头变成「数据第一行」被跳过，而数据行
+/// 用兜底列号解析 —— 编码和余额恰好还在原位，**多出来的列（数量/存货/银行）却全丢**，
+/// 而且一声不响。v1.8.43 之前就是这么丢的。
 fn find_header(rows: &[Vec<String>]) -> Option<(usize, Vec<String>)> {
     for (i, r) in rows.iter().enumerate().take(12) {
+        let filled = r.iter().filter(|c| !c.trim().is_empty()).count();
+        if filled < 2 {
+            continue;
+        }
         let joined: String = r.join("");
-        if joined.contains("编码") || joined.contains("科目") || joined.contains("项目") {
+        if joined.contains("编码") || joined.contains("项目") {
             return Some((i, r.iter().map(|s| s.trim().to_string()).collect()));
         }
     }
@@ -177,24 +189,88 @@ fn parse_parties(rows: &[Vec<String>], sheet: &str, code_names: &[&str]) -> Part
     PartySheets { lines, out }
 }
 
+/// 要写进 `begin_balance` 的一行（含辅助核算与数量）。
+struct BeginLine {
+    code: String,
+    signed: Money,
+    aux: fincore::voucher::AuxRef,
+    qty: Option<Money>,
+}
+
+/// ③ 账户余额的一行。
+///
+/// 后四个字段是 v1.8.43 才读的：没有它们，期初的「分存货数量 / 分银行账户 /
+/// 分客户预收」全都进不了库 —— 表格里明明填了，导进去看不见，而且**不报错**。
+struct BalLine {
+    code: String,
+    amount: Money,
+    qty: Option<Money>,
+    aux: fincore::voucher::AuxRef,
+}
+
 /// 一张「科目余额」纸（③）的解析结果。
-fn parse_balances(rows: &[Vec<String>]) -> Vec<(String, Money)> {
+fn parse_balances(rows: &[Vec<String>]) -> Vec<BalLine> {
     let mut out = Vec::new();
     let Some((hr, head)) = find_header(rows) else {
         return out;
     };
     let c_code = col(&head, &["科目编码", "编码"], 0);
     let c_amt = col(&head, &["余额", "金额"], 2);
+    let c_qty = col(&head, &["数量", "期初数量", "数量期初"], usize::MAX);
+    let c_cus = col(&head, &["客户编码", "客户"], usize::MAX);
+    let c_sup = col(&head, &["供应商编码", "供应商"], usize::MAX);
+    // 「客户/供应商编码」是一列两用：按科目方向决定它指的是哪一头。
+    let c_party = col(
+        &head,
+        &["客户/供应商编码", "客商编码", "客户或供应商编码"],
+        usize::MAX,
+    );
+    let c_item = col(&head, &["存货编码", "商品编码"], usize::MAX);
+    let c_bank = col(&head, &["银行账户", "账户编码"], usize::MAX);
     for r in rows.iter().skip(hr + 1) {
         let code = cell(r, c_code);
         if code.is_empty() || !code.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             continue;
         }
-        if let Some(m) = money_of(&cell(r, c_amt)) {
-            if !m.is_zero() {
-                out.push((code, m));
+        let Some(m) = money_of(&cell(r, c_amt)) else {
+            continue;
+        };
+        if m.is_zero() {
+            continue;
+        }
+        let party = cell(r, c_party);
+        let mut aux = fincore::voucher::AuxRef::default();
+        if !cell(r, c_cus).is_empty() {
+            aux.customer = Some(cell(r, c_cus));
+        }
+        if !cell(r, c_sup).is_empty() {
+            aux.supplier = Some(cell(r, c_sup));
+        }
+        if !cell(r, c_item).is_empty() {
+            aux.item = Some(cell(r, c_item));
+        }
+        if !cell(r, c_bank).is_empty() {
+            aux.bank = Some(cell(r, c_bank));
+        }
+        // 一列两用，按**科目家族**判它指的是谁 —— 不能按「资产挂客户、负债挂供应商」：
+        // 2203 预收账款是负债，可它挂的明明是客户；1123 预付账款是资产，挂的却是供应商。
+        // 判错的后果不是报错，是把一个客户编码挂成供应商编码，然后对账时「档案里找不到」。
+        if !party.is_empty() {
+            let to_customer = code.starts_with("1122") || code.starts_with("2203");
+            if to_customer {
+                if aux.customer.is_none() {
+                    aux.customer = Some(party);
+                }
+            } else if aux.supplier.is_none() {
+                aux.supplier = Some(party);
             }
         }
+        out.push(BalLine {
+            code,
+            amount: m,
+            qty: money_of(&cell(r, c_qty)),
+            aux,
+        });
     }
     out
 }
@@ -285,8 +361,10 @@ fn collection_sheet_impl(
 
     // ---- ③ 账户余额；同时分资产/负债
     let bal_rows = bal_sheet.map(|(_, r)| parse_balances(r)).unwrap_or_default();
-    let mut begin_rows: Vec<(String, Money)> = Vec::new();
-    for (code, amt) in &bal_rows {
+    let mut begin_rows: Vec<BeginLine> = Vec::new();
+    for line in &bal_rows {
+        let code = &line.code;
+        let amt = &line.amount;
         if !chart.contains(code) {
             res.balances
                 .warnings
@@ -309,7 +387,53 @@ fn collection_sheet_impl(
         } else {
             *amt
         };
-        begin_rows.push((code.clone(), signed));
+        // 辅助核算编码必须在档案里，否则那一行会变成一个谁也查不到的孤儿期初。
+        // 注意这里用 `bad` 跳整行：`continue` 只能跳出这个内层 for，行照样会写进去。
+        let mut bad = false;
+        for (label, code_opt, kind) in [
+            ("客户编码", &line.aux.customer, fincore::AuxKind::Customer),
+            (
+                "供应商编码",
+                &line.aux.supplier,
+                fincore::AuxKind::Supplier,
+            ),
+            ("存货编码", &line.aux.item, fincore::AuxKind::Item),
+            ("银行账户", &line.aux.bank, fincore::AuxKind::Bank),
+        ] {
+            let Some(c) = code_opt else { continue };
+            let found = crate::auxs::list(
+                db,
+                &fincore::auxiliary::AuxQuery {
+                    kind: Some(kind),
+                    ..Default::default()
+                },
+            )?
+            .into_iter()
+            .any(|e| &e.code == c);
+            if !found {
+                res.balances.warnings.push(format!(
+                    "账户余额：{code} 的{label}「{c}」在档案里找不到，这一行已跳过"
+                ));
+                res.balances.skipped += 1;
+                bad = true;
+                break;
+            }
+        }
+        if bad {
+            continue;
+        }
+        // 核算数量的科目，只填金额不填数量 → 以后出库结存必错
+        if chart.get(code).is_some_and(|a| a.has_qty) && line.qty.is_none() {
+            res.balances.warnings.push(format!(
+                "账户余额：{code} 核算数量但没填数量，已按「只有金额」导入 —— 请补数量"
+            ));
+        }
+        begin_rows.push(BeginLine {
+            code: code.clone(),
+            signed,
+            aux: line.aux.clone(),
+            qty: line.qty,
+        });
         res.balances.ok += 1;
         res.balances.total += *amt;
     }
@@ -334,23 +458,42 @@ fn collection_sheet_impl(
         }
     }
     if !paid_in.is_zero() {
-        begin_rows.push(("4001".to_string(), -paid_in));
+        begin_rows.push(BeginLine {
+            code: "4001".to_string(),
+            signed: -paid_in,
+            aux: Default::default(),
+            qty: None,
+        });
     }
     if has_profit {
-        begin_rows.push(("4103".to_string(), -profit));
+        begin_rows.push(BeginLine {
+            code: "4103".to_string(),
+            signed: -profit,
+            aux: Default::default(),
+            qty: None,
+        });
     }
 
     // ---- 平衡：逐条把 begin_rows 按方向加总（资产类记借，其余记贷），
     //      再加上「应收台账合计」「应付台账合计」这两个还没进 begin_rows 的数。
-    let mut debit = res.ar.total;
-    let mut credit = res.ap.total;
-    for (code, signed) in &begin_rows {
-        if code.starts_with('1') {
-            debit += *signed;
-        } else {
-            credit += -*signed;
+    // 按**余额符号**分借贷，不能按科目首位。
+    //
+    // 4103 本年利润以「4」开头，但它完全可能是借方余额（亏了）—— 按首位一律当贷方，
+    // 会把亏损加到贷方去，于是「借方 65,000 = 贷方 65,000」这种**两边都错、还能对上**的
+    // 合计就打印出来了，而库里实际是 71,000。
+    let tally = |rows: &[BeginLine]| {
+        let mut d = res.ar.total;
+        let mut c = res.ap.total;
+        for line in rows {
+            if line.signed.is_positive() {
+                d += line.signed;
+            } else {
+                c += -line.signed;
+            }
         }
-    }
+        (d, c)
+    };
+    let (mut debit, mut credit) = tally(&begin_rows);
 
     // 若用户只填了实收资本、没填本年利润，用差额补齐 4103（收集表④本身也是这么轧的）
     if !has_profit && !paid_in.is_zero() {
@@ -358,14 +501,25 @@ fn collection_sheet_impl(
         if !diff.is_zero() {
             profit += diff;
             res.auto_profit = diff;
-            begin_rows.push(("4103".to_string(), -profit));
-            credit += diff;
+            begin_rows.push(BeginLine {
+                code: "4103".to_string(),
+                signed: -profit,
+                aux: Default::default(),
+                qty: None,
+            });
             res.equity.warnings.push(format!(
                 "「本年利润」没填，已按轧差补 {} —— 请核对这个数是前期赚的（或亏的）",
                 profit.fmt_money()
             ));
         }
     }
+
+    // 轧差那一行进来之后必须重算：它是**借**方（亏损）还是**贷**方（利润）取决于
+    // diff 的正负，靠「credit += diff」这种单边修补必然算错一边，于是明明已经平了
+    // 却报「借贷不平」，或者回显的合计和库里的对不上。
+    let (d2, c2) = tally(&begin_rows);
+    debit = d2;
+    credit = c2;
 
     res.debit_total = debit;
     res.credit_total = credit;
@@ -424,23 +578,33 @@ fn collection_sheet_impl(
     res.ar.skipped += dup;
     // 往来合计落到科目期初
     if res.ar.total.is_positive() {
-        begin_rows.push(("112201".to_string(), res.ar.total));
+        begin_rows.push(BeginLine {
+            code: "112201".to_string(),
+            signed: res.ar.total,
+            aux: Default::default(),
+            qty: None,
+        });
     }
     if res.ap.total.is_positive() {
-        begin_rows.push(("220201".to_string(), -res.ap.total));
+        begin_rows.push(BeginLine {
+            code: "220201".to_string(),
+            signed: -res.ap.total,
+            aux: Default::default(),
+            qty: None,
+        });
     }
 
-    for (code, signed) in &begin_rows {
+    for line in &begin_rows {
         crate::balances::upsert_begin(
             db,
             &crate::balances::BeginRow {
                 id: 0,
-                account_code: code.clone(),
-                aux: fincore::voucher::AuxRef::default(),
-                year_begin: *signed,
+                account_code: line.code.clone(),
+                aux: line.aux.clone(),
+                year_begin: line.signed,
                 debit_accum: Money::ZERO,
                 credit_accum: Money::ZERO,
-                qty_begin: None,
+                qty_begin: line.qty,
             },
         )?;
         res.begin_ok += 1;
@@ -473,6 +637,32 @@ mod tests {
         assert_eq!(money_of("  "), None);
         assert_eq!(money_of("—"), None);
         assert_eq!(money_of("1200元"), None);
+    }
+
+    /// ③ 的后四列（数量 / 客商 / 存货 / 银行账户）必须真的读进去。
+    ///
+    /// 这四列曾经是「模板上有、导入器不认」—— 表格里填得好好的，导进去看不见，
+    /// 而且不报错：存货有金额没数量，第一次出库结存就是负数。
+    #[test]
+    fn balances_sheet_keeps_quantity_item_bank_and_party() {
+        let rows = vec![
+            s(&["科目编码", "科目名称", "余额", "数量", "客户/供应商编码", "存货编码", "银行账户"]),
+            s(&["140501", "库存商品", "5000", "2.5", "", "HG001", ""]),
+            s(&["100201", "工行对公", "8000", "", "", "", "B01"]),
+            s(&["2203", "预收账款", "8000", "", "C002", "", ""]),
+            s(&["1123", "预付账款", "3000", "", "S001", "", ""]),
+        ];
+        let out = parse_balances(&rows);
+        assert_eq!(out.len(), 4);
+        assert_eq!(out[0].qty, Some(Money::parse("2.5").unwrap()));
+        assert_eq!(out[0].aux.item.as_deref(), Some("HG001"));
+        assert_eq!(out[1].aux.bank.as_deref(), Some("B01"));
+        // 2203 预收是负债，但它挂的明明是客户
+        assert_eq!(out[2].aux.customer.as_deref(), Some("C002"));
+        assert_eq!(out[2].aux.supplier, None, "预收账款不能把客户挂成供应商");
+        // 1123 预付是资产，挂的却是供应商
+        assert_eq!(out[3].aux.supplier.as_deref(), Some("S001"));
+        assert_eq!(out[3].aux.customer, None, "预付账款不能把供应商挂成客户");
     }
 
     #[test]

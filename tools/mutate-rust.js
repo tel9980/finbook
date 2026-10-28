@@ -37,6 +37,8 @@ const FADV = (name) => ["test", "-p", "findb", "--lib", `advanced::tests::${name
 // 勾了页码纸上没有、选了横向还是竖的、账套参数被拒了却照样存进去。
 const FPRINT = (name) => ["test", "-p", "fincore", "--lib", `print::tests::${name}`];
 const OPT = (name) => ["test", "-p", "finweb", "--test", "options_print", "--", name];
+/** findb 库内的期初导入单测（`mod tests` 里，全路径要是 `opening_book::tests::xxx`） */
+const FOB = (name) => ["test", "-p", "findb", "--lib", `opening_book::tests::${name}`];
 const OBOOK = (name) => ["test", "-p", "findb", "--test", "opening_book", "--", name];
 // v1.8.28 套打：凭证/账簿/单据也走账套里的纸张设置。失效形态是"设置对了但纸上没变"。
 const FPFORM = (name) => ["test", "-p", "findb", "--lib", `printform::tests::${name}`];
@@ -570,8 +572,8 @@ const MUT = [
     // 往来台账不写科目期初 → 账龄表上有欠款、资产负债表一分没有（本轮最想守住的一条）
     name: "㉒ 期初收集表只导台账不写科目期初",
     file: "crates/findb/src/opening_book.rs",
-    from: '    if res.ar.total.is_positive() {\n        begin_rows.push(("112201".to_string(), res.ar.total));\n    }',
-    to: "",
+    from: '    if res.ar.total.is_positive() {\n        begin_rows.push(BeginLine {\n            code: "112201".to_string(),',
+    to: '    if false {\n        begin_rows.push(BeginLine {\n            code: "112201".to_string(),',
     cmd: OBOOK("collection_sheet_lands_in_ledger_and_opening_balances"),
   },
   {
@@ -706,6 +708,27 @@ const MUT = [
     from: "            _ => -amt,",
     to: "            _ => amt,",
     cmd: LOOP("reconcile_treats_debit_profit_as_a_loss"),
+  },
+  {
+    name: "㉕ ③ 表不读银行账户列",
+    file: "crates/findb/src/opening_book.rs",
+    from: '    let c_bank = col(&head, &["银行账户", "账户编码"], usize::MAX);',
+    to: "    let c_bank = usize::MAX;",
+    cmd: LOOP("balance_sheet_carries_quantity_stock_and_bank"),
+  },
+  {
+    name: "㉕ ③ 表不读数量列",
+    file: "crates/findb/src/opening_book.rs",
+    from: '    let c_qty = col(&head, &["数量", "期初数量", "数量期初"], usize::MAX);',
+    to: "    let c_qty = usize::MAX;",
+    cmd: LOOP("balance_sheet_carries_quantity_stock_and_bank"),
+  },
+  {
+    name: "㉕ 客商列按资产/负债方向判（预收挂成供应商）",
+    file: "crates/findb/src/opening_book.rs",
+    from: '            let to_customer = code.starts_with("1122") || code.starts_with("2203");',
+    to: "            let to_customer = code.starts_with('1');",
+    cmd: FOB("balances_sheet_keeps_quantity_item_bank_and_party"),
   },
 ];
 

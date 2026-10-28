@@ -161,6 +161,122 @@ fn fill_core(src: &[u8], extra_ar: &[(&str, &str, &str)], paid_in: &str) -> Vec<
     wb.save_to_buffer().unwrap()
 }
 
+/// ③ 的后四列（数量 / 存货 / 银行账户 / 客商）要真的落进期初。
+///
+/// 这四列曾经是「模板上有、导入器不认」：填了也不报错，导进去就是没有。
+/// 后果最重的是数量 —— 存货期初有金额没数量，出库结存从第一笔起就是错的。
+#[tokio::test]
+async fn balance_sheet_carries_quantity_stock_and_bank() {
+    let (state, _dir, _tmp) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 期初要用到的档案：存货 HG001、银行账户 B01
+    for (kind, text) in [
+        ("item", "HG001\t合页 2 寸\n"),
+        ("bank", "B01\t工行对公\n"),
+    ] {
+        let resp = finweb::handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/aux-batch",
+                &sid,
+                serde_json::json!({ "kind": kind, "text": text }),
+            ))
+            .await
+            .unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap())
+                .unwrap();
+        // POST 只解析，真正落库是 PUT（必须把解析出来的 rows 原样带回）
+        let resp = finweb::handlers::router(state.clone())
+            .oneshot(authed_put(
+                "/api/aux-batch",
+                &sid,
+                serde_json::json!({ "kind": kind, "rows": parsed["rows"] }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{kind} 档案应能写入");
+    }
+
+    let tpl = get_xlsx(&state, &sid, "/api/books/opening-sheet/template").await;
+    let filled = fill_with_balance_extras(&tpl);
+    let (code, body) = post_sheet(&state, &sid, "/api/books/opening-sheet", &filled).await;
+    assert_eq!(code, StatusCode::OK, "导入应成功：{body}");
+
+    let begin = get_json(&state, &sid, "/api/begin").await;
+    let rows = begin.as_array().expect("期初列表");
+    let find = |c: &str| {
+        rows.iter()
+            .find(|r| r["account_code"] == serde_json::json!(c))
+            .unwrap_or_else(|| panic!("期初里没有 {c}，实际 {begin}"))
+            .clone()
+    };
+
+    let stock = find("140501");
+    assert_eq!(
+        stock["qty_begin"],
+        serde_json::json!("2.5"),
+        "存货期初的数量必须落库，实际 {stock}"
+    );
+    assert_eq!(
+        stock["aux"]["item"],
+        serde_json::json!("HG001"),
+        "存货期初要挂到具体存货上，实际 {stock}"
+    );
+
+    let bank = find("100201");
+    assert_eq!(
+        bank["aux"]["bank"],
+        serde_json::json!("B01"),
+        "银行期初要挂到具体账户上，实际 {bank}"
+    );
+}
+
+/// 在 `fill_core` 的基础上，再给 ③ 填两行「带后四列」的期初。
+fn fill_with_balance_extras(src: &[u8]) -> Vec<u8> {
+    use rust_xlsxwriter::{Format, Workbook};
+    let sheets = findb::imports::read_xlsx_sheets(src).expect("模板应能被解析回来");
+    let mut wb = Workbook::new();
+    let f = Format::new();
+    for (name, rows) in &sheets {
+        let mut rows = rows.clone();
+        if name.contains("账户余额") {
+            let push = |rows: &mut Vec<Vec<String>>, v: Vec<String>| {
+                if let Some(r) = rows.iter_mut().find(|r| r.first().map(|c| c.as_str()) == Some(&v[0])) {
+                    *r = v;
+                } else {
+                    rows.push(v);
+                }
+            };
+            push(&mut rows, vec!["1001".into(), "库存现金".into(), "20000".into(), String::new(), String::new(), String::new(), String::new()]);
+            push(&mut rows, vec!["100201".into(), "工行对公".into(), "8000".into(), String::new(), String::new(), String::new(), "B01".into()]);
+            push(&mut rows, vec!["140501".into(), "库存商品".into(), "5000".into(), "2.5".into(), String::new(), "HG001".into(), String::new()]);
+        }
+        if name.contains("基本资料") {
+            rows.retain(|r| r.first().map(|c| c.as_str()) != Some("实收资本"));
+            rows.push(vec!["实收资本".into(), "100000".into()]);
+        }
+        let ws = wb.add_worksheet();
+        ws.set_name(name.as_str()).unwrap();
+        for (r, row) in rows.iter().enumerate() {
+            for (c, cell) in row.iter().enumerate() {
+                if cell.is_empty() {
+                    continue;
+                }
+                match cell.parse::<f64>() {
+                    Ok(n) if c > 0 => {
+                        ws.write_number(r as u32, c as u16, n, &f).unwrap();
+                    }
+                    _ => {
+                        ws.write_string(r as u32, c as u16, cell, &f).unwrap();
+                    }
+                }
+            }
+        }
+    }
+    wb.save_to_buffer().unwrap()
+}
+
 /// 模板必须带着当前账套的科目清单（否则工厂还得手抄编码）。
 #[tokio::test]
 async fn template_carries_the_current_books_account_codes() {

@@ -282,6 +282,39 @@ pub fn reconcile_begin(db: &Db) -> DbResult<BeginReconcile> {
         },
     });
 
+    // 数量核算科目：有金额没数量。
+    //
+    // 这不是格式问题，是**以后一定会算错**的问题：出库按数量结转成本，期初数量是 0 /
+    // 空，第一次出库就把结存算成负数。而期初那一栏看起来「金额是对的」，没人会去
+    // 数量金额式明细里确认一眼。
+    let chart = crate::accounts::chart(db)?;
+    let mut no_qty: Vec<String> = Vec::new();
+    for r in crate::balances::list_begin(db)?.iter() {
+        if r.year_begin.is_zero() {
+            continue;
+        }
+        let Some(a) = chart.get(&r.account_code) else {
+            continue;
+        };
+        if a.has_qty && r.qty_begin.is_none() {
+            no_qty.push(format!("{}({})", r.account_code, a.name));
+        }
+    }
+    no_qty.sort();
+    no_qty.dedup();
+    checks.push(Check {
+        name: "数量核算科目都填了数量".into(),
+        ok: no_qty.is_empty(),
+        detail: if no_qty.is_empty() {
+            "有金额的存货科目都带了数量".into()
+        } else {
+            format!(
+                "有金额没数量：{} —— 在 ③ 表填「数量」列；或者改用「期初库存」导入数量流水",
+                no_qty.join("、")
+            )
+        },
+    });
+
     // 已经有期初凭证又录了 begin_balance → 很可能重复
     let dup_voucher = crate::vouchers::list(
         db,
@@ -328,7 +361,7 @@ pub fn reconcile_begin(db: &Db) -> DbResult<BeginReconcile> {
     })
 }
 
-/// 供页面用的一行摘要（「四张纸 + 五项校验」都过时说一句话）。
+/// 供页面用的一行摘要（「四张纸 + 七项校验」都过时说一句话）。
 pub fn one_liner(r: &BeginReconcile) -> String {
     if r.empty {
         return "还没有期初数据 —— 先下载期初收集表填好导入".into();

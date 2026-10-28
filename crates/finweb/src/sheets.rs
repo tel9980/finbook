@@ -89,6 +89,24 @@ pub fn opening_collection_template(
                     .to_string(),
             ],
             vec![
+                "客户预交的钱（预收）".to_string(),
+                "填 ③：2203 预收账款 的余额，并在「客户/供应商编码」列写上是哪个客户".to_string(),
+            ],
+            vec![
+                "先付给供应商的钱（预付）".to_string(),
+                "填 ③：1123 预付账款 的余额，并写上是哪个供应商".to_string(),
+            ],
+            vec![
+                "存货".to_string(),
+                "③ 里填金额，同时填「数量」和「存货编码」—— 只填金额的话数量是 0，以后出库结存会算错"
+                    .to_string(),
+            ],
+            vec![
+                "银行".to_string(),
+                "③ 里填银行科目的余额，并在「银行账户」列写上账户编码（如 B01）—— 不填就落不到账户上，银行日记账没有期初"
+                    .to_string(),
+            ],
+            vec![
                 "不平怎么办".to_string(),
                 "导入会先算平：不平整批拒绝，并告诉你差多少。差额补到「④ 本年利润」一般就平"
                     .to_string(),
@@ -151,15 +169,40 @@ pub fn opening_collection_template(
         .filter(|a| a.code.chars().next().is_some_and(|c| c == '1' || c == '2'))
         .filter(|a| !a.code.starts_with("1122") && !a.code.starts_with("2202"))
         .filter(|a| !a.disabled)
-        .map(|a| vec![a.code.clone(), a.name.clone(), String::new()])
+        .map(|a| {
+            let mut row = vec![a.code.clone(), a.name.clone(), String::new()];
+            // 后四列平时留空，只有特定科目才填 —— 见「怎么填」页。
+            //
+            // 没有这四列时，期初的「分户 / 分存货 / 分银行账户 / 数量」全都进不来：
+            // 存货有金额没数量 → 数量金额式明细里数量是 0，出库结存必错；
+            // 银行科目没账户 → 期初挂在不存在的账户上，银行日记账一分没有。
+            row.extend(std::iter::repeat_n(String::new(), 4));
+            row
+        })
         .collect();
     out.push(
         Sheet::titled(
             "③ 账户余额",
-            "账户余额（资产 / 负债 / 权益）",
-            "余额一律填正数；借贷方向自动判断，不需要你选",
-            &["科目编码", "科目名称", "余额"],
-            &[ColFmt::Text, ColFmt::Text, ColFmt::Money],
+            "账户余额（资产 / 负债）",
+            "余额一律填正数；后四列只有对应的科目才填（见「怎么填」）",
+            &[
+                "科目编码",
+                "科目名称",
+                "余额",
+                "数量",
+                "客户/供应商编码",
+                "存货编码",
+                "银行账户",
+            ],
+            &[
+                ColFmt::Text,
+                ColFmt::Text,
+                ColFmt::Money,
+                ColFmt::Money,
+                ColFmt::Text,
+                ColFmt::Text,
+                ColFmt::Text,
+            ],
         )
         .with_rows(bal_rows),
     );
