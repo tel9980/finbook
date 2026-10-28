@@ -11517,6 +11517,58 @@ function openAccountEditor(main, acc) {
 // 为什么单开一个入口而不是塞进「数据导入」：收集表是四张纸一起看的，只导一张纸
 // 就会出现「应收台账有数、资产负债表没数」这种合起来不对的状态。后端也是先算平
 // 再落库，不平整批拒绝。
+/// 期初导入**之后**的对账视图。
+///
+/// 与「导入期初收集表」的分工：那边回答「这份表能不能导」，这边回答「导完之后账上
+/// 是不是真的变成了表里那个样子」。两次来的数据都可能对，但中间任何一步出问题，
+/// 只有这边能发现 —— 所以它不能并进导入弹窗，要能**随时**单独看。
+async function openBeginReconcile() {
+  let r;
+  try {
+    r = await api("/books/opening-sheet/reconcile");
+  } catch (e) {
+    toast("读取对账结果失败：" + e.message, "err");
+    return;
+  }
+  const sheetRows = (r.sheets || []).map((s) => `
+    <tr>
+      <td>${s.label}</td>
+      <td class="r">${s.rows}</td>
+      <td class="r num">${s.total}</td>
+      <td class="muted u-sm">${s.hint}</td>
+    </tr>`).join("");
+  const checkRows = (r.checks || []).map((c) => `
+    <tr>
+      <td style="width:26px">${c.ok ? "✅" : "❌"}</td>
+      <td>${c.name}</td>
+      <td class="muted u-sm">${c.detail}</td>
+    </tr>`).join("");
+  const body = r.empty
+    ? `<div class="muted" style="padding:14px 0">还没有期初数据。先「下载期初模板」填好，再「导入期初收集表」。</div>`
+    : `
+      <div class="card" style="margin-bottom:12px">
+        <div style="font-size:15px;font-weight:600;margin-bottom:6px;color:${r.ok ? "var(--ok)" : "var(--err)"}">${r.one_liner}</div>
+        <div class="muted u-sm">借方 ${r.debit_total} ｜ 贷方 ${r.credit_total} ｜ 资产 ${r.asset_total} ｜ 负债 ${r.liab_total} ｜ 权益 ${r.equity_total}</div>
+      </div>
+      <table class="tbl" style="margin-bottom:14px">
+        <thead><tr><th>那张纸</th><th class="r">行数</th><th class="r">合计</th><th>落到了哪里</th></tr></thead>
+        <tbody>${sheetRows}</tbody>
+      </table>
+      <table class="tbl">
+        <thead><tr><th></th><th>交叉校验</th><th>数字</th></tr></thead>
+        <tbody>${checkRows}</tbody>
+      </table>
+      ${(r.issues && r.issues.length) ? `<div style="margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--warn-t);color:var(--warn);line-height:1.7">
+        <b>怎么改：</b>期初是推倒重来的活，别在报表上补差。改表 → 清掉期初 → 重新导入，比逐条调账可靠。
+      </div>` : ""}`;
+  const mask = modal(
+    `<h3>期初对账</h3>${body}
+     <div style="margin-top:16px;text-align:right"><button class="btn" data-close>关闭</button></div>`,
+    true
+  );
+  mask.querySelector("[data-close]").onclick = () => closeModal();
+}
+
 function openImportCollection() {
   const mask = modal(`
     <h3>导入期初收集表</h3>
@@ -11675,6 +11727,7 @@ function renderBegin(main, rows) {
         ${can("export") ? `<button class="btn ghost" id="bg-export" title="导出已保存的期初余额（科目编码/名称/方向/期初/累计），改完可以导回">导出 Excel</button>` : ""}
         ${can("opening") ? `<button class="btn ghost" id="bg-collect" title="上传填好的《期初收集表.xlsx》：客户应收/供应商应付/账户余额/实收资本一次导完，先算平再落库">导入期初收集表</button>` : ""}
       ${can("opening") ? `<button class="btn ghost" id="bg-tpl" title="下载空模板：已列好你这个账套的科目、客户、供应商，只需填金额">下载期初模板</button>` : ""}
+      ${can("opening") ? `<button class="btn ghost" id="bg-check" title="导入之后点这里：把四张纸的落库情况与台账/科目/借贷/资产负债结构交叉核对，任何两处差一个数都会指出来">导入后对账</button>` : ""}
         ${can("opening") ? `<button class="btn primary" id="bg-save">保存全部</button>` : ""}
       </div>
       <div class="panel" style="padding:0;overflow:auto;max-height:60vh">
@@ -11705,6 +11758,7 @@ function renderBegin(main, rows) {
     if ($("#bg-export")) $("#bg-export").addEventListener("click", () => downloadUrl("/api/export/begin"));
     if ($("#bg-collect")) $("#bg-collect").addEventListener("click", () => openImportCollection());
     if ($("#bg-tpl")) $("#bg-tpl").addEventListener("click", () => downloadUrl("/books/opening-sheet/template"));
+    if ($("#bg-check")) $("#bg-check").addEventListener("click", () => openBeginReconcile());
     $all(".bg-dir", main).forEach((sel) => sel.onchange = () => { draft[+sel.dataset.i].dir = sel.value; paintTotals(); });
     $all(".bg-yb", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].yb = inp.value; paintTotals(); });
     $all(".bg-ad", main).forEach((inp) => inp.oninput = () => { draft[+inp.dataset.i].ad = inp.value; paintTotals(); });

@@ -686,6 +686,27 @@ const MUT = [
     to: "    if false {\n        let diff = debit - credit;",
     cmd: LOOP("preview_rejects_an_unbalanced_sheet"),
   },
+  {
+    name: "㉔ 对账不比对台账与科目",
+    file: "crates/findb/src/opening_check.rs",
+    from: "        ok: ar_ledger_total == ar_booked,",
+    to: "        ok: true,",
+    cmd: LOOP("reconcile_catches_ledger_without_booked_accounts"),
+  },
+  {
+    name: "㉔ 对账不查往来编码是否在档案里",
+    file: "crates/findb/src/opening_check.rs",
+    from: "            if crate::auxs::get(db, kind, &r.party_code)?.is_none() {\n                missing.push(format!(\"{}({})\", r.party_code, r.party_name));\n            }",
+    to: "            let _ = (&db, kind, r);",
+    cmd: LOOP("reconcile_flags_a_party_code_missing_from_the_archive"),
+  },
+  {
+    name: "㉔ 负债权益不按余额方向取反（亏损变收益）",
+    file: "crates/findb/src/opening_check.rs",
+    from: "            _ => -amt,",
+    to: "            _ => amt,",
+    cmd: LOOP("reconcile_treats_debit_profit_as_a_loss"),
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

@@ -310,6 +310,11 @@ pub fn router(state: Arc<WebState>) -> Router {
         )
         // 空模板（已预填当前账套的科目/客户/供应商清单）
         .route("/api/books/opening-sheet/template", get(opening_sheet_template))
+        // 导入**之后**的对账：四张纸落库情况 + 五条交叉校验
+        .route(
+            "/api/books/opening-sheet/reconcile",
+            get(opening_sheet_reconcile),
+        )
         .route("/api/login", post(post_login))
         .route("/api/logout", post(post_logout))
         // 平台安全中心（仅管理员）：口令策略 / 登录审计 / 锁定账号
@@ -17459,6 +17464,86 @@ async fn sheet_upload(mut multipart: axum::extract::Multipart) -> Result<Vec<u8>
 }
 
 /// 《期初收集表》的空模板：已预填当前账套的科目、客户、供应商清单。
+/// 期初对账视图的 DTO。
+///
+/// 金额一律给**字符串**（`fmt_plain`）：前端直接显示，不做二次格式化 ——
+/// 对账页上一个千分位错位就会让人怀疑是数字错了，而它只是显示问题。
+#[derive(serde::Serialize)]
+struct ReconcileSheetDto {
+    label: String,
+    rows: usize,
+    total: String,
+    hint: String,
+}
+
+#[derive(serde::Serialize)]
+struct ReconcileCheckDto {
+    name: String,
+    ok: bool,
+    detail: String,
+}
+
+#[derive(serde::Serialize)]
+struct ReconcileDto {
+    /// 全部校验通过且不空
+    ok: bool,
+    one_liner: String,
+    empty: bool,
+    sheets: Vec<ReconcileSheetDto>,
+    debit_total: String,
+    credit_total: String,
+    balanced: bool,
+    asset_total: String,
+    liab_total: String,
+    equity_total: String,
+    checks: Vec<ReconcileCheckDto>,
+    issues: Vec<String>,
+}
+
+/// 期初导入后的对账视图。
+///
+/// 为什么不并进「预览」接口：预览回答「这份表能不能导」，对账回答「导完之后账上是不是
+/// 真的变成了表里那个样子」。前者看的是文件，后者看的是库 —— 两次来的数据都可能对，
+/// 但中间任何一步出问题，只有后者能发现。
+async fn opening_sheet_reconcile(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+) -> Result<Json<ReconcileDto>, AppError> {
+    user.require(Perm::Opening)?;
+    let r = findb::opening_check::reconcile_begin(&user.db)?;
+    Ok(Json(ReconcileDto {
+        ok: !r.empty && r.issues.is_empty(),
+        one_liner: findb::opening_check::one_liner(&r),
+        empty: r.empty,
+        sheets: r
+            .sheets
+            .into_iter()
+            .map(|s| ReconcileSheetDto {
+                label: s.label,
+                rows: s.rows,
+                total: s.total.fmt_plain(),
+                hint: s.hint,
+            })
+            .collect(),
+        debit_total: r.debit_total.fmt_plain(),
+        credit_total: r.credit_total.fmt_plain(),
+        balanced: r.balanced,
+        asset_total: r.asset_total.fmt_plain(),
+        liab_total: r.liab_total.fmt_plain(),
+        equity_total: r.equity_total.fmt_plain(),
+        checks: r
+            .checks
+            .into_iter()
+            .map(|c| ReconcileCheckDto {
+                name: c.name,
+                ok: c.ok,
+                detail: c.detail,
+            })
+            .collect(),
+        issues: r.issues,
+    }))
+}
+
 async fn opening_sheet_template(
     State(_state): State<Arc<WebState>>,
     user: CurrentUser,
