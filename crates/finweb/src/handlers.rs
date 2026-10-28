@@ -3120,11 +3120,11 @@ async fn post_print_settings(
     let db = &user.db;
     let mut opts = db.options();
     opts.print.apply_patch(&patch);
-    // 越界值在这里被挡住并带上原值，而不是被悄悄夹回合法范围
-    let problems = opts.validate();
-    if !problems.is_empty() {
-        return Err(AppError::bad_request(problems.join("；")));
-    }
+    // 校验只走 `Db::set_options` 里那一道。
+    //
+    // 这里曾经又写了一遍 `opts.validate()`——两层校验看着更保险，实际是「两层都拦」
+    // 谁也证明不了另一层有没有在干活：把外层删掉，测试照样绿，`set_options` 里那道
+    // 就已经把越界值挡回去了。真正的守卫只有一处，也就只有一条变异能盯住它。
     db.set_options(&opts)?;
     Ok(Json(opts.print))
 }

@@ -741,9 +741,9 @@ const MUT = [
   },
   {
     name: "㉖ 预览保存不校验就落库（20pt 也能存）",
-    file: "crates/finweb/src/handlers.rs",
-    from: "    let problems = opts.validate();\n    if !problems.is_empty() {\n        return Err(AppError::bad_request(problems.join(\"；\")));\n    }\n    db.set_options(&opts)?;\n    Ok(Json(opts.print))",
-    to: "    db.set_options(&opts)?;\n    Ok(Json(opts.print))",
+    file: "crates/findb/src/lib.rs",
+    from: "        let mut problems = o.validate();",
+    to: "        let mut problems: Vec<String> = Vec::new();",
     cmd: FPS("out_of_range_value_is_rejected_with_the_number"),
   },
   {
