@@ -40,6 +40,7 @@ const OPT = (name) => ["test", "-p", "finweb", "--test", "options_print", "--", 
 /** findb 库内的期初导入单测（`mod tests` 里，全路径要是 `opening_book::tests::xxx`） */
 const FOB = (name) => ["test", "-p", "findb", "--lib", `opening_book::tests::${name}`];
 /** 打印预览「点一下、拖一下就能存」的接口（v1.8.44） */
+const ICOST = (name) => ["test", "-p", "findb", "--test", "income_vs_dashboard", "--", name];
 const FPS = (name) => ["test", "-p", "finweb", "--test", "print_settings", "--", name];
 const OBOOK = (name) => ["test", "-p", "findb", "--test", "opening_book", "--", name];
 // v1.8.28 套打：凭证/账簿/单据也走账套里的纸张设置。失效形态是"设置对了但纸上没变"。
@@ -753,6 +754,13 @@ const MUT = [
     to: "        *self = PrintOptions::default();\n        if let Some(v) = &p.orientation {\n            self.orientation = v.trim().to_string();\n        }",
     cmd: FPS("a_single_drag_is_saved_without_touching_the_rest"),
   },
+  {
+    name: "㉗ 营业成本退回只算 6401/6402（5101 不进利润表）",
+    file: "crates/fincore/src/report/income.rs",
+    from: '        expense(&["6401", "6402", "5001", "5101", "5201"]),',
+    to: '        expense(&["6401", "6402"]),',
+    cmd: ICOST("unclosed_manufacturing_cost_reaches_the_income_statement"),
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */
@@ -854,6 +862,14 @@ try {
         maxBuffer: 64 * 1024 * 1024,
       });
     } catch (e) {
+      // `cargo` 不在 PATH（常见于直接 `node tools/mutate-rust.js` 而没先 export
+      // PATH）会让每条变异都报「测试根本没跑」，看着像 58 条全废——直接说清楚。
+      if (e.code === "ENOENT" || /ENOENT/.test(String(e.message || ""))) {
+        console.log(
+          "!! 找不到 cargo —— 先 export PATH=\"$HOME/.cargo/bin:$PATH\"（或 CARGO_HOME 所在目录）再跑",
+        );
+        process.exit(2);
+      }
       out = (e.stdout || "") + (e.stderr || "");
     }
     const c = counts(out);
