@@ -356,9 +356,128 @@ pub fn is_number_like(s: &str) -> bool {
     t.chars().any(|c| c.is_ascii_digit())
 }
 
+
+/// 打印版式的**局部**改动。
+///
+/// 预览页上「点一下方向、拖一下字号」发的是这个，而不是整个 [`PrintOptions`]：
+/// 预览页只认识其中几个字段，整对象覆盖会把它不认识的设置（凭证/账簿/单据纸型、
+/// 套打偏移）一起按默认值冲掉 —— 而且因为都带 `#[serde(default)]`，这种破坏
+/// 一声不响，等下次打凭证才发现纸型没了。
+///
+/// 字段全是 `Option`：`None` = 「这次没动它」。
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrintPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orientation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_pt: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub margin_mm: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_x_mm: Option<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_y_mm: Option<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_company: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_printed_at: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_page_no: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_signatures: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_line: Option<String>,
+}
+
+impl PrintOptions {
+    /// 把一处局部改动合进来；`None` 的字段原样保留。
+    ///
+    /// 这里**不做范围检查** —— 非法值要留给 [`PrintOptions::problems`] 在保存时
+    /// 报出来。悄悄夹回合法范围看着「更稳」，但用户明明填了 20pt 却打出 14pt，
+    /// 而且没有任何提示，只会让人以为设置没生效。
+    pub fn apply_patch(&mut self, p: &PrintPatch) {
+        if let Some(v) = &p.orientation {
+            self.orientation = v.trim().to_string();
+        }
+        if let Some(v) = p.font_pt {
+            self.font_pt = v;
+        }
+        if let Some(v) = p.margin_mm {
+            self.margin_mm = v;
+        }
+        if let Some(v) = p.offset_x_mm {
+            self.offset_x_mm = v;
+        }
+        if let Some(v) = p.offset_y_mm {
+            self.offset_y_mm = v;
+        }
+        if let Some(v) = p.show_company {
+            self.show_company = v;
+        }
+        if let Some(v) = p.show_printed_at {
+            self.show_printed_at = v;
+        }
+        if let Some(v) = p.show_page_no {
+            self.show_page_no = v;
+        }
+        if let Some(v) = p.show_signatures {
+            self.show_signatures = v;
+        }
+        if let Some(v) = &p.sign_line {
+            self.sign_line = v.clone();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 局部改动只动它带来的字段：预览页不认识的设置（纸型）必须原样留着。
+    #[test]
+    fn patch_only_touches_what_it_carries() {
+        let mut po = PrintOptions {
+            voucher_paper: "241x140".into(),
+            ledger_paper: "A5".into(),
+            offset_x_mm: -3,
+            ..PrintOptions::default()
+        };
+        let patch = PrintPatch {
+            font_pt: Some(13),
+            orientation: Some("landscape".into()),
+            ..PrintPatch::default()
+        };
+        po.apply_patch(&patch);
+        assert_eq!(po.font_pt, 13);
+        assert_eq!(po.orientation, "landscape");
+        // 这三个一个都没在 patch 里
+        assert_eq!(po.voucher_paper, "241x140");
+        assert_eq!(po.ledger_paper, "A5");
+        assert_eq!(po.offset_x_mm, -3);
+        assert_eq!(po.margin_mm, PrintOptions::default().margin_mm);
+    }
+
+    /// 越界的值要留下来让保存报错，不能被悄悄夹回去。
+    #[test]
+    fn patch_keeps_out_of_range_values_so_saving_can_complain() {
+        let mut po = PrintOptions::default();
+        po.apply_patch(&PrintPatch {
+            font_pt: Some(20),
+            ..PrintPatch::default()
+        });
+        assert_eq!(po.font_pt, 20);
+        let p = po.problems();
+        assert!(p.iter().any(|m| m.contains("20")), "{p:?}");
+    }
+
+    /// 空 patch 等于什么都没发生——这是「页面只改了勾选框」时的常见形态。
+    #[test]
+    fn empty_patch_changes_nothing() {
+        let before = PrintOptions::default();
+        let mut after = before.clone();
+        after.apply_patch(&PrintPatch::default());
+        assert_eq!(before, after);
+    }
 
     #[test]
     fn default_is_auto_and_sane() {

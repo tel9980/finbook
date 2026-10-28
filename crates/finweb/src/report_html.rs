@@ -20,6 +20,7 @@ pub fn report_table_html(
     company: &str,
     unit: &str,
     po: &PrintOptions,
+    can_edit: bool,
 ) -> String {
     let mut thead = String::new();
     thead.push_str("<th style='width:40px'>行次</th><th>项目</th>");
@@ -70,6 +71,7 @@ pub fn report_table_html(
         &format!("<table><thead><tr>{thead}</tr></thead><tbody>{body}</tbody></table>"),
         cols,
         po,
+        can_edit,
     )
 }
 
@@ -79,6 +81,7 @@ pub fn cash_flow_html(
     company: &str,
     subtitle: &str,
     po: &PrintOptions,
+    can_edit: bool,
 ) -> String {
     let mut body = String::new();
     let mut section = |name: &str,
@@ -146,6 +149,7 @@ pub fn cash_flow_html(
         ),
         4,
         po,
+        can_edit,
     )
 }
 
@@ -155,6 +159,7 @@ pub fn equity_html(
     company: &str,
     subtitle: &str,
     po: &PrintOptions,
+    can_edit: bool,
 ) -> String {
     let mut body = String::new();
     for l in &e.lines {
@@ -186,8 +191,121 @@ pub fn equity_html(
         ),
         4,
         po,
+        can_edit,
     )
 }
+
+
+/// 预览页控制条：有「系统设置」权限时用这个 —— 每一项都是**立刻生效 + 存进账套**。
+///
+/// 为什么把控件做进打印预览页：版式调不调得对，只有在**看到那张纸**的时候才知道。
+/// 原来是「去系统设置改 → 回来点打印 → 发现不对 → 再回去」，来回三五趟就放弃了，
+/// 最后就那么歪着打。点一下、拖一下能当场看到、并且自动存住，才算真的能用。
+const EDIT_BAR: &str = "\
+<div class='pbar'>\
+<button onclick='window.print()'>🖨 打印本页</button>\
+<label>方向<select id='p-o'>\
+<option value='auto'>自动（列多转横向）</option>\
+<option value='portrait'>纵向</option>\
+<option value='landscape'>横向</option></select></label>\
+<label>字号<input type='range' id='p-f' min='9' max='14' step='1'><span id='f-v'></span></label>\
+<label>页边距<input type='range' id='p-m' min='5' max='30' step='1'><span id='m-v'></span></label>\
+<label><input type='checkbox' id='p-c'>编制单位</label>\
+<label><input type='checkbox' id='p-t'>打印时间</label>\
+<label><input type='checkbox' id='p-g'>页码</label>\
+<label><input type='checkbox' id='p-s'>落款</label>\
+<span class='st' id='p-st'></span>\
+<span class='hint'>改这里就是改本账套的默认版式（所有人打印都生效）</span></div>";
+
+/// 没权限时的控制条：只影响本次打印，并且明说。
+const READONLY_BAR: &str = "\
+<div class='pbar'>\
+<button onclick='window.print()'>🖨 打印本页</button>\
+<button onclick=\"live('landscape')\">横向</button>\
+<button onclick=\"live('portrait')\">纵向</button>\
+<button onclick='live(null,1)'>字大</button><button onclick='live(null,-1)'>字小</button>\
+<span class='hint'>你的账号没有「系统设置」权限：这里的调整只对本次打印生效，不会保存</span></div>";
+
+/// 有权限时的前端逻辑。
+///
+/// 两次防抖：拖动滑块会连续触发 `input`，等手停下来 400ms 再发一次请求；
+/// 另外用 `seq` 丢掉过期响应 —— 否则快速拖几下，先发的慢请求后到，状态栏会
+/// 显示成「保存失败」，而其实早就存好了。
+const EDIT_JS: &str = r#"
+var COLS=__COLS__, AUTO=__AUTOCOLS__, MG=__MG__, PT=__PT__, DIR='__DIR__', PG=__PG__===1;
+var LV=document.getElementById('live');
+function dirNow(){ if(DIR==='auto') return COLS>AUTO?'landscape':'portrait'; return DIR; }
+// 与 fincore::print::page_css 保持同形；改一处要想着另一处
+function cssNow(){ return '@page{size:A4 '+dirNow()+';margin:'+MG+'mm}body,table{font-size:'+PT+'pt}'; }
+// 页码单独一条：它只在打印时看得见，开关时不需要重算纸张
+var PGNUM='@page{@bottom-right{content:"第 " counter(page) " 页 / 共 " counter(pages) " 页"}}';
+function paint(){
+  LV.textContent=cssNow();
+  document.getElementById('live2').textContent=PG?PGNUM:'';
+  document.getElementById('q-co').style.display=document.getElementById('p-c').checked?'':'none';
+  document.getElementById('q-tm').style.display=document.getElementById('p-t').checked?'':'none';
+  document.getElementById('q-sg').style.display=document.getElementById('p-s').checked?'':'none';
+  document.getElementById('f-v').textContent=PT+' pt';
+  document.getElementById('m-v').textContent=MG+' mm';
+}
+var seq=0, timer=null;
+function save(){
+  var st=document.getElementById('p-st');
+  st.textContent='保存中…'; st.className='st';
+  var mine=++seq;
+  if(timer) clearTimeout(timer);
+  timer=setTimeout(function(){
+    var body={font_pt:PT, margin_mm:MG, orientation:DIR,
+              show_company:document.getElementById('p-c').checked,
+              show_printed_at:document.getElementById('p-t').checked,
+              show_page_no:PG,
+              show_signatures:document.getElementById('p-s').checked};
+    fetch('/api/reports/print-settings',{method:'POST',credentials:'same-origin',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+      .then(function(r){
+        if(r.ok) return r.json();
+        return r.json().then(function(j){throw new Error(j.error||('HTTP '+r.status));},
+                             function(){throw new Error('HTTP '+r.status);});
+      })
+      .then(function(){ if(mine!==seq) return; st.textContent='已保存 ✓'; st.className='st ok'; })
+      .catch(function(e){ if(mine!==seq) return; st.textContent='保存失败：'+e.message; st.className='st bad'; });
+  },400);
+}
+function bind(id, fn){
+  var el=document.getElementById(id);
+  el.addEventListener('input',function(){ fn(); paint(); save(); });
+  el.addEventListener('change',function(){ fn(); paint(); save(); });
+}
+bind('p-f', function(){ PT=+document.getElementById('p-f').value; });
+bind('p-m', function(){ MG=+document.getElementById('p-m').value; });
+bind('p-c', function(){});
+bind('p-t', function(){});
+bind('p-s', function(){});
+bind('p-g', function(){ PG=document.getElementById('p-g').checked; });
+document.getElementById('p-o').addEventListener('change',function(){
+  DIR=document.getElementById('p-o').value; paint(); save();
+});
+// 初值：把服务端当前设置写进控件，颜色/字号的显示才和纸上一致
+document.getElementById('p-f').value=PT;
+document.getElementById('p-m').value=MG;
+document.getElementById('p-o').value=DIR;
+document.getElementById('p-c').checked=document.getElementById('q-co').style.display!=='none';
+document.getElementById('p-t').checked=document.getElementById('q-tm').style.display!=='none';
+document.getElementById('p-s').checked=document.getElementById('q-sg').style.display!=='none';
+document.getElementById('p-g').checked=PG;
+paint();
+"#;
+
+/// 没权限时的临时调整（只改本次预览的样式，不发请求）。
+const READONLY_JS: &str = r#"
+var MG=__MG__, PT=__PT__, DIR='__DIR__';
+function live(o,d){
+  if(o) DIR=o;
+  if(d) PT=Math.min(14,Math.max(9,PT+d));
+  document.getElementById('live').textContent=
+    '@page{size:A4 '+DIR+';margin:'+MG+'mm}body,table{font-size:'+PT+'pt}';
+}
+"#;
 
 /// 打印页外壳：**任何**一张表都能套（表体自己拼好传进来）。
 ///
@@ -203,27 +321,47 @@ pub fn page_shell(
     table: &str,
     cols: usize,
     po: &PrintOptions,
+    can_edit: bool,
 ) -> String {
     let company_cell = if po.show_company {
-        format!("<span>编制单位：{}</span>", esc(company))
+        format!("<span id='q-co'>编制单位：{}</span>", esc(company))
     } else {
-        "<span></span>".to_string()
+        "<span id='q-co' style='display:none'>编制单位：{}</span>".to_string()
     };
-    let time_cell = if po.show_printed_at {
-        format!(
-            "<span>打印时间：{}</span>",
-            chrono::Local::now().format("%Y-%m-%d %H:%M")
+    let time_cell = format!(
+        "<span id='q-tm'{}>打印时间：{}</span>",
+        if po.show_printed_at { "" } else { " style='display:none'" },
+        chrono::Local::now().format("%Y-%m-%d %H:%M")
+    );
+    let sig_div = format!(
+        "<div class='sig' id='q-sg'{}>{}</div>",
+        if po.show_signatures { "" } else { " style='display:none'" },
+        po.signature_html()
+    );
+    // 预览页的控制条分两种：
+    //   有「系统设置」权限 → 真控件，改完就存进账套（点一下、拖一下都算）；
+    //   没有权限 → 只给本次打印用的临时按钮，并写明不会保存。
+    let (bar, js) = if can_edit {
+        (
+            EDIT_BAR,
+            EDIT_JS
+                .replace("__COLS__", &cols.to_string())
+                .replace("__AUTOCOLS__", &fincore::print::AUTO_LANDSCAPE_COLS.to_string())
+                .replace("__MG__", &po.margin_mm.to_string())
+                .replace("__PT__", &po.font_pt.to_string())
+                .replace("__DIR__", &po.orientation)
+                .replace("__PG__", if po.show_page_no { "1" } else { "0" }),
         )
     } else {
-        "<span></span>".to_string()
+        (
+            READONLY_BAR,
+            READONLY_JS
+                .replace("__MG__", &po.margin_mm.to_string())
+                .replace("__PT__", &po.font_pt.to_string())
+                .replace("__DIR__", &po.orientation),
+        )
     };
-    let sig = po.signature_html();
-    // 预览页上临时改方向/字号：只影响本次打印，不改账套设置（长期设置要进「系统设置」）
-    let init_dir = if po.landscape(cols) {
-        "landscape"
-    } else {
-        "portrait"
-    };
+
     format!(
         "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>\
          <title>{title}</title>\
@@ -234,28 +372,27 @@ pub fn page_shell(
          th,td{{border:1px solid #bbb;padding:4px 8px;}}\
          th{{background:#f0f3f7;}}td.r{{text-align:right;}}td.c{{text-align:center;color:#888;}}\
          .sig{{margin-top:18px;color:#444;}}\
-         .pbar{{position:sticky;top:0;z-index:9;display:flex;gap:10px;align-items:center;background:#1a1a1a;color:#fff;padding:8px 14px;font-family:system-ui,sans-serif;font-size:12px;}}\
-         .pbar button{{background:#fff;color:#111;border:0;border-radius:4px;padding:6px 12px;font-size:13px;cursor:pointer;}}\
+         .pbar{{position:sticky;top:0;z-index:9;display:flex;flex-wrap:wrap;gap:10px 14px;\
+         align-items:center;background:#1a1a1a;color:#fff;padding:8px 14px;\
+         font-family:system-ui,sans-serif;font-size:12px;}}\
+         .pbar button{{background:#fff;color:#111;border:0;border-radius:4px;padding:6px 12px;\
+         font-size:13px;cursor:pointer;}}\
+         .pbar label{{display:flex;gap:6px;align-items:center;cursor:pointer;}}\
+         .pbar input[type=range]{{width:110px;}}\
+         .pbar select{{border:0;border-radius:4px;padding:4px 6px;font-size:13px;}}\
          .pbar .hint{{opacity:.72;}}\
+         .pbar .st{{min-width:76px;opacity:.9;}}\
+         .pbar .st.ok{{color:#7ee787;}}.pbar .st.bad{{color:#ff9a8b;}}\
          @media print{{.pbar{{display:none;}}body{{margin:0;}}\
          tr,td,th{{break-inside:avoid;page-break-inside:avoid;}}}}\
          {page}</style>\
-         <style id='live'></style></head>\
+         <style id='live'></style><style id='live2'></style></head>\
          <body><h2>{title}</h2>\
          <div class='meta'>{company_cell}<span>单位：{unit}</span></div>\
          <div class='meta'><span>{subtitle}</span>{time_cell}</div>\
-         {table}{sig}\
-         <div class='pbar'><button onclick='window.print()'>🖨 打印本页</button>\
-         <button onclick=\"live('landscape')\">横向</button>\
-         <button onclick=\"live('portrait')\">纵向</button>\
-         <button onclick='live(null,1)'>字大</button><button onclick='live(null,-1)'>字小</button>\
-         <span class='hint'>这里的调整只影响本次打印；要长期生效请到「系统设置 → 打印预览」</span></div>\
-         <script>\
-         var MG={margin},PT={font},DIR='{init_dir}';\
-         function live(o,d){{if(o)DIR=o;PT=Math.min(14,Math.max(9,PT+d));\
-         document.getElementById('live').textContent=\
-         '@page{{size:A4 '+DIR+';margin:'+MG+'mm}}body,table{{font-size:'+PT+'pt}}';}}\
-         </script>\
+         {table}{sig_div}\
+         {bar}\
+         <script>{js}</script>\
          </body></html>",
         title = esc(title),
         company_cell = company_cell,
@@ -263,14 +400,12 @@ pub fn page_shell(
         subtitle = esc(subtitle),
         time_cell = time_cell,
         table = table,
-        sig = sig,
+        sig_div = sig_div,
+        bar = bar,
+        js = js,
         page = po.page_css(cols),
-        margin = po.margin_mm,
-        font = po.font_pt,
-        init_dir = init_dir,
     )
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +439,7 @@ mod tests {
             "测试公司",
             "元",
             &PrintOptions::default(),
+            false,
         );
         assert!(html.contains("0.00"), "零值必须印成 0.00");
     }
@@ -324,6 +460,7 @@ mod tests {
             "测试公司",
             "元",
             &po,
+            false,
         );
         assert!(html.contains("size:A4 landscape"), "设置里选了横向就该横向");
         assert!(html.contains("font-size:9pt"), "字号要跟着设置");
@@ -334,7 +471,7 @@ mod tests {
 
     /// 关掉的项目不能留个空壳在纸上
     #[test]
-    fn print_switches_remove_their_blocks() {
+    fn print_switches_hide_their_blocks() {
         let po = PrintOptions {
             show_company: false,
             show_printed_at: false,
@@ -347,11 +484,55 @@ mod tests {
             "测试公司",
             "元",
             &po,
+            false,
         );
-        assert!(!html.contains("编制单位"), "关了编制单位还印出来就是没生效");
-        assert!(!html.contains("打印时间"));
-        assert!(!html.contains("counter(page)"));
-        assert!(!html.contains("class='sig'"));
+        // 这几个块现在**留在 DOM 里但 display:none**：预览页的勾选框要能当场打开/关掉，
+        // 删掉节点就没法「改一下看一眼」。打印与屏幕都一样不显示，所以观感没变。
+        assert!(html.contains("id='q-co' style='display:none'"), "{html}");
+        assert!(html.contains("id='q-tm' style='display:none'"));
+        assert!(html.contains("id='q-sg' style='display:none'"));
+        assert!(!html.contains("counter(page)"), "关了页码不该有页码规则");
+        // 「隐藏」而不是「不存在」的前提是：隐藏的块确实带 display:none，
+        // 别哪天只删了文字、留下一个空 div 占位
+        assert!(!html.contains("<span id='q-co'></span>"));
+    }
+
+    /// 有「系统设置」权限的预览页要给真控件（点一下、拖一下就能存）。
+    #[test]
+    fn editable_preview_offers_controls_that_save() {
+        let po = PrintOptions::default();
+        let html = report_table_html(
+            &table(LineStyle::Normal, vec![fincore::Money::ZERO]),
+            "测试公司",
+            "元",
+            &po,
+            true,
+        );
+        for need in [
+            "id='p-f'",              // 字号滑块
+            "id='p-m'",              // 页边距滑块
+            "id='p-o'",              // 方向
+            "/api/reports/print-settings", // 保存地址
+        ] {
+            assert!(html.contains(need), "缺 {need}：预览页改不了也存不住");
+        }
+        assert!(!html.contains("只对本次打印生效"), "有权限就不该说这句话");
+    }
+
+    /// 没权限时：控件不存在，并且明说不会保存。
+    #[test]
+    fn readonly_preview_says_adjustments_are_not_saved() {
+        let po = PrintOptions::default();
+        let html = report_table_html(
+            &table(LineStyle::Normal, vec![fincore::Money::ZERO]),
+            "测试公司",
+            "元",
+            &po,
+            false,
+        );
+        assert!(!html.contains("id='p-f'"), "没权限不该看到会保存的控件");
+        assert!(!html.contains("/api/reports/print-settings"));
+        assert!(html.contains("只对本次打印生效"), "{html}");
     }
 
     /// 列多自动横向：两端是同一套判定，不能只改桌面端
@@ -360,7 +541,7 @@ mod tests {
         let po = PrintOptions::default();
         let mut t = table(LineStyle::Normal, vec![fincore::Money::ZERO]);
         t.columns = (1..=10).map(|i| format!("列{i}")).collect();
-        let html = report_table_html(&t, "测试公司", "元", &po);
+        let html = report_table_html(&t, "测试公司", "元", &po, true);
         assert!(html.contains("size:A4 landscape"), "10 列在纵向放不下");
     }
 }

@@ -39,6 +39,8 @@ const FPRINT = (name) => ["test", "-p", "fincore", "--lib", `print::tests::${nam
 const OPT = (name) => ["test", "-p", "finweb", "--test", "options_print", "--", name];
 /** findb 库内的期初导入单测（`mod tests` 里，全路径要是 `opening_book::tests::xxx`） */
 const FOB = (name) => ["test", "-p", "findb", "--lib", `opening_book::tests::${name}`];
+/** 打印预览「点一下、拖一下就能存」的接口（v1.8.44） */
+const FPS = (name) => ["test", "-p", "finweb", "--test", "print_settings", "--", name];
 const OBOOK = (name) => ["test", "-p", "findb", "--test", "opening_book", "--", name];
 // v1.8.28 套打：凭证/账簿/单据也走账套里的纸张设置。失效形态是"设置对了但纸上没变"。
 const FPFORM = (name) => ["test", "-p", "findb", "--lib", `printform::tests::${name}`];
@@ -729,6 +731,27 @@ const MUT = [
     from: '            let to_customer = code.starts_with("1122") || code.starts_with("2203");',
     to: "            let to_customer = code.starts_with('1');",
     cmd: FOB("balances_sheet_keeps_quantity_item_bank_and_party"),
+  },
+  {
+    name: "㉖ 预览保存忽略字号（拖了不生效）",
+    file: "crates/fincore/src/print.rs",
+    from: "        if let Some(v) = p.font_pt {\n            self.font_pt = v;\n        }",
+    to: "        if p.font_pt.is_some() {}",
+    cmd: FPS("a_single_drag_is_saved_without_touching_the_rest"),
+  },
+  {
+    name: "㉖ 预览保存不校验就落库（20pt 也能存）",
+    file: "crates/finweb/src/handlers.rs",
+    from: "    let problems = opts.validate();\n    if !problems.is_empty() {\n        return Err(AppError::bad_request(problems.join(\"；\")));\n    }\n    db.set_options(&opts)?;\n    Ok(Json(opts.print))",
+    to: "    db.set_options(&opts)?;\n    Ok(Json(opts.print))",
+    cmd: FPS("out_of_range_value_is_rejected_with_the_number"),
+  },
+  {
+    name: "㉖ 局部改动退化成整份覆盖（纸型被冲掉）",
+    file: "crates/fincore/src/print.rs",
+    from: "        if let Some(v) = &p.orientation {\n            self.orientation = v.trim().to_string();\n        }",
+    to: "        *self = PrintOptions::default();\n        if let Some(v) = &p.orientation {\n            self.orientation = v.trim().to_string();\n        }",
+    cmd: FPS("a_single_drag_is_saved_without_touching_the_rest"),
   },
 ];
 

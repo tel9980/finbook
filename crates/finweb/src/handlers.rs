@@ -359,6 +359,8 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/roles", get(list_roles))
         // 账套参数 / 仪表盘 / 期间
         .route("/api/options", get(get_options).put(put_options))
+        // 打印预览页上的「点一下 / 拖一下」直接落库（局部更新，不覆盖纸型等它不认识的字段）
+        .route("/api/reports/print-settings", post(post_print_settings))
         .route("/api/dashboard", get(get_dashboard))
         .route("/api/workbench", get(get_workbench))
         .route("/api/notices", get(get_notices))
@@ -3100,6 +3102,31 @@ async fn put_options(
     // set_options 内部还会补一道「业务默认科目必须存在且是末级」的查库校验
     db.set_options(&opts)?;
     Ok(Json(json!({"ok": true})))
+}
+
+/// 打印预览页上的调整直接落库。
+///
+/// 收的是 [`fincore::print::PrintPatch`]（全是 `Option`），只合并请求里带来的字段。
+/// 为什么不做成「整份 `PrintOptions` 覆盖」：预览页不认识的字段（凭证/账簿/单据
+/// 纸型）会被 `serde(default)` 悄悄重置成默认值，用户下次打凭证才发现纸型没了。
+///
+/// 权限跟「系统设置」一致：版式是**账套级**的，改一次所有人都变。没有这个权限的
+/// 账号，预览页只给「本次打印」的临时调整（页面会写明）。
+async fn post_print_settings(
+    user: CurrentUser,
+    Json(patch): Json<fincore::print::PrintPatch>,
+) -> Result<Json<fincore::PrintOptions>, AppError> {
+    user.require(Perm::SysOption)?;
+    let db = &user.db;
+    let mut opts = db.options();
+    opts.print.apply_patch(&patch);
+    // 越界值在这里被挡住并带上原值，而不是被悄悄夹回合法范围
+    let problems = opts.validate();
+    if !problems.is_empty() {
+        return Err(AppError::bad_request(problems.join("；")));
+    }
+    db.set_options(&opts)?;
+    Ok(Json(opts.print))
 }
 
 fn current_period(state: &WebState, user: &CurrentUser) -> Period {
@@ -6205,9 +6232,11 @@ async fn print_trial_balance(
 ) -> Result<Response, AppError> {
     // 打印预览：所有有「账簿报表」权限的角色都可使用（不落地文件）
     user.require(Perm::Report)?;
+    // 预览页要不要给「改了就存」的真控件：版式是账套级的，得跟系统设置同一个权限
+    let can_edit = user.require(Perm::SysOption).is_ok();
     let (rows, totals) = trial_balance_data(&state, &user, &q)?;
     let po = print_opts_from_q(user.db.options().print, &q);
-    let html = trial_balance_html(&user.company, &q, &rows, &totals, &po);
+    let html = trial_balance_html(&user.company, &q, &rows, &totals, &po, can_edit);
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -6696,6 +6725,7 @@ fn trial_balance_html(
     rows: &[fincore::balance::BalanceRow],
     totals: &fincore::balance::TrialBalance,
     po: &fincore::PrintOptions,
+    can_edit: bool,
 ) -> String {
     let from = q.get("from").cloned().unwrap_or_default();
     let to = q.get("to").cloned().unwrap_or_default();
@@ -6747,6 +6777,7 @@ fn trial_balance_html(
         &table,
         7,
         po,
+        can_edit,
     )
 }
 
@@ -14799,6 +14830,8 @@ async fn print_balance_sheet(
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    // 预览页要不要给「改了就存」的真控件：版式是账套级的，得跟系统设置同一个权限
+    let can_edit = user.require(Perm::SysOption).is_ok();
     user.require(Perm::FinReport)?;
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
@@ -14813,7 +14846,7 @@ async fn print_balance_sheet(
             Box::new(fincore::report::to_begin),
         ],
     )?;
-    let html = crate::report_html::report_table_html(&t, &user.company, "元", &print_opts_from_q(db.options().print, &q));
+    let html = crate::report_html::report_table_html(&t, &user.company, "元", &print_opts_from_q(db.options().print, &q), can_edit);
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -14901,6 +14934,8 @@ async fn print_income_statement(
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    // 预览页要不要给「改了就存」的真控件：版式是账套级的，得跟系统设置同一个权限
+    let can_edit = user.require(Perm::SysOption).is_ok();
     user.require(Perm::FinReport)?;
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
@@ -14912,7 +14947,7 @@ async fn print_income_statement(
         to,
         vec![Box::new(fincore::report::identity), Box::new(to_ytd)],
     )?;
-    let html = crate::report_html::report_table_html(&t, &user.company, "元", &print_opts_from_q(db.options().print, &q));
+    let html = crate::report_html::report_table_html(&t, &user.company, "元", &print_opts_from_q(db.options().print, &q), can_edit);
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -14947,12 +14982,14 @@ async fn print_cash_flow(
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    // 预览页要不要给「改了就存」的真控件：版式是账套级的，得跟系统设置同一个权限
+    let can_edit = user.require(Perm::SysOption).is_ok();
     user.require(Perm::FinReport)?;
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let cf = findb::reports::cash_flow_statement(&db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
-    let html = crate::report_html::cash_flow_html(&cf, &user.company, &subtitle, &print_opts_from_q(db.options().print, &q));
+    let html = crate::report_html::cash_flow_html(&cf, &user.company, &subtitle, &print_opts_from_q(db.options().print, &q), can_edit);
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -14961,12 +14998,14 @@ async fn print_equity_statement(
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    // 预览页要不要给「改了就存」的真控件：版式是账套级的，得跟系统设置同一个权限
+    let can_edit = user.require(Perm::SysOption).is_ok();
     user.require(Perm::FinReport)?;
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let stmt = findb::reports::equity_statement(&db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
-    let html = crate::report_html::equity_html(&stmt, &user.company, &subtitle, &print_opts_from_q(db.options().print, &q));
+    let html = crate::report_html::equity_html(&stmt, &user.company, &subtitle, &print_opts_from_q(db.options().print, &q), can_edit);
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
