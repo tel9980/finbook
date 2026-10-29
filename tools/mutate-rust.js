@@ -20,6 +20,9 @@ const CORE = (name) => ["test", "-p", "fincore", "--lib", `user::tests::${name}`
 // v1.8.21「导入导出闭环」的三个新 target。这类功能最典型的失效是
 // 「界面点得动、文件也下来了，但数据其实没进去/没出来」，所以每条都要有变异守着。
 const XLSX = (name) => ["test", "-p", "finweb", "--test", "export_xlsx", "--", name];
+const CFRINT = (name) =>
+  ["test", "-p", "finweb", "--test", "cashflow_print_compare", "--", name];
+const FCFW = (name) => ["test", "-p", "findb", "--lib", `reports::compare_window_tests::${name}`];
 const STATIC = (name) => ["test", "-p", "finweb", "--test", "static_cache", "--", name];
 const MC = (name) => ["test", "-p", "finweb", "--test", "month_close_wizard", "--", name];
 const ROUND = (name) => ["test", "-p", "finweb", "--test", "roundtrip", "--", name];
@@ -893,6 +896,22 @@ const MUT = [
     from: "            if seen.contains(&l.code.as_str()) {\n                continue;\n            }",
     to: "            continue;",
     cmd: FSH("cash_flow_compare_keeps_last_period_only_items"),
+  },
+
+  // ⑭ 现金流量表打印页也要有上期对比（v1.8.51）
+  {
+    name: "⑭ 打印页不给上期对比",
+    file: "crates/finweb/src/handlers.rs",
+    from: "        Some(&prev),\n    );\n    Ok(([(header::CONTENT_TYPE, \"text/html; charset=utf-8\")], html).into_response())",
+    to: "        None,\n    );\n    Ok(([(header::CONTENT_TYPE, \"text/html; charset=utf-8\")], html).into_response())",
+    cmd: CFRINT("cash_flow_print_page_carries_last_period_columns"),
+  },
+  {
+    name: "⑭ 上期区间多往前推几个月（3 个月报成 2 个月前那段）",
+    file: "crates/findb/src/reports.rs",
+    from: "    let prev_to = from.prev();\n    let mut prev_from = prev_to;",
+    to: "    let mut prev_to = from.prev();\n    for _ in 1..months {\n        prev_to = prev_to.prev();\n    }\n    let mut prev_from = prev_to;",
+    cmd: FCFW("quarter_takes_the_previous_quarter_not_one_month"),
   },
 
 ];

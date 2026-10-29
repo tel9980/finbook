@@ -23,6 +23,8 @@ pub enum SettleTab {
     Aging,
     /// 往来对账单：期初 + 本期流水 + 期末，发给客户回签
     Statement,
+    /// 催款单 / 对账函：一页 A4 文书，逐单带逾期天数
+    Dunning,
 }
 
 /// 账龄区间方案
@@ -116,6 +118,16 @@ pub struct SettleView {
     pub st_from: String,
     pub st_to: String,
     pub st_memo: String,
+    /// 催款单：ar 催款 / ap 对账函
+    pub dun_kind: String,
+    /// 催款单：往来单位编码
+    pub dun_party: String,
+    /// 催款单：附注（写进函里的一句话）
+    pub dun_memo: String,
+    /// 催款单列表
+    pub dunnings: Vec<findb::settle::Dunning>,
+    /// 催款单：选中的那张
+    pub dun_sel: Option<i64>,
     /// 账龄下钻：选中的往来对象（`customer=C01` 形式的 aux_key）
     pub drill_key: Option<String>,
     /// 账龄下钻：该对象还没核销完的分录
@@ -164,6 +176,11 @@ impl Default for SettleView {
                 .iter()
                 .map(|m| m.fmt_plain())
                 .collect(),
+            dun_kind: "ar".to_string(),
+            dun_party: String::new(),
+            dun_memo: String::new(),
+            dunnings: Vec::new(),
+            dun_sel: None,
             drill_key: None,
             drill_rows: Vec::new(),
             confirm_auto: false,
@@ -344,6 +361,7 @@ impl SettleView {
             SettleTab::Offset => self.show_offset(ctx, ui),
             SettleTab::Aging => self.show_aging(ctx, ui),
             SettleTab::Statement => self.show_statement(ctx, ui),
+            SettleTab::Dunning => self.show_dunning(ctx, ui),
         }
     }
 
@@ -1317,6 +1335,156 @@ impl SettleView {
     /// 对账单是某期间的**完整流水**（含已核销），客户盖章确认后即为对账闭环。
     /// 小厂客户几个月才确认一次，靠的就是这个——每一期发出去、等回签，
     /// 没有回签的就一直挂在"已发出"里，一眼能看出跟谁还没对上。
+    /// 催款函：生成 → 打印。桌面版一直没有这一页，所以以前只能去网页端打。
+    fn show_dunning(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        let mut generate = false;
+        let mut print_id: Option<i64> = None;
+        let mut mark_sent: Option<i64> = None;
+
+        widgets::card(ui, "催款函 / 对账函", |ui| {
+            ui.label(
+                RichText::new(
+                    "一张 A4 文书：致语 + 逐单明细（每单带逾期天数，按客户档案里的账期算）+ 合计 + 落款。\
+                     预收/预付不进合计，会在函末单独说明——混进去客户会以为我们记错账。",
+                )
+                .weak(),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("类型");
+                ui.selectable_value(&mut self.dun_kind, "ar".to_string(), "催款函（应收）");
+                ui.selectable_value(&mut self.dun_kind, "ap".to_string(), "对账函（应付）");
+                ui.separator();
+                ui.label(if self.dun_kind == "ar" { "客户" } else { "供应商" });
+                ui.add_sized(
+                    [110.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.dun_party)
+                        .hint_text(if self.dun_kind == "ar" { "C001" } else { "S001" }),
+                );
+                ui.separator();
+                ui.label("附注");
+                ui.add_sized(
+                    [220.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.dun_memo).hint_text("如：请于本月内结清"),
+                );
+                if ui.button("生成催款单").clicked() {
+                    generate = true;
+                }
+            });
+        });
+
+        if generate {
+            let kind = self.dun_kind.clone();
+            let party = self.dun_party.trim().to_string();
+            if party.is_empty() {
+                ctx.toast("先填往来单位编码");
+            } else {
+                let aux_kind = if kind == "ar" {
+                    fincore::AuxKind::Customer
+                } else {
+                    fincore::AuxKind::Supplier
+                };
+                let name = findb::auxs::get(ctx.db(), aux_kind, &party)
+                    .ok()
+                    .flatten()
+                    .map(|e| e.name)
+                    .unwrap_or_else(|| party.clone());
+                let account = {
+                    let b = ctx.db().options().biz_accounts.clone();
+                    if kind == "ar" { b.ar } else { b.ap }
+                };
+                let today = chrono::Local::now().date_naive();
+                let who = ctx.user().username.clone();
+                match findb::settle::dunning_create(
+                    ctx.db(),
+                    &kind,
+                    &account,
+                    &party,
+                    &name,
+                    today,
+                    self.dun_memo.trim(),
+                    &who,
+                ) {
+                    Ok(d) => {
+                        ctx.toast(format!(
+                            "已生成 {}，共 {} 笔，合计 {}",
+                            d.no,
+                            d.item_count,
+                            d.amount.fmt_money()
+                        ));
+                        self.dun_sel = Some(d.id);
+                        self.dunnings = findb::settle::dunning_list(ctx.db(), Some(&kind), None)
+                            .unwrap_or_default();
+                    }
+                    Err(e) => ctx.toast(format!("生成失败：{e}")),
+                }
+            }
+        }
+
+        ui.add_space(8.0);
+        if self.dunnings.is_empty() {
+            ui.label(RichText::new("还没有催款单。上面填上客户编码点「生成催款单」。").weak());
+            return;
+        }
+        let opts = ctx.db().options();
+        let company = opts.company.clone();
+        egui::Grid::new("dunning_list")
+            .num_columns(6)
+            .spacing([12.0, 4.0])
+            .show(ui, |ui| {
+                for h in ["单号", "日期", "往来单位", "合计", "状态", "操作"] {
+                    ui.label(RichText::new(h).strong());
+                }
+                ui.end_row();
+                for d in &self.dunnings {
+                    ui.label(&d.no);
+                    ui.label(d.date.format("%Y-%m-%d").to_string());
+                    ui.label(format!("{} {}", d.party_code, d.party_name));
+                    ui.label(d.amount.fmt_money());
+                    let (txt, color) = match d.status.as_str() {
+                        "sent" => ("已发出", palette::OK),
+                        "settled" => ("已结清", palette::OK),
+                        "cancelled" => ("已作废", ui.visuals().weak_text_color()),
+                        _ => ("草稿", palette::WARN),
+                    };
+                    ui.label(RichText::new(txt).color(color));
+                    ui.horizontal(|ui| {
+                        if ui.small_button("打印函").clicked() {
+                            print_id = Some(d.id);
+                        }
+                        if d.status == "draft" && ui.small_button("标记已发出").clicked() {
+                            mark_sent = Some(d.id);
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+
+        if let Some(id) = mark_sent {
+            match findb::settle::dunning_status(ctx.db(), id, "sent") {
+                Ok(()) => {
+                    let kind = self.dun_kind.clone();
+                    self.dunnings =
+                        findb::settle::dunning_list(ctx.db(), Some(&kind), None).unwrap_or_default();
+                }
+                Err(e) => ctx.toast(format!("标记失败：{e}")),
+            }
+        }
+        if let Some(id) = print_id {
+            match findb::settle::dunning_get(ctx.db(), id) {
+                Ok(Some(d)) => {
+                    let html =
+                        findb::printform::dunning_letter_html(&d, &company, "元", &opts.print);
+                    if let Err(e) = crate::views::export::print_html_content("催款函", &html) {
+                        ctx.toast(format!("打印失败：{e}"));
+                    }
+                }
+                Ok(None) => ctx.toast("这张催款单找不到了"),
+                Err(e) => ctx.toast(format!("读取失败：{e}")),
+            }
+        }
+    }
+
     fn show_statement(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         let mut create = false;
 

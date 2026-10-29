@@ -82,73 +82,172 @@ pub fn cash_flow_html(
     subtitle: &str,
     po: &PrintOptions,
     can_edit: bool,
+    prev: Option<&fincore::report::cashflow::CashFlowStatement>,
 ) -> String {
+    use fincore::report::cashflow::CashFlowStatement;
+    let extra = prev.is_some();
+    let ncols = if extra { 6 } else { 4 };
+
+    // 上期某项目净额：按 code 找（不能按名字，名字会改）
+    let prev_net = |code: &str| -> Option<fincore::Money> {
+        let p = prev?;
+        p.operating
+            .iter()
+            .chain(p.investing.iter())
+            .chain(p.financing.iter())
+            .find(|l| l.code == code)
+            .map(|l| l.net)
+    };
+
     let mut body = String::new();
     let mut section = |name: &str,
                        lines: &[fincore::report::cashflow::CashFlowLine],
-                       net: fincore::Money| {
+                       prev_lines: &[fincore::report::cashflow::CashFlowLine],
+                       net: fincore::Money,
+                       prev_total: Option<fincore::Money>| {
         body.push_str(&format!(
-            "<tr style='font-weight:600;background:#f5f7fa'><td colspan='4'>{}</td></tr>",
+            "<tr style='font-weight:600;background:#f5f7fa'><td colspan='{ncols}'>{}</td></tr>",
             esc(name)
         ));
         for l in lines {
-            body.push_str(&format!(
-                "<tr><td>{}</td><td class='r'>{}</td><td class='r'>{}</td><td class='r'>{}</td></tr>",
+            let mut row = format!(
+                "<tr><td>{}</td><td class='r'>{}</td><td class='r'>{}</td><td class='r'>{}</td>",
                 esc(&l.name),
                 l.inflow.fmt_money(),
                 l.outflow.fmt_money(),
                 l.net.fmt_money()
-            ));
+            );
+            if extra {
+                let o = prev_net(&l.code);
+                row.push_str(&format!(
+                    "<td class='r'>{}</td><td class='r'>{}</td>",
+                    o.map(|v| v.fmt_money()).unwrap_or_default(),
+                    (l.net - o.unwrap_or(fincore::Money::ZERO)).fmt_money()
+                ));
+            }
+            row.push_str("</tr>");
+            body.push_str(&row);
+        }
+        // 上期有、本期没有的项目不能消失 —— 否则「上月买了设备、这月没买」这件事
+        // 在对比列里凭空不见，而两张表看着都挺对。
+        if extra {
+            for o in prev_lines {
+                if lines.iter().any(|l| l.code == o.code) {
+                    continue;
+                }
+                body.push_str(&format!(
+                    "<tr><td>{}（上期有）</td><td class='r'></td><td class='r'></td>\
+                     <td class='r'></td><td class='r'>{}</td><td class='r'>{}</td></tr>",
+                    esc(&o.name),
+                    o.net.fmt_money(),
+                    (fincore::Money::ZERO - o.net).fmt_money()
+                ));
+            }
         }
         body.push_str(&format!(
-            "<tr style='font-weight:600'><td>小计</td><td></td><td></td><td class='r'>{}</td></tr>",
+            "<tr style='font-weight:600'><td>小计</td><td></td><td></td><td class='r'>{}</td>",
             net.fmt_money()
         ));
+        if extra {
+            body.push_str(&format!(
+                "<td class='r'>{}</td><td class='r'>{}</td>",
+                prev_total.map(|v| v.fmt_money()).unwrap_or_default(),
+                (net - prev_total.unwrap_or(fincore::Money::ZERO)).fmt_money()
+            ));
+        }
+        body.push_str("</tr>");
     };
-    section("一、经营活动", &cf.operating, cf.operating_net);
-    section("二、投资活动", &cf.investing, cf.investing_net);
-    section("三、筹资活动", &cf.financing, cf.financing_net);
-    body.push_str(&format!(
-        "<tr style='font-weight:bold;background:#fafafa'><td>现金及现金等价物净增加额</td>\
-         <td></td><td></td><td class='r'>{}</td></tr>",
-        cf.net_increase.fmt_money()
-    ));
-    body.push_str(&format!(
-        "<tr><td>加：期初现金及现金等价物余额</td><td></td><td></td><td class='r'>{}</td></tr>",
-        cf.begin_cash.fmt_money()
-    ));
-    body.push_str(&format!(
-        "<tr style='font-weight:bold'><td>期末现金及现金等价物余额</td>\
-         <td></td><td></td><td class='r'>{}</td></tr>",
-        cf.end_cash.fmt_money()
-    ));
+
+    let blank = &[][..];
+    let p = prev;
+    section(
+        "一、经营活动",
+        &cf.operating,
+        p.map(|x| x.operating.as_slice()).unwrap_or(blank),
+        cf.operating_net,
+        p.map(|x| x.operating_net),
+    );
+    section(
+        "二、投资活动",
+        &cf.investing,
+        p.map(|x| x.investing.as_slice()).unwrap_or(blank),
+        cf.investing_net,
+        p.map(|x| x.investing_net),
+    );
+    section(
+        "三、筹资活动",
+        &cf.financing,
+        p.map(|x| x.financing.as_slice()).unwrap_or(blank),
+        cf.financing_net,
+        p.map(|x| x.financing_net),
+    );
+
+    let mut push_total = |label: &str, v: fincore::Money, pv: Option<fincore::Money>, bold: bool| {
+        if bold {
+            body.push_str(&format!(
+                "<tr style='font-weight:bold;background:#fafafa'><td>{}</td><td></td><td></td>\
+                 <td class='r'>{}</td>",
+                esc(label),
+                v.fmt_money()
+            ));
+        } else {
+            body.push_str(&format!(
+                "<tr><td>{}</td><td></td><td></td><td class='r'>{}</td>",
+                esc(label),
+                v.fmt_money()
+            ));
+        }
+        if extra {
+            body.push_str(&format!(
+                "<td class='r'>{}</td><td class='r'>{}</td>",
+                pv.map(|x| x.fmt_money()).unwrap_or_default(),
+                (v - pv.unwrap_or(fincore::Money::ZERO)).fmt_money()
+            ));
+        }
+        body.push_str("</tr>");
+    };
+    push_total(
+        "现金及现金等价物净增加额",
+        cf.net_increase,
+        p.map(|x| x.net_increase),
+        true,
+    );
+    push_total("加：期初现金及现金等价物余额", cf.begin_cash, None, false);
+    push_total("期末现金及现金等价物余额", cf.end_cash, None, true);
+
     let ties = cf.ties();
-    body.push_str(&format!(
-        "<tr><td colspan='4' style='color:{}'>{}</td></tr>",
+    let note = |body: &mut String, color: &str, text: &str| {
+        body.push_str(&format!(
+            "<tr><td colspan='{ncols}' style='color:{color}'>{text}</td></tr>"
+        ));
+    };
+    note(
+        &mut body,
         if ties { "#2e7d32" } else { "#c00" },
         if ties {
             "勾稽：期末现金 − 期初现金 = 净增加额 ✓"
         } else {
             "勾稽：净增加额与期初期末差不等，请检查未标注现金流量的凭证"
-        }
-    ));
-    {
-        let color = if cf.fully_assigned() { "#2e7d32" } else { "#c00" };
-        body.push_str(&format!(
-            "<tr><td colspan='4' style='color:{color}'>{}</td></tr>",
-            crate::report_html::esc(&cf.assignment_note())
-        ));
+        },
+    );
+    let color = if cf.fully_assigned() { "#2e7d32" } else { "#c00" };
+    note(&mut body, color, &cf.assignment_note());
+
+    let mut head = String::from(
+        "<table><thead><tr><th>项目</th><th class='r'>流入</th><th class='r'>流出</th>\
+         <th class='r'>净额</th>",
+    );
+    if extra {
+        head.push_str("<th class='r'>上期净额</th><th class='r'>变动</th>");
     }
+    head.push_str("</tr></thead><tbody>");
     page_shell(
         "现金流量表",
         company,
         subtitle,
         "元",
-        &format!(
-            "<table><thead><tr><th>项目</th><th class='r'>流入</th><th class='r'>流出</th>\
-             <th class='r'>净额</th></tr></thead><tbody>{body}</tbody></table>"
-        ),
-        4,
+        &format!("{head}{body}</tbody></table>"),
+        ncols,
         po,
         can_edit,
     )
@@ -564,117 +663,6 @@ pub fn dunning_letter_html(
     unit: &str,
     po: &fincore::PrintOptions,
 ) -> String {
-    let is_ar = d.kind == "ar";
-    let title = if is_ar { "催款函" } else { "对账函" };
-    let owed_label = if is_ar { "应收" } else { "应付" };
-    let owed_total = d.owed_total();
-    let advance_total = d.advance_total();
-
-    // 明细：只列「对方欠我方」的行。预收/预付是另一件事（我方欠对方），
-    // 混进催款函客户会以为我们记错了账 —— 单独在末尾说明。
-    let mut rows = String::new();
-    let mut idx = 0;
-    for it in d.detail.iter() {
-        if !findb::settle::dunning_item_is_owed(&it.direction) {
-            continue;
-        }
-        idx += 1;
-        let overdue = if it.overdue_days > 0 {
-            format!("<td class='r od'>逾期 {} 天</td>", it.overdue_days)
-        } else {
-            "<td class='r'></td>".to_string()
-        };
-        rows.push_str(&format!(
-            "<tr><td class='c'>{idx}</td><td>{}</td><td class='c'>{}</td><td>{}</td><td class='r'>{}</td>{overdue}</tr>",
-            esc(&it.doc_no),
-            esc(&it.date),
-            esc(&it.summary),
-            it.amount.fmt_money()
-        ));
-    }
-    let total_overdue = d
-        .detail
-        .iter()
-        .filter(|i| findb::settle::dunning_item_is_owed(&i.direction))
-        .map(|i| i.overdue_days)
-        .max()
-        .unwrap_or(0);
-
-    let mut extra = String::new();
-    if !advance_total.is_zero() {
-        extra.push_str(&format!(
-            "<p class='note'>另：账面记有贵方预交款 {}，已单独列示，未计入上面的合计。</p>",
-            advance_total.fmt_money()
-        ));
-    }
-    if total_overdue > 0 {
-        extra.push_str(&format!(
-            "<p class='note'>其中最早一笔已逾期 <b>{total_overdue}</b> 天。</p>"
-        ));
-    }
-    if !d.memo.trim().is_empty() {
-        extra.push_str(&format!("<p class='note'>附注：{}</p>", esc(&d.memo)));
-    }
-
-    format!(
-        "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>\
-<title>{title} {no}</title><style>{page}\
-body{{font-family:-apple-system,'Microsoft YaHei',sans-serif;color:#222;margin:0}}\
-.box{{max-width:760px;margin:0 auto;padding:8mm 6mm}}\
-h1{{font-size:20pt;text-align:center;letter-spacing:6px;margin:0 0 4mm}}\
-.meta{{font-size:10pt;color:#555;text-align:center;margin-bottom:6mm}}\
-.to{{margin:0 0 4mm;font-size:11pt}}\
-p{{margin:0 0 3mm;line-height:1.7;font-size:{fs}pt}}\
-table{{width:100%;border-collapse:collapse;margin:3mm 0;font-size:{fs}pt}}\
-th,td{{border:1px solid #999;padding:1.6mm 2mm}}\
-th{{background:#f2f2f2}}\
-.c{{text-align:center}} .r{{text-align:right;font-variant-numeric:tabular-nums}}\
-.od{{color:#b46a00;white-space:nowrap}}\
-tr.tot td{{font-weight:700;background:#fafafa}}\
-.note{{color:#555;font-size:10pt}}\
-.sign{{margin-top:14mm;text-align:right;font-size:{fs}pt;line-height:2}}\
-.pbar{{text-align:center;margin:4mm 0}}\
-@media print{{.pbar{{display:none}}}}\
-</style></head><body><div class='pbar'>\
-<button onclick='window.print()'>打印 / 另存为 PDF</button></div>\
-<div class='box'><h1>{title}</h1>\
-<div class='meta'>{no} · {date}</div>\
-<div class='to'>致：{party}{code}</div>\
-<p>截至 {date}，贵方与我方往来账项中，尚欠我方{unit_first}货款合计 <b>{total}</b> 元（{n} 笔），明细如下：</p>\
-<table><thead><tr><th class='c' style='width:8%'>序号</th><th style='width:20%'>单据号</th>\
-<th class='c' style='width:14%'>日期</th><th>摘要</th><th class='r' style='width:16%'>金额</th>\
-<th class='r' style='width:16%'>备注</th></tr></thead><tbody>{rows}\
-<tr class='tot'><td colspan='4' class='r'>合计（{owed_label}）</td><td class='r'>{total}</td><td></td></tr>\
-</tbody></table>{extra}\
-<p>请核对。如无异议，请尽快安排付款；如与贵方记录不一致，请及时与我方联系对账。</p>\
-<div class='sign'>{company}<br>{sig}</div>\
-</div></body></html>",
-        title = title,
-        no = esc(&d.no),
-        date = d.date.format("%Y-%m-%d"),
-        party = esc(&d.party_name),
-        code = if d.party_code.trim().is_empty() {
-            String::new()
-        } else {
-            format!("（{}）", esc(&d.party_code))
-        },
-        page = po.page_box_css("A4 portrait", 16),
-        fs = po.font_pt,
-        total = owed_total.fmt_money(),
-        n = idx,
-        rows = rows,
-        extra = extra,
-        unit_first = unit,
-        owed_label = owed_label,
-        company = if po.show_company {
-            esc(company)
-        } else {
-            String::new()
-        },
-        sig = if po.show_signatures {
-            po.signature_html()
-        } else {
-            String::new()
-        },
-    )
+    // 实现在 `findb::printform` —— 桌面端也要打同一封信，两处各写一份迟早会长歪
+    findb::printform::dunning_letter_html(d, company, unit, po)
 }

@@ -368,10 +368,10 @@ pub fn prior_range(from: fincore::Period, to: fincore::Period) -> (fincore::Peri
         - (from.ymm() % 100) as i32
         + 1)
         .max(1) as usize;
-    let mut prev_to = from.prev();
-    for _ in 1..months {
-        prev_to = prev_to.prev();
-    }
+    // 末尾是本期起始月的前一个月，再往前推 months-1 个月就是上期的起点。
+    // 曾经的写法把 `prev_to` 也往前推了 months-1，于是 3 个月的对比实际取的是
+    // 「再往前两个月的那 3 个月」——差两个月，看着像数字都对，其实是另一段时间。
+    let prev_to = from.prev();
     let mut prev_from = prev_to;
     for _ in 1..months {
         prev_from = prev_from.prev();
@@ -1343,5 +1343,34 @@ mod tests {
         assert_eq!(o.invoice_out, (Money::ZERO, 0));
         assert_eq!(o.recent.len(), 1);
         assert_eq!(o.recent[0].debit_total(), Money::parse("1000").unwrap());
+    }
+}
+
+#[cfg(test)]
+mod compare_window_tests {
+    use super::prior_range;
+    use fincore::Period;
+
+    fn p(s: &str) -> Period {
+        Period::parse(s).expect("期间")
+    }
+
+    #[test]
+    fn single_month_takes_the_month_before() {
+        let (f, t) = prior_range(p("2026-03"), p("2026-03"));
+        assert_eq!((f.code(), t.code()), ("2026-02".to_string(), "2026-02".to_string()));
+    }
+
+    #[test]
+    fn quarter_takes_the_previous_quarter_not_one_month() {
+        let (f, t) = prior_range(p("2026-04"), p("2026-06"));
+        assert_eq!(f.code(), "2026-01", "3 个月就取上一个 3 个月");
+        assert_eq!(t.code(), "2026-03");
+    }
+
+    #[test]
+    fn window_crosses_the_year_boundary() {
+        let (f, t) = prior_range(p("2026-01"), p("2026-02"));
+        assert_eq!((f.code(), t.code()), ("2025-11".to_string(), "2025-12".to_string()));
     }
 }

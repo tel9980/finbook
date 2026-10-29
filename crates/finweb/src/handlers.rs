@@ -15145,9 +15145,18 @@ async fn print_cash_flow(
     user.require(Perm::FinReport)?;
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
-    let cf = findb::reports::cash_flow_statement(&db, from, to, Some(&user.user))?;
+    // 打印页也带上期对比：Excel 有、网页有，打印页没有的话，拿纸去开会的人看到的
+    // 是唯一一份「只有本期」的表。
+    let (cf, prev) = findb::reports::cash_flow_compare(&db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
-    let html = crate::report_html::cash_flow_html(&cf, &user.company, &subtitle, &print_opts_from_q(db.options().print, &q), can_edit);
+    let html = crate::report_html::cash_flow_html(
+        &cf,
+        &user.company,
+        &subtitle,
+        &print_opts_from_q(db.options().print, &q),
+        can_edit,
+        Some(&prev),
+    );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
