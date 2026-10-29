@@ -1260,6 +1260,23 @@ pub struct DunningItem {
     /// 把它们的金额改成预收等于篡改历史单据。
     #[serde(default)]
     pub direction: String,
+    /// 这一笔按客商账期算的逾期天数（`0` = 未到期或档案里没填账期）
+    ///
+    /// 老账套存下的催款单没这个字段（`serde(default)` 得 0），不追溯重算 ——
+    /// 那是当时那封函上写过的数字，重算等于改历史单据。
+    #[serde(default)]
+    pub overdue_days: i64,
+}
+
+/// 单张单据的逾期天数：`(开函日 − 单据日) − 账期`，不足 0 记 0
+///
+/// 与账龄页的口径一致（`AgingLine.overdue_days`），但这里是逐单算 ——
+/// 催款函上每一行都要说清「这笔超了几天」，只给一个总数客户对不上是哪张。
+fn overdue_of(letter_date: NaiveDate, doc_date: NaiveDate, pay_days: Option<i64>) -> i64 {
+    let Some(days) = pay_days else {
+        return 0;
+    };
+    (letter_date - doc_date).num_days().saturating_sub(days).max(0)
 }
 
 /// 明细行是否属于「对方欠我方」的那一侧。
@@ -1471,6 +1488,17 @@ pub fn dunning_create(
         Some(a) => a.dir == fincore::account::Direction::Credit,
         None => account.starts_with('2'),
     };
+    // 账期：与账龄页同一个来源（客商档案的 pay_days），一次全读
+    let pay_days = pay_days_map(
+        db,
+        if kind == "ar" {
+            fincore::AuxKind::Customer
+        } else {
+            fincore::AuxKind::Supplier
+        },
+    )?
+    .get(party)
+    .copied();
     let mut items: Vec<DunningItem> = Vec::new();
     let mut amount = Money::ZERO;
     let mut owed_count: i64 = 0;
@@ -1508,6 +1536,7 @@ pub fn dunning_create(
             summary: e.summary.clone(),
             amount: amt,
             direction,
+            overdue_days: overdue_of(date, e.date, pay_days),
         });
     }
     for o in arap_opening_list(db, Some(kind))? {
@@ -1536,6 +1565,7 @@ pub fn dunning_create(
             summary: "往来期初".to_string(),
             amount: o.amount,
             direction: dunning_dir_label(kind, true).to_string(),
+            overdue_days: overdue_of(date, d, pay_days),
         });
     }
     if items.is_empty() {
@@ -1853,6 +1883,123 @@ mod tests {
         assert_eq!(d.detail.len(), 2, "两种方向的单据都要能看到");
         assert!(d.detail.iter().any(|i| i.direction == "预收"));
         assert!(d.detail.iter().any(|i| i.direction == "应收"));
+    }
+
+    /// 催款函明细要逐单写「逾期几天」——客户对账时看的就是这一列
+    ///
+    /// 只给一个总数不行：客户手里有十几张单，得知道是哪一张超期、超了多久。
+    #[test]
+    fn dunning_items_carry_overdue_days_from_pay_days() {
+        let db = tmpdb("dunning_overdue");
+        let p = Period::new(2026, 10).unwrap();
+
+        // 客户 C01：账期 30 天
+        let mut c = fincore::AuxEntity::new(fincore::AuxKind::Customer, "C01", "客户甲");
+        c.props.insert(
+            fincore::auxiliary::prop::PAY_DAYS.to_string(),
+            "30".to_string(),
+        );
+        crate::auxs::insert(&db, &c).unwrap();
+
+        arap_opening_insert(
+            &db,
+            &ArapOpening {
+                id: 0,
+                kind: "ar".into(),
+                party_code: "C01".into(),
+                party_name: "客户甲".into(),
+                doc_no: "XS-OLD".into(),
+                doc_date: "2026-09-01".into(),
+                amount: Money::parse("6000").unwrap(),
+                memo: String::new(),
+                created_by: "u".into(),
+            },
+            "u",
+        )
+        .unwrap();
+        arap_opening_insert(
+            &db,
+            &ArapOpening {
+                id: 0,
+                kind: "ar".into(),
+                party_code: "C01".into(),
+                party_name: "客户甲".into(),
+                doc_no: "XS-NEW".into(),
+                doc_date: "2026-10-10".into(),
+                amount: Money::parse("4000").unwrap(),
+                memo: String::new(),
+                created_by: "u".into(),
+            },
+            "u",
+        )
+        .unwrap();
+
+        // 开函日 10-25：老单 54 天 − 账期 30 = 逾期 24；新单 15 天 < 30 → 0
+        let d = dunning_create(
+            &db,
+            "ar",
+            "1122",
+            "C01",
+            "客户甲",
+            NaiveDate::from_ymd_opt(2026, 10, 25).unwrap(),
+            "",
+            "boss",
+        )
+        .unwrap();
+        let old = d
+            .detail
+            .iter()
+            .find(|i| i.doc_no.contains("XS-OLD"))
+            .expect("老单据要在明细里");
+        assert_eq!(old.overdue_days, 24, "54 天账龄 − 30 天账期 = 逾期 24");
+        let new = d
+            .detail
+            .iter()
+            .find(|i| i.doc_no.contains("XS-NEW"))
+            .expect("新单据也要在明细里");
+        assert_eq!(new.overdue_days, 0, "还没到期，不能标逾期");
+    }
+
+    /// 客商档案没填账期：明细的逾期一律 0，不瞎猜
+    #[test]
+    fn dunning_overdue_is_zero_without_pay_days() {
+        let db = tmpdb("dunning_no_pay_days");
+        crate::auxs::insert(
+            &db,
+            &fincore::AuxEntity::new(fincore::AuxKind::Customer, "C02", "客户乙"),
+        )
+        .unwrap();
+        arap_opening_insert(
+            &db,
+            &ArapOpening {
+                id: 0,
+                kind: "ar".into(),
+                party_code: "C02".into(),
+                party_name: "客户乙".into(),
+                doc_no: "XS-2".into(),
+                doc_date: "2025-01-05".into(),
+                amount: Money::parse("100").unwrap(),
+                memo: String::new(),
+                created_by: "u".into(),
+            },
+            "u",
+        )
+        .unwrap();
+        let d = dunning_create(
+            &db,
+            "ar",
+            "1122",
+            "C02",
+            "客户乙",
+            NaiveDate::from_ymd_opt(2026, 10, 25).unwrap(),
+            "",
+            "boss",
+        )
+        .unwrap();
+        assert_eq!(
+            d.detail[0].overdue_days, 0,
+            "没设账期就不能说逾期——说了客户会反问「按什么约定的」"
+        );
     }
 
     /// 只有预收、一分不欠：不能生成催款单（以前会出一张 0.00 元的单子）。

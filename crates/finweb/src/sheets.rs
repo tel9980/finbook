@@ -581,6 +581,97 @@ fn sheet_name_of(title: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+
+    /// 对比表：上期有、本期没有的项目不能消失
+    ///
+    /// 「上个月买了设备、这个月没买」正是同比最该看见的事。按本期循环一遍就收工，
+    /// 投资活动这一整块会凭空消失，而两张表看起来都挺对。
+    #[test]
+    fn cash_flow_compare_keeps_last_period_only_items() {
+        use fincore::report::cashflow::{CashFlowLine, CashFlowStatement};
+        let line = |code: &str, name: &str, net: &str| CashFlowLine {
+            code: code.to_string(),
+            name: name.to_string(),
+            inflow: Money::parse(net).unwrap(),
+            outflow: Money::ZERO,
+            net: Money::parse(net).unwrap(),
+        };
+        let mk = |ops: Vec<CashFlowLine>, inv: Vec<CashFlowLine>| CashFlowStatement {
+            operating: ops,
+            operating_net: Money::parse("100").unwrap(),
+            investing: inv,
+            investing_net: Money::ZERO,
+            financing: vec![],
+            financing_net: Money::ZERO,
+            net_increase: Money::parse("100").unwrap(),
+            begin_cash: Money::ZERO,
+            end_cash: Money::parse("100").unwrap(),
+            unassigned: Money::ZERO,
+            auto_assigned: 0,
+            ambiguous: 0,
+            transfers: 0,
+        };
+        let cur = mk(vec![line("0101", "销售商品收到的现金", "100")], vec![]);
+        let prev = mk(
+            vec![line("0101", "销售商品收到的现金", "80")],
+            vec![line("0202", "购建固定资产支付的现金", "500")],
+        );
+        let sh = cash_flow_compare_sheet(&cur, &prev, "本期", "上期");
+        let flat: String = sh.rows.iter().flatten().cloned().collect::<Vec<String>>().join("|");
+        assert!(flat.contains("购建固定资产"), "上期独有的投资活动被吞了：{flat}");
+        assert!(flat.contains("（上期有）"), "要标出来这是上期才有的事：{flat}");
+        assert!(flat.contains("销售商品收到的现金"), "两期都有的项目");
+    }
+
+    /// 期初模板必须把低频科目也列出来
+    ///
+    /// 「我以为模板只列了常用的几个」是错的：模板按 1xxx/2xxx 末级科目**全量**生成。
+    /// 这条测试把这件事钉住 —— 否则哪天有人为了「让表短一点」加个白名单，
+    /// 在建工程、预付账款、预收账款这些不常动但一动就是大额的科目会静默消失，
+    /// 而用户看不见「少了一行」，只会发现期末不平。
+    #[test]
+    fn opening_template_lists_low_frequency_accounts_too() {
+        use fincore::account::Chart;
+        let chart = Chart::with_accounts(
+            fincore::CodeScheme(vec![4, 2, 2, 2, 2]),
+            fincore::chart::default_accounts(),
+        );
+        let all: Vec<&fincore::account::Account> = chart.all().into_iter().collect();
+        let sheets = opening_collection_template(&all, &[], &[]);
+        let flat: String = sheets
+            .iter()
+            .flat_map(|s| s.rows.iter().flatten().cloned())
+            .collect::<Vec<String>>()
+            .join("\u{1f}");
+        for (code, name) in [
+            ("1123", "预付账款"),
+            ("1604", "在建工程"),
+            ("2203", "预收账款"),
+            ("2501", "长期借款"),
+        ] {
+            assert!(
+                flat.contains(code) && flat.contains(name),
+                "期初模板里找不到 {code} {name} —— 低频科目也是资产/负债，漏了期末就不平"
+            );
+        }
+        // 由 ①② 两张纸自动生成的这两个，反而**不能**出现在③账户余额表里
+        // （「怎么填」那张说明纸上会提到它们，那是解释文字，不是可填行）
+        let bal = sheets
+            .iter()
+            .find(|s| s.name == "③ 账户余额")
+            .expect("应有账户余额这张纸");
+        let bal_flat: String = bal.rows.iter().flatten().cloned().collect::<Vec<String>>().join("\u{1f}");
+        assert!(
+            !bal_flat.contains("应收账款"),
+            "1122 的余额由客户应收那张纸生成，再让人填一遍会双计"
+        );
+        assert!(
+            !bal_flat.contains("应付账款"),
+            "2202 同理，由供应商应付那张纸生成"
+        );
+    }
+
     use super::*;
     use fincore::account::{AcctCategory, Direction};
 
@@ -897,4 +988,129 @@ pub fn equity_sheet(e: &fincore::report::equity::EquityStatement, subtitle: &str
     )
     .with_rows(rows)
     .with_emphasis(vec![total_at])
+}
+
+/// 现金流量表的「本期 vs 上期」对比表
+///
+/// 单独一张表而不是给主表加两列：主表已经有流入/流出/净额三列，再加两列在 A4 横向
+/// 也挤；而对比只需要看净额，一行一个项目最清楚。
+pub fn cash_flow_compare_sheet(
+    cur: &fincore::report::cashflow::CashFlowStatement,
+    prev: &fincore::report::cashflow::CashFlowStatement,
+    cur_label: &str,
+    prev_label: &str,
+) -> Sheet {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut emphasis: Vec<usize> = Vec::new();
+
+    let mut push_block = |rows: &mut Vec<Vec<String>>,
+                          emphasis: &mut Vec<usize>,
+                          title: &str,
+                          a: &[fincore::report::cashflow::CashFlowLine],
+                          b: &[fincore::report::cashflow::CashFlowLine]| {
+        rows.push(vec![title.to_string(), String::new(), String::new(), String::new()]);
+        emphasis.push(rows.len() - 1);
+        // 以本期出现的项目为主序，上期有而本期没有的补在后面 —— 不能只按本期循环，
+        // 否则「上期买过设备、这期没买」这件事在对比表里会凭空消失
+        let mut seen: Vec<&str> = Vec::new();
+        for l in a.iter() {
+            seen.push(l.code.as_str());
+            let other = b.iter().find(|x| x.code == l.code).map(|x| x.net);
+            let delta = match other {
+                Some(o) => l.net - o,
+                None => l.net,
+            };
+            rows.push(vec![
+                format!("　{}", l.name),
+                l.net.fmt_plain(),
+                other.map(|o| o.fmt_plain()).unwrap_or_default(),
+                delta.fmt_plain(),
+            ]);
+        }
+        for l in b.iter() {
+            if seen.contains(&l.code.as_str()) {
+                continue;
+            }
+            rows.push(vec![
+                format!("　{}（上期有）", l.name),
+                String::new(),
+                l.net.fmt_plain(),
+                (Money::ZERO - l.net).fmt_plain(),
+            ]);
+        }
+    };
+
+    let mut totals = |rows: &mut Vec<Vec<String>>,
+                      emphasis: &mut Vec<usize>,
+                      label: &str,
+                      a: &Money,
+                      b: &Money| {
+        rows.push(vec![
+            label.to_string(),
+            a.fmt_plain(),
+            b.fmt_plain(),
+            (*a - *b).fmt_plain(),
+        ]);
+        emphasis.push(rows.len() - 1);
+    };
+
+    push_block(
+        &mut rows,
+        &mut emphasis,
+        "一、经营活动",
+        &cur.operating,
+        &prev.operating,
+    );
+    totals(
+        &mut rows,
+        &mut emphasis,
+        "　经营活动净额",
+        &cur.operating_net,
+        &prev.operating_net,
+    );
+    push_block(
+        &mut rows,
+        &mut emphasis,
+        "二、投资活动",
+        &cur.investing,
+        &prev.investing,
+    );
+    totals(
+        &mut rows,
+        &mut emphasis,
+        "　投资活动净额",
+        &cur.investing_net,
+        &prev.investing_net,
+    );
+    push_block(
+        &mut rows,
+        &mut emphasis,
+        "三、筹资活动",
+        &cur.financing,
+        &prev.financing,
+    );
+    totals(
+        &mut rows,
+        &mut emphasis,
+        "　筹资活动净额",
+        &cur.financing_net,
+        &prev.financing_net,
+    );
+    totals(
+        &mut rows,
+        &mut emphasis,
+        "现金及现金等价物净增加额",
+        &cur.net_increase,
+        &prev.net_increase,
+    );
+
+    Sheet::titled(
+        "本期与上期对比",
+        "现金流量表 · 本期与上期对比",
+        &format!("{cur_label} 对比 {prev_label}"),
+        &["项目", cur_label, prev_label, "变动（本期−上期）"],
+        &[ColFmt::Text, ColFmt::Money, ColFmt::Money, ColFmt::Money],
+    )
+    .with_rows(rows)
+    .with_emphasis(emphasis)
 }

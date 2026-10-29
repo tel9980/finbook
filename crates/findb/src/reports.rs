@@ -353,6 +353,44 @@ pub fn cash_begin_end(
 }
 
 /// 生成现金流量表
+/// 现金流量表：本期 + 上期（同样长度的上一段期间）
+///
+/// 「这个月经营现金流 5 万」这句话本身没有信息量——是比上月多了还是少了才有。
+/// 上期长度取与本期**相同的月数**（本期 3 个月就取上一个 3 个月），
+/// 这样两列才可比；固定取「上月」会让季度报里出现「3 个月 vs 1 个月」。
+/// 与 `from..to` 等长的上一段期间
+///
+/// 「等长」是关键：本期是 3 个月，上期就得取 3 个月，否则两列不可比
+/// （季度报里出现「3 个月 vs 1 个月」，同比变成月比季）。
+pub fn prior_range(from: fincore::Period, to: fincore::Period) -> (fincore::Period, fincore::Period) {
+    let months = ((to.ymm() / 100 - from.ymm() / 100) * 12
+        + (to.ymm() % 100) as i32
+        - (from.ymm() % 100) as i32
+        + 1)
+        .max(1) as usize;
+    let mut prev_to = from.prev();
+    for _ in 1..months {
+        prev_to = prev_to.prev();
+    }
+    let mut prev_from = prev_to;
+    for _ in 1..months {
+        prev_from = prev_from.prev();
+    }
+    (prev_from, prev_to)
+}
+
+pub fn cash_flow_compare(
+    db: &Db,
+    from: fincore::Period,
+    to: fincore::Period,
+    scope: Option<&fincore::user::User>,
+) -> DbResult<(CashFlowStatement, CashFlowStatement)> {
+    let cur = cash_flow_statement(db, from, to, scope)?;
+    let (prev_from, prev_to) = prior_range(from, to);
+    let prev = cash_flow_statement(db, prev_from, prev_to, scope)?;
+    Ok((cur, prev))
+}
+
 pub fn cash_flow_statement(
     db: &Db,
     from: fincore::Period,

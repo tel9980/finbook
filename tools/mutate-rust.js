@@ -52,6 +52,7 @@ const FLIB = (name) => ["test", "-p", "findb", "--lib", `tests::${name}`];
 const SOPEN = (name) => ["test", "-p", "finweb", "--test", "settle_open_page", "--", name];
 // 账套参数结构校验（fincore::BookOptions::validate）
 const FOPT = (name) => ["test", "-p", "fincore", "--lib", `account::tests::${name}`];
+const FSH = (name) => ["test", "-p", "finweb", "--lib", `sheets::tests::${name}`];
 const FSETTLE = (name) => ["test", "-p", "findb", "--lib", `settle::tests::${name}`];
 const OCFG = (name) => ["test", "-p", "finweb", "--test", "options_config", "--", name];
 const FUNS = (name) => ["test", "-p", "finweb", "--test", "settle_unsettle_api", "--", name];
@@ -869,6 +870,29 @@ const MUT = [
     from: "        self.budget_control = String::new();\n        self.doc_prefixes.clear();",
     to: "        self.doc_prefixes.clear();",
     cmd: OCFG("reset_only_touches_preferences"),
+  },
+
+  // --- v1.8.50 催款函逾期 + 现金流对比 -------------------------------------
+  {
+    name: "㉜ 催款明细不算逾期",
+    file: "crates/findb/src/settle.rs",
+    from: "    (letter_date - doc_date).num_days().saturating_sub(days).max(0)",
+    to: "    0",
+    cmd: FSETTLE("dunning_items_carry_overdue_days_from_pay_days"),
+  },
+  {
+    name: "㉜ 没设账期也硬算逾期",
+    file: "crates/findb/src/settle.rs",
+    from: "    let Some(days) = pay_days else {\n        return 0;\n    };",
+    to: "    let days = pay_days.unwrap_or(0);",
+    cmd: FSETTLE("dunning_overdue_is_zero_without_pay_days"),
+  },
+  {
+    name: "㉜ 现金流对比吞掉上期独有项目",
+    file: "crates/finweb/src/sheets.rs",
+    from: "            if seen.contains(&l.code.as_str()) {\n                continue;\n            }",
+    to: "            continue;",
+    cmd: FSH("cash_flow_compare_keeps_last_period_only_items"),
   },
 
 ];

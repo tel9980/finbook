@@ -826,6 +826,7 @@ pub fn router(state: Arc<WebState>) -> Router {
             get(list_dunnings).post(create_dunning),
         )
         .route("/api/settle/dunnings/:id/status", post(dunning_status_ep))
+        .route("/api/settle/dunnings/:id/print", get(print_dunning))
         // ---- 往来对账单（按期间对账 + 客户回签确认）----
         .route(
             "/api/settle/statements",
@@ -14828,6 +14829,26 @@ async fn dunning_status_ep(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// 催款函 / 对账函打印页（一页 A4，可直接发给客户）
+///
+/// 以前催款单只能导出 Excel：一张表，客户收到不知道这是一封函。这页把它渲染成有
+/// 抬头、有致语、有落款、有合计的文书；纸张方向/边距/字号/落款开关仍读账套参数。
+async fn print_dunning(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::FinReport)?;
+    let db = &user.db;
+    let Some(d) = findb::settle::dunning_get(db, id)? else {
+        return Err(AppError::not_found("找不到这张催款单"));
+    };
+    let po = print_opts_from_q(db.options().print, &q);
+    let html = crate::report_html::dunning_letter_html(&d, &user.company, "元", &po);
+    Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
+}
+
 // ---------------------------------------------------------------------------
 // 三大报表：资产负债表 / 利润表 / 现金流量表（JSON + 打印预览）
 // ---------------------------------------------------------------------------
@@ -15079,7 +15100,9 @@ async fn get_cash_flow(
     user.require(Perm::FinReport)?;
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
-    let cf = findb::reports::cash_flow_statement(&db, from, to, Some(&user.user))?;
+    // 本期 + 上期一起算：只给本期净额没法判断「是好是坏」
+    let (cf, prev_cf) = findb::reports::cash_flow_compare(&db, from, to, Some(&user.user))?;
+    let (pf, pt) = findb::reports::prior_range(from, to);
     let line = |l: &fincore::report::cashflow::CashFlowLine| json!({ "code": l.code, "name": l.name, "inflow": l.inflow.fmt_money(), "outflow": l.outflow.fmt_money(), "net": l.net.fmt_money() });
     Ok(Json(json!({
         "from": period_to_str(from), "to": period_to_str(to),
@@ -15098,6 +15121,17 @@ async fn get_cash_flow(
         "fully_assigned": cf.fully_assigned(),
         "assignment_note": cf.assignment_note(),
         "ties": cf.ties(),
+        "prev": {
+            "from": period_to_str(pf), "to": period_to_str(pt),
+            "operating_net": prev_cf.operating_net.fmt_money(),
+            "investing_net": prev_cf.investing_net.fmt_money(),
+            "financing_net": prev_cf.financing_net.fmt_money(),
+            "net_increase": prev_cf.net_increase.fmt_money(),
+        },
+        "delta": {
+            "operating_net": (cf.operating_net - prev_cf.operating_net).fmt_money(),
+            "net_increase": (cf.net_increase - prev_cf.net_increase).fmt_money(),
+        },
     })))
 }
 
@@ -17384,7 +17418,7 @@ fn export_statement_xlsx(
     // 取数与打印页/JSON 接口**走同一条路**（statement_table / cash_flow_statement /
     // equity_statement）。另起一套取数逻辑是这类改造最容易犯的错：导出的表和
     // 页面上的表对不上，而两张表看起来都"挺对"。
-    let sheet = match kind {
+    let sheets: Vec<crate::xlsxout::Sheet> = match kind {
         StatementKind::BalanceSheet => {
             let t = statement_table(
                 db,
@@ -17397,7 +17431,7 @@ fn export_statement_xlsx(
                     Box::new(fincore::report::to_begin),
                 ],
             )?;
-            crate::sheets::report_sheet(&t, "元")
+            vec![crate::sheets::report_sheet(&t, "元")]
         }
         StatementKind::Income => {
             let t = statement_table(
@@ -17408,15 +17442,25 @@ fn export_statement_xlsx(
                 to,
                 vec![Box::new(fincore::report::identity), Box::new(to_ytd)],
             )?;
-            crate::sheets::report_sheet(&t, "元")
+            vec![crate::sheets::report_sheet(&t, "元")]
         }
         StatementKind::CashFlow => {
-            let cf = findb::reports::cash_flow_statement(db, from, to, Some(&user.user))?;
-            crate::sheets::cash_flow_sheet(&cf, &subtitle)
+            // 两张表：本期主表 + 本期与上期对比
+            let (cf, prev_cf) = findb::reports::cash_flow_compare(db, from, to, Some(&user.user))?;
+            let (pf, pt) = findb::reports::prior_range(from, to);
+            vec![
+                crate::sheets::cash_flow_sheet(&cf, &subtitle),
+                crate::sheets::cash_flow_compare_sheet(
+                    &cf,
+                    &prev_cf,
+                    &format!("本期 {}", to.label()),
+                    &format!("上期 {}~{}", pf.label(), pt.label()),
+                ),
+            ]
         }
         StatementKind::Equity => {
             let st = findb::reports::equity_statement(db, from, to, Some(&user.user))?;
-            crate::sheets::equity_sheet(&st, &subtitle)
+            vec![crate::sheets::equity_sheet(&st, &subtitle)]
         }
     };
     user.db.log(
@@ -17426,7 +17470,7 @@ fn export_statement_xlsx(
         &format!("{} {subtitle}", kind.filename()),
     )?;
     build_xlsx(
-        &[sheet],
+        &sheets,
         &format!("{}_{}.xlsx", kind.filename(), period_to_str(to)),
         kind.filename(),
     )
