@@ -369,6 +369,36 @@ pub fn summary(db: &Db) -> DbResult<Vec<(String, Money, Money, i64)>> {
     out.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(out)
 }
+/// 按「进项/销项 × 状态」汇总税额与张数
+///
+/// 与 `summary` 的区别是它**区分状态**：报税要的是「待认证进项」（还不能抵）、
+/// 「已认证进项」（可以抵）、「销项税额」（要交），混在一起加总没有意义。
+pub fn tax_summary(db: &Db) -> DbResult<Vec<(String, String, Money, i64)>> {
+    let mut stmt = db
+        .conn()
+        .prepare("SELECT kind, status, tax FROM invoice ORDER BY kind, status")?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut by: std::collections::BTreeMap<(String, String), (Money, i64)> =
+        std::collections::BTreeMap::new();
+    for (kind, status, tax) in rows {
+        let e = by.entry((kind, status)).or_insert((Money::ZERO, 0));
+        e.0 += Money::parse_or_zero(&tax);
+        e.1 += 1;
+    }
+    Ok(by
+        .into_iter()
+        .map(|((k, s), (tax, n))| (k, s, tax, n))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,5 +510,34 @@ mod tests {
         // 非法状态流转
         let id = insert(&db, &sample("in", "N002"), "u1").unwrap();
         assert!(set_status(&db, id, "whatever", "u1").is_err());
+    }
+
+    /// 待认证与已认证必须分开：混在一起报税会多抵税
+    #[test]
+    fn tax_summary_separates_pending_from_verified() {
+        let db = mem();
+        let mut a = sample("in", "001");
+        a.tax = Money::parse_or_zero("130");
+        a.status = "pending".to_string();
+        insert(&db, &a, "u").unwrap();
+        let mut b = sample("in", "002");
+        b.tax = Money::parse_or_zero("70");
+        b.status = "verified".to_string();
+        insert(&db, &b, "u").unwrap();
+        let mut c = sample("out", "003");
+        c.tax = Money::parse_or_zero("260");
+        c.status = "verified".to_string();
+        insert(&db, &c, "u").unwrap();
+
+        let s = tax_summary(&db).unwrap();
+        let get = |k: &str, st: &str| {
+            s.iter()
+                .find(|r| r.0 == k && r.1 == st)
+                .map(|r| (r.2.fmt_plain(), r.3))
+        };
+        assert_eq!(get("in", "pending"), Some(("130.00".to_string(), 1)));
+        assert_eq!(get("in", "verified"), Some(("70.00".to_string(), 1)));
+        assert_eq!(get("out", "verified"), Some(("260.00".to_string(), 1)));
+        assert_eq!(get("out", "pending"), None, "销项没有待认证这种状态");
     }
 }

@@ -27,6 +27,10 @@ pub struct ReportsView {
     pub to: String,
     pub table: Option<ReportTable>,
     pub cf: Option<CashFlowStatement>,
+    /// 上一段（等长）的现金流量表，用于「上期对比」；取不到就是 None
+    pub cf_prev: Option<CashFlowStatement>,
+    /// 上期区间文字，如「2026-06 至 2026-08」
+    pub cf_prev_label: String,
     pub equity: Option<fincore::report::equity::EquityStatement>,
     pub compare: Vec<findb::reports::CompareRow>,
     pub err: Option<String>,
@@ -44,6 +48,8 @@ impl Default for ReportsView {
             to: String::new(),
             table: None,
             cf: None,
+            cf_prev: None,
+            cf_prev_label: String::new(),
             equity: None,
             compare: Vec::new(),
             err: None,
@@ -86,6 +92,12 @@ impl ReportsView {
                     Ok(s) => self.cf = Some(s),
                     Err(e) => self.err = Some(e.to_string()),
                 }
+                // 上期取「等长的上一段」，不是「上月」——季度报表里 3 个月比 1 个月
+                // 会得出一个看起来很吓人但毫无意义的变动率。
+                let (pf, pt) = findb::reports::prior_range(from, to);
+                self.cf_prev_label = format!("{pf} 至 {pt}");
+                self.cf_prev =
+                    findb::reports::cash_flow_statement(ctx.db(), pf, pt, Some(ctx.user())).ok();
             }
             Tab::Equity => {
                 self.table = None;
@@ -249,6 +261,20 @@ impl ReportsView {
         egui::ScrollArea::both().show(ui, |ui| match self.tab {
             Tab::CashFlow => {
                 if let Some(cf) = &self.cf {
+                    if let Some(p) = &self.cf_prev {
+                        let d = cf.operating_net - p.operating_net;
+                        ui.label(
+                            RichText::new(format!(
+                                "上期（{}）：经营净额 {}　净增加额 {}　—— 本期经营净额变动 {}",
+                                self.cf_prev_label,
+                                p.operating_net.fmt_plain(),
+                                p.net_increase.fmt_plain(),
+                                d.fmt_plain()
+                            ))
+                            .weak(),
+                        );
+                        ui.add_space(4.0);
+                    }
                     cash_flow_table(ui, cf, &ctx.db().options().company, &self.subtitle());
                 }
             }
@@ -298,7 +324,12 @@ impl ReportsView {
                     ctx.error("没有可导出的数据");
                     return;
                 }
-                Some(cf) => cash_flow_sheet(cf),
+                Some(cf) => cash_flow_sheet_with_prev(
+                    cf,
+                    self.cf_prev.as_ref(),
+                    &self.subtitle(),
+                    &self.cf_prev_label,
+                ),
             },
             Tab::Equity => {
                 let Some(e) = &self.equity else {
@@ -837,6 +868,112 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
     }
 }
 
+/// 现金流量表 + 上期对比（六列：项目 / 本期流入 / 本期流出 / 本期净额 / 上期净额 / 变动）
+///
+/// 与网页端 `crates/finweb/src/sheets.rs` 的 `cash_flow_compare_sheet` 同一口径：
+/// **上期有、本期没有的项目不能消失**，要单列并标「（上期有）」——「上月买了设备、
+/// 这月没买」正是同比最该看见的事；按本期循环一遍就收工会把它吞掉，而两张表看着都对。
+/// 对比只比净额：流入/流出两列再乘两期，A4 横向也放不下。
+pub fn cash_flow_sheet_with_prev(
+    cf: &CashFlowStatement,
+    prev: Option<&CashFlowStatement>,
+    cur_label: &str,
+    prev_label: &str,
+) -> crate::views::export::Sheet {
+    let Some(prev) = prev else {
+        return cash_flow_sheet(cf);
+    };
+    let mut sh = crate::views::export::Sheet::new(
+        "现金流量表",
+        vec![
+            format!("项目（本期 {cur_label}／上期 {prev_label}）"),
+            "本期流入".into(),
+            "本期流出".into(),
+            "本期净额".into(),
+            "上期净额".into(),
+            "变动".into(),
+        ],
+    );
+    let push = |sh: &mut crate::views::export::Sheet,
+                    name: &str,
+                    i: Money,
+                    o: Money,
+                    n: Money,
+                    p: Option<Money>| {
+        sh.push(vec![
+            name.to_string(),
+            i.fmt_plain(),
+            o.fmt_plain(),
+            n.fmt_plain(),
+            p.map(|m| m.fmt_plain()).unwrap_or_default(),
+            p.map(|m| (n - m).fmt_plain()).unwrap_or_default(),
+        ]);
+    };
+    // 上期净额按项目名索引；两边名字对不上就落成「（上期有）」
+    let lookup = |list: &[fincore::report::cashflow::CashFlowLine], name: &str| {
+        list.iter().find(|l| l.name == name).map(|l| l.net)
+    };
+    let sections: [(&str, &str, &[fincore::report::cashflow::CashFlowLine],
+                    &[fincore::report::cashflow::CashFlowLine], Money, Money); 3] = [
+        (
+            "一、经营活动产生的现金流量",
+            "经营活动产生的现金流量净额",
+            &cf.operating,
+            &prev.operating,
+            cf.operating_net,
+            prev.operating_net,
+        ),
+        (
+            "二、投资活动产生的现金流量",
+            "投资活动产生的现金流量净额",
+            &cf.investing,
+            &prev.investing,
+            cf.investing_net,
+            prev.investing_net,
+        ),
+        (
+            "三、筹资活动产生的现金流量",
+            "筹资活动产生的现金流量净额",
+            &cf.financing,
+            &prev.financing,
+            cf.financing_net,
+            prev.financing_net,
+        ),
+    ];
+    for (title, subtotal, cur, old, cn, pn) in sections {
+        push(&mut sh, title, Money::ZERO, Money::ZERO, Money::ZERO, None);
+        for l in cur {
+            let p = lookup(old, &l.name);
+            push(&mut sh, &l.name, l.inflow, l.outflow, l.net, p);
+        }
+        // 上期独有
+        for l in old {
+            if !cur.iter().any(|c| c.name == l.name) {
+                push(
+                    &mut sh,
+                    &format!("{}（上期有）", l.name),
+                    Money::ZERO,
+                    Money::ZERO,
+                    Money::ZERO,
+                    Some(l.net),
+                );
+            }
+        }
+        push(&mut sh, subtotal, Money::ZERO, Money::ZERO, cn, Some(pn));
+    }
+    push(
+        &mut sh,
+        "现金及现金等价物净增加额",
+        Money::ZERO,
+        Money::ZERO,
+        cf.net_increase,
+        Some(prev.net_increase),
+    );
+    push(&mut sh, "加：期初现金余额", Money::ZERO, Money::ZERO, cf.begin_cash, Some(prev.begin_cash));
+    push(&mut sh, "期末现金余额", Money::ZERO, Money::ZERO, cf.end_cash, Some(prev.end_cash));
+    sh
+}
+
 pub fn cash_flow_sheet(cf: &CashFlowStatement) -> crate::views::export::Sheet {
     let mut sh = crate::views::export::Sheet::new(
         "现金流量表",
@@ -928,4 +1065,74 @@ pub fn cash_flow_sheet(cf: &CashFlowStatement) -> crate::views::export::Sheet {
         cf.end_cash,
     );
     sh
+}
+
+#[cfg(test)]
+mod compare_sheet_tests {
+    use super::*;
+    use fincore::report::cashflow::{CashFlowLine, CashFlowStatement};
+
+    fn line(name: &str, net: &str) -> CashFlowLine {
+        let n = Money::parse_or_zero(net);
+        CashFlowLine {
+            code: String::new(),
+            name: name.to_string(),
+            inflow: if n > Money::ZERO { n } else { Money::ZERO },
+            outflow: if n < Money::ZERO { -n } else { Money::ZERO },
+            net: n,
+        }
+    }
+
+    fn stmt(op: Vec<CashFlowLine>, on: &str, ni: &str) -> CashFlowStatement {
+        CashFlowStatement {
+            operating: op,
+            investing: Vec::new(),
+            financing: Vec::new(),
+            operating_net: Money::parse_or_zero(on),
+            investing_net: Money::ZERO,
+            financing_net: Money::ZERO,
+            net_increase: Money::parse_or_zero(ni),
+            begin_cash: Money::ZERO,
+            end_cash: Money::parse_or_zero(ni),
+            unassigned: Money::ZERO,
+            transfers: 0,
+            auto_assigned: 0,
+            ambiguous: 0,
+        }
+    }
+
+    /// 上期有、本期没有的项目必须单列并标「（上期有）」——按本期循环会把它吞掉
+    #[test]
+    fn last_period_only_lines_are_kept_and_marked() {
+        let cur = stmt(vec![line("销售商品收到的现金", "1000")], "1000", "1000");
+        let prev = stmt(
+            vec![
+                line("销售商品收到的现金", "800"),
+                line("购建固定资产支付的现金", "-500"),
+            ],
+            "300",
+            "300",
+        );
+        let sh = cash_flow_sheet_with_prev(&cur, Some(&prev), "2026-09 至 2026-09", "2026-08 至 2026-08");
+        let texts: Vec<String> = sh.rows.iter().map(|r| r[0].clone()).collect();
+        assert!(
+            texts.iter().any(|t| t.contains("购建固定资产支付的现金（上期有）")),
+            "上期独有项目丢了：{texts:?}"
+        );
+        // 变动 = 本期 − 上期：1000 − 800 = 200
+        let sale = sh
+            .rows
+            .iter()
+            .find(|r| r[0] == "销售商品收到的现金")
+            .unwrap();
+        assert_eq!(sale[5], "200.00");
+    }
+
+    /// 没有上期数据时不能崩，退回原来的四列
+    #[test]
+    fn without_prev_it_falls_back_to_the_plain_sheet() {
+        let cur = stmt(vec![line("销售商品收到的现金", "1000")], "1000", "1000");
+        let sh = cash_flow_sheet_with_prev(&cur, None, "a", "b");
+        assert_eq!(sh.headers.len(), 4);
+    }
 }

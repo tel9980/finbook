@@ -90,6 +90,19 @@ impl EditRow {
     }
 }
 
+/// 期初收集表（四张纸）的导入 / 对账临时状态
+#[derive(Default)]
+pub struct CollectionUi {
+    /// 预检结果（不落库）。有值就弹窗给用户看
+    pub preview: Option<findb::opening_book::CollectionImport>,
+    /// 预检时的文件字节，确认导入时直接复用（不重复选文件）
+    pub bytes: Vec<u8>,
+    pub path: String,
+    pub err: Option<String>,
+    /// 导入后对账结果
+    pub rec: Option<findb::opening_check::BeginReconcile>,
+}
+
 pub struct BeginView {
     pub rows: Vec<EditRow>,
     pub dirty: bool,
@@ -101,6 +114,8 @@ pub struct BeginView {
     pub start_period: Period,
     /// 批量粘贴窗口
     pub batch: super::begin_batch::Ui,
+    /// 期初收集表（四张纸）导入 / 对账
+    pub coll: CollectionUi,
 }
 
 impl Default for BeginView {
@@ -115,6 +130,7 @@ impl Default for BeginView {
             credits: Money::ZERO,
             start_period: Period::default(),
             batch: Default::default(),
+            coll: CollectionUi::default(),
         }
     }
 }
@@ -233,6 +249,24 @@ impl BeginView {
             if ui.button("批量粘贴").clicked() && can_edit {
                 self.batch = Default::default();
                 self.batch.open = true;
+            }
+            if ui
+                .button("期初收集表")
+                .on_hover_text("四张纸（客户/供应商/账户/基本资料）一次填完 —— 下载、导入、导入后对账")
+                .clicked()
+                && can_edit
+            {
+                self.download_collection(ctx);
+            }
+            if ui.button("导入期初收集表").clicked() && can_edit {
+                self.pick_collection(ctx);
+            }
+            if ui
+                .button("导入后对账")
+                .on_hover_text("台账、科目期初、借贷平衡、资产负债结构四条线索摆到一起看")
+                .clicked()
+            {
+                self.reconcile(ctx);
             }
             if ui
                 .button("下载模板")
@@ -742,6 +776,219 @@ impl BeginView {
                 .window(&dir_of, &leaf_codes, &existing, &mut on_import, ui)
             {
                 self.recount();
+            }
+        }
+
+        self.collection_windows(ctx, ui);
+    }
+
+    /// 下载四张纸的期初收集表
+    ///
+    /// 与网页端用的是**同一份数据**（`findb::opening_book::collection_template`）：
+    /// 用户可能在这边下载、在那边导入，列头必须一模一样。
+    fn download_collection(&mut self, ctx: &mut AppCtx<'_>) {
+        let chart = match findb::accounts::chart(ctx.db()) {
+            Ok(c) => c,
+            Err(e) => {
+                ctx.error(format!("读取科目表失败：{e}"));
+                return;
+            }
+        };
+        let accounts: Vec<fincore::account::Account> =
+            chart.all().into_iter().cloned().collect();
+        let q = |k: fincore::AuxKind| {
+            findb::auxs::list(
+                ctx.db(),
+                &fincore::AuxQuery {
+                    kind: Some(k),
+                    keyword: None,
+                    include_disabled: false,
+                    parent_code: None,
+                },
+            )
+            .unwrap_or_default()
+        };
+        let customers = q(fincore::AuxKind::Customer);
+        let suppliers = q(fincore::AuxKind::Supplier);
+        let data = findb::opening_book::collection_template(&accounts, &customers, &suppliers);
+        let sheets: Vec<crate::views::export::Sheet> = data
+            .into_iter()
+            .map(|c| {
+                let mut sh = crate::views::export::Sheet::new(&c.name, c.headers);
+                for r in c.rows {
+                    sh.push(r);
+                }
+                sh
+            })
+            .collect();
+        match crate::views::export::save_template(&sheets, "期初收集表") {
+            Ok(Some(m)) => ctx.info(m),
+            Ok(None) => {}
+            Err(e) => ctx.error(e),
+        }
+    }
+
+    /// 选文件 → 预检（不落库）
+    fn pick_collection(&mut self, ctx: &mut AppCtx<'_>) {
+        let Some(path) = crate::views::export::pick_open(&["xlsx"]) else {
+            return;
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                ctx.error(format!("读文件失败：{e}"));
+                return;
+            }
+        };
+        match findb::opening_book::preview_collection_sheet(ctx.db(), &bytes) {
+            Ok(r) => {
+                self.coll.preview = Some(r);
+                self.coll.bytes = bytes;
+                self.coll.path = path.display().to_string();
+                self.coll.err = None;
+            }
+            Err(e) => {
+                self.coll.err = Some(format!("预检失败：{e}"));
+                self.coll.preview = None;
+            }
+        }
+    }
+
+    fn reconcile(&mut self, ctx: &mut AppCtx<'_>) {
+        match findb::opening_check::reconcile_begin(ctx.db()) {
+            Ok(r) => self.coll.rec = Some(r),
+            Err(e) => ctx.error(format!("对账失败：{e}")),
+        }
+    }
+
+    /// 预检结果窗口 + 对账结果窗口
+    fn collection_windows(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        // ── 预检结果 ──
+        let mut do_import = false;
+        let mut close_preview = false;
+        if let Some(p) = &self.coll.preview {
+            let mut open = true;
+            egui::Window::new("期初收集表 · 预检")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_width(560.0)
+                .show(ui.ctx(), |ui| {
+                    ui.label(
+                        RichText::new("这一步不写库 —— 只是把四张纸读一遍，先看看会不会平。")
+                            .weak(),
+                    );
+                    ui.add_space(4.0);
+                    for (name, so) in [
+                        ("① 客户应收", &p.ar),
+                        ("② 供应商应付", &p.ap),
+                        ("③ 账户余额", &p.balances),
+                        ("④ 基本资料", &p.equity),
+                    ] {
+                        ui.label(format!(
+                            "{name}：{} 行可导入，{} 行跳过，合计 {}",
+                            so.ok,
+                            so.skipped,
+                            so.total.fmt_plain()
+                        ));
+                        for w in so.warnings.iter().take(5) {
+                            ui.label(RichText::new(format!("  ⚠ {w}")).weak());
+                        }
+                    }
+                    ui.add_space(6.0);
+                    let diff = (p.debit_total - p.credit_total).round2();
+                    ui.label(format!(
+                        "借方合计 {}　贷方合计 {}　差额 {}",
+                        p.debit_total.fmt_plain(),
+                        p.credit_total.fmt_plain(),
+                        diff.fmt_plain()
+                    ));
+                    if !p.auto_profit.is_zero() {
+                        ui.label(
+                            RichText::new(format!(
+                                "「本年利润」没填，按差额轧出 {}",
+                                p.auto_profit.fmt_plain()
+                            ))
+                            .weak(),
+                        );
+                    }
+                    if !diff.is_zero() {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(0xB0, 0x30, 0x30),
+                            "借贷不平 —— 直接导入会被拒绝，先去表里改平",
+                        );
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("确认导入").clicked() {
+                            do_import = true;
+                        }
+                        if ui.button("取消").clicked() {
+                            close_preview = true;
+                        }
+                    });
+                });
+            if !open {
+                close_preview = true;
+            }
+        }
+        if do_import {
+            let bytes = self.coll.bytes.clone();
+            let who = ctx.user().username.clone();
+            match findb::opening_book::import_collection_sheet(ctx.db(), &bytes, &who) {
+                Ok(r) => {
+                    ctx.info(format!(
+                        "导入完成：往来 {} 条、科目期初 {} 条",
+                        r.arap_ok, r.begin_ok
+                    ));
+                    self.coll.preview = None;
+                    self.reload(ctx);
+                    self.reconcile(ctx);
+                }
+                Err(e) => {
+                    // 导入被拒时把原因摊在预检窗里 —— 换个弹窗会让人以为预检白看了
+                    if let Some(p) = self.coll.preview.as_mut() {
+                        p.ar.warnings.push(format!("导入被拒绝：{e}"));
+                    }
+                }
+            }
+        }
+        if close_preview {
+            self.coll.preview = None;
+        }
+
+        // ── 对账结果 ──
+        if let Some(r) = &self.coll.rec {
+            let mut open = true;
+            egui::Window::new("期初对账")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(true)
+                .default_width(600.0)
+                .show(ui.ctx(), |ui| {
+                    ui.label(
+                        RichText::new(findb::opening_check::one_liner(r)).strong(),
+                    );
+                    ui.add_space(6.0);
+                    for s in &r.sheets {
+                        ui.label(format!(
+                            "{}：{} 行，合计 {}",
+                            s.label,
+                            s.rows,
+                            s.total.fmt_plain()
+                        ));
+                        if !s.hint.is_empty() {
+                            ui.label(RichText::new(format!("  {}", s.hint)).weak());
+                        }
+                    }
+                    ui.add_space(6.0);
+                    for c in &r.checks {
+                        let mark = if c.ok { "✅" } else { "❌" };
+                        ui.label(format!("{mark} {}：{}", c.name, c.detail));
+                    }
+                });
+            if !open {
+                self.coll.rec = None;
             }
         }
     }

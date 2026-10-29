@@ -35,196 +35,34 @@ const T: ColFmt = ColFmt::Text;
 const M: ColFmt = ColFmt::Money;
 const I: ColFmt = ColFmt::Int;
 
-/// 辅助核算档案：列头与 `import_aux_rows` 一致。
+/// 期初收集表（四张纸）——数据在 `findb::opening_book::collection_template`，
+/// 这里只把它摊成网页端的 `Sheet`。
 ///
-/// 除了六个公共列，**每种档案还带上它自己在页面上能编辑的扩展属性**：
-/// 客户/供应商有「税点%」「开票情况」「信用额度」，银行账户有开户行和账号，
-/// 存货有规格型号和计量单位。这些列原来一个都不导 —— 于是「导出去批量改」这条
-/// 路走不通：59 个客户的税点只能一个个点开改，存了半年才发现改不过来。
-///
-/// 为什么按档案种类给不同列、而不是给一张大宽表：大宽表里 90% 的格子是空的，
-/// 老板填表时要先判断「这列跟我有没有关系」。列名就是接口，多余的列也是噪音。
-/// 解析器现在先认表头（见 `imports::HeadMap`），所以列集不同、顺序不同都能导回。
-/// 《期初收集表》的空模板 —— **已预填当前账套的科目、客户、供应商清单**。
-///
-/// 为什么值得做：小工厂的期初要填 200 多个科目、86 个往来单位。以前是发一张白表，
-/// 工厂照着科目表手抄编码，抄错一个编码就等于「这笔期初消失了」——`opening_book`
-/// 对不在科目表里的编码只会往 warnings 里塞一句就跳过，不报错。
-///
-/// 所以模板直接从账套里取：编码与名称都是现成的，工厂只填金额。
-///
-/// 四张纸的列名与 `findb::opening_book` 的解析器一一对应（按列名找，不靠位置）：
-///   ① 客户应收：客户编码 / 客户名称 / 欠款金额 / 单据号 / 备注
-///   ② 供应商应付：供应商编码 / 供应商名称 / 欠款金额 / 单据号 / 备注
-///   ③ 账户余额：科目编码 / 科目名称 / 余额
-///   ④ 基本资料：项目 / 金额（只认「实收资本」与「本年利润」）
+/// 为什么数据搬到了 `findb`：这张表同时是导出**和**导入的契约，桌面版和网页版
+/// 必须吐出完全一样的列头 —— 用户在桌面下载、在网页导入不能错位。放在两端各写
+/// 一遍，第一列一改就有一边悄悄错位，而 xlsx 不会报错。
 pub fn opening_collection_template(
     accounts: &[&Account],
     customers: &[AuxEntity],
     suppliers: &[AuxEntity],
 ) -> Vec<Sheet> {
-    let mut out = Vec::new();
-
-    // 0) 怎么填 —— 放在第一张，工厂打开就看到规则
-    out.push(
-        Sheet::titled(
-            "怎么填",
-            "期初收集表",
-            "只填你确实有的科目/往来；空着的行不用删，也不影响导入",
-            &["项目", "说明"],
-            &[ColFmt::Text, ColFmt::Text],
-        )
-        .with_rows(vec![
-            vec!["① 客户应收".to_string(), "客户欠你的钱（按客户一行，金额填正数）".to_string()],
-            vec!["② 供应商应付".to_string(), "你欠供应商的钱（按供应商一行，金额填正数）".to_string()],
-            vec!["③ 账户余额".to_string(), "现金、各银行账户、固定/无形资产的账面数；借款、应交税费也填这里".to_string()],
-            vec!["④ 基本资料".to_string(), "实收资本照营业执照上的填；「本年利润」不填就按借贷差额自动轧".to_string()],
-            vec![
-                "权益类不填在③".to_string(),
-                "实收资本/本年利润只填在④ —— ③ 里再填一遍会双计，而且看起来还是平的".to_string(),
-            ],
-            vec![
-                "不要填的两类".to_string(),
-                "1122 应收账款 / 2202 应付账款 的科目余额不用填 —— 由 ①② 两张纸自动生成"
-                    .to_string(),
-            ],
-            vec![
-                "客户预交的钱（预收）".to_string(),
-                "填 ③：2203 预收账款 的余额，并在「客户/供应商编码」列写上是哪个客户".to_string(),
-            ],
-            vec![
-                "先付给供应商的钱（预付）".to_string(),
-                "填 ③：1123 预付账款 的余额，并写上是哪个供应商".to_string(),
-            ],
-            vec![
-                "存货".to_string(),
-                "③ 里填金额，同时填「数量」和「存货编码」—— 只填金额的话数量是 0，以后出库结存会算错"
-                    .to_string(),
-            ],
-            vec![
-                "银行".to_string(),
-                "③ 里填银行科目的余额，并在「银行账户」列写上账户编码（如 B01）—— 不填就落不到账户上，银行日记账没有期初"
-                    .to_string(),
-            ],
-            vec![
-                "不平怎么办".to_string(),
-                "导入会先算平：不平整批拒绝，并告诉你差多少。差额补到「④ 本年利润」一般就平"
-                    .to_string(),
-            ],
-            vec![
-                "不确定就先预检".to_string(),
-                "填一部分也能预检：只算平、不落库，改完再预检，满意了再正式导入".to_string(),
-            ],
-        ]),
-    );
-
-    // ①② 往来：编码与名称都预填，金额留空
-    let parties = |name: &str, title: &str, code_head: &str, name_head: &str, rows: &[AuxEntity]| {
-        Sheet::titled(
-            name,
-            title,
-            // 副标题里刻意不出现「编码」「科目」「项目」—— opener 靠这几个词找表头
-            "金额填正数（欠多少填多少）；单据号留空则自动生成",
-            &[code_head, name_head, "欠款金额", "单据号", "备注"],
-            &[
-                ColFmt::Text,
-                ColFmt::Text,
-                ColFmt::Money,
-                ColFmt::Text,
-                ColFmt::Text,
-            ],
-        )
-        .with_rows(
-            rows.iter()
-                .filter(|e| !e.disabled)
-                .map(|e| {
-                    vec![
-                        e.code.clone(),
-                        e.name.clone(),
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                    ]
+    let owned: Vec<Account> = accounts.iter().map(|a| (*a).clone()).collect();
+    findb::opening_book::collection_template(&owned, customers, suppliers)
+        .into_iter()
+        .map(|c| {
+            let cols: Vec<ColFmt> = c
+                .cols
+                .iter()
+                .map(|k| match k {
+                    findb::opening_book::Col::Money => ColFmt::Money,
+                    findb::opening_book::Col::Text => ColFmt::Text,
                 })
-                .collect(),
-        )
-    };
-    out.push(parties("① 客户应收", "客户应收（客户欠我的钱）", "客户编码", "客户名称", customers));
-    out.push(parties(
-        "② 供应商应付",
-        "供应商应付（我欠供应商的钱）",
-        "供应商编码",
-        "供应商名称",
-        suppliers,
-    ));
-
-    // ③ 账户余额：只列资产 / 负债类的末级科目。
-    //
-    // 剔掉两类，否则会**双计**：
-    //   - 1122 / 2202：由 ①② 两张纸的往来合计自动生成
-    //   - 4xxx 权益类：由 ④「实收资本 / 本年利润」生成
-    // 双计的后果不是「多一行」，而是借贷两边各多一份、看起来还是平的 —— 最难查。
-    let bal_rows: Vec<Vec<String>> = accounts
-        .iter()
-        .filter(|a| a.code.chars().next().is_some_and(|c| c == '1' || c == '2'))
-        .filter(|a| !a.code.starts_with("1122") && !a.code.starts_with("2202"))
-        .filter(|a| !a.disabled)
-        .map(|a| {
-            let mut row = vec![a.code.clone(), a.name.clone(), String::new()];
-            // 后四列平时留空，只有特定科目才填 —— 见「怎么填」页。
-            //
-            // 没有这四列时，期初的「分户 / 分存货 / 分银行账户 / 数量」全都进不来：
-            // 存货有金额没数量 → 数量金额式明细里数量是 0，出库结存必错；
-            // 银行科目没账户 → 期初挂在不存在的账户上，银行日记账一分没有。
-            row.extend(std::iter::repeat_n(String::new(), 4));
-            row
+                .collect();
+            let headers: Vec<&str> = c.headers.iter().map(|h| h.as_str()).collect();
+            Sheet::titled(&c.name, &c.title, &c.subtitle, &headers, &cols).with_rows(c.rows)
         })
-        .collect();
-    out.push(
-        Sheet::titled(
-            "③ 账户余额",
-            "账户余额（资产 / 负债）",
-            "余额一律填正数；后四列只有对应的科目才填（见「怎么填」）",
-            &[
-                "科目编码",
-                "科目名称",
-                "余额",
-                "数量",
-                "客户/供应商编码",
-                "存货编码",
-                "银行账户",
-            ],
-            &[
-                ColFmt::Text,
-                ColFmt::Text,
-                ColFmt::Money,
-                ColFmt::Money,
-                ColFmt::Text,
-                ColFmt::Text,
-                ColFmt::Text,
-            ],
-        )
-        .with_rows(bal_rows),
-    );
-
-    // ④ 基本资料
-    out.push(
-        Sheet::titled(
-            "④ 基本资料",
-            "基本资料",
-            "实收资本照营业执照填写；本年利润填不出来就留空，导入时按差额轧",
-            &["项目", "金额"],
-            &[ColFmt::Text, ColFmt::Money],
-        )
-        .with_rows(vec![
-            vec!["实收资本".to_string(), String::new()],
-            vec!["其中：本年利润（没有就留空）".to_string(), String::new()],
-        ]),
-    );
-
-    out
+        .collect()
 }
-
 pub fn aux_sheet(rows: &[AuxEntity], kind_label: &str) -> Sheet {
     let kind = rows.first().map(|e| e.kind);
     // (列头, 取值) —— 顺序即导出顺序；缺失的列在导回时不会被误认成别的字段。

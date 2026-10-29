@@ -13,6 +13,10 @@
 const fs = require("fs");
 const { execFileSync } = require("child_process");
 
+// v1.8.52 桌面端补功能：发票税额拆分、现金流上期对比、期初收集表契约。
+// 共同失效形态是「看得见的地方都对，算出来的数不对」——发票拆错一分、
+// 对比表吞掉上期独有项目、期初表多列一个 1122 造成往来双计，都不报错。
+const FUI = (name) => ["test", "-p", "finui", "--lib", name];
 const API = (name) => ["test", "-p", "finweb", "--test", "api", "--", name];
 // 注意：这里曾经写成固定的 "user::tests::"（name 参数被丢掉），效果是「跑所有 user 测试」。
 // 那样一条变异被别的用例顺手拦住，也会显示 PASS，看不出目标用例到底守没守住。
@@ -690,7 +694,8 @@ const MUT = [
   },
   {
     name: "㉓ 模板不预填科目清单",
-    file: "crates/finweb/src/sheets.rs",
+    // v1.8.52：模板构造逻辑搬到了 findb，靶子跟着搬
+    file: "crates/findb/src/opening_book.rs",
     from: "        .filter(|a| a.code.chars().next().is_some_and(|c| c == '1' || c == '2'))",
     to: "        .filter(|_a| false)",
     cmd: LOOP("template_carries_the_current_books_account_codes"),
@@ -912,6 +917,36 @@ const MUT = [
     from: "    let prev_to = from.prev();\n    let mut prev_from = prev_to;",
     to: "    let mut prev_to = from.prev();\n    for _ in 1..months {\n        prev_to = prev_to.prev();\n    }\n    let mut prev_from = prev_to;",
     cmd: FCFW("quarter_takes_the_previous_quarter_not_one_month"),
+  },
+
+  // ㉝ 桌面端补齐（v1.8.52）
+  {
+    name: "㉝ 发票税额各自算一遍（不含税+税额对不上合计）",
+    file: "crates/finui/src/views/invoice_view.rs",
+    from: "    let amount = (total.inner() / divisor).round_dp(2);",
+    to: "    let amount = (total.inner() / divisor).round_dp(1);",
+    cmd: FUI("views::invoice_view::tests::thirteen_percent_splits_cleanly"),
+  },
+  {
+    name: "㉝ 现金流对比表吞掉上期独有项目",
+    file: "crates/finui/src/views/reports.rs",
+    from: "            if !cur.iter().any(|c| c.name == l.name) {",
+    to: "            if false {",
+    cmd: FUI("views::reports::compare_sheet_tests::last_period_only_lines_are_kept_and_marked"),
+  },
+  {
+    name: "㉝ 期初③不再排除 1122/2202（往来双计）",
+    file: "crates/findb/src/opening_book.rs",
+    from: ".filter(|a| !a.code.starts_with(\"1122\") && !a.code.starts_with(\"2202\"))",
+    to: ".filter(|_a| true)",
+    cmd: ["test", "-p", "findb", "--lib", "opening_book::template_tests::balances_sheet_excludes_generated_ar_and_ap_but_keeps_the_rest"],
+  },
+  {
+    name: "㉝ 期初收集表只列资产类（负债全丢）",
+    file: "crates/findb/src/opening_book.rs",
+    from: ".filter(|a| a.code.chars().next().is_some_and(|c| c == '1' || c == '2'))",
+    to: ".filter(|a| a.code.chars().next().is_some_and(|c| c == '1'))",
+    cmd: ["test", "-p", "findb", "--lib", "opening_book::template_tests::balances_sheet_excludes_generated_ar_and_ap_but_keeps_the_rest"],
   },
 
 ];

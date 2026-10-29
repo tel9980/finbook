@@ -23,6 +23,7 @@ pub mod export;
 pub mod funds;
 pub mod help;
 pub mod inventory;
+pub mod invoice_view;
 pub mod inventory_deep;
 pub mod ledger;
 pub mod login;
@@ -99,6 +100,7 @@ pub struct Views {
     pub assets: assets::AssetsView,
     pub bank_rec: bank_rec::BankRecView,
     pub settle: settle_view::SettleView,
+    pub invoice: invoice_view::InvoiceView,
     pub automation: automation::AutomationView,
     pub inventory: inventory::InventoryView,
     pub inventory_deep: inventory_deep::InventoryDeepView,
@@ -231,6 +233,7 @@ impl Views {
                 NavItem::Assets => self.assets.enter(ctx),
                 NavItem::BankRec => self.bank_rec.enter(ctx),
                 NavItem::Settle => self.settle.enter(ctx),
+                NavItem::Invoice => self.invoice.enter(ctx),
                 NavItem::Automation => self.automation.enter(ctx),
                 NavItem::Inventory => self.inventory.enter(ctx),
                 NavItem::InventoryDeep => self.inventory_deep.enter(ctx),
@@ -290,6 +293,7 @@ impl Views {
             NavItem::Assets => self.assets.show(ctx, ui),
             NavItem::BankRec => self.bank_rec.show(ctx, ui),
             NavItem::Settle => self.settle.show(ctx, ui),
+            NavItem::Invoice => self.invoice.show(ctx, ui),
             NavItem::Automation => self.automation.show(ctx, ui),
             NavItem::Inventory => self.inventory.show(ctx, ui),
             NavItem::InventoryDeep => self.inventory_deep.show(ctx, ui),

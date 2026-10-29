@@ -18,7 +18,222 @@
 //! 不平就整批拒绝并报出差额（填错表比写进半个账套好收拾）。
 
 use crate::{Db, DbResult};
+use fincore::account::Account;
+use fincore::auxiliary::AuxEntity;
 use fincore::money::Money;
+
+
+/// 导出用的列类型（只有「文本」与「金额」两种，够用且不把 xlsx 细节漏进数据层）
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Col {
+    Text,
+    Money,
+}
+
+/// 一张「收集表」的纯数据（不含任何 xlsx 细节）
+///
+/// 放在 `findb` 而不是各端，是因为这张表既是**导出**也是**导入**的契约：
+/// 桌面版和网页版必须吐出完全一样的列头，否则用户拿桌面下的表到网页导就错位。
+#[derive(Debug, Clone, Default)]
+pub struct CollectionSheet {
+    pub name: String,
+    pub title: String,
+    pub subtitle: String,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub cols: Vec<Col>,
+}
+
+impl CollectionSheet {
+    pub fn titled(
+        name: &str,
+        title: &str,
+        subtitle: &str,
+        headers: &[&str],
+        cols: &[Col],
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            title: title.to_string(),
+            subtitle: subtitle.to_string(),
+            headers: headers.iter().map(|h| h.to_string()).collect(),
+            rows: Vec::new(),
+            cols: cols.to_vec(),
+        }
+    }
+
+    pub fn with_rows(mut self, rows: Vec<Vec<String>>) -> Self {
+        self.rows = rows;
+        self
+    }
+}
+
+pub fn collection_template(
+    accounts: &[Account],
+    customers: &[AuxEntity],
+    suppliers: &[AuxEntity],
+) -> Vec<CollectionSheet> {
+    let mut out = Vec::new();
+
+    // 0) 怎么填 —— 放在第一张，工厂打开就看到规则
+    out.push(
+        CollectionSheet::titled(
+            "怎么填",
+            "期初收集表",
+            "只填你确实有的科目/往来；空着的行不用删，也不影响导入",
+            &["项目", "说明"],
+            &[Col::Text, Col::Text],
+        )
+        .with_rows(vec![
+            vec!["① 客户应收".to_string(), "客户欠你的钱（按客户一行，金额填正数）".to_string()],
+            vec!["② 供应商应付".to_string(), "你欠供应商的钱（按供应商一行，金额填正数）".to_string()],
+            vec!["③ 账户余额".to_string(), "现金、各银行账户、固定/无形资产的账面数；借款、应交税费也填这里".to_string()],
+            vec!["④ 基本资料".to_string(), "实收资本照营业执照上的填；「本年利润」不填就按借贷差额自动轧".to_string()],
+            vec![
+                "权益类不填在③".to_string(),
+                "实收资本/本年利润只填在④ —— ③ 里再填一遍会双计，而且看起来还是平的".to_string(),
+            ],
+            vec![
+                "不要填的两类".to_string(),
+                "1122 应收账款 / 2202 应付账款 的科目余额不用填 —— 由 ①② 两张纸自动生成"
+                    .to_string(),
+            ],
+            vec![
+                "客户预交的钱（预收）".to_string(),
+                "填 ③：2203 预收账款 的余额，并在「客户/供应商编码」列写上是哪个客户".to_string(),
+            ],
+            vec![
+                "先付给供应商的钱（预付）".to_string(),
+                "填 ③：1123 预付账款 的余额，并写上是哪个供应商".to_string(),
+            ],
+            vec![
+                "存货".to_string(),
+                "③ 里填金额，同时填「数量」和「存货编码」—— 只填金额的话数量是 0，以后出库结存会算错"
+                    .to_string(),
+            ],
+            vec![
+                "银行".to_string(),
+                "③ 里填银行科目的余额，并在「银行账户」列写上账户编码（如 B01）—— 不填就落不到账户上，银行日记账没有期初"
+                    .to_string(),
+            ],
+            vec![
+                "不平怎么办".to_string(),
+                "导入会先算平：不平整批拒绝，并告诉你差多少。差额补到「④ 本年利润」一般就平"
+                    .to_string(),
+            ],
+            vec![
+                "不确定就先预检".to_string(),
+                "填一部分也能预检：只算平、不落库，改完再预检，满意了再正式导入".to_string(),
+            ],
+        ]),
+    );
+
+    // ①② 往来：编码与名称都预填，金额留空
+    let parties = |name: &str, title: &str, code_head: &str, name_head: &str, rows: &[AuxEntity]| {
+        CollectionSheet::titled(
+            name,
+            title,
+            // 副标题里刻意不出现「编码」「科目」「项目」—— opener 靠这几个词找表头
+            "金额填正数（欠多少填多少）；单据号留空则自动生成",
+            &[code_head, name_head, "欠款金额", "单据号", "备注"],
+            &[
+                Col::Text,
+                Col::Text,
+                Col::Money,
+                Col::Text,
+                Col::Text,
+            ],
+        )
+        .with_rows(
+            rows.iter()
+                .filter(|e| !e.disabled)
+                .map(|e| {
+                    vec![
+                        e.code.clone(),
+                        e.name.clone(),
+                        String::new(),
+                        String::new(),
+                        String::new(),
+                    ]
+                })
+                .collect(),
+        )
+    };
+    out.push(parties("① 客户应收", "客户应收（客户欠我的钱）", "客户编码", "客户名称", customers));
+    out.push(parties(
+        "② 供应商应付",
+        "供应商应付（我欠供应商的钱）",
+        "供应商编码",
+        "供应商名称",
+        suppliers,
+    ));
+
+    // ③ 账户余额：只列资产 / 负债类的末级科目。
+    //
+    // 剔掉两类，否则会**双计**：
+    //   - 1122 / 2202：由 ①② 两张纸的往来合计自动生成
+    //   - 4xxx 权益类：由 ④「实收资本 / 本年利润」生成
+    // 双计的后果不是「多一行」，而是借贷两边各多一份、看起来还是平的 —— 最难查。
+    let bal_rows: Vec<Vec<String>> = accounts
+        .iter()
+        .filter(|a| a.code.chars().next().is_some_and(|c| c == '1' || c == '2'))
+        .filter(|a| !a.code.starts_with("1122") && !a.code.starts_with("2202"))
+        .filter(|a| !a.disabled)
+        .map(|a| {
+            let mut row = vec![a.code.clone(), a.name.clone(), String::new()];
+            // 后四列平时留空，只有特定科目才填 —— 见「怎么填」页。
+            //
+            // 没有这四列时，期初的「分户 / 分存货 / 分银行账户 / 数量」全都进不来：
+            // 存货有金额没数量 → 数量金额式明细里数量是 0，出库结存必错；
+            // 银行科目没账户 → 期初挂在不存在的账户上，银行日记账一分没有。
+            row.extend(std::iter::repeat_n(String::new(), 4));
+            row
+        })
+        .collect();
+    out.push(
+        CollectionSheet::titled(
+            "③ 账户余额",
+            "账户余额（资产 / 负债）",
+            "余额一律填正数；后四列只有对应的科目才填（见「怎么填」）",
+            &[
+                "科目编码",
+                "科目名称",
+                "余额",
+                "数量",
+                "客户/供应商编码",
+                "存货编码",
+                "银行账户",
+            ],
+            &[
+                Col::Text,
+                Col::Text,
+                Col::Money,
+                Col::Money,
+                Col::Text,
+                Col::Text,
+                Col::Text,
+            ],
+        )
+        .with_rows(bal_rows),
+    );
+
+    // ④ 基本资料
+    out.push(
+        CollectionSheet::titled(
+            "④ 基本资料",
+            "基本资料",
+            "实收资本照营业执照填写；本年利润填不出来就留空，导入时按差额轧",
+            &["项目", "金额"],
+            &[Col::Text, Col::Money],
+        )
+        .with_rows(vec![
+            vec!["实收资本".to_string(), String::new()],
+            vec!["其中：本年利润（没有就留空）".to_string(), String::new()],
+        ]),
+    );
+
+    out
+}
 
 /// 一张纸的导入结果。
 #[derive(Debug, Clone, Default)]
@@ -745,5 +960,96 @@ mod tests {
             }
         };
         format!("{ny}-{nm:02}-{last:02}")
+    }
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+    use fincore::account::{AcctCategory, Account, Chart, CodeScheme};
+    use fincore::AuxKind;
+
+    fn acct(code: &str, name: &str, cat: AcctCategory) -> Account {
+        let mut a = Account::new(code, name, cat);
+        a.dir = cat.default_dir();
+        a
+    }
+
+    fn chart_accounts() -> Vec<Account> {
+        vec![
+            acct("1001", "库存现金", AcctCategory::Asset),
+            acct("1122", "应收账款", AcctCategory::Asset),
+            acct("112201", "应收账款-客户", AcctCategory::Asset),
+            acct("1123", "预付账款", AcctCategory::Asset),
+            acct("1405", "库存商品", AcctCategory::Asset),
+            acct("2202", "应付账款", AcctCategory::Liability),
+            acct("220201", "应付账款-供应商", AcctCategory::Liability),
+            acct("2203", "预收账款", AcctCategory::Liability),
+            acct("2501", "长期借款", AcctCategory::Liability),
+            acct("4001", "实收资本", AcctCategory::Equity),
+            acct("5101", "制造费用", AcctCategory::Cost),
+        ]
+    }
+
+    /// 四张纸的名字与列头是**导入契约**：客户端按名字找表、按列位取值。
+    /// 改这里等于改接口，必须同步改 `import_collection_sheet` 的解析。
+    #[test]
+    fn collection_template_has_the_four_sheets_and_expected_headers() {
+        let accounts = chart_accounts();
+        let sheets = collection_template(&accounts, &[], &[]);
+        let names: Vec<&str> = sheets.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["怎么填", "① 客户应收", "② 供应商应付", "③ 账户余额", "④ 基本资料"]);
+
+        let bal = sheets.iter().find(|s| s.name == "③ 账户余额").unwrap();
+        assert_eq!(
+            bal.headers,
+            vec![
+                "科目编码", "科目名称", "余额", "数量", "客户/供应商编码", "存货编码", "银行账户"
+            ]
+        );
+        let eq = sheets.iter().find(|s| s.name == "④ 基本资料").unwrap();
+        assert_eq!(eq.headers, vec!["项目", "金额"]);
+        // 金额列要被标出来，否则导出成文本 Excel 里没法求和
+        assert_eq!(bal.cols[2], Col::Money);
+        assert_eq!(eq.cols[1], Col::Money);
+    }
+
+    /// ③ 里**只能**有 1xxx / 2xxx 的末级科目，且必须排除 1122/2202 ——
+    /// 那两个由 ①② 两张纸生成，再填一遍就是双计，而双计之后借贷两边
+    /// 各多一份、看起来还是平的，最难查。
+    #[test]
+    fn balances_sheet_excludes_generated_ar_and_ap_but_keeps_the_rest() {
+        let accounts = chart_accounts();
+        let sheets = collection_template(&accounts, &[], &[]);
+        let bal = sheets.iter().find(|s| s.name == "③ 账户余额").unwrap();
+        let codes: Vec<&str> = bal.rows.iter().map(|r| r[0].as_str()).collect();
+        assert!(!codes.contains(&"1122"), "1122 由①生成，不能再填：{codes:?}");
+        assert!(!codes.contains(&"112201"), "112201 也是应收，不能填：{codes:?}");
+        assert!(!codes.contains(&"2202"), "2202 由②生成：{codes:?}");
+        assert!(!codes.contains(&"220201"), "220201 也是应付：{codes:?}");
+        // 低频科目必须在 —— 「在建工程、预付账款没进去」曾经是我的错觉，
+        // 这条断言就是防止哪天有人为了「让表短一点」加白名单
+        for c in ["1123", "2203", "2501", "1001"] {
+            assert!(codes.contains(&c), "{c} 应当出现在③里：{codes:?}");
+        }
+        // 权益类不出现在③（由④生成）
+        assert!(!codes.contains(&"4001"), "4001 由④生成：{codes:?}");
+        // 成本类不是 1/2 开头，也不该在
+        assert!(!codes.contains(&"5101"), "5101 不该进期初账户表：{codes:?}");
+    }
+
+    /// 客户/供应商档案存在时，①② 要预填成行（编码、名称、空金额），
+    /// 空表则只有表头 —— 两种都要能导入
+    #[test]
+    fn customer_and_supplier_rows_are_prefilled() {
+        let accounts = chart_accounts();
+        let c = AuxEntity::new(AuxKind::Customer, "C001", "华达");
+        let s = AuxEntity::new(AuxKind::Supplier, "S001", "宏源");
+        let sheets = collection_template(&accounts, &[c], &[s]);
+        let ar = sheets.iter().find(|x| x.name == "① 客户应收").unwrap();
+        assert!(ar.rows.iter().any(|r| r.contains(&"C001".to_string())));
+        let ap = sheets.iter().find(|x| x.name == "② 供应商应付").unwrap();
+        assert!(ap.rows.iter().any(|r| r.contains(&"S001".to_string())));
+        let _ = Chart::with_accounts(CodeScheme(vec![4, 2, 2]), accounts);
     }
 }

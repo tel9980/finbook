@@ -36,6 +36,8 @@ pub enum NavItem {
     BankRec,
     /// 往来核销与账龄
     Settle,
+    /// 发票管理（进项 / 销项登记与认证）
+    Invoice,
     /// 期末调汇、自动转账、月度检查
     Automation,
     /// 存货核算
@@ -112,6 +114,7 @@ impl NavItem {
             NavItem::Assets => "固定资产".to_string(),
             NavItem::BankRec => "银行对账".to_string(),
             NavItem::Settle => "往来核销".to_string(),
+            NavItem::Invoice => "发票管理".to_string(),
             NavItem::Automation => "月末自动化".to_string(),
             NavItem::Inventory => "存货核算".to_string(),
             NavItem::InventoryDeep => "库存深度".to_string(),
@@ -200,6 +203,7 @@ impl NavItem {
             | NavItem::Assets
             | NavItem::BankRec
             | NavItem::Settle
+            | NavItem::Invoice
             | NavItem::Automation => "期末",
             NavItem::Inventory
             | NavItem::InventoryDeep
@@ -235,7 +239,11 @@ impl NavItem {
             NavItem::Assets | NavItem::Inventory | NavItem::InventoryDeep | NavItem::ScmDeep => {
                 Some(Perm::AccountEdit)
             }
-            NavItem::BankRec | NavItem::Settle | NavItem::Payroll | NavItem::Claims => {
+            NavItem::BankRec
+            | NavItem::Settle
+            | NavItem::Invoice
+            | NavItem::Payroll
+            | NavItem::Claims => {
                 Some(Perm::VoucherNew)
             }
             NavItem::Budget
@@ -295,6 +303,7 @@ impl NavItem {
             NavItem::Assets,
             NavItem::BankRec,
             NavItem::Settle,
+            NavItem::Invoice,
             NavItem::Automation,
             NavItem::Inventory,
             NavItem::InventoryDeep,
