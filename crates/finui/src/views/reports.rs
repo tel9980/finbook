@@ -809,14 +809,15 @@ pub fn cash_flow_table(ui: &mut Ui, cf: &CashFlowStatement, company: &str, subti
     });
 
     ui.separator();
-    if cf.unassigned.is_zero() {
-        ui.label(RichText::new("✔ 现金收支已全部标注现金流量项目").color(palette::OK));
+    // 归集情况用 fincore 那句统一说明：三端同一句话，措辞不会各自演化
+    if cf.fully_assigned() {
+        ui.label(RichText::new(format!("✔ {}", cf.assignment_note())).color(palette::OK));
     } else {
         ui.colored_label(
             palette::WARN,
             format!(
-                "⚠ 尚有 {} 的现金收支未标注现金流量项目，请在凭证中补录",
-                cf.unassigned.fmt_money()
+                "⚠ {}，未归集的部分请在凭证上补标现金流量项目",
+                cf.assignment_note()
             ),
         );
     }

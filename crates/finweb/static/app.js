@@ -5472,7 +5472,8 @@ async function viewCashFlow(main) {
       const tail = `<tr style="font-weight:700;background:#fafafa"><td colspan="2">现金及现金等价物净增加额</td><td class="num">${esc(r.net_increase)}</td></tr>
         <tr><td colspan="2">加：期初现金及现金等价物余额</td><td class="num">${esc(r.begin_cash)}</td></tr>
         <tr style="font-weight:700;background:#fafafa"><td colspan="2">期末现金及现金等价物余额</td><td class="num">${esc(r.end_cash)}</td></tr>
-        <tr><td colspan="3" class="muted">${r.ties ? "✔ 净增加额与货币资金变动勾稽一致" : "✖ 勾稽不符"}</td></tr>`;
+        <tr><td colspan="3" class="muted">${r.ties ? "✔ 净增加额与货币资金变动勾稽一致" : "✖ 勾稽不符"}</td></tr>
+        <tr><td colspan="3" class="${r.fully_assigned ? "muted" : ""}" style="${r.fully_assigned ? "" : "color:var(--warn-t)"}">${esc(r.assignment_note || "")}</td></tr>`;
       $("#cf-result").innerHTML = statementMetaHtml(r, `${r.from} 至 ${r.to}`) + `
         <table class="grid"><thead><tr>${head}</tr></thead><tbody>
         ${section("经营活动产生的现金流量", r.operating, r.operating_net)}

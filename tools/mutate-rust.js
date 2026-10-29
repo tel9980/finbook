@@ -53,6 +53,11 @@ const SOPEN = (name) => ["test", "-p", "finweb", "--test", "settle_open_page", "
 const FOPT = (name) => ["test", "-p", "fincore", "--lib", `account::tests::${name}`];
 const FSETTLE = (name) => ["test", "-p", "findb", "--lib", `settle::tests::${name}`];
 const FUNS = (name) => ["test", "-p", "finweb", "--test", "settle_unsettle_api", "--", name];
+// v1.8.46 现金流量表按对方科目自动归集。失效形态都是「表还是那张表，只是空着」：
+// 规则表静默不生效、税额伴生行把整笔拖成"分不清"、内部划转被当成未归集。
+const CF = (name) => ["test", "-p", "findb", "--test", "cashflow_auto", "--", name];
+const FRULE = (name) => ["test", "-p", "fincore", "--lib", `report::cashflow_rules::tests::${name}`];
+const FREP = (name) => ["test", "-p", "findb", "--lib", `reports::tests::${name}`];
 // v1.8.36 应收应付：催款单口径 + 账龄基准日 + 催款单导出明细。
 // 这三处的共同失效形态是「文件/页面都正常，只有数字是错的」——客户收到错的催款单。
 const FCUST = (name) => ["test", "-p", "finweb", "--test", "customers", "--", name];
@@ -761,6 +766,41 @@ const MUT = [
     to: '        expense(&["6401", "6402"]),',
     cmd: ICOST("unclosed_manufacturing_cost_reaches_the_income_statement"),
   },
+  {
+    name: "㉘ 归集规则表静默不生效（表永远是空的）",
+    file: "crates/fincore/src/report/cashflow_rules.rs",
+    from: "    for r in candidates {",
+    to: "    for r in candidates.into_iter().take(0) {",
+    cmd: FRULE("sales_of_services_is_operating_inflow"),
+  },
+  {
+    name: "㉘ 未归集金额不计入净增加额（勾稽永远不平）",
+    file: "crates/fincore/src/report/cashflow.rs",
+    from: "        net_increase: operating_net + investing_net + financing_net + unassigned,",
+    to: "        net_increase: operating_net + investing_net + financing_net,",
+    cmd: FREP("unassigned_reported_only_when_ambiguous"),
+  },
+  {
+    name: "㉘ 税额伴生行也投票（收入+销项被判成分不清）",
+    file: "crates/findb/src/reports.rs",
+    from: '                        .filter(|c| !(counters.len() > 1 && c.starts_with("2221")))',
+    to: "                        .filter(|_c| true)",
+    cmd: CF("sales_with_output_tax_goes_to_operating_inflow"),
+  },
+  {
+    name: "㉘ 提现/存现被当成未归集的现金流量",
+    file: "crates/findb/src/reports.rs",
+    from: "                    if counters.is_empty() {\n                        out.transfers += 1;\n                        continue;\n                    }",
+    to: "                    if false {\n                        out.transfers += 1;\n                        continue;\n                    }",
+    cmd: CF("cash_transfer_is_not_a_cash_flow"),
+  },
+  {
+    name: "㉘ 人工标注被规则覆盖",
+    file: "crates/findb/src/reports.rs",
+    from: '                Some(t) if !t.trim().is_empty() => Some(t.trim().to_string()),',
+    to: "                Some(_t) if false => None,",
+    cmd: CF("manual_label_wins_over_rules"),
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */
@@ -827,8 +867,45 @@ if (RUN.length === 0) {
 if (SHARD && !process.argv.includes("--list")) {
   console.log(`分片 ${SHARD.idx}/${SHARD.n}：本次跑 ${RUN.length} 条（合计 ${PICKED.length} 条）\n`);
 }
+const LOCK = ".mutation-lock.json";
+// 上次跑到一半被 Ctrl-C / CI 超时杀掉时，`finally` 不会执行，源码就**留着变异后的样子**。
+// 2026-10 真的踩过一次：`save_begin` 的「科目存在性校验」被留成 `if false`，全量测试
+// 里那条用例报了红才被发现。所以：跑之前先把原文写进锁文件，下次启动先恢复它。
+function restoreFromLock() {
+  if (!fs.existsSync(LOCK)) return;
+  try {
+    const saved = JSON.parse(fs.readFileSync(LOCK, "utf8"));
+    for (const [f, b64] of Object.entries(saved)) {
+      fs.writeFileSync(f, Buffer.from(b64, "base64"));
+    }
+    fs.unlinkSync(LOCK);
+    console.log("!! 上次变异没跑完就退出了 —— 已按锁文件把源码还原\n");
+  } catch (e) {
+    console.error("!! 锁文件损坏，请先手工检查工作区：" + String(e.message || e));
+    process.exit(2);
+  }
+}
+if (!process.argv.includes("--list")) restoreFromLock();
+
 const backups = new Map();
 for (const m of RUN) if (!backups.has(m.file)) backups.set(m.file, fs.readFileSync(m.file, "utf8"));
+function restoreAll() {
+  for (const [f, s] of backups) fs.writeFileSync(f, s);
+  if (fs.existsSync(LOCK)) fs.unlinkSync(LOCK);
+}
+if (!process.argv.includes("--list")) {
+  const lock = {};
+  for (const [f, s] of backups) lock[f] = Buffer.from(s, "utf8").toString("base64");
+  fs.writeFileSync(LOCK, JSON.stringify(lock));
+  // 被信号打断也要还原，否则工作区带着变异代码，而人以为只是"跑完了"
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.on(sig, () => {
+      restoreAll();
+      console.error(`\n收到 ${sig}，已还原源码`);
+      process.exit(130);
+    });
+  }
+}
 
 // --list：只把变异清单打成 JSON，不执行。让 tools/check-ci.js 检查「清单是否已过期」
 // （源码改了但 from 串对不上 = 这条变异形同虚设，而且会被读成「检查放过了」）。
@@ -891,7 +968,7 @@ try {
     }
   }
 } finally {
-  for (const [f, s] of backups) fs.writeFileSync(f, s);
+  restoreAll();
 }
 console.log(
   bad === 0 && notRun === 0

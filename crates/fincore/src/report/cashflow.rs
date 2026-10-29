@@ -160,9 +160,45 @@ pub struct CashFlowStatement {
     pub end_cash: Money,
     /// 尚未标注现金流量项目的金额（勾稽提示用）
     pub unassigned: Money,
+    /// 按对方科目自动归集的现金行数
+    pub auto_assigned: usize,
+    /// 对方科目指向不同项目、未能归集的行数
+    pub ambiguous: usize,
+    /// 纯货币资金内部划转（提现 / 存现）而跳过的行数
+    pub transfers: usize,
 }
 
 impl CashFlowStatement {
+    /// 归集情况的一句话说明
+    ///
+    /// 三端（桌面 / 网页 / Excel）都用这一句，不要各自拼措辞——同一件事写在三个地方，
+    /// 迟早会分叉（v1.8.27 打印版式的教训）。
+    pub fn assignment_note(&self) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if self.auto_assigned > 0 {
+            parts.push(format!("{} 笔按对方科目自动归集", self.auto_assigned));
+        }
+        if self.ambiguous > 0 {
+            parts.push(format!(
+                "{} 笔对方科目指向不同项目、未归集",
+                self.ambiguous
+            ));
+        }
+        if !self.unassigned.is_zero() {
+            parts.push(format!("未归集金额 {}", self.unassigned.fmt_money()));
+        }
+        if parts.is_empty() {
+            "现金收支已全部人工标注现金流量项目".to_string()
+        } else {
+            parts.join("，")
+        }
+    }
+
+    /// 是否已经一笔不漏地归集（自动归集也算归集，只是措辞要说清）
+    pub fn fully_assigned(&self) -> bool {
+        self.unassigned.is_zero() && self.ambiguous == 0
+    }
+
     /// 与货币资金账面变动是否勾稽一致
     pub fn ties(&self) -> bool {
         (self.net_increase - (self.end_cash - self.begin_cash))
@@ -235,12 +271,40 @@ pub fn build_cash_flow(
         begin_cash,
         end_cash,
         unassigned,
+        auto_assigned: 0,
+        ambiguous: 0,
+        transfers: 0,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assignment_note_says_what_was_guessed() {
+        let mut st = build_cash_flow(
+            &default_cash_flow_items(),
+            &ItemAmounts::new(),
+            Money::ZERO,
+            Money::ZERO,
+            Money::ZERO,
+        );
+        assert!(st.fully_assigned());
+        assert_eq!(st.assignment_note(), "现金收支已全部人工标注现金流量项目");
+
+        st.auto_assigned = 6;
+        let note = st.assignment_note();
+        assert!(note.contains("6 笔按对方科目自动归集"), "{note}");
+        assert!(st.fully_assigned(), "自动归集也算归集完整");
+
+        st.ambiguous = 2;
+        st.unassigned = Money::parse("1234.5").unwrap();
+        let note = st.assignment_note();
+        assert!(note.contains("2 笔对方科目指向不同项目"), "{note}");
+        assert!(note.contains("未归集金额"), "{note}");
+        assert!(!st.fully_assigned(), "有未归集就不能说完整");
+    }
 
     #[test]
     fn build_and_tie() {

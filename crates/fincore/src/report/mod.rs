@@ -5,6 +5,7 @@
 
 pub mod balance_sheet;
 pub mod cashflow;
+pub mod cashflow_rules;
 pub mod equity;
 pub mod income;
 

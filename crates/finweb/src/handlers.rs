@@ -14973,6 +14973,10 @@ async fn get_cash_flow(
         "begin_cash": cf.begin_cash.fmt_money(),
         "end_cash": cf.end_cash.fmt_money(),
         "unassigned": cf.unassigned.fmt_money(),
+        "auto_assigned": cf.auto_assigned,
+        "ambiguous": cf.ambiguous,
+        "fully_assigned": cf.fully_assigned(),
+        "assignment_note": cf.assignment_note(),
         "ties": cf.ties(),
     })))
 }

@@ -167,23 +167,52 @@ pub fn cash_accounts(db: &Db) -> DbResult<Vec<String>> {
         .collect())
 }
 
+/// 现金流量归集结果
+///
+/// 除了「项目 → 发生额」，还带四项审计信息：界面要能诚实地说清
+/// 「这张表有多少是猜出来的、多少猜不了」——不然用户以为报表是完整的。
+#[derive(Debug, Default)]
+pub struct CashFlowAmounts {
+    pub amounts: ItemAmounts,
+    /// 无法归集的现金收支净额
+    pub unassigned: Money,
+    /// 按对方科目自动归集的行数
+    pub auto_assigned: usize,
+    /// 对方科目指向不同项目、拒绝猜测的行数
+    pub ambiguous: usize,
+    /// 纯货币资金内部划转（提现 / 存现）而跳过的行数
+    pub transfers: usize,
+}
+
 /// 按现金流量项目汇总发生额（只统计现金/银行科目的已记账分录）
-pub fn cash_flow_amounts(
+///
+/// 归集顺序：**凭证上标的项目 → 按对方科目推断**。推断只在一件事上猜：
+/// 这张凭证的对方科目全都指向同一个现金流量项目。指向不同项目时宁可留在
+/// 「未归集」也不猜——猜错的现金流量表比空表更糟。
+pub fn cash_flow_amounts_detail(
     db: &Db,
     from: fincore::Period,
     to: fincore::Period,
     scope: Option<&fincore::user::User>,
-) -> DbResult<ItemAmounts> {
+) -> DbResult<CashFlowAmounts> {
     let codes = cash_accounts(db)?;
     if codes.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(CashFlowAmounts::default());
     }
+    let cash_set: std::collections::HashSet<&str> = codes.iter().map(|c| c.as_str()).collect();
     let placeholders = codes.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    // 取「本期所有含现金科目的凭证」的**全部分录**，按凭证分组后再判断对方科目。
+    // 不能只查现金行：对方科目在同一个凭证的另一行上。
     let mut sql = format!(
-        "SELECT e.cf_item, e.debit, e.credit
-         FROM voucher_entry e JOIN voucher v ON e.voucher_id=v.id
+        "SELECT e.voucher_id, e.account_code, e.cf_item, e.debit, e.credit
+         FROM voucher_entry e JOIN voucher v ON e.voucher_id = v.id
          WHERE v.status = 'posted' AND e.period BETWEEN ?1 AND ?2
-           AND e.account_code IN ({placeholders})"
+           AND e.voucher_id IN (
+               SELECT e2.voucher_id FROM voucher_entry e2
+               JOIN voucher v2 ON e2.voucher_id = v2.id
+               WHERE v2.status = 'posted' AND e2.period BETWEEN ?1 AND ?2
+                 AND e2.account_code IN ({placeholders})
+           )"
     );
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
         vec![Box::new(from.ymm()), Box::new(to.ymm())];
@@ -197,26 +226,105 @@ pub fn cash_flow_amounts(
     let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
     let mut rows = stmt.query(refs.as_slice())?;
 
-    let mut amt = ItemAmounts::new();
-    let mut unassigned_net = Money::ZERO;
+    // voucher_id -> [(科目, 标注项目, 借方, 贷方)]
+    let mut by_voucher: HashMap<i64, Vec<(String, Option<String>, Money, Money)>> = HashMap::new();
     while let Some(r) = rows.next()? {
-        let item: Option<String> = r.get(0)?;
-        let d = read_money(r, 1)?;
-        let c = read_money(r, 2)?;
-        match item {
-            Some(code) if !code.is_empty() => {
-                let e = amt.entry(code).or_insert((Money::ZERO, Money::ZERO));
-                e.0 += d;
-                e.1 += c;
+        let vid: i64 = r.get(0)?;
+        let code: String = r.get(1)?;
+        let cf: Option<String> = r.get(2)?;
+        let d = read_money(r, 3)?;
+        let c = read_money(r, 4)?;
+        by_voucher.entry(vid).or_default().push((code, cf, d, c));
+    }
+
+    let mut out = CashFlowAmounts::default();
+    // 固定遍历顺序，保证 auto_assigned / ambiguous 的计数可复现
+    let mut vids: Vec<i64> = by_voucher.keys().copied().collect();
+    vids.sort_unstable();
+    for vid in vids {
+        let lines = &by_voucher[&vid];
+        // 这张凭证的全部对方科目（非货币资金科目）
+        let counters: Vec<&str> = lines
+            .iter()
+            .map(|(c, ..)| c.as_str())
+            .filter(|c| !cash_set.contains(c))
+            .collect();
+
+        for (code, cf, d, c) in lines {
+            if !cash_set.contains(code.as_str()) {
+                continue;
             }
-            _ => {
-                unassigned_net += d - c;
+            if d.round2().is_zero() && c.round2().is_zero() {
+                continue;
+            }
+            let dir = if *d >= *c {
+                CashFlowDirection::In
+            } else {
+                CashFlowDirection::Out
+            };
+            let net = *d - *c;
+
+            // ① 凭证上标了，就听凭证的
+            let assigned = match cf {
+                Some(t) if !t.trim().is_empty() => Some(t.trim().to_string()),
+                _ => {
+                    // ② 对方科目全是货币资金 → 提现/存现，不是现金流量
+                    if counters.is_empty() {
+                        out.transfers += 1;
+                        continue;
+                    }
+                    // ③ 按对方科目推断。税额科目是主业务的伴生行：
+                    //    「借 银行 113,000 / 贷 收入 100,000 / 贷 销项 13,000」
+                    //    该归「销售商品收到的现金」，不能因为多了个 2221 就说分不清。
+                    let votes: std::collections::BTreeSet<&'static str> = counters
+                        .iter()
+                        .filter(|c| !(counters.len() > 1 && c.starts_with("2221")))
+                        .filter_map(|c| {
+                            fincore::report::cashflow_rules::item_for(c, dir)
+                        })
+                        .collect();
+                    match votes.len() {
+                        1 => {
+                            out.auto_assigned += 1;
+                            Some(votes.into_iter().next().unwrap_or_default().to_string())
+                        }
+                        0 => None,
+                        _ => {
+                            // 指向多个项目：不猜
+                            out.ambiguous += 1;
+                            None
+                        }
+                    }
+                }
+            };
+
+            match assigned {
+                Some(code) => {
+                    let e = out
+                        .amounts
+                        .entry(code)
+                        .or_insert((Money::ZERO, Money::ZERO));
+                    e.0 += *d;
+                    e.1 += *c;
+                }
+                None => out.unassigned += net,
             }
         }
     }
-    // 未标注项目的金额也要参与勾稽，用内部键记录下来
-    if !unassigned_net.is_zero() {
-        amt.insert("__unassigned__".to_string(), (unassigned_net, Money::ZERO));
+    Ok(out)
+}
+
+/// 只要「项目 → 发生额」的旧接口（未归集额用内部键 `__unassigned__` 带出）
+pub fn cash_flow_amounts(
+    db: &Db,
+    from: fincore::Period,
+    to: fincore::Period,
+    scope: Option<&fincore::user::User>,
+) -> DbResult<ItemAmounts> {
+    let d = cash_flow_amounts_detail(db, from, to, scope)?;
+    let mut amt = d.amounts;
+    if !d.unassigned.is_zero() {
+        amt.insert("__unassigned__".to_string(), (d.unassigned, Money::ZERO));
     }
     Ok(amt)
 }
@@ -251,11 +359,8 @@ pub fn cash_flow_statement(
     to: fincore::Period,
     scope: Option<&fincore::user::User>,
 ) -> DbResult<CashFlowStatement> {
-    let mut amounts = cash_flow_amounts(db, from, to, scope)?;
-    let unassigned = amounts
-        .remove("__unassigned__")
-        .map(|(net, _)| net)
-        .unwrap_or(Money::ZERO);
+    let detail = cash_flow_amounts_detail(db, from, to, scope)?;
+    let amounts = detail.amounts;
     let (begin, end) = cash_begin_end(db, from, to, scope)?;
     let items = cash_flow_items(db)?;
     let items = if items.is_empty() {
@@ -263,7 +368,11 @@ pub fn cash_flow_statement(
     } else {
         items
     };
-    Ok(build_cash_flow(&items, &amounts, begin, end, unassigned))
+    let mut stmt = build_cash_flow(&items, &amounts, begin, end, detail.unassigned);
+    stmt.auto_assigned = detail.auto_assigned;
+    stmt.ambiguous = detail.ambiguous;
+    stmt.transfers = detail.transfers;
+    Ok(stmt)
 }
 
 // ---------------------------------------------------------------------------
@@ -841,11 +950,38 @@ mod tests {
         assert_eq!(stmt.unassigned, Money::ZERO);
     }
 
+    /// 未归集只出现在「猜不了」的时候
+    ///
+    /// 以前是「没标就一律未归集」；现在没标时先按对方科目推断（见
+    /// `fincore::report::cashflow_rules`）。所以这条用例改成真正猜不了的情形：
+    /// 一笔 5,000 的收款，对方科目一半像收入、一半像卖设备。
     #[test]
-    fn unassigned_reported() {
+    fn unassigned_reported_only_when_ambiguous() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        // 不标注现金流量项目
+        cash_voucher(
+            &db,
+            p,
+            5,
+            vec![
+                ("1001", "借", "5000", None),
+                ("600101", "贷", "3000", None),
+                ("160101", "贷", "2000", None),
+            ],
+        );
+        let stmt = cash_flow_statement(&db, p, p, None).unwrap();
+        assert_eq!(stmt.unassigned, Money::parse("5000").unwrap());
+        assert_eq!(stmt.ambiguous, 1, "对方科目指向两个项目，不能猜");
+        assert_eq!(stmt.auto_assigned, 0);
+        assert!(stmt.ties());
+        assert!(stmt.assignment_note().contains("未归集"));
+    }
+
+    /// 没标注但对方科目单一：按规则归集到 0101，不再算未归集
+    #[test]
+    fn unannotated_but_inferable_is_auto_assigned() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
         cash_voucher(
             &db,
             p,
@@ -853,7 +989,9 @@ mod tests {
             vec![("1001", "借", "5000", None), ("600101", "贷", "5000", None)],
         );
         let stmt = cash_flow_statement(&db, p, p, None).unwrap();
-        assert_eq!(stmt.unassigned, Money::parse("5000").unwrap());
+        assert_eq!(stmt.unassigned, Money::ZERO, "对方科目是收入，能推出来");
+        assert_eq!(stmt.auto_assigned, 1);
+        assert_eq!(stmt.operating_net, Money::parse("5000").unwrap());
         assert!(stmt.ties());
     }
 

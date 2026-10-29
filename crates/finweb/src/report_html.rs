@@ -132,10 +132,11 @@ pub fn cash_flow_html(
             "勾稽：净增加额与期初期末差不等，请检查未标注现金流量的凭证"
         }
     ));
-    if cf.unassigned != fincore::Money::ZERO {
+    {
+        let color = if cf.fully_assigned() { "#2e7d32" } else { "#c00" };
         body.push_str(&format!(
-            "<tr><td colspan='4' style='color:#c00'>未标注现金流量项目的收付：{}</td></tr>",
-            cf.unassigned.fmt_money()
+            "<tr><td colspan='4' style='color:{color}'>{}</td></tr>",
+            crate::report_html::esc(&cf.assignment_note())
         ));
     }
     page_shell(

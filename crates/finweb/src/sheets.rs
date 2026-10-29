@@ -847,17 +847,13 @@ pub fn cash_flow_sheet(
         String::new(),
         String::new(),
     ]);
-    if !cf.unassigned.is_zero() {
-        rows.push(vec![
-            format!(
-                "提示：{} 元现金收支未标注现金流量项目，未计入上面任何一类",
-                cf.unassigned.fmt_plain()
-            ),
-            String::new(),
-            String::new(),
-            String::new(),
-        ]);
-    }
+    // 归集情况一律用 fincore 的那一句话，三端同源
+    rows.push(vec![
+        format!("提示：{}", cf.assignment_note()),
+        String::new(),
+        String::new(),
+        String::new(),
+    ]);
 
     Sheet::titled(
         "现金流量表",
