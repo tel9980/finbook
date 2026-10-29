@@ -77,6 +77,14 @@ const FREP = (name) => ["test", "-p", "findb", "--lib", `reports::tests::${name}
 const FCUST = (name) => ["test", "-p", "finweb", "--test", "customers", "--", name];
 
 const MUT = [
+  // v1.8.56：锁中毒不可连带打死登录。
+  {
+    name: "㊲ 锁中毒后不取回内值（登录会跟着 panic）",
+    file: "crates/finweb/src/realm.rs",
+    from: "        self.inner.lock().unwrap_or_else(|e| e.into_inner())",
+    to: "        self.inner.lock().unwrap()",
+    cmd: ["test", "-p", "finweb", "--lib", "realm::tests::a_poisoned_lock_does_not_kill_login"],
+  },
   // v1.8.55：部门范围与写侧越权。
   // 这两条对应的 bug 都是「读和写各抄一遍口径，抄漏了部门」——
   // 抄漏之后列表会多出别的部门的单子，而且**不报错**。

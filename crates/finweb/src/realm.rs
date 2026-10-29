@@ -127,6 +127,27 @@ pub struct RealmDb {
     policy_cache: RwLock<Option<PasswordPolicy>>,
 }
 
+impl RealmDb {
+    /// 取库连接。
+    ///
+    /// 为什么不用 `self.conn()`：一个 panic 会把 Mutex 打成「中毒」，
+    /// 此后**每一次登录都 panic** —— 一次局部 bug 变成永久不可用，只能重启进程。
+    ///
+    /// 这里锁保护的是一条 SQLite 连接，不是"必须完全一致的内存不变量"：数据一致性
+    /// 由 SQLite 自己的事务保证，毒化后继续用这条连接是安全的。所以从毒化里取回内值。
+    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 同上：策略缓存也是 `RwLock`，毒化后取回内值而不是 panic
+    fn policy_read(&self) -> std::sync::RwLockReadGuard<'_, Option<PasswordPolicy>> {
+        self.policy_cache.read().unwrap_or_else(|e| e.into_inner())
+    }
+    fn policy_write(&self) -> std::sync::RwLockWriteGuard<'_, Option<PasswordPolicy>> {
+        self.policy_cache.write().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
 fn now() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
@@ -253,7 +274,7 @@ impl RealmDb {
     }
 
     fn init(&self) -> DbResult<()> {
-        self.inner.lock().unwrap().execute_batch(SCHEMA)?;
+        self.conn().execute_batch(SCHEMA)?;
         self.migrate()?;
         Ok(())
     }
@@ -261,7 +282,7 @@ impl RealmDb {
     /// 轻量迁移：为早期创建的库补上后加的列（device_id / locked_until），
     /// 以及「一个账号可绑多台设备」用的 `realm_user_device` 表。
     fn migrate(&self) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let cols: Vec<String> = conn
             .prepare("PRAGMA table_info(realm_user)")?
             .query_map([], |r| r.get::<_, String>(1))?
@@ -339,7 +360,7 @@ impl RealmDb {
     // ---------------------------------------------------------------
 
     pub fn count_users(&self) -> DbResult<i64> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         Ok(conn.query_row("SELECT COUNT(*) FROM realm_user", [], |r| r.get(0))?)
     }
 
@@ -388,7 +409,7 @@ impl RealmDb {
         if self.get_user(&username)?.is_some() {
             return Err(DbError::Fin(fincore::FinError::msg("该用户名已存在")));
         }
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO realm_user(username,display_name,password_hash,is_admin,disabled,must_change_pwd,device_id,created_at)
              VALUES(?1,?2,?3,?4,0,?5,'',?6)",
@@ -417,7 +438,7 @@ impl RealmDb {
                     let mut u = u;
                     if fincore::user::is_legacy_hash(&u.password_hash) {
                         u.password_hash = hash_password(password);
-                        let conn = self.inner.lock().unwrap();
+                        let conn = self.conn();
                         conn.execute(
                             "UPDATE realm_user SET password_hash=?2 WHERE username=?1",
                             rusqlite::params![username, u.password_hash],
@@ -439,7 +460,7 @@ impl RealmDb {
     }
 
     pub fn get_user(&self, username: &str) -> DbResult<Option<RealmUser>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.query_row(
             "SELECT id,username,display_name,password_hash,is_admin,disabled,must_change_pwd,device_id,created_at,locked_until
              FROM realm_user WHERE username=?1",
@@ -451,7 +472,7 @@ impl RealmDb {
     }
 
     pub fn list_users(&self) -> DbResult<Vec<RealmUser>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id,username,display_name,password_hash,is_admin,disabled,must_change_pwd,device_id,created_at,locked_until
              FROM realm_user ORDER BY id",
@@ -469,10 +490,10 @@ impl RealmDb {
     /// 平台口令策略（realm_option 存储；缺省 = 与桌面端一致的默认策略）
     pub fn policy(&self) -> DbResult<PasswordPolicy> {
         // 先尝试读取缓存
-        if let Some(cached) = self.policy_cache.read().unwrap().clone() {
+        if let Some(cached) = self.policy_read().clone() {
             return Ok(cached);
         }
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let raw: Option<String> = conn
             .query_row(
                 "SELECT value FROM realm_option WHERE key='password_policy'",
@@ -483,7 +504,7 @@ impl RealmDb {
         let policy = raw
             .and_then(|s| serde_json::from_str::<PasswordPolicy>(&s).ok())
             .unwrap_or_default();
-        *self.policy_cache.write().unwrap() = Some(policy.clone());
+        *self.policy_write() = Some(policy.clone());
         Ok(policy)
     }
 
@@ -491,19 +512,19 @@ impl RealmDb {
     pub fn set_policy(&self, p: &PasswordPolicy) -> DbResult<()> {
         let json = serde_json::to_string(p)
             .map_err(|e| DbError::Fin(fincore::FinError::msg(format!("策略序列化失败：{e}"))))?;
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO realm_option(key,value) VALUES('password_policy',?1)
              ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             rusqlite::params![json],
         )?;
-        *self.policy_cache.write().unwrap() = Some(p.clone());
+        *self.policy_write() = Some(p.clone());
         Ok(())
     }
 
     /// 记录一次登录尝试（成功/失败），并只保留最近 500 条防膨胀
     pub fn record_login_attempt(&self, username: &str, ok: bool, ip: &str) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO realm_login_attempt(username,ts,ok,ip) VALUES(?1,?2,?3,?4)",
             rusqlite::params![username, now(), ok as i64, ip],
@@ -519,7 +540,7 @@ impl RealmDb {
 
     /// 自上次成功登录以来的连续失败次数（与桌面 findb::security 同口径）
     pub fn recent_fail_count(&self, username: &str) -> DbResult<i64> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let last_ok: i64 = conn.query_row(
             "SELECT COALESCE(MAX(id),0) FROM realm_login_attempt WHERE username=?1 AND ok=1",
             rusqlite::params![username],
@@ -535,7 +556,7 @@ impl RealmDb {
 
     /// 清空某账号的登录尝试记录（登录成功 / 管理员解锁时调用）
     pub fn clear_login_attempts(&self, username: &str) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "DELETE FROM realm_login_attempt WHERE username=?1",
             rusqlite::params![username],
@@ -549,7 +570,7 @@ impl RealmDb {
         username: Option<&str>,
         limit: usize,
     ) -> DbResult<Vec<(i64, String, String, bool, String)>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let limit = limit.clamp(1, 500) as i64;
         let mut out = Vec::new();
         let filter = username.map(str::trim).filter(|s| !s.is_empty());
@@ -595,7 +616,7 @@ impl RealmDb {
         let until = (chrono::Local::now() + chrono::Duration::minutes(minutes.max(1)))
             .format("%Y-%m-%d %H:%M:%S")
             .to_string();
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "UPDATE realm_user SET locked_until=?2 WHERE username=?1",
             rusqlite::params![username, until],
@@ -605,7 +626,7 @@ impl RealmDb {
 
     /// 解锁账号（同时清空失败计数）
     pub fn unlock_user(&self, username: &str) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "UPDATE realm_user SET locked_until='' WHERE username=?1",
             rusqlite::params![username],
@@ -616,7 +637,7 @@ impl RealmDb {
 
     /// 剩余锁定分钟（未锁定/已过期 = 0；过期顺手清锁）
     pub fn lock_remaining_min(&self, username: &str) -> DbResult<i64> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let raw: String = conn
             .query_row(
                 "SELECT COALESCE(locked_until,'') FROM realm_user WHERE username=?1",
@@ -677,7 +698,7 @@ impl RealmDb {
             }
             u.is_admin = a;
         }
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "UPDATE realm_user SET display_name=?2,disabled=?3,is_admin=?4 WHERE username=?1",
             rusqlite::params![
@@ -707,7 +728,7 @@ impl RealmDb {
                 )));
             }
         }
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "DELETE FROM realm_user WHERE username=?1",
             rusqlite::params![username],
@@ -725,7 +746,7 @@ impl RealmDb {
             .check(new)
             .map_err(fincore::FinError::msg)
             .map_err(DbError::Fin)?;
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         // 管理员重置的口令是管理员已知的口令，必须强制用户下次登录自行改一次，
         // 否则口令会长期停留在管理员设定值上，失去重置的意义。
         conn.execute(
@@ -763,7 +784,7 @@ impl RealmDb {
         device_id: &str,
         device_name: &str,
     ) -> DbResult<Result<(), String>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         let secret = device_secret(&conn)?;
         let fp = device_fingerprint(&secret, username, device_id);
@@ -821,7 +842,7 @@ impl RealmDb {
     /// 这里读表而不是读 `realm_user.device_id` 那一列：那是"第一台"的快照，只为列表显示
     /// 保留同步。用它做授权就退回了"一台机"，而且两处判定会各写一份必然分叉。
     pub fn device_allowed(&self, username: &str, device_id: &str) -> DbResult<bool> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM realm_user_device WHERE username=?1",
             rusqlite::params![username],
@@ -844,7 +865,7 @@ impl RealmDb {
 
     /// 该账号已绑定的设备数（账号列表显示"已绑定/未绑定"用）
     pub fn bound_device_count(&self, username: &str) -> DbResult<i64> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         Ok(conn.query_row(
             "SELECT COUNT(*) FROM realm_user_device WHERE username=?1",
             rusqlite::params![username],
@@ -854,7 +875,7 @@ impl RealmDb {
 
     /// 解绑全部设备（管理员「重置设备」）：清空后该账号可在任意设备重新登录
     pub fn clear_device(&self, username: &str) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "DELETE FROM realm_user_device WHERE username=?1",
             rusqlite::params![username],
@@ -883,7 +904,7 @@ impl RealmDb {
         if let Err(msg) = policy.check(new) {
             return Ok(Err(msg));
         }
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "UPDATE realm_user SET password_hash=?2,must_change_pwd=0 WHERE username=?1",
             rusqlite::params![username, hash_password(new)],
@@ -902,7 +923,7 @@ impl RealmDb {
         owner_username: &str,
         company: &str,
     ) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO realm_book(key,path,owner_username,company,created_at) VALUES(?1,?2,?3,?4,?5)",
             rusqlite::params![key, path, owner_username, company, now()],
@@ -912,7 +933,7 @@ impl RealmDb {
 
     /// 最早创建的（未停用）管理员：账号模型二元化后的唯一治理者候选
     pub fn first_admin(&self) -> DbResult<Option<(String, String)>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let row = conn
             .query_row(
                 "SELECT username, display_name FROM realm_user
@@ -931,7 +952,7 @@ impl RealmDb {
         let Some((admin, _)) = self.first_admin()? else {
             return Ok(Vec::new()); // 尚未引导管理员时跳过
         };
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let mut st = conn.prepare(
             "SELECT key, path FROM realm_book
              WHERE owner_username NOT IN (SELECT username FROM realm_user WHERE is_admin=1)",
@@ -952,7 +973,7 @@ impl RealmDb {
     }
 
     pub fn get_book(&self, key: &str) -> DbResult<Option<RealmBook>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.query_row(
             "SELECT id,key,path,owner_username,company,created_at FROM realm_book WHERE key=?1",
             rusqlite::params![key],
@@ -964,7 +985,7 @@ impl RealmDb {
 
     /// 按归属返回账套列表：管理员返回全部，普通用户只返回自己创建的
     pub fn list_books_for(&self, username: &str, is_admin: bool) -> DbResult<Vec<RealmBook>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let sql: &str = if is_admin {
             "SELECT id,key,path,owner_username,company,created_at FROM realm_book ORDER BY id"
         } else {
@@ -980,7 +1001,7 @@ impl RealmDb {
     }
 
     pub fn book_owner(&self, key: &str) -> DbResult<Option<String>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         Ok(conn
             .query_row(
                 "SELECT owner_username FROM realm_book WHERE key=?1",
@@ -991,7 +1012,7 @@ impl RealmDb {
     }
 
     pub fn delete_book(&self, key: &str) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "DELETE FROM realm_book WHERE key=?1",
             rusqlite::params![key],
@@ -1000,7 +1021,7 @@ impl RealmDb {
     }
 
     pub fn count_books_of(&self, username: &str) -> DbResult<i64> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         Ok(conn.query_row(
             "SELECT COUNT(*) FROM realm_book WHERE owner_username=?1",
             rusqlite::params![username],
@@ -1016,7 +1037,7 @@ impl RealmDb {
     /// 明确传 `must_change_pwd:false`（"这人是我设的口令，不用再改"），用户
     /// 仍被拦在「必须先改密」上。实测确认过这条不一致。
     pub fn set_must_change_pwd(&self, username: &str, v: bool) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "UPDATE realm_user SET must_change_pwd=?2 WHERE username=?1",
             rusqlite::params![username, v as i64],
@@ -1046,7 +1067,7 @@ impl RealmDb {
         // 存哈希：不能用 sha256 明文比（key 长度固定，直接哈希即可），也不存明文
         let hash = hash_api_secret(&secret);
         let prefix: String = secret.chars().take(12).collect();
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute(
             "INSERT INTO realm_api_key(name,prefix,key_hash,book_key,scopes,created_by,created_at,expires_at)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
@@ -1065,7 +1086,7 @@ impl RealmDb {
     }
 
     pub fn api_key_list(&self) -> DbResult<Vec<ApiKeyInfo>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let mut st = conn.prepare(
             "SELECT id,name,prefix,book_key,scopes,disabled,created_by,created_at,last_used_at,expires_at
              FROM realm_api_key ORDER BY id DESC",
@@ -1100,7 +1121,7 @@ impl RealmDb {
     /// 公开可见：集成测试（tests/api.rs）是独立 crate，拿不到 `#[cfg(test)]`
     /// 的内部项，而「库里有没有明文」恰恰是最该被集成测试盯住的一条。
     pub fn debug_dump_api_keys(&self) -> String {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let mut st = conn
             .prepare("SELECT * FROM realm_api_key")
             .expect("准备 dump 失败");
@@ -1125,7 +1146,7 @@ impl RealmDb {
 
     /// 停用 / 启用（不物理删除：审计需要知道「曾经有过」）
     pub fn api_key_set_disabled(&self, id: i64, disabled: bool) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let n = conn.execute(
             "UPDATE realm_api_key SET disabled=?2 WHERE id=?1",
             rusqlite::params![id, disabled as i64],
@@ -1137,7 +1158,7 @@ impl RealmDb {
     }
 
     pub fn api_key_delete(&self, id: i64) -> DbResult<()> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         conn.execute("DELETE FROM realm_api_key WHERE id=?1", [id])?;
         Ok(())
     }
@@ -1151,7 +1172,7 @@ impl RealmDb {
             return Ok(None);
         }
         let hash = hash_api_secret(secret);
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let row = conn
             .query_row(
                 "SELECT id,prefix,book_key,scopes,disabled,expires_at FROM realm_api_key WHERE key_hash=?1",
@@ -1229,7 +1250,7 @@ impl RealmDb {
 
     /// 启动时把目录全量载入（返回 path，供注册进 BookRegistry）
     pub fn load_all_book_paths(&self) -> DbResult<Vec<PathBuf>> {
-        let conn = self.inner.lock().unwrap();
+        let conn = self.conn();
         let mut stmt = conn.prepare("SELECT path FROM realm_book ORDER BY id")?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))?
@@ -1407,6 +1428,58 @@ mod tests {
         assert!(r.device_allowed("u1", "dev-B").unwrap());
         // 旧设备从此不在名单里
         assert!(!r.device_allowed("u1", "dev-A").unwrap());
+    }
+
+    /// 锁中毒后**不能连带把登录打死**。
+    ///
+    /// `Mutex::lock().unwrap()` 的老写法有个连锁反应：任一处持锁时 panic，锁就中毒，
+    /// 之后每一次 `.lock().unwrap()` 都 panic —— 本进程里所有登录/改密/开号全部失效，
+    /// 只能重启。一次局部 bug 变成永久不可用。
+    ///
+    /// 这里的锁只保护一条 SQLite 连接，一致性由 SQLite 事务保证，所以毒化后继续用
+    /// 是安全的。这条测试故意在持锁时 panic 把锁打成中毒，然后断言登录链路照常工作。
+    #[test]
+    fn a_poisoned_lock_does_not_kill_login() {
+        let (r, _p) = tmp_realm("poison");
+        r.create_user(
+            "pz1",
+            "张三",
+            "Pass@1234",
+            false,
+            false,
+            &PasswordPolicy::default(),
+        )
+        .unwrap();
+
+        // 在同一线程作用域里制造一次"持锁 panic"：join 掉结果，不让它传播
+        std::thread::scope(|s| {
+            let h = s.spawn(|| {
+                let _g = r.inner.lock().unwrap();
+                panic!("故意 panic，把锁打成中毒");
+            });
+            assert!(h.join().is_err(), "子线程应当 panic 了");
+        });
+
+        // 锁现在是中毒状态：老写法在这里会 panic
+        assert!(
+            r.get_user("pz1").unwrap().is_some(),
+            "毒化后仍应读得到用户"
+        );
+        assert!(
+            r.authenticate("pz1", "Pass@1234").unwrap().is_some(),
+            "毒化后仍应能登录"
+        );
+        // 写也一样
+        r.create_user(
+            "pz2",
+            "李四",
+            "Pass@1234",
+            false,
+            false,
+            &PasswordPolicy::default(),
+        )
+        .unwrap();
+        assert!(r.get_user("pz2").unwrap().is_some());
     }
 
     /// 名单里存的是指纹，不是 `device_id` 原文。
