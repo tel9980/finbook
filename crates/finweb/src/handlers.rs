@@ -3245,7 +3245,7 @@ async fn get_dashboard(
         vouchers: v,
         entries: e,
         accounts: a,
-        brief: home_brief(db, cur).ok(),
+        brief: home_brief(db, cur, &user.user).ok(),
     }))
 }
 
@@ -3254,15 +3254,23 @@ async fn get_dashboard(
 /// 取数全部复用报表那条路径（`findb::advanced::financial_totals` /
 /// `financial_analysis` / `money_position`），**不另算一套**。首页自己算一遍
 /// 的下场是「首页说赚 10 万，点进利润表是 8.5 万」，而两边都"看起来对"。
-fn home_brief(db: &findb::Db, cur: Period) -> Result<HomeBrief, AppError> {
-    let t = findb::advanced::financial_totals(db, cur, cur, None)?;
+fn home_brief(
+    db: &findb::Db,
+    cur: Period,
+    user: &fincore::user::User,
+) -> Result<HomeBrief, AppError> {
+    // 数据范围必须带着走：首页那三块数字与利润表、资产负债表是同一批数，
+    // 利润表按权限裁了而首页不裁，等于「首页看到全公司、点进报表只剩自己的」。
+    // 这类"两处数字不一样"的 bug 最难查，因为两边都觉得自己对。
+    let scope = Some(user);
+    let t = findb::advanced::financial_totals(db, cur, cur, scope)?;
     // 本年累计：不再用 `financial_totals(db, cur, 年初, ..)`——那是另一组查询键，
     // 等于把整本账重扫一遍（6000 张凭证规模下约 8ms）。快照里已经算好了
     // 1 月至本期的累计发生额，`financial_ytd` 命中同一份缓存直接读它。
-    let ytd = findb::advanced::financial_ytd(db, cur, None)?;
+    let ytd = findb::advanced::financial_ytd(db, cur, scope)?;
     // 上月净利润：只为了算环比。"这个月赚 8 万"本身没有意义，老板真正想
     // 知道的是"比上个月好还是差"。取不到（建账首月）就当 0。
-    let prev_np = findb::advanced::financial_totals(db, cur.prev(), cur.prev(), None)
+    let prev_np = findb::advanced::financial_totals(db, cur.prev(), cur.prev(), scope)
         .map(|x| x.net_profit)
         .unwrap_or(fincore::Money::ZERO);
     let nc = t.net_profit;
@@ -3298,7 +3306,7 @@ fn home_brief(db: &findb::Db, cur: Period) -> Result<HomeBrief, AppError> {
 
     // 账龄以「当月最后一天」为基准：用今天算会让补录上个月的凭证显示成 0 天。
     let as_of = month_end(cur);
-    let mp = findb::advanced::money_position(db, cur, as_of, None)
+    let mp = findb::advanced::money_position(db, cur, as_of, scope)
         .unwrap_or_else(|_| empty_money_position());
 
     let party = |p: &findb::advanced::PartyMoney| HomeParty {
@@ -14002,6 +14010,13 @@ async fn get_settle_open(
     if account.trim().is_empty() {
         return Err(AppError::bad_request("缺少往来科目 account"));
     }
+    // 数据范围：科目不在可见范围就当没这个科目。
+    //
+    // 用 403 而不是「返回空清单」：空清单会让会计以为「这户真的没欠款」，
+    // 而真相是「你没有这个科目的权限」——两种情况的下一步动作完全不同。
+    if !user.user.can_see_account(account.trim()) {
+        return Err(AppError::forbidden("无权查看该科目"));
+    }
     let upto = q
         .get("upto")
         .and_then(|s| parse_period(s))
@@ -14425,6 +14440,13 @@ async fn get_settle_aging(
         fincore::engine::aging::buckets_by_days()
     };
     let db = &user.db;
+    // 数据范围：科目不在可见范围就当没这个科目。
+    //
+    // 用 403 而不是「返回空清单」：空清单会让会计以为「这户真的没欠款」，
+    // 而真相是「你没有这个科目的权限」——两种情况的下一步动作完全不同。
+    if !user.user.can_see_account(account.trim()) {
+        return Err(AppError::forbidden("无权查看该科目"));
+    }
     let lines = findb::settle::aging(&db, account.trim(), upto, as_of, &buckets, None)?;
     let labels: Vec<&str> = buckets.iter().map(|b| b.label).collect();
     // key 是**裸编码**（`C01`），名称另查 —— 页面上显示 `customer=C01` 是内部存储格式，
@@ -14490,6 +14512,13 @@ async fn export_settle_aging_xlsx(
         fincore::engine::aging::buckets_by_days()
     };
     let db = &user.db;
+    // 数据范围：科目不在可见范围就当没这个科目。
+    //
+    // 用 403 而不是「返回空清单」：空清单会让会计以为「这户真的没欠款」，
+    // 而真相是「你没有这个科目的权限」——两种情况的下一步动作完全不同。
+    if !user.user.can_see_account(account.trim()) {
+        return Err(AppError::forbidden("无权查看该科目"));
+    }
     let lines = findb::settle::aging(db, &account, upto, as_of, &buckets, None)?;
     let party = findb::settle::party_kind_in(db, &account);
     let names: std::collections::HashMap<String, String> = findb::auxs::list(

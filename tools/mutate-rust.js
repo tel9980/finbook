@@ -16,6 +16,7 @@ const { execFileSync } = require("child_process");
 // v1.8.52 桌面端补功能：发票税额拆分、现金流上期对比、期初收集表契约。
 // 共同失效形态是「看得见的地方都对，算出来的数不对」——发票拆错一分、
 // 对比表吞掉上期独有项目、期初表多列一个 1122 造成往来双计，都不报错。
+const SCOPE = (name) => ["test", "-p", "finweb", "--test", "scope_dashboard", "--", name];
 const FUI = (name) => ["test", "-p", "finui", "--lib", name];
 // v1.8.53 设备绑定（M-4）：政策与指纹。三条变异对应三个「不报错就会静悄悄变松」的点。
 const REALM = (name) => ["test", "-p", "finweb", "--lib", `realm::tests::${name}`];
@@ -75,6 +76,23 @@ const FREP = (name) => ["test", "-p", "findb", "--lib", `reports::tests::${name}
 const FCUST = (name) => ["test", "-p", "finweb", "--test", "customers", "--", name];
 
 const MUT = [
+  // v1.8.54：数据范围（DataScope）在「有金额的出口」上是否真的生效。
+  // 这两条都不是「报表算错了」，而是「报表裁了、首页/往来没裁」——
+  // 两端数字不一样，各自看着都对，是最难查的那类。
+  {
+    name: "㉟ 首页取数不带数据范围（首页看到全公司）",
+    file: "crates/finweb/src/handlers.rs",
+    from: "    let scope = Some(user);",
+    to: "    let scope: Option<&fincore::user::User> = None;",
+    cmd: SCOPE("dashboard_money_position_respects_data_scope"),
+  },
+  {
+    name: "㉟ 账龄不查科目范围（范围外也给出数字）",
+    file: "crates/finweb/src/handlers.rs",
+    from: "    if !user.user.can_see_account(account.trim()) {",
+    to: "    if false {",
+    cmd: SCOPE("settle_endpoints_refuse_out_of_scope_accounts"),
+  },
   {
     name: "③ 去掉期初的科目存在性校验",
     file: "crates/finweb/src/handlers.rs",

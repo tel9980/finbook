@@ -372,7 +372,7 @@ const appJs = fs.readFileSync(jsList.file, "utf8");
 // 下限 = 当前实际条数，所以「删掉几条」和「清单被清空」都会被立刻发现。
 // （之前写的是 10/7，而实际已到 16/17 —— 下限形同虚设，删掉 6 条都不会有人知道。）
 const MIN_CHECK_MUTATIONS = 22;
-const MIN_RUST_MUTATIONS = 107;
+const MIN_RUST_MUTATIONS = 109;
 if (jsList.cases.length < MIN_CHECK_MUTATIONS) {
   console.log(
     `FAIL mutate-check 只剩 ${jsList.cases.length} 条变异（下限 ${MIN_CHECK_MUTATIONS}）—— ` +
