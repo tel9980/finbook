@@ -205,16 +205,9 @@ const MUT = [
   //    任何测试都分不出来。留着它就是一条永远绿的假守卫（CI 就是被它红掉的）。
   // v1.8.53：`MAX_DEVICES_PER_USER` 概念已不存在（首次绑定后禁改），
   // 「政策回潮」改由 ㉞ 的新变异守。
-  {
-    // 逐请求复核改回读单列 device_id → 退回一台机，且两处判定会分叉
-    name: "逐请求设备复核改回读单列 device_id（退回一台机）",
-    file: "crates/finweb/src/state.rs",
-    from:
-        "        if !ru.is_admin\n            && !state\n                .realm\n                .device_allowed(&info.username, &info.device_id)?\n        {",
-    to:
-        "        if !ru.is_admin && !ru.device_id.is_empty() && ru.device_id != info.device_id {",
-    cmd: API("platform_device_binding_and_reset"),
-  },
+  // ③ 「逐请求设备复核改回读单列 device_id」也删了：普通账号现在只会绑**一台**，
+  //    单列里的值恒等于榜上那一台，读列与读表的结果完全一样 —— 又一次「政策变了、
+  //    靶子不再可观测」。它的原始动机（两处判定会分叉）在新政策下不再成立。
   {
     // 旧库的绑定不迁移过去 → 升级后所有账号静默解绑
     // 原来的变异是 `let moved: usize = 0; let _ = conn.execute(...)` —— 只丢掉了
