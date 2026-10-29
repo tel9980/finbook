@@ -17,6 +17,7 @@ const { execFileSync } = require("child_process");
 // 共同失效形态是「看得见的地方都对，算出来的数不对」——发票拆错一分、
 // 对比表吞掉上期独有项目、期初表多列一个 1122 造成往来双计，都不报错。
 const SCOPE = (name) => ["test", "-p", "finweb", "--test", "scope_dashboard", "--", name];
+const SCLAIM = (name) => ["test", "-p", "finweb", "--test", "scope_claims", "--", name];
 const FUI = (name) => ["test", "-p", "finui", "--lib", name];
 // v1.8.53 设备绑定（M-4）：政策与指纹。三条变异对应三个「不报错就会静悄悄变松」的点。
 const REALM = (name) => ["test", "-p", "finweb", "--lib", `realm::tests::${name}`];
@@ -76,6 +77,23 @@ const FREP = (name) => ["test", "-p", "findb", "--lib", `reports::tests::${name}
 const FCUST = (name) => ["test", "-p", "finweb", "--test", "customers", "--", name];
 
 const MUT = [
+  // v1.8.55：部门范围与写侧越权。
+  // 这两条对应的 bug 都是「读和写各抄一遍口径，抄漏了部门」——
+  // 抄漏之后列表会多出别的部门的单子，而且**不报错**。
+  {
+    name: "㊱ 报销列表不按部门过滤",
+    file: "crates/finweb/src/handlers.rs",
+    from: "    rows.iter().filter(|c| claim_visible(user, c)).collect()",
+    to: "    rows.iter().filter(|c| doc_in_scope(user, &c.applicant)).collect()",
+    cmd: SCLAIM("claim_list_and_export_respect_dept_scope"),
+  },
+  {
+    name: "㊱ 报销写侧不按部门拦（别的部门也能审批）",
+    file: "crates/finweb/src/handlers.rs",
+    from: "    user.user.data_scope.allows_dept(&c.dept) && doc_in_scope(user, &c.applicant)",
+    to: "    doc_in_scope(user, &c.applicant)",
+    cmd: SCLAIM("claim_write_endpoints_refuse_other_dept"),
+  },
   // v1.8.54：数据范围（DataScope）在「有金额的出口」上是否真的生效。
   // 这两条都不是「报表算错了」，而是「报表裁了、首页/往来没裁」——
   // 两端数字不一样，各自看着都对，是最难查的那类。

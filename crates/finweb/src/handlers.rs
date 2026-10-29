@@ -3686,7 +3686,7 @@ async fn quick_search(
         if mine >= 3 {
             break;
         }
-        if !doc_in_scope(&user, &c.applicant) {
+        if !claim_visible(&user, &c) {
             continue;
         }
         if c.no.contains(&kw) || c.reason.contains(&kw) {
@@ -4113,6 +4113,27 @@ fn doc_in_scope(user: &CurrentUser, who: &str) -> bool {
     }
     let who = who.trim();
     who == user.user.username || who == user.user.display_name
+}
+
+/// 一张报销单是否在当前用户的可见范围内。
+///
+/// 口径 = 部门范围 ∧「仅看本人经手的业务单据」，和工资那边 `scope_payroll` 一致。
+/// 这已经是第三个地方抄同一句了（工资 4 个出口共用 `scope_payroll`，报销却散在
+/// `list_claims` / `export_claims` / 四个写接口里各写一遍），所以收成两个函数：
+/// 读用 `scope_claims`，写用 `claim_visible`。
+///
+/// 写侧必须和读侧同口径：**看不见的单据不能改/审批/生成凭证**。否则会出现
+/// 「列表里看不到，但拿着 id 能操作」——这比起看不到更糟，因为没人会发现。
+fn claim_visible(user: &CurrentUser, c: &business::Claim) -> bool {
+    user.user.data_scope.allows_dept(&c.dept) && doc_in_scope(user, &c.applicant)
+}
+
+/// 报销单列表/导出共用的数据范围过滤
+fn scope_claims<'a>(
+    user: &CurrentUser,
+    rows: &'a [business::Claim],
+) -> Vec<&'a business::Claim> {
+    rows.iter().filter(|c| claim_visible(user, c)).collect()
 }
 
 fn to_item(v: &Voucher) -> VoucherListItem {
@@ -6639,11 +6660,8 @@ async fn export_claims(
         .filter(|s| !s.is_empty())
         .map(|s| business::ClaimStatus::parse(s));
     let list = business::claim_list(&db, period, status)?;
-    // 「仅看本人经手的业务单据」：报销按申请人匹配当前登录人（与 list_claims 一致）
-    let list: Vec<&business::Claim> = list
-        .iter()
-        .filter(|c| doc_in_scope(&user, &c.applicant))
-        .collect();
+    // 与 list_claims 同一个口径（部门范围 + 仅本人经手），不再各写一遍
+    let list: Vec<&business::Claim> = scope_claims(&user, &list);
     let mut rows = vec![[
         "单号",
         "业务日期",
@@ -17032,14 +17050,7 @@ async fn list_claims(
         .filter(|s| !s.is_empty())
         .map(|s| business::ClaimStatus::parse(s));
     let rows = business::claim_list(&db, period, status)?;
-    // 「仅看本人经手的业务单据」：报销按申请人匹配当前登录人
-    let rows: Vec<business::Claim> = if user.user.data_scope.own_doc_only {
-        rows.into_iter()
-            .filter(|c| c.applicant == user.user.display_name || c.applicant == user.user.username)
-            .collect()
-    } else {
-        rows
-    };
+    let rows: Vec<business::Claim> = scope_claims(&user, &rows).into_iter().cloned().collect();
     Ok(Json(rows))
 }
 
@@ -17067,6 +17078,13 @@ async fn create_claim(
     }
     if !doc_in_scope(&user, applicant) {
         return Err(AppError::forbidden("数据范围受限，不能为他人填报销单"));
+    }
+    // 部门范围同样要管：否则受限会计能给范围外的部门开单，开完自己又看不到
+    if !user.user.data_scope.allows_dept(r.dept.trim()) {
+        return Err(AppError::forbidden(format!(
+            "数据范围受限，不能为「{}」部门填报销单",
+            r.dept.trim()
+        )));
     }
     let db = &user.db;
     let period = match r.period.filter(|ym| *ym > 0) {
@@ -17111,7 +17129,7 @@ async fn update_claim(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     let mut c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
-    if !doc_in_scope(&user, &c.applicant) {
+    if !claim_visible(&user, &c) {
         return Err(AppError::forbidden("数据范围受限，不能修改他人的报销单"));
     }
     if !c.status.editable() {
@@ -17123,7 +17141,7 @@ async fn update_claim(
     let date = req_date(&r.biz_date, c.period.last_day())?;
     c.biz_date = date;
     c.applicant = r.applicant.trim().to_string();
-    if !doc_in_scope(&user, &c.applicant) {
+    if !claim_visible(&user, &c) {
         return Err(AppError::forbidden("数据范围受限，不能改由他人作为申请人"));
     }
     c.dept = r.dept.trim().to_string();
@@ -17148,7 +17166,7 @@ async fn delete_claim(
     user.require(Perm::VoucherDelete)?;
     let db = &user.db;
     let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
-    if !doc_in_scope(&user, &c.applicant) {
+    if !claim_visible(&user, &c) {
         return Err(AppError::forbidden("数据范围受限，不能删除他人的报销单"));
     }
     // 预检：引擎的通用错误会映射成 500，这里给出明确的 400
@@ -17177,7 +17195,7 @@ async fn claim_transition(
     let db = &user.db;
     let to = business::ClaimStatus::parse(&r.status);
     let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
-    if !doc_in_scope(&user, &c.applicant) {
+    if !claim_visible(&user, &c) {
         return Err(AppError::forbidden("数据范围受限，不能操作他人的报销单"));
     }
     // 工作流拦截（仅 批准/驳回 两个目标）：有流程 → Pending 只推进；NoFlow/Final → 原流转
@@ -17225,16 +17243,16 @@ async fn claim_voucher(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let pay = r.pay_account.trim();
-    if pay.is_empty() {
-        return Err(AppError::bad_request("请填写支付科目"));
-    }
-    // 预检给出友好的 400（引擎层也有同样拦截，此处避免落到 500）
+    // 先验权限再验参数：范围外的单子连"参数对不对"都不该告诉调用方
     let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
-    if !doc_in_scope(&user, &c.applicant) {
+    if !claim_visible(&user, &c) {
         return Err(AppError::forbidden(
             "数据范围受限，不能为他人报销单生成凭证",
         ));
+    }
+    let pay = r.pay_account.trim();
+    if pay.is_empty() {
+        return Err(AppError::bad_request("请填写支付科目"));
     }
     if let Some(existing) = c.voucher_id {
         // 幂等：支付时已自动出过凭证 → 返回同一张（不新增）
