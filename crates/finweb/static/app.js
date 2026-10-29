@@ -7449,12 +7449,27 @@ async function viewPeriodEnd(main) {
     const p = periodOf();
     if (!/^\d{6}$/.test(p)) { $("#pe-status", main).textContent = "期间格式应为 YYYYMM"; return; }
     try {
-      const chk = await api(`/periods/${encodeURIComponent(p)}/precheck`);
-      const issues = chk.issues || [];
+      // 两个接口一起取：precheck 给抬头数字，wizard 给打勾清单
+      const [chk, wiz] = await Promise.all([
+        api(`/periods/${encodeURIComponent(p)}/precheck`),
+        api(`/periods/${encodeURIComponent(p)}/wizard`),
+      ]);
       $("#pe-status", main).innerHTML = `期间 <b>${esc(chk.period)}</b>　已结账至：<b>${esc(chk.closed_upto || "—")}</b>　损益科目：<b>${chk.pl_count}</b> 个　本年利润余额：<b>${esc(chk.profit_balance)}</b>`;
-      $("#pe-issues", main).innerHTML = issues.length
-        ? `<div class="panel"><b>待处理问题：</b><ul style="margin:6px 0 0 18px">${issues.map((s) => `<li>${esc(s)}</li>`).join("")}</ul></div>`
-        : `<div class="panel" style="color:var(--ok,#2e7d32)">✔ 未发现阻断项（是否要求先结转以左侧选项为准）</div>`;
+      const mark = (st) => (st.ok ? "✔" : st.blocking ? "✖" : "⚠");
+      const color = (st) => (st.ok ? "var(--ok,#2e7d32)" : st.blocking ? "var(--err,#c00)" : "var(--warn-t,#b46a00)");
+      const rows = (wiz.steps || []).map((st, i) => `<tr>
+          <td style="white-space:nowrap">${i + 1}. ${esc(st.label)}</td>
+          <td style="color:${color(st)};white-space:nowrap">${mark(st)} ${st.ok ? "完成" : st.blocking ? "未完成" : "提醒"}</td>
+          <td>${esc(st.detail)}${st.ok ? "" : `<br><span class="muted">${esc(st.hint)}</span>`}</td>
+        </tr>`).join("");
+      const tail = wiz.closed
+        ? `<div class="muted">${esc(wiz.period)} 已结账。要修改请先反结账。</div>`
+        : wiz.can_close
+          ? `<div style="color:var(--ok,#2e7d32)">✔ 清单已全部通过，可以结账</div>`
+          : `<div style="color:var(--err,#c00)">✖ 还有 ${(wiz.steps || []).filter((x) => x.blocking && !x.ok).length} 项必须做完才能结账</div>`;
+      $("#pe-issues", main).innerHTML = `<div class="panel"><b>月结向导</b>
+        <table class="grid" style="margin-top:6px"><thead><tr><th>步骤</th><th>状态</th><th>现状与该做什么</th></tr></thead><tbody>${rows}</tbody></table>
+        <div style="margin-top:8px">${tail}</div></div>`;
     } catch (e) { $("#pe-status", main).textContent = e.message; $("#pe-issues", main).innerHTML = ""; }
   }
   $("#pe-check", main).onclick = refresh;

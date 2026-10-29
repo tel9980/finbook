@@ -371,6 +371,9 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/period", post(post_period))
         // 期末处理（与桌面端对齐）：预检 / 结转损益 / 年末结转 / 结账 / 反结账
         .route("/api/periods/:ymm/precheck", get(period_precheck))
+        // 月结向导：与 precheck 同一批判定，但拆成带 ok/blocking 的步骤清单，
+        // 前端才能画成「打勾清单」而不是一串错误文字
+        .route("/api/periods/:ymm/wizard", get(period_wizard))
         .route(
             "/api/periods/:ymm/carry-forward",
             post(period_carry_forward),
@@ -3744,6 +3747,41 @@ struct ClosePeriodReq {
 }
 
 /// 期末预检：返回结账前需要处理的问题清单与损益概况
+/// 月结向导：返回带状态的步骤清单
+///
+/// 与 `/precheck` 的区别只是形状：precheck 是给人看的错误串，这里是给界面画的清单。
+/// 判定口径必须一致 —— `findb::month_close` 有测试钉住这件事。
+async fn period_wizard(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(ymm): Path<i32>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PeriodClose)?;
+    let period = period_checked(ymm)?;
+    let mc = findb::month_close::report(&user.db, period)?;
+    let steps: Vec<serde_json::Value> = mc
+        .steps
+        .iter()
+        .map(|s| {
+            json!({
+                "code": s.code,
+                "label": s.label,
+                "ok": s.ok,
+                "blocking": s.blocking,
+                "detail": s.detail,
+                "hint": s.hint,
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "period": period_to_str(period),
+        "closed": mc.closed,
+        "can_close": mc.can_close(),
+        "steps": steps,
+        "finance_ready": mc.can_close(),
+    })))
+}
+
 async fn period_precheck(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,

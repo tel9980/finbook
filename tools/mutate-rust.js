@@ -21,6 +21,7 @@ const CORE = (name) => ["test", "-p", "fincore", "--lib", `user::tests::${name}`
 // 「界面点得动、文件也下来了，但数据其实没进去/没出来」，所以每条都要有变异守着。
 const XLSX = (name) => ["test", "-p", "finweb", "--test", "export_xlsx", "--", name];
 const STATIC = (name) => ["test", "-p", "finweb", "--test", "static_cache", "--", name];
+const MC = (name) => ["test", "-p", "finweb", "--test", "month_close_wizard", "--", name];
 const ROUND = (name) => ["test", "-p", "finweb", "--test", "roundtrip", "--", name];
 // imports.rs 的测试都在 `mod tests` 里，全路径是 `imports::tests::<name>`
 const FIMPORT = (name) => ["test", "-p", "findb", "--lib", `imports::tests::${name}`];
@@ -801,6 +802,35 @@ const MUT = [
     to: "                Some(_t) if false => None,",
     cmd: CF("manual_label_wins_over_rules"),
   },
+  // --- v1.8.47 月结向导 -------------------------------------------------
+  {
+    name: "㉙ 向导把未记账当完成",
+    file: "crates/findb/src/month_close.rs",
+    from: "        ok: unposted == 0,",
+    to: "        ok: true,",
+    cmd: MC("draft_voucher_blocks_closing"),
+  },
+  {
+    name: "㉙ 未记账不再阻止结账",
+    file: "crates/findb/src/month_close.rs",
+    from: `        code: "unposted",
+        label: "凭证全部记账",
+        ok: unposted == 0,
+        blocking: true,`,
+    to: `        code: "unposted",
+        label: "凭证全部记账",
+        ok: unposted == 0,
+        blocking: false,`,
+    cmd: MC("draft_voucher_blocks_closing"),
+  },
+  {
+    name: "㉙ 已结账期间仍说可以结",
+    file: "crates/findb/src/month_close.rs",
+    from: "        !self.closed && self.steps.iter().all(|s| !s.blocking || s.ok)",
+    to: "        self.steps.iter().all(|s| !s.blocking || s.ok)",
+    cmd: MC("closed_period_reports_state_and_refuses"),
+  },
+
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

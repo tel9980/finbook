@@ -32,6 +32,8 @@ pub struct PeriodEndView {
     pub closed: Vec<Period>,
     pub closed_upto: Option<Period>,
     pub reconcile: Vec<findb::reports::ReconcileItem>,
+    /// 月结向导清单（与 web 端 /api/periods/:ymm/wizard 同一份判定）
+    pub wizard: Option<findb::month_close::MonthClose>,
     pub dirty: bool,
     key: String,
 }
@@ -49,6 +51,7 @@ impl Default for PeriodEndView {
             closed: Vec::new(),
             closed_upto: None,
             reconcile: Vec::new(),
+            wizard: None,
             dirty: true,
             key: String::new(),
         }
@@ -84,6 +87,7 @@ impl PeriodEndView {
         self.closed = findb::periods::list_closed(ctx.db()).unwrap_or_default();
         self.issues = findb::periods::precheck(ctx.db(), p, self.require_carry).unwrap_or_default();
         self.reconcile = findb::reports::period_reconcile(ctx.db(), p).unwrap_or_default();
+        self.wizard = findb::month_close::report(ctx.db(), p).ok();
 
         // 含草稿取数：与 Web 结转一致——结转凭证本身是草稿，年末结转靠
         // "4103 已清零"判重，按已记账口径会重复生成结转凭证（H-3 口径适用于报表）
@@ -150,6 +154,8 @@ impl PeriodEndView {
             }
         });
 
+        self.show_wizard(ui);
+
         match self.tab {
             Tab::Carry => self.show_carry(ctx, ui, p),
             Tab::Close => self.show_close(ctx, ui, p),
@@ -157,6 +163,68 @@ impl PeriodEndView {
             Tab::Maintain => self.show_maintain(ctx, ui, p),
             Tab::Reconcile => self.show_reconcile(ui),
         }
+    }
+
+    // ------------------------- 月结向导 -------------------------
+    /// 月末要做的几件事，按「完成 / 未完成 / 提醒」三种颜色摊开
+    ///
+    /// 判定全部来自 `findb::month_close`，这里只负责画——同一句话不要写两遍。
+    fn show_wizard(&self, ui: &mut Ui) {
+        let Some(wc) = &self.wizard else { return };
+        let warn = egui::Color32::from_rgb(0xB4, 0x6A, 0x00);
+        let bad = egui::Color32::from_rgb(0xC0, 0x00, 0x00);
+        let good = egui::Color32::from_rgb(0x2E, 0x7D, 0x32);
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("月结向导").strong());
+                ui.label(
+                    RichText::new("按顺序打勾，全绿就能结账")
+                        .weak()
+                        .small(),
+                );
+            });
+            egui::Grid::new("month_close_steps")
+                .num_columns(3)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui| {
+                    for (i, st) in wc.steps.iter().enumerate() {
+                        let (mark, color) = if st.ok {
+                            ("✔", good)
+                        } else if st.blocking {
+                            ("✖", bad)
+                        } else {
+                            ("⚠", warn)
+                        };
+                        ui.label(RichText::new(format!("{}. {}", i + 1, st.label)));
+                        ui.label(RichText::new(mark).color(color));
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&st.detail).color(if st.ok { good } else { color }));
+                            if !st.ok {
+                                ui.label(RichText::new(st.hint).weak().small());
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+            if wc.closed {
+                ui.label(
+                    RichText::new(format!("{} 已结账。要修改请先反结账。", wc.period.label()))
+                        .weak(),
+                );
+            } else if wc.can_close() {
+                ui.label(RichText::new("✔ 清单已全部通过，可以直接结账").color(good));
+            } else {
+                ui.label(
+                    RichText::new(format!(
+                        "✖ 还有 {} 项必须做完才能结账",
+                        wc.blockers().len()
+                    ))
+                    .color(bad),
+                );
+            }
+        });
+        ui.add_space(6.0);
     }
 
     // ------------------------- 期末对账 -------------------------
