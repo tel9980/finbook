@@ -89,6 +89,7 @@ async function newBook(page, company, opts) {
   // 同名会直接报 "Identifier 'o' has already been declared"，整个 helpers.js
   // 语法检查不过、连带 90 条 E2E 全跑不起来。
   await setSimpleNav(page, opts && opts.simpleNav !== undefined ? opts.simpleNav : false);
+  await pinDevice(page, "admin");
   await page.goto("/");
   await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
   await page.fill("#u", "admin");
@@ -294,11 +295,31 @@ async function addBookUser(page, { username, password, role, display }) {
 /// `book` = 目标账套全名（`newBook` 的返回值）。**必须传**：一个 realm 里会攒下
 /// 多本书，`.book-enter` 取第一个就是进错账套 —— 症状是刚拿到的凭证 id 一访问就 404，
 /// 会被误读成"凭证被删了"。不传就退化成"第一个"，并在这里说明为什么不能这么用。
+// ---- 设备绑定：给每个账号固定一个 device_id -------------------------------
+//
+// v1.8.53 把设备绑定改成「首次登录自动登记，此后新设备一律拒绝」（M-4）。
+// 而 `app.js` 的 device_id 存在 localStorage 里 —— Playwright 每个 test 都开
+// 全新 context，localStorage 是空的 → 每次登录都是「一台新设备」→ 第一条用例
+// 之后全被 403 挡住，整套 E2E 挂在一句「等不到 #book-list」上。
+//
+// 这里把 `finbook_device_id` 钉成 `e2e-<账号>`：同一账号在所有用例里都是同一台
+// 设备，等于模拟「一个人一直用自己的浏览器」。这也是真实用户的常态。
+//
+// 用 addInitScript（每次导航前执行）而不是登录后 setItem 一次：登录请求发出时
+// 就要读到它。注入字符串而非 (fn,arg)，理由同 setSimpleNav。
+async function pinDevice(page, username) {
+  const id = `e2e-${username || "admin"}`;
+  await page.addInitScript(
+    `try { localStorage.setItem("finbook_device_id", ${JSON.stringify(id)}); } catch (e) {}`
+  );
+}
+
 async function loginAs(page, username, password, book) {
   await page.request.post("/api/logout", { data: {} }).catch(() => {});
   // 同 newBook：换账号后侧栏重新渲染，精简默认开会让后续点不到非 16 项的视图。
   // key 按**登录账号**分区（acctKey）—— 写 admin 的等于没写。
   await setSimpleNav(page, false, username);
+  await pinDevice(page, username);
   await page.goto("/");
   await expect(page.locator("#u")).toBeVisible({ timeout: 15_000 });
   await page.fill("#u", username);
@@ -317,6 +338,7 @@ async function loginAs(page, username, password, book) {
 module.exports = {
   newBook,
   setSimpleNav,
+  pinDevice,
   postVoucher,
   postAllDrafts,
   auditAllDrafts,

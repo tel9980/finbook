@@ -198,15 +198,11 @@ const MUT = [
     to: "            Role::Accountant => &[\n                Export,\n                VoucherNew,\n                VoucherEdit,",
     cmd: CORE("ar_ap_clerks_can_export_but_others_cannot"),
   },
-  {
-    // 设备绑定 2 台：登录时若又清该账号全部会话，第 2 台会把第 1 台踢下线，
-    // 「允许绑两台」就只剩一个数字
-    name: "设备绑定 2 台：登录时又改成清该账号全部会话（两台无法并存）",
-    file: "crates/finweb/src/handlers.rs",
-    from: "            .remove_by_username_and_device(&username, &device_id);",
-    to: "            .remove_by_username(&username);",
-    cmd: API("platform_device_binding_and_reset"),
-  },
+  // v1.8.53 删掉的两条变异（都因为靶子随政策变化而**不可观测**）：
+  // ① `MAX_DEVICES_PER_USER` 退回 1 —— 这个常量已经不存在；
+  // ② 「登录时清该账号全部会话」—— 普通账号现在只会绑**一台**设备，
+  //    `remove_by_username_and_device` 与 `remove_by_username` 移除的集合完全相同，
+  //    任何测试都分不出来。留着它就是一条永远绿的假守卫（CI 就是被它红掉的）。
   // v1.8.53：`MAX_DEVICES_PER_USER` 概念已不存在（首次绑定后禁改），
   // 「政策回潮」改由 ㉞ 的新变异守。
   {
