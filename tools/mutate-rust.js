@@ -17,6 +17,8 @@ const { execFileSync } = require("child_process");
 // 共同失效形态是「看得见的地方都对，算出来的数不对」——发票拆错一分、
 // 对比表吞掉上期独有项目、期初表多列一个 1122 造成往来双计，都不报错。
 const FUI = (name) => ["test", "-p", "finui", "--lib", name];
+// v1.8.53 设备绑定（M-4）：政策与指纹。三条变异对应三个「不报错就会静悄悄变松」的点。
+const REALM = (name) => ["test", "-p", "finweb", "--lib", `realm::tests::${name}`];
 const API = (name) => ["test", "-p", "finweb", "--test", "api", "--", name];
 // 注意：这里曾经写成固定的 "user::tests::"（name 参数被丢掉），效果是「跑所有 user 测试」。
 // 那样一条变异被别的用例顺手拦住，也会显示 PASS，看不出目标用例到底守没守住。
@@ -205,14 +207,8 @@ const MUT = [
     to: "            .remove_by_username(&username);",
     cmd: API("platform_device_binding_and_reset"),
   },
-  {
-    // 上限退回 1 台：第三台就不该被拒了
-    name: "设备绑定上限退回 1 台（第三台又能登了）",
-    file: "crates/finweb/src/realm.rs",
-    from: "    pub const MAX_DEVICES_PER_USER: usize = 2;",
-    to: "    pub const MAX_DEVICES_PER_USER: usize = 1;",
-    cmd: API("platform_device_binding_and_reset"),
-  },
+  // v1.8.53：`MAX_DEVICES_PER_USER` 概念已不存在（首次绑定后禁改），
+  // 「政策回潮」改由 ㉞ 的新变异守。
   {
     // 逐请求复核改回读单列 device_id → 退回一台机，且两处判定会分叉
     name: "逐请求设备复核改回读单列 device_id（退回一台机）",
@@ -917,6 +913,29 @@ const MUT = [
     from: "    let prev_to = from.prev();\n    let mut prev_from = prev_to;",
     to: "    let mut prev_to = from.prev();\n    for _ in 1..months {\n        prev_to = prev_to.prev();\n    }\n    let mut prev_from = prev_to;",
     cmd: FCFW("quarter_takes_the_previous_quarter_not_one_month"),
+  },
+
+  // ㉞ 设备绑定 M-4（v1.8.53）
+  {
+    name: "㉞ 新设备又能自动绑进来（M-4 回潮）",
+    file: "crates/finweb/src/realm.rs",
+    from: "        if count > 0 {",
+    to: "        if false {",
+    cmd: REALM("first_bind_is_automatic_but_a_second_device_is_refused"),
+  },
+  {
+    name: "㉞ 同设备重登不再刷新行（每次都新插一行）",
+    file: "crates/finweb/src/realm.rs",
+    from: "        if updated > 0 {",
+    to: "        if false {",
+    cmd: REALM("rebinding_the_same_device_refreshes_instead_of_growing"),
+  },
+  {
+    name: "㉞ 存量绑定行不回填指纹",
+    file: "crates/finweb/src/realm.rs",
+    from: "            .prepare(\"SELECT username, device_id FROM realm_user_device WHERE device_hash = ''\")?",
+    to: "            .prepare(\"SELECT username, device_id FROM realm_user_device WHERE 1 = 0\")?",
+    cmd: REALM("legacy_single_column_device_binding_is_migrated"),
   },
 
   // ㉝ 桌面端补齐（v1.8.52）

@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS realm_api_key (
 CREATE INDEX IF NOT EXISTS idx_realm_api_key_prefix ON realm_api_key(prefix);
 "#;
 
-/// 账号 ↔ 设备的绑定名单（一个账号最多 `MAX_DEVICES_PER_USER` 台）。
+/// 账号 ↔ 设备的绑定名单（首次登录自动登记；此后换设备须管理员重置）。
 ///
 /// 为什么单独一张表，而不是在 `realm_user` 上加 `device_id2`：加列只能表达固定台数，
 /// 想改上限就得再迁移一次；而且「哪台是哪台」一旦超过两台就没法用列表达。
@@ -142,6 +142,49 @@ fn hash_api_secret(secret: &str) -> String {
     let mut h = Sha256::new();
     h.update(secret.as_bytes());
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 设备指纹：`sha256(secret | username | device_id)`。
+///
+/// 存哈希而不是原样的 `device_id`，是为了让**名单本身不能当通行证**：能读到库的人
+/// 抄一行 `device_id` 出去，也换不来一台「被授权的设备」。
+///
+/// 但要说清楚它挡不住什么：`device_id` 终究是客户端自己上报的（见 SECURITY_TODO M-4），
+/// 所以真正的防线不是哈希，而是下面 `bind_device` 的政策 —— **首次绑定之后，服务端
+/// 不再自动往名单里加新设备**，换设备必须由管理员在账号页显式重置。
+fn device_fingerprint(secret: &str, username: &str, device_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(secret.as_bytes());
+    h.update(b"|");
+    h.update(username.as_bytes());
+    h.update(b"|");
+    h.update(device_id.as_bytes());
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 平台级的设备指纹盐：首次用到时随机生成并落 `realm_option`。
+///
+/// 每个 realm 一份，跟着库走 —— 库拷到别处，同一台设备的指纹仍然对得上；
+/// 反过来，把 `device_id` 抄到另一个部署里也换不出同样的指纹。
+fn device_secret(conn: &rusqlite::Connection) -> DbResult<String> {
+    if let Ok(v) = conn.query_row(
+        "SELECT value FROM realm_option WHERE key='device_secret'",
+        [],
+        |r| r.get::<_, String>(0),
+    ) {
+        if !v.trim().is_empty() {
+            return Ok(v);
+        }
+    }
+    let mut raw = [0u8; 32];
+    rand::Rng::fill(&mut rand::thread_rng(), &mut raw);
+    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    conn.execute(
+        "INSERT OR REPLACE INTO realm_option(key, value) VALUES('device_secret', ?1)",
+        rusqlite::params![hex],
+    )?;
+    Ok(hex)
 }
 
 /// 密钥列表项（**不含哈希**，也不含明文——明文只在创建时返回一次）
@@ -242,6 +285,19 @@ impl RealmDb {
         // 绑定搬进去 —— **不搬的话升级后所有账号的设备绑定会静默消失**，等于给全部
         // 用户解绑：安全后果是「绑定形同虚设」，症状是「谁都能登」，而且**不报任何错**。
         conn.execute_batch(DEVICE_SCHEMA)?;
+        // v1.8.53：设备名单加指纹列（存量行在下面回填）。
+        // 必须放在 `DEVICE_SCHEMA` 之后 —— 老库里这张表可能是上一段才建出来的。
+        let dcols: Vec<String> = conn
+            .prepare("PRAGMA table_info(realm_user_device)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(Result::ok)
+            .collect();
+        if !dcols.iter().any(|c| c == "device_hash") {
+            conn.execute(
+                "ALTER TABLE realm_user_device ADD COLUMN device_hash TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
         // execute() 返回受影响行数 —— 这里**必须**用 execute 而不是 query_row：
         // query_row 期望恰好一行，而全新 realm 里没有任何已绑定设备，这条
         // INSERT...SELECT 影响 0 行，会返回 QueryReturnedNoRows 把建库整个搞崩
@@ -258,6 +314,22 @@ impl RealmDb {
                 count = moved,
                 "已把单列 device_id 的绑定迁移到 realm_user_device"
             );
+        }
+
+        // v1.8.53：给还没有指纹的存量绑定行补上。
+        // **不补的后果与上一段同类**：指纹为空 = 这台设备永远匹配不上 = 所有老用户
+        // 升级后当场被锁在门外，症状是「登录成功但每个请求都说设备未授权」。
+        let secret = device_secret(&conn)?;
+        let rows: Vec<(String, String)> = conn
+            .prepare("SELECT username, device_id FROM realm_user_device WHERE device_hash = ''")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(Result::ok)
+            .collect();
+        for (u, d) in rows {
+            conn.execute(
+                "UPDATE realm_user_device SET device_hash=?3 WHERE username=?1 AND device_id=?2",
+                rusqlite::params![u, d, device_fingerprint(&secret, &u, &d)],
+            )?;
         }
         Ok(())
     }
@@ -672,13 +744,19 @@ impl RealmDb {
     /// 为什么不是"不设上限"：上限是这个功能**全部**的控制力来源。不限台数等于没有
     /// 绑定（口令泄露后攻击者从任何机器都能登）。2 台是"覆盖真实需要"与"保留控制"的交点。
     /// 仍然**不做 LRU 自动挤出** —— 悄悄踢掉用户正在用的那台，比直接拒绝更让人困惑。
-    pub const MAX_DEVICES_PER_USER: usize = 2;
-
     /// 设备绑定：登录时把当前设备登记进来。
     ///
-    /// 返回 `Result`：`Ok(())` = 已在名单内或新绑定成功；`Err(msg)` = 名单已满。
-    /// 判定与写入都在**同一次持锁**内完成；插入用 `INSERT OR IGNORE` + 条件 UPDATE，
-    /// 两台设备几乎同时首次登录时不会互相顶掉名额。
+    /// **策略（v1.8.53 起）**：
+    /// - 名单为空 → 这是第一次登录，自动登记（否则新装好的系统谁都进不去）；
+    /// - 名单里已有这台（按**指纹**比对）→ 只刷新 `last_seen` / `device_name`；
+    /// - 名单非空且不认识这台 → **拒绝登录**，换设备必须由管理员在「账号」页重置。
+    ///
+    /// 原来这里能自动绑到 `MAX_DEVICES_PER_USER` 台，等于「拿着口令的人可以悄悄多绑
+    /// 一台自己的设备，然后一直用」。SECURITY_TODO M-4 记的就是这件事 —— `device_id`
+    /// 由客户端上报、本来就可伪造，所以能做的不是「验证它」，而是**不给它再扩容的机会**。
+    ///
+    /// 返回 `Ok(Err(msg))` 而不是 `Err`：拒绝是**业务结论**（要在登录页原样显示给用户
+    /// 「找管理员重置」），而 `Err` 是数据库故障，两者混在一起会让运维分不清是不是库坏了。
     pub fn bind_device(
         &self,
         username: &str,
@@ -687,6 +765,8 @@ impl RealmDb {
     ) -> DbResult<Result<(), String>> {
         let conn = self.inner.lock().unwrap();
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let secret = device_secret(&conn)?;
+        let fp = device_fingerprint(&secret, username, device_id);
         // 账号不存在要报错（原来查 device_id 列顺带做了这件事，现在要显式查）
         let exists: i64 = conn.query_row(
             "SELECT COUNT(*) FROM realm_user WHERE username=?1",
@@ -696,11 +776,11 @@ impl RealmDb {
         if exists == 0 {
             return Err(DbError::Fin(fincore::FinError::msg("账号不存在")));
         }
-        // 已在名单内：只刷新 last_seen / device_name（换浏览器版本会改 device_name）
+        // 已在名单内（按指纹，兼容指纹为空的存量行按 device_id 兜底）
         let updated = conn.execute(
-            "UPDATE realm_user_device SET last_seen=?3, device_name=?4
-             WHERE username=?1 AND device_id=?2",
-            rusqlite::params![username, device_id, now, device_name],
+            "UPDATE realm_user_device SET last_seen=?3, device_name=?4, device_hash=?5
+             WHERE username=?1 AND (device_hash=?5 OR (device_hash='' AND device_id=?2))",
+            rusqlite::params![username, device_id, now, device_name, fp],
         )?;
         if updated > 0 {
             return Ok(Ok(()));
@@ -710,17 +790,17 @@ impl RealmDb {
             rusqlite::params![username],
             |r| r.get(0),
         )?;
-        if count as usize >= Self::MAX_DEVICES_PER_USER {
+        if count > 0 {
             return Ok(Err(format!(
-                "该账号已绑定 {count} 台设备（上限 {} 台），如需更换请联系管理员重置设备绑定",
-                Self::MAX_DEVICES_PER_USER
+                "这台设备还没有被授权。该账号已在 {count} 台设备上绑定过；\
+                 换设备需要管理员在「账号」页点「重置设备绑定」，之后用新设备重新登录。"
             )));
         }
-        // INSERT OR IGNORE：同一设备并发首登时第二次插入被忽略，updated==0 走上面的分支
+        // 首次绑定：INSERT OR IGNORE 防同一设备并发首登时插入两次
         let inserted = conn.execute(
-            "INSERT OR IGNORE INTO realm_user_device(username, device_id, device_name, bound_at, last_seen)
-             VALUES(?1,?2,?3,?4,?4)",
-            rusqlite::params![username, device_id, device_name, now],
+            "INSERT OR IGNORE INTO realm_user_device(username, device_id, device_name, bound_at, last_seen, device_hash)
+             VALUES(?1,?2,?3,?4,?4,?5)",
+            rusqlite::params![username, device_id, device_name, now, fp],
         )?;
         if inserted == 0 {
             return Ok(Ok(()));
@@ -750,9 +830,13 @@ impl RealmDb {
         if count == 0 {
             return Ok(true);
         }
+        // 按指纹比对；指纹为空的存量行按 device_id 兜底（升级瞬间的请求不能被踢）
+        let secret = device_secret(&conn)?;
+        let fp = device_fingerprint(&secret, username, device_id);
         let hit: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM realm_user_device WHERE username=?1 AND device_id=?2",
-            rusqlite::params![username, device_id],
+            "SELECT COUNT(*) FROM realm_user_device
+             WHERE username=?1 AND (device_hash=?3 OR (device_hash='' AND device_id=?2))",
+            rusqlite::params![username, device_id, fp],
             |r| r.get(0),
         )?;
         Ok(hit > 0)
@@ -1264,6 +1348,91 @@ pub fn ensure_book_admin(db: &Db, ru: &RealmUser) -> DbResult<()> {
 mod tests {
     use super::*;
 
+    fn tmp_realm(tag: &str) -> (RealmDb, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("fb-realm-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("realm.db");
+        let r = RealmDb::open(&path).unwrap();
+        r.create_user(
+            "u1",
+            "用户一",
+            "Init@123456",
+            false,
+            false,
+            &PasswordPolicy::default(),
+        )
+        .unwrap();
+        (r, path)
+    }
+
+    /// v1.8.53 的核心政策：**第一次登录自动登记，之后不再自动放新设备进来**。
+    ///
+    /// 原来的行为是「自动绑到 2 台」—— 拿到口令的人可以悄悄多绑一台自己的设备，
+    /// 然后长期用；用户自己完全看不出来（列表里那一行看起来跟自己的手机一样）。
+    #[test]
+    fn first_bind_is_automatic_but_a_second_device_is_refused() {
+        let (r, _p) = tmp_realm("freeze");
+        // 第一次：名单为空 → 自动登记
+        assert_eq!(r.bind_device("u1", "dev-A", "办公室电脑").unwrap(), Ok(()));
+        assert!(r.device_allowed("u1", "dev-A").unwrap());
+        // 第二台：拒绝，并给出「找管理员重置」的下一步
+        let second = r.bind_device("u1", "dev-B", "家里的电脑").unwrap();
+        let msg = second.expect_err("第二台设备必须被拒绝");
+        assert!(msg.contains("重置设备绑定"), "提示里要写清怎么办：{msg}");
+        assert!(!r.device_allowed("u1", "dev-B").unwrap());
+        assert_eq!(r.bound_device_count("u1").unwrap(), 1);
+    }
+
+    /// 同一台设备再登录只刷新时间，不新增行 —— 否则每次登录都会把名单撑爆。
+    #[test]
+    fn rebinding_the_same_device_refreshes_instead_of_growing() {
+        let (r, _p) = tmp_realm("refresh");
+        r.bind_device("u1", "dev-A", "办公室电脑").unwrap().unwrap();
+        r.bind_device("u1", "dev-A", "办公室电脑（Chrome 131）")
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.bound_device_count("u1").unwrap(), 1);
+    }
+
+    /// 管理员重置之后，新设备能重新自动登记（否则换电脑就只能换人）。
+    #[test]
+    fn reset_lets_a_new_device_in() {
+        let (r, _p) = tmp_realm("reset");
+        r.bind_device("u1", "dev-A", "旧电脑").unwrap().unwrap();
+        assert!(r.bind_device("u1", "dev-B", "新电脑").unwrap().is_err());
+        r.clear_device("u1").unwrap();
+        assert_eq!(r.bound_device_count("u1").unwrap(), 0);
+        assert_eq!(r.bind_device("u1", "dev-B", "新电脑").unwrap(), Ok(()));
+        assert!(r.device_allowed("u1", "dev-B").unwrap());
+        // 旧设备从此不在名单里
+        assert!(!r.device_allowed("u1", "dev-A").unwrap());
+    }
+
+    /// 名单里存的是指纹，不是 `device_id` 原文。
+    ///
+    /// 这不是主要防线（`device_id` 终究由客户端上报），但它让「读到库的人」不能
+    /// 把某一行抄出去当通行证用；同时换了 realm（换盐）同一台设备的指纹也对不上。
+    #[test]
+    fn binding_rows_hold_a_fingerprint_not_the_raw_device_id() {
+        let (r, _p) = tmp_realm("hash");
+        r.bind_device("u1", "dev-A", "办公室电脑").unwrap().unwrap();
+        let conn = r.inner.lock().unwrap();
+        let (did, hash): (String, String) = conn
+            .query_row(
+                "SELECT device_id, device_hash FROM realm_user_device WHERE username='u1'",
+                [],
+                |x| Ok((x.get(0)?, x.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(did, "dev-A", "原值保留只为「重置」与排障时能对上人");
+        assert_eq!(hash.len(), 64, "sha256 十六进制是 64 位");
+        assert_ne!(hash, "dev-A");
+        // 同一输入必须稳定（否则每次登录都匹配不上，全员被锁）
+        drop(conn);
+        assert!(r.device_allowed("u1", "dev-A").unwrap());
+    }
+
     /// 旧库的「单列 device_id」必须在打开时搬进 realm_user_device。
     ///
     /// 不搬的后果**不报任何错**：升级后所有账号的设备绑定静默消失，等于给全员
@@ -1313,6 +1482,23 @@ mod tests {
             "旧库里已有的设备绑定必须在打开时搬进 realm_user_device —— \
              不搬等于升级后给全部账号静默解绑，且不会报错"
         );
+        // 搬过来的行也必须补上指纹：光有 device_id 的行只能靠兜底路径匹配，
+        // 而兜底是为「升级那一瞬间的请求」留的，不是常态。指纹为空 = 这行没被回填。
+        {
+            let conn = r2.inner.lock().unwrap();
+            let hash: String = conn
+                .query_row(
+                    "SELECT device_hash FROM realm_user_device WHERE username='u1'",
+                    [],
+                    |x| x.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                hash.len(),
+                64,
+                "存量绑定行没有回填设备指纹 —— 指纹为空的行只能靠 device_id 兜底匹配"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -1175,7 +1175,8 @@ async fn post_login(
     let _ = state
         .realm
         .record_login_attempt(&username, true, ip.as_deref().unwrap_or(""));
-    // 设备绑定（平台层）：普通账号最多绑 RealmDb::MAX_DEVICES_PER_USER 台，超出需管理员
+    // 设备绑定（平台层）：首次登录自动登记，此后新设备一律拒绝（v1.8.53，M-4）——
+    // 换设备走管理员「重置设备绑定」，不给「悄悄多绑一台」留口子
     if !ru.is_admin {
         match state
             .realm
@@ -2673,7 +2674,7 @@ async fn reset_platform_password(
 }
 
 /// 平台层重置设备绑定：解绑**全部**已绑定设备后，该账号可在任意设备重新登录
-/// （重新绑定仍受 `RealmDb::MAX_DEVICES_PER_USER` 上限约束）
+/// （重置只重启一次首绑机会：该账号下一台登录的设备会被自动登记，再往后仍会被拒）
 async fn reset_platform_device(
     State(state): State<Arc<WebState>>,
     user: RealmUser,

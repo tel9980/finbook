@@ -698,10 +698,16 @@ async fn last_admin_cannot_be_removed() {
 /// 锁死 1 台的结果是用户隔几天就要找管理员重置一次 —— 一个安全功能如果天天要人工
 /// 介入，实际效果就是被绕过。
 ///
-/// 为什么不是不限：上限是这个功能**全部**的控制力来源。不限台数等于没有绑定，
-/// 口令泄露后攻击者从任何机器都能登。
+/// 语义（v1.8.53 起）：**首次登录自动绑定，此后不再自动放新设备进来**；换设备只能
+/// 由管理员在「账号」页重置。
 ///
-/// 原测试断言的是「第二台被拒」（一人一机），已随语义变更改写。
+/// 这条测试自己就是被改的第三版，三个版本的差别值得记住：
+/// 1. 最初「一人一机」——第二台直接拒。用户实际是手机+电脑，太硬；
+/// 2. 后来「最多两台」——第二台自动绑。**这一版是错的**：拿到口令的人可以悄悄绑
+///    一台自己的设备长期用，名单里那行看起来跟用户自己的手机没区别（M-4）；
+/// 3. 现在「首次绑定后禁改」——既不限制用户首登，也不给扩张留后门。
+///
+/// 为什么不是不限：能自动绑就是能被悄悄多用，上限只是「悄悄多用几台」的数字。
 #[tokio::test]
 async fn platform_device_binding_and_reset() {
     let (state, _bd, _dir) = test_state();
@@ -735,33 +741,26 @@ async fn platform_device_binding_and_reset() {
     let (status, s1b) = login_with_device(&state, "emp", "Emp654321", "dev-A").await;
     assert_eq!(status, StatusCode::OK, "原设备重新登录应成功（已绑定）");
 
-    // 第二台设备**应当能登**（上限 2 台）
-    let (status, s2) = login_with_device(&state, "emp", "Emp654321", "dev-B").await;
-    assert_eq!(status, StatusCode::OK, "第二台设备应可登录并绑定");
+    // 已绑定设备继续可用（这是「手机 + 电脑」的正常场景，不该被这次收紧干掉）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/books", &s1b))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "已绑定设备的会话应仍然有效"
+    );
 
-    // 两台都在用：各自会话互不影响（这是「一人两机」的核心诉求）
-    for (label, sid) in [("dev-A", &s1b), ("dev-B", &s2)] {
-        let resp = handlers::router(state.clone())
-            .oneshot(authed_get("/api/books", sid))
-            .await
-            .unwrap();
-        assert_eq!(
-            resp.status(),
-            StatusCode::OK,
-            "{label} 的会话应仍然有效（两台设备互不踢下线）"
-        );
-    }
-
-    // 第三台设备被拒：上限就是上限
-    let (status, _) = login_with_device(&state, "emp", "Emp654321", "dev-C").await;
+    // 第二台设备**必须被拒**：拿到口令的人不能悄悄多绑一台自己的机器
+    let (status, _) = login_with_device(&state, "emp", "Emp654321", "dev-B").await;
     assert_eq!(
         status,
         StatusCode::FORBIDDEN,
-        "第三台设备应被拒绝（上限 2 台）"
+        "未授权的新设备应被拒绝（首次绑定后禁改）"
     );
 
-    // 拒绝信息要说清是几台上限，而不是笼统的「已绑定其它设备」——
-    // 用户看到「已绑定 2 台设备（上限 2 台）」才知道该找谁解绑
+    // 拒绝信息要能让用户知道下一步做什么，而不是笼统的「登录失败」
     let r = handlers::router(state.clone())
         .oneshot(
             Request::builder()
@@ -771,7 +770,7 @@ async fn platform_device_binding_and_reset() {
                 .body(Body::from(
                     serde_json::json!({
                         "username": "emp", "password": "Emp654321",
-                        "device_id": "dev-C", "device_name": "第三台"
+                        "device_id": "dev-B", "device_name": "第二台"
                     })
                     .to_string(),
                 ))
@@ -781,8 +780,8 @@ async fn platform_device_binding_and_reset() {
         .unwrap();
     let body = body_string(r).await;
     assert!(
-        body.contains("2 台设备"),
-        "提示要说明已绑台数与上限：{body}"
+        body.contains("重置设备绑定"),
+        "提示要写清找管理员重置：{body}"
     );
 
     // 非管理员不能重置设备
@@ -817,13 +816,16 @@ async fn platform_device_binding_and_reset() {
         "重置设备后旧会话应失效"
     );
 
-    // 重置后两台都能重新绑定（不是只放行一台）
-    for dev in ["dev-A", "dev-B"] {
-        let (status, _) = login_with_device(&state, "emp", "Emp654321", dev).await;
-        assert_eq!(status, StatusCode::OK, "重置后 {dev} 应可重新绑定");
-    }
+    // 重置后「先到的那台」重新绑定成功，紧随其后的另一台仍会被拒
+    // —— 这正是新语义：重置只重启一次首绑机会，不是把上限清零重来
+    let (status, _) = login_with_device(&state, "emp", "Emp654321", "dev-B").await;
+    assert_eq!(status, StatusCode::OK, "重置后新设备应可重新绑定");
     let (status, _) = login_with_device(&state, "emp", "Emp654321", "dev-C").await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "重置后仍应保持 2 台上限");
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "重置再绑一台之后，其它设备仍应被拒"
+    );
 }
 
 #[tokio::test]
