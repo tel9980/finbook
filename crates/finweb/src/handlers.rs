@@ -359,6 +359,9 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/roles", get(list_roles))
         // 账套参数 / 仪表盘 / 期间
         .route("/api/options", get(get_options).put(put_options))
+        .route("/api/options/export", get(export_options))
+        .route("/api/options/import", post(import_options))
+        .route("/api/options/reset", post(reset_options))
         // 打印预览页上的「点一下 / 拖一下」直接落库（局部更新，不覆盖纸型等它不认识的字段）
         .route("/api/reports/print-settings", post(post_print_settings))
         .route("/api/dashboard", get(get_dashboard))
@@ -3105,6 +3108,74 @@ async fn put_options(
     // set_options 内部还会补一道「业务默认科目必须存在且是末级」的查库校验
     db.set_options(&opts)?;
     Ok(Json(json!({"ok": true})))
+}
+
+/// 导出账套参数成 JSON 文件
+///
+/// 为什么不是「页面上的复制按钮」：换台机器要把它放到指定位置，一个下载文件比
+/// 一段要手动粘进编辑器的文本可靠。整个 `BookOptions` 原样出去，没有删减——
+/// 少导出一个字段，导入后就会静默回到默认值。
+async fn export_options(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+) -> Result<Response, AppError> {
+    user.require(Perm::SysOption)?;
+    let db = &user.db;
+    let opts = db.options();
+    let body = serde_json::to_vec_pretty(&opts)
+        .map_err(|e| AppError::Internal(format!("序列化账套参数失败：{e}")))?;
+    let name = format!(
+        "{}_账套参数_{}.json",
+        if opts.company.trim().is_empty() {
+            "账套"
+        } else {
+            opts.company.trim()
+        },
+        chrono::Local::now().format("%Y%m%d")
+    );
+    let mut resp = Response::builder()
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8");
+    if let Some(hv) = attachment_header(&name) {
+        resp = resp.header(header::CONTENT_DISPOSITION, hv);
+    }
+    resp.body(Body::from(body))
+        .map_err(|e| AppError::Internal(format!("生成下载响应失败：{e}")))
+}
+
+/// 导入账套参数
+///
+/// 结构项（编码级长 / 启用期间）与当前账套不同就整体拒绝，一个字段都不改 ——
+/// 见 `BookOptions::adopt_config`。
+async fn import_options(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(incoming): Json<fincore::BookOptions>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::SysOption)?;
+    let db = &user.db;
+    let mut opts = db.options();
+    if let Err(problems) = opts.adopt_config(&incoming) {
+        return Err(AppError::bad_request(problems.join("；")));
+    }
+    period_checked(opts.start_period.ymm())?;
+    db.set_options(&opts)?;
+    Ok(Json(json!({"ok": true, "options": opts})))
+}
+
+/// 恢复默认（只清偏好类设置）
+///
+/// 企业名称、编码级长、启用期间、默认科目、审核/出纳开关都不动 ——
+/// 它们与已经记过的账绑在一起，见 `BookOptions::reset_preferences`。
+async fn reset_options(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::SysOption)?;
+    let db = &user.db;
+    let mut opts = db.options();
+    opts.reset_preferences();
+    db.set_options(&opts)?;
+    Ok(Json(json!({"ok": true, "options": opts})))
 }
 
 /// 打印预览页上的调整直接落库。

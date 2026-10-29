@@ -818,6 +818,56 @@ impl BookOptions {
     ///
     /// 这里只挡**一定是错的**（范围越界、空科目编码）。科目存不存在、是不是末级，
     /// 要查库才能判断，放在 findb 层（`findb::accounts::check_biz_accounts`）。
+    /// 把「偏好类」设置恢复默认
+    ///
+    /// **不动**这些：企业名称 / 税号 / 启用期间 / 科目编码级长 / 凭证字 / 本位币 /
+    /// 业务默认科目 / 审核出纳开关。
+    ///
+    /// 理由不是「改起来麻烦」，而是它们**与已经记过的账绑在一起**：编码级长决定了
+    /// 科目树怎么分叉（改了老科目就对不上级）、默认科目决定了自动生成的凭证记到哪、
+    /// 启用期间决定了期初从哪一期开始。一键把它们清成默认，等于让存量账套的解释规则
+    /// 变掉——用户点的是「恢复默认」，不是「重开一套账」。
+    pub fn reset_preferences(&mut self) {
+        self.enable_production = false;
+        self.budget_control = String::new();
+        self.doc_prefixes.clear();
+        self.print = crate::print::PrintOptions::default();
+    }
+
+    /// 采纳另一份配置（用于「导出配置 → 换台机器导入」）
+    ///
+    /// 返回 `Err` 时**一个字段都不改**：先比 `code_scheme` 与 `start_period`，
+    /// 它们与已有科目树、期初数据绑定，不能由配置文件覆盖。其余字段整套照搬。
+    ///
+    /// 为什么不静默跳过这两项：导出的文件里明明写着 4-2-2-2，导入后账套还是
+    /// 4-2-2-2（本来就不一样），用户会以为导入没生效，然后开始怀疑别的设置。
+    pub fn adopt_config(&mut self, other: &BookOptions) -> Result<(), Vec<String>> {
+        let mut problems = Vec::new();
+        if other.code_scheme != self.code_scheme {
+            problems.push(format!(
+                "配置文件里的科目编码级长 {:?} 与当前账套 {:?} 不同——编码级长决定科目树怎么分叉，不能被配置文件覆盖",
+                other.code_scheme, self.code_scheme
+            ));
+        }
+        if other.start_period.ymm() != self.start_period.ymm() {
+            problems.push(format!(
+                "配置文件里的启用期间 {} 与当前账套 {} 不同——启用期间决定期初从哪一期开始，不能被配置文件覆盖",
+                other.start_period.label(),
+                self.start_period.label()
+            ));
+        }
+        if !problems.is_empty() {
+            return Err(problems);
+        }
+        let keep_scheme = self.code_scheme.clone();
+        let keep_start = self.start_period;
+        *self = other.clone();
+        // 兜底：即使上面比过，也把这两项钉回原值（免得将来有人往 adopt 里加字段时忘了）
+        self.code_scheme = keep_scheme;
+        self.start_period = keep_start;
+        Ok(())
+    }
+
     pub fn validate(&self) -> Vec<String> {
         let mut out = Vec::new();
         if self.code_scheme.is_empty() {
@@ -989,6 +1039,80 @@ mod tests {
     }
 
     /// 这几条都有一个共同点：**填错了不报错，只是悄悄不生效**。
+    /// 「恢复默认」只清偏好，不动与已有账绑定的字段
+    ///
+    /// 一键把编码级长清回默认，等于让存量科目树对不上级；把启用期间清回默认，
+    /// 期初就从另一期开始算了。用户点的是恢复默认，不是重开一套账。
+    #[test]
+    fn reset_preferences_keeps_what_is_bound_to_existing_data() {
+        let mut o = BookOptions::default();
+        o.company = "恒亮氧化".into();
+        o.tax_no = "91440101".into();
+        o.code_scheme = vec![4, 2, 2, 2, 2];
+        o.start_period = crate::period::Period::new(2026, 7).unwrap();
+        o.voucher_words = vec!["记".into(), "付".into()];
+        o.biz_accounts.ar = "112201".into();
+        o.enable_audit = true;
+        // 这些是要被恢复的
+        o.enable_production = true;
+        o.budget_control = "warn".into();
+        o.doc_prefixes.insert("po".into(), "CG".into());
+        o.print.orientation = "landscape".into();
+        o.print.font_pt = 13;
+        o.print.offset_x_mm = 4;
+
+        o.reset_preferences();
+
+        assert_eq!(o.company, "恒亮氧化", "企业名称不在恢复范围内");
+        assert_eq!(o.tax_no, "91440101");
+        assert_eq!(o.code_scheme, vec![4, 2, 2, 2, 2], "编码级长与科目树绑定");
+        assert_eq!(o.start_period.ymm(), 202607);
+        assert_eq!(o.voucher_words.len(), 2);
+        assert_eq!(o.biz_accounts.ar, "112201");
+        assert!(o.enable_audit, "内控开关不在恢复范围内");
+
+        assert!(!o.enable_production);
+        assert_eq!(o.budget_control, "");
+        assert!(o.doc_prefixes.is_empty());
+        assert_eq!(o.print, crate::print::PrintOptions::default(), "版式整套回默认");
+        assert!(o.validate().is_empty(), "恢复默认后必须仍然是一份合法配置");
+    }
+
+    /// 导入配置：其余字段照搬，编码级长/启用期间不同就整体拒绝（一个字段都不改）
+    #[test]
+    fn adopt_config_moves_preferences_but_refuses_structural_mismatch() {
+        let mut cur = BookOptions::default();
+        cur.company = "当前厂".into();
+        cur.code_scheme = vec![4, 2, 2, 2];
+        cur.start_period = crate::period::Period::new(2026, 1).unwrap();
+
+        // 同结构：整套照搬
+        let mut other = cur.clone();
+        other.company = "另一台机器".into();
+        other.budget_control = "strong".into();
+        other.print.font_pt = 12;
+        cur.adopt_config(&other).unwrap();
+        assert_eq!(cur.company, "另一台机器");
+        assert_eq!(cur.budget_control, "strong");
+        assert_eq!(cur.print.font_pt, 12);
+
+        // 结构不同：拒绝，且**一个字段都没变**
+        let before = cur.clone();
+        let mut bad = cur.clone();
+        bad.code_scheme = vec![4, 2, 2, 2, 2];
+        bad.company = "不该生效".into();
+        let errs = cur.adopt_config(&bad).unwrap_err();
+        assert_eq!(errs.len(), 1, "只报编码级长那一项：{errs:?}");
+        assert!(errs[0].contains("编码级长"), "{errs:?}");
+        assert_eq!(cur.company, before.company, "拒绝时不能部分生效");
+
+        // 启用期间不同也拒绝
+        let mut bad2 = cur.clone();
+        bad2.start_period = crate::period::Period::new(2026, 7).unwrap();
+        let errs2 = cur.adopt_config(&bad2).unwrap_err();
+        assert!(errs2[0].contains("启用期间"), "{errs2:?}");
+    }
+
     /// 预算控制写了 `warning`（应为 `warn`）→ 当成关闭，超预算一路放行；
     /// 单据前缀键写成 `purchase` → 永远用默认 CG；凭证字重复 → 两张凭证同号。
     #[test]

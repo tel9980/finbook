@@ -53,6 +53,7 @@ const SOPEN = (name) => ["test", "-p", "finweb", "--test", "settle_open_page", "
 // 账套参数结构校验（fincore::BookOptions::validate）
 const FOPT = (name) => ["test", "-p", "fincore", "--lib", `account::tests::${name}`];
 const FSETTLE = (name) => ["test", "-p", "findb", "--lib", `settle::tests::${name}`];
+const OCFG = (name) => ["test", "-p", "finweb", "--test", "options_config", "--", name];
 const FUNS = (name) => ["test", "-p", "finweb", "--test", "settle_unsettle_api", "--", name];
 // v1.8.46 现金流量表按对方科目自动归集。失效形态都是「表还是那张表，只是空着」：
 // 规则表静默不生效、税额伴生行把整笔拖成"分不清"、内部划转被当成未归集。
@@ -845,6 +846,29 @@ const MUT = [
     from: "        if let Some(v) = a.props.get(fincore::auxiliary::prop::PAY_DAYS) {",
     to: `        if let Some(v) = a.props.get("__no_such_prop__") {`,
     cmd: FSETTLE("aging_uses_pay_days_to_compute_overdue"),
+  },
+
+  // --- v1.8.49 参数导出/导入/恢复默认 -------------------------------------
+  {
+    name: "㉛ 恢复默认顺手清掉企业名称",
+    file: "crates/fincore/src/account.rs",
+    from: "        self.budget_control = String::new();\n        self.doc_prefixes.clear();",
+    to: "        self.budget_control = String::new();\n        self.company.clear();\n        self.doc_prefixes.clear();",
+    cmd: FOPT("reset_preferences_keeps_what_is_bound_to_existing_data"),
+  },
+  {
+    name: "㉛ 导入配置结构不同也不拒绝",
+    file: "crates/fincore/src/account.rs",
+    from: "        if other.code_scheme != self.code_scheme {",
+    to: "        if false {",
+    cmd: OCFG("import_moves_preferences_but_refuses_structural_mismatch"),
+  },
+  {
+    name: "㉛ 恢复默认不清预算控制",
+    file: "crates/fincore/src/account.rs",
+    from: "        self.budget_control = String::new();\n        self.doc_prefixes.clear();",
+    to: "        self.doc_prefixes.clear();",
+    cmd: OCFG("reset_only_touches_preferences"),
   },
 
 ];

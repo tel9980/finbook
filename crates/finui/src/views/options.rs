@@ -59,6 +59,9 @@ impl OptionsView {
 
         let mut do_save = false;
         let mut do_reload = false;
+        let mut do_export = false;
+        let mut do_import = false;
+        let mut do_reset = false;
         widgets::toolbar(ui, |ui| {
             if ui.button("保存").clicked() {
                 do_save = true;
@@ -66,9 +69,46 @@ impl OptionsView {
             if ui.button("重新载入").clicked() {
                 do_reload = true;
             }
+            ui.separator();
+            if ui
+                .button("导出配置")
+                .on_hover_text("把整套账套参数存成 JSON 文件（换机器时带走）")
+                .clicked()
+            {
+                do_export = true;
+            }
+            if ui
+                .button("导入配置")
+                .on_hover_text("从 JSON 文件恢复参数；编码级长/启用期间与当前账套不同会被拒绝")
+                .clicked()
+            {
+                do_import = true;
+            }
+            if ui
+                .button("恢复默认")
+                .on_hover_text("只恢复偏好类设置（打印版式/预算控制/单据前缀/生产模块）；企业名称、编码级长、启用期间、默认科目不动")
+                .clicked()
+            {
+                do_reset = true;
+            }
         });
         if do_reload {
             self.dirty = true;
+            return;
+        }
+        if do_reset {
+            // 只动偏好：这几项与已经记过的账没关系，改了不会让存量凭证变味
+            o.reset_preferences();
+            self.save(ctx);
+            return;
+        }
+        if do_export {
+            let o2 = o.clone();
+            self.export_config(ctx, &o2);
+            return;
+        }
+        if do_import {
+            self.import_config(ctx);
             return;
         }
         if do_save {
@@ -395,6 +435,73 @@ impl OptionsView {
                 .weak(),
             );
         });
+    }
+
+    /// 导出整套参数到 JSON 文件
+    ///
+    /// 整个对象原样写出，不挑字段：少导出一个字段，导入后它就静默回到默认值，
+    /// 而这种「换了机器某个设置不一样」的问题极难自查。
+    fn export_config(&mut self, ctx: &mut AppCtx<'_>, o: &BookOptions) {
+        let name = format!(
+            "{}_账套参数_{}.json",
+            if o.company.trim().is_empty() { "账套" } else { o.company.trim() },
+            chrono::Local::now().format("%Y%m%d")
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&name)
+            .add_filter("JSON", &["json"])
+            .save_file()
+        else {
+            return;
+        };
+        match serde_json::to_string_pretty(o) {
+            Ok(text) => match std::fs::write(&path, text) {
+                Ok(_) => {
+                    ctx.log("账套", "导出账套参数", &path.display().to_string());
+                    ctx.info(format!("已导出到 {}", path.display()));
+                }
+                Err(e) => ctx.toast(format!("写文件失败：{e}")),
+            },
+            Err(e) => ctx.toast(format!("序列化参数失败：{e}")),
+        }
+    }
+
+    /// 从 JSON 文件导入参数
+    ///
+    /// 结构项（编码级长 / 启用期间）不同就整体拒绝且一个字段都不改 —— 见
+    /// `BookOptions::adopt_config`。拒绝理由原样显示，用户要知道是哪一项不一样。
+    fn import_config(&mut self, ctx: &mut AppCtx<'_>) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("JSON", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                ctx.toast(format!("读文件失败：{e}"));
+                return;
+            }
+        };
+        let incoming: BookOptions = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                ctx.toast(format!("这个文件不是账套参数（{}）：{e}", path.display()));
+                return;
+            }
+        };
+        let mut o = match self.o.clone() {
+            Some(v) => v,
+            None => return,
+        };
+        if let Err(problems) = o.adopt_config(&incoming) {
+            ctx.toast(problems.join("；"));
+            return;
+        }
+        self.o = Some(o);
+        self.save(ctx);
+        ctx.info(format!("已从 {} 导入配置", path.display()));
     }
 
     fn save(&mut self, ctx: &mut AppCtx<'_>) {

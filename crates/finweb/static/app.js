@@ -12170,7 +12170,13 @@ async function viewOptions(main) {
         <button class="btn ghost" id="op-print-preview">试打一张（按上面设置，未保存也生效）</button>
         <span class="muted" style="font-size:12px">页码靠浏览器「页边距盒子」实现，Chrome 131 之前的旧内核会整块忽略——勾了页码纸上却没有，就用新版浏览器。</span>
       </div>
-      ${can("sys_option") ? `<div class="foot" style="margin-top:10px"><button class="btn primary" id="op-save">保存参数</button></div>` : `<p class="muted">无修改权限（需要 sys_option）</p>`}
+      ${can("sys_option") ? `<div class="foot" style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn primary" id="op-save">保存参数</button>
+        <button class="btn ghost" id="op-export" title="导出成 JSON 文件，换机器时带走">导出配置</button>
+        <button class="btn ghost" id="op-import" title="从 JSON 文件恢复；编码级长/启用期间与当前账套不同会被拒绝">导入配置</button>
+        <input type="file" id="op-import-file" accept=".json,application/json" style="display:none">
+        <button class="btn ghost" id="op-reset" title="只恢复偏好（打印版式/预算控制/单据前缀/生产模块）；企业名称、编码级长、启用期间、默认科目不动">恢复默认</button>
+      </div>` : `<p class="muted">无修改权限（需要 sys_option）</p>`}
     </div>`;
   const prev = $("#op-print-preview");
   if (prev) prev.addEventListener("click", () => {
@@ -12189,6 +12195,34 @@ async function viewOptions(main) {
     });
     const cur = state.current || "";
     window.open(`/api/reports/trial-balance/print?from=${encodeURIComponent(cur)}&to=${encodeURIComponent(cur)}&${q}`, "_blank");
+  });
+  if ($("#op-export")) $("#op-export").addEventListener("click", () => {
+    downloadUrl("/api/options/export");
+  });
+  if ($("#op-import")) $("#op-import").addEventListener("click", () => $("#op-import-file").click());
+  if ($("#op-import-file")) $("#op-import-file").addEventListener("change", async (ev) => {
+    const f = ev.target.files && ev.target.files[0];
+    if (!f) return;
+    try {
+      const text = await f.text();
+      let body;
+      try { body = JSON.parse(text); } catch (e) { throw new Error(`不是合法的 JSON：${e.message}`); }
+      const r = await api("/options/import", { method: "POST", body });
+      // 服务端会把采纳后的完整参数返回，用它覆盖本地缓存 —— 否则点完「保存参数」
+      // 会拿旧的 o 覆盖一遍，导入等于白做
+      o = (r && r.options) ? r.options : o;
+      toast("配置已导入", "ok");
+      viewOptions(main);
+    } catch (e) { toast(e.message, "err"); }
+  });
+  if ($("#op-reset")) $("#op-reset").addEventListener("click", async () => {
+    if (!confirm("恢复默认只会重置「打印版式 / 预算控制 / 单据前缀 / 生产模块」。\n企业名称、科目编码级长、启用期间、业务默认科目都不会动。继续？")) return;
+    try {
+      const r = await api("/options/reset", { method: "POST", body: {} });
+      o = (r && r.options) ? r.options : o;
+      toast("已恢复默认设置", "ok");
+      viewOptions(main);
+    } catch (e) { toast(e.message, "err"); }
   });
   const save = $("#op-save");
   if (save) save.addEventListener("click", async () => {
