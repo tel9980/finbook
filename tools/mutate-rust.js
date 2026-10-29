@@ -831,6 +831,22 @@ const MUT = [
     cmd: MC("closed_period_reports_state_and_refuses"),
   },
 
+  // --- v1.8.48 账期落地 ---------------------------------------------------
+  {
+    name: "㉚ 账期不参与逾期计算",
+    file: "crates/findb/src/settle.rs",
+    from: "                let due_days = *d - l.max_days;",
+    to: "                let due_days = 0 - l.max_days;",
+    cmd: FSETTLE("aging_uses_pay_days_to_compute_overdue"),
+  },
+  {
+    name: "㉚ 账龄读不到客商档案的账期",
+    file: "crates/findb/src/settle.rs",
+    from: "        if let Some(v) = a.props.get(fincore::auxiliary::prop::PAY_DAYS) {",
+    to: `        if let Some(v) = a.props.get("__no_such_prop__") {`,
+    cmd: FSETTLE("aging_uses_pay_days_to_compute_overdue"),
+  },
+
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

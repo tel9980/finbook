@@ -1124,6 +1124,7 @@ impl SettleView {
         cols.push(widgets::TCol::new("合计", 130.0).right());
         cols.push(widgets::TCol::new("贷方余额（预收/预付）", 160.0).right());
         cols.push(widgets::TCol::new("最长账龄", 100.0).right());
+        cols.push(widgets::TCol::new("逾期", 110.0).right());
 
         let bucket_n = buckets.len();
         widgets::grid(ui, "settle_aging", &cols, lines.len(), 24.0, |i, c, ui| {
@@ -1159,6 +1160,23 @@ impl SettleView {
                 widgets::amount_label(ui, l.credit_total);
             } else if c == bucket_n + 3 {
                 ui.label(format!("{} 天", l.max_days));
+            } else if c == bucket_n + 4 {
+                // 「逾期」与「账龄」不是一回事：账龄 54 天、账期 30 天 → 逾期 24 天。
+                // 没填账期的客户只能说账龄，不能说逾期（红线提示会催错人）。
+                match l.pay_days {
+                    None => {
+                        ui.label(RichText::new("未设账期").weak());
+                    }
+                    Some(_) if l.overdue_days == 0 => {
+                        ui.label(RichText::new("未到期").color(palette::OK));
+                    }
+                    Some(_) => {
+                        ui.label(
+                            RichText::new(format!("逾期 {} 天", l.overdue_days))
+                                .color(palette::WARN),
+                        );
+                    }
+                }
             }
         });
 

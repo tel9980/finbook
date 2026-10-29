@@ -14371,6 +14371,8 @@ async fn get_settle_aging(
                 "credit_total": l.credit_total.fmt_money(),
                 "net": l.net().fmt_money(),
                 "max_days": l.max_days,
+                "pay_days": l.pay_days,
+                "overdue_days": l.overdue_days,
             })
         })
         .collect();
@@ -14434,6 +14436,8 @@ async fn export_settle_aging_xlsx(
     headers.push("其中预收预付".into());
     headers.push("净额".into());
     headers.push("最久天数".into());
+    headers.push("账期".into());
+    headers.push("逾期天数".into());
 
     let mut sheet = crate::xlsxout::Sheet::plain(
         "往来账龄",
@@ -14447,6 +14451,9 @@ async fn export_settle_aging_xlsx(
             c.push(ColFmt::Money);
             c.push(ColFmt::Money);
             c.push(ColFmt::Money);
+            c.push(ColFmt::Int);
+            // 账期（没填就空着，不要写 0 —— 0 天账期和「没约定」是两件事）
+            c.push(ColFmt::Int);
             c.push(ColFmt::Int);
             c
         },
@@ -14469,6 +14476,8 @@ async fn export_settle_aging_xlsx(
         r.push(l.credit_total.fmt_plain());
         r.push(l.net().fmt_plain());
         r.push(l.max_days.to_string());
+        r.push(l.pay_days.map(|d| d.to_string()).unwrap_or_default());
+        r.push(l.overdue_days.to_string());
         t_sum += l.total;
         t_credit += l.credit_total;
         t_net += l.net();
@@ -14481,6 +14490,8 @@ async fn export_settle_aging_xlsx(
     total_row.push(t_sum.fmt_plain());
     total_row.push(t_credit.fmt_plain());
     total_row.push(t_net.fmt_plain());
+    total_row.push(String::new());
+    total_row.push(String::new());
     total_row.push(String::new());
     rows.push(total_row);
     let em = vec![rows.len() - 1];

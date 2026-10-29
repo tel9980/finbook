@@ -1104,7 +1104,51 @@ pub fn aging(
             });
         }
     }
-    Ok(fincore::engine::aging::analyze(&items, as_of, buckets)?)
+    let mut lines = fincore::engine::aging::analyze(&items, as_of, buckets)?;
+    // 账期在这里补上：analyze 是纯函数（fincore 不碰数据库），而账期存在客商档案里。
+    //
+    // 逾期按**最老一笔未核销单据**算（`as_of - max_days` 就是它的日期）：
+    // 客户 9/1 卖的货账期 30 天，10/25 还没给，就是逾期 24 天。
+    // 一个客户有十笔单据时这是最保守的那个数 —— 也正是催款时要说的那个数。
+    if !lines.is_empty() {
+        let days_map = pay_days_map(db, party)?;
+        for l in lines.iter_mut() {
+            if let Some(d) = days_map.get(l.key.trim()) {
+                l.pay_days = Some(*d);
+                let due_days = *d - l.max_days;
+                l.overdue_days = (-due_days).max(0);
+            }
+        }
+    }
+    Ok(lines)
+}
+
+/// 账期表：客商编码 → 账期天数
+///
+/// 一次全读，不要在账龄循环里逐行查档案（几十个客户就是几十次查询）。
+/// 解析不了的账期直接忽略 —— 填错的账期当成没填，比让整张账龄报错好。
+fn pay_days_map(
+    db: &Db,
+    kind: fincore::AuxKind,
+) -> DbResult<std::collections::HashMap<String, i64>> {
+    // 停用的档案也要算：客户停用了，欠的钱不会消失
+    let q = fincore::AuxQuery {
+        kind: Some(kind),
+        keyword: None,
+        include_disabled: true,
+        parent_code: None,
+    };
+    let mut m = std::collections::HashMap::new();
+    for a in crate::auxs::list(db, &q)? {
+        if let Some(v) = a.props.get(fincore::auxiliary::prop::PAY_DAYS) {
+            if let Ok(d) = v.trim().parse::<i64>() {
+                if (0..=3650).contains(&d) {
+                    m.insert(a.code.trim().to_string(), d);
+                }
+            }
+        }
+    }
+    Ok(m)
 }
 
 // ---------------- 往来期初明细（按单据，平台迁移导入 v2） ----------------
@@ -1947,6 +1991,107 @@ mod tests {
             Money::parse("3500").unwrap(),
             "金额应相加（3000 凭证 + 500 期初），不能分在两行里"
         );
+    }
+
+    /// 账期落地：客户档案里填了 30 天，9/1 的单 10/25 还没给 → 逾期 24 天
+    ///
+    /// 这是 `pay_days` 第一次真的被读。以前它只是档案里的一个字段，
+    /// 填什么都一样 —— 而「账期」恰恰是催款时唯一有意义的参照。
+    #[test]
+    fn aging_uses_pay_days_to_compute_overdue() {
+        let db = tmpdb("pay_days");
+        let p = Period::new(2026, 10).unwrap();
+
+        // 客户 C01，账期 30 天
+        let mut c = fincore::AuxEntity::new(fincore::AuxKind::Customer, "C01", "客户甲");
+        c.props.insert(
+            fincore::auxiliary::prop::PAY_DAYS.to_string(),
+            "30".to_string(),
+        );
+        crate::auxs::insert(&db, &c).unwrap();
+
+        arap_opening_insert(
+            &db,
+            &ArapOpening {
+                id: 0,
+                kind: "ar".into(),
+                party_code: "C01".into(),
+                party_name: "客户甲".into(),
+                doc_no: "XS-1".into(),
+                doc_date: "2026-09-01".into(),
+                amount: Money::parse("10000").unwrap(),
+                memo: String::new(),
+                created_by: "u".into(),
+            },
+            "u",
+        )
+        .unwrap();
+
+        let as_of = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let lines = aging(
+            &db,
+            "1122",
+            p,
+            as_of,
+            &fincore::engine::aging::buckets_by_days(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].max_days, 54, "9/1 到 10/25 是 54 天");
+        assert_eq!(lines[0].pay_days, Some(30));
+        assert_eq!(
+            lines[0].overdue_days, 24,
+            "54 - 30 = 逾期 24 天，这才是催款要说的数"
+        );
+    }
+
+    /// 没填账期 / 账期没到：`overdue_days` 必须是 0，不能拿账龄冒充逾期
+    #[test]
+    fn overdue_is_zero_without_pay_days_or_before_due() {
+        let db = tmpdb("pay_days_none");
+        let p = Period::new(2026, 10).unwrap();
+        for (code, days) in [("C01", None), ("C02", Some("60"))] {
+            let mut c = fincore::AuxEntity::new(fincore::AuxKind::Customer, code, code);
+            if let Some(d) = days {
+                c.props.insert(
+                    fincore::auxiliary::prop::PAY_DAYS.to_string(),
+                    d.to_string(),
+                );
+            }
+            crate::auxs::insert(&db, &c).unwrap();
+            arap_opening_insert(
+                &db,
+                &ArapOpening {
+                    id: 0,
+                    kind: "ar".into(),
+                    party_code: code.into(),
+                    party_name: code.into(),
+                    doc_no: format!("XS-{code}"),
+                    doc_date: "2026-10-01".into(),
+                    amount: Money::parse("1000").unwrap(),
+                    memo: String::new(),
+                    created_by: "u".into(),
+                },
+                "u",
+            )
+            .unwrap();
+        }
+        let lines = aging(
+            &db,
+            "1122",
+            p,
+            NaiveDate::from_ymd_opt(2026, 10, 20).unwrap(),
+            &fincore::engine::aging::buckets_by_days(),
+            None,
+        )
+        .unwrap();
+        let c1 = lines.iter().find(|l| l.key == "C01").unwrap();
+        assert_eq!(c1.pay_days, None);
+        assert_eq!(c1.overdue_days, 0, "没填账期就不能说逾期");
+        let c2 = lines.iter().find(|l| l.key == "C02").unwrap();
+        assert_eq!(c2.pay_days, Some(60));
+        assert_eq!(c2.overdue_days, 0, "账期 60 天，才 19 天没到期");
     }
 
     /// 维度按科目的真实辅助核算取，不按首位猜。

@@ -179,6 +179,14 @@ pub struct AgingLine {
     pub credit_total: Money,
     /// 最老一笔单据的账龄天数
     pub max_days: i64,
+    /// 这个往来单位约定的账期（天）。档案里没填就是 `None`。
+    ///
+    /// 放在这里而不是让界面各自去查档案：账龄一屏要列几十个客户，
+    /// 每行查一次档案就是几十次查询；而且「从哪天开始算逾期」的规则
+    /// 只该有一个定义点。
+    pub pay_days: Option<i64>,
+    /// 按账期算的逾期天数（`0` = 未逾期或不知道该从哪天算）
+    pub overdue_days: i64,
 }
 
 impl AgingLine {
@@ -207,6 +215,9 @@ pub fn analyze(
             total: Money::ZERO,
             credit_total: Money::ZERO,
             max_days: 0,
+            // 账期由调用方（findb::settle::aging）补：fincore 这一层不碰数据库
+            pay_days: None,
+            overdue_days: 0,
         });
         // 未来日期的单据（days 为负）按 0 天处理，不能落进"最旧"档虚增长账龄
         let days = (as_of - it.date).num_days().max(0);
