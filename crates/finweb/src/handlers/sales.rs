@@ -1044,3 +1044,81 @@ pub(super) async fn get_tax_vat(
         "manual_fields": ["上期留抵税额", "进项税额转出额", "附加税费减免", "留抵结转下期"],
     })))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize)]
+pub(super) struct InvoiceFromPo {
+    po_id: i64,
+}
+
+#[derive(Deserialize)]
+pub(super) struct InvoiceFromSo {
+    so_id: i64,
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct InvoiceListQuery {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub keyword: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ShipmentReq {
+    pub so_id: i64,
+    #[serde(default)]
+    pub period: i32,
+    #[serde(default)]
+    pub date: String,
+    pub qty: String,
+    #[serde(default)]
+    pub memo: String,
+    /// 仓库编码（留空 = 默认仓）
+    #[serde(default)]
+    pub warehouse: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SoPaymentReq {
+    pub so_id: i64,
+    #[serde(default)]
+    pub period: i32,
+    #[serde(default)]
+    pub date: String,
+    pub amount: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SoInput {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    period: i32,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    customer_code: String,
+    #[serde(default)]
+    customer_name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    memo: String,
+    #[serde(default)]
+    lines: Vec<OrderLineInput>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct NoticeReq {
+    qty: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    memo: String,
+}

@@ -706,3 +706,15 @@ pub(super) async fn delete_user(
     Ok(Json(json!({"ok": true})))
 }
 
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize)]
+pub(super) struct LoginAttemptsQuery {
+    username: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct UnlockSecurityReq {
+    username: String,
+}

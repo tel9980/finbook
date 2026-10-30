@@ -1189,3 +1189,27 @@ pub(super) async fn import_book(
         "attachments": attach.len(),
     })))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize)]
+pub(super) struct BackupRestoreReq {
+    file: String,
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct ReconcileDto {
+    /// 全部校验通过且不空
+    ok: bool,
+    one_liner: String,
+    empty: bool,
+    sheets: Vec<ReconcileSheetDto>,
+    debit_total: String,
+    credit_total: String,
+    balanced: bool,
+    asset_total: String,
+    liab_total: String,
+    equity_total: String,
+    checks: Vec<ReconcileCheckDto>,
+    issues: Vec<String>,
+}

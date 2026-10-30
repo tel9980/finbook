@@ -1683,3 +1683,69 @@ pub(super) async fn import_aux_batch(
         "duplicate_in_batch": dup_in_batch,
     })))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize)]
+pub(super) struct ExportScheduleReq {
+    #[serde(default)]
+    id: i64,
+    kind: String,
+    #[serde(default)]
+    period_mode: String,
+    #[serde(default)]
+    at_time: String,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AccountReq {
+    account: Account,
+    #[serde(default)]
+    aux_kinds: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TemplateGenerateReq {
+    /// 期间 ymm，如 202601，缺省当前期间
+    #[serde(default)]
+    period: Option<i32>,
+    /// 凭证日期，缺省期间末日
+    #[serde(default)]
+    date: String,
+}
+
+#[derive(serde::Deserialize)]
+pub(super) struct KindReq {
+    kind: AuxKind,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AuxBatchParseReq {
+    kind: AuxKind,
+    text: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AuxBatchImportReq {
+    kind: AuxKind,
+    /// 只导入前端回传的这些行。**不接受「重新解析一遍文本」**：
+    /// 用户在预览之后可能改过文本（比如去掉一行），若后端重新解析，
+    /// 实际导入的就不是他看到并确认过的那批 —— 正是「确认了 A 写进去 B」
+    /// 这类最难查的错。
+    rows: Vec<AuxBatchRow>,
+}
+
+#[derive(serde::Serialize)]
+pub(super) struct AuxBatchRowView {
+    code: String,
+    name: String,
+    /// None = 可导入；Some = 跳过原因（中文文案）
+    skip: Option<String>,
+    parent_code: Option<String>,
+    memo: String,
+    disabled: bool,
+}

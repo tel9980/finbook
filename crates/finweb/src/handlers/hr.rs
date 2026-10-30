@@ -599,3 +599,69 @@ pub(super) async fn claim_voucher(
     Ok(Json(json!({ "id": vid })))
 }
 
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize)]
+pub(super) struct GeneratePayrollReq {
+    #[serde(default)]
+    period: Option<String>,
+    rows: Vec<PayrollInput>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PayrollAccrueReq {
+    #[serde(default)]
+    date: String,
+    expense: String,
+    wage_payable: String,
+    social_payable: String,
+    housing_payable: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PayrollSocialReq {
+    #[serde(default)]
+    date: String,
+    social_payable: String,
+    housing_payable: String,
+    personal_payable: String,
+    bank_account: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PayrollPayReq {
+    #[serde(default)]
+    date: String,
+    payable_account: String,
+    bank_account: String,
+    tax_account: String,
+    social_account: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ClaimInput {
+    /// 期间 ymm，如 202601
+    #[serde(default)]
+    period: Option<i32>,
+    /// 业务日期 YYYY-MM-DD
+    biz_date: String,
+    applicant: String,
+    #[serde(default)]
+    dept: String,
+    reason: String,
+    amount: String,
+    #[serde(default)]
+    items: Vec<ClaimItemInput>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ClaimTransitionReq {
+    /// draft / submitted / approved / rejected / paid
+    status: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ClaimVoucherReq {
+    /// 贷方支付科目（如 100201 银行存款）
+    pay_account: String,
+}

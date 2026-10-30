@@ -1344,3 +1344,135 @@ pub(super) async fn get_settle_open(
             .collect::<Vec<_>>(),
     })))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize, Default)]
+pub(super) struct SettleAutoReq {
+    pub account: String,
+    #[serde(default)]
+    pub ymm: i32,
+    #[serde(default)]
+    pub tolerance: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SettleRunReq {
+    pub from_entry: i64,
+    pub to_entry: i64,
+    pub amount: String,
+    /// 差异（现金折扣 / 抹零）金额：> 0 时自动出一张差异凭证把零头记入损益
+    #[serde(default)]
+    pub diff: String,
+    /// 差异科目（如 660305 财务费用-其他 / 6711 营业外支出）；差异为 0 时可空
+    #[serde(default)]
+    pub diff_account: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct UnsettleReq {
+    pub id: i64,
+    /// 只撤销这么多（缺省 = 整条撤销）。
+    ///
+    /// 核销三张单共 5 万，事后发现其中一张该是 3 万 —— 以前只能整条撤销再重录，
+    /// 撤销的瞬间三张单全变「未核销」，账龄立刻虚高。
+    #[serde(default)]
+    pub amount: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SettleCrossReq {
+    /// 借方挂账分录（被冲减的应收 / 预付等）
+    pub debit_entry: i64,
+    /// 贷方挂账分录（被冲减的应付 / 预收等）
+    pub credit_entry: i64,
+    pub amount: String,
+    /// 过渡凭证日期（`YYYY-MM-DD`，缺省今天）
+    #[serde(default)]
+    pub date: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct OffsetCreateReq {
+    #[serde(default)]
+    date: String,
+    pub customer: String,
+    pub supplier: String,
+    #[serde(default)]
+    pub ar_account: String,
+    #[serde(default)]
+    pub ap_account: String,
+    pub amount: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct StatementReq {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    account: String,
+    party_code: String,
+    #[serde(default)]
+    party_name: String,
+    /// 起始期间 ymm
+    from: i32,
+    /// 截止期间 ymm
+    to: i32,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct StatementStatusReq {
+    status: String,
+    /// 回签确认人（confirmed 时必填，用于留痕"谁替客户签的"）
+    #[serde(default)]
+    confirmed_by: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct DunningReq {
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    account: String,
+    party_code: String,
+    #[serde(default)]
+    party_name: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct DunningStatusReq {
+    status: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(super) enum BeginSaveReq {
+    Wrapped {
+        #[serde(default)]
+        rows: Vec<BeginRowInput>,
+        #[serde(default)]
+        delete_ids: Vec<i64>,
+    },
+    Rows(Vec<BeginRowInput>),
+}
+
+#[derive(Deserialize)]
+pub(super) struct BeginBatchParseReq {
+    text: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BeginBatchImportReq {
+    rows: Vec<BeginBatchRow>,
+    /// 前端草稿里已有的行也要避开 —— 与桌面的 `existing` 口径一致
+    #[serde(default)]
+    existing: Vec<String>,
+}

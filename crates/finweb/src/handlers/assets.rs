@@ -378,3 +378,32 @@ pub(super) async fn delete_asset_deps_period(
     )?;
     Ok(Json(json!({ "removed": removed })))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize, Default)]
+pub(super) struct AssetDisposeReq {
+    pub ymm: i32,
+    #[serde(default)]
+    pub amount: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AssetImpairReq {
+    #[serde(default)]
+    period: i32,
+    amount: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AssetCountReq {
+    #[serde(default)]
+    period: i32,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    memo: String,
+    lines: Vec<AssetCountLineReq>,
+}

@@ -953,3 +953,34 @@ pub(super) async fn upload_voucher_attachment(
     )?;
     Ok(Json(json!({ "id": aid })))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize)]
+pub(super) struct AmendReq {
+    /// 更正原因（必填）。没有原因的更正等于没更正。
+    reason: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct VoidReq {
+    /// 缺省 = true（作废）；恢复请显式传 false
+    #[serde(default = "default_true")]
+    void: bool,
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct ReverseVoucherReq {
+    #[serde(default)]
+    pub period: i32,
+    #[serde(default)]
+    pub date: String,
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct RenumberVoucherReq {
+    #[serde(default)]
+    pub period: i32,
+    #[serde(default)]
+    pub word: String,
+}

@@ -1291,3 +1291,283 @@ pub(super) async fn save_location(
     )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(serde::Deserialize)]
+pub(super) struct LcSaveReq {
+    #[serde(default)]
+    id: i64,
+    period: i32,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    supplier_code: String,
+    #[serde(default)]
+    supplier_name: String,
+    #[serde(default)]
+    basis: String,
+    #[serde(default)]
+    freight: String,
+    #[serde(default)]
+    duty: String,
+    #[serde(default)]
+    insurance: String,
+    #[serde(default)]
+    clearing: String,
+    #[serde(default)]
+    other: String,
+    #[serde(default)]
+    dr_account: String,
+    #[serde(default)]
+    cr_account: String,
+    /// 付款账户（贷方核算银行账户时必填）
+    #[serde(default)]
+    bank_account: String,
+    #[serde(default)]
+    expense_account: String,
+    #[serde(default)]
+    memo: String,
+    #[serde(default)]
+    lines: Vec<LcLineReq>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct StockAdjustReq {
+    #[serde(default)]
+    pub period: i32,
+    #[serde(default)]
+    pub date: String,
+    pub item: String,
+    #[serde(default)]
+    pub warehouse: String,
+    /// 调整数量（正=盘盈/调增，负=盘亏/调减）。**建账与盘盈必填**：
+    /// 只给金额不给数量会造出「数量 0、金额 > 0」的幽灵存货。
+    #[serde(default)]
+    pub qty: String,
+    /// 调整金额（正=调增，负=调减），十进制字符串
+    pub delta: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SerialInReq {
+    pub item: String,
+    pub serials: Vec<String>,
+    #[serde(default)]
+    pub batch_no: String,
+    #[serde(default)]
+    pub date: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SerialOutReq {
+    pub serials: Vec<String>,
+    #[serde(default)]
+    pub date: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct UnitReq {
+    pub item: String,
+    #[serde(default)]
+    pub base_unit: String,
+    #[serde(default)]
+    pub alt_unit: String,
+    #[serde(default)]
+    pub factor: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AssembleReq {
+    pub parent: String,
+    pub children: Vec<(String, String)>,
+    #[serde(default)]
+    pub memo: String,
+    #[serde(default)]
+    pub date: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RoutingOpDto {
+    #[serde(default)]
+    pub seq: i32,
+    pub op_code: String,
+    pub op_name: String,
+    #[serde(default)]
+    pub work_center: String,
+    #[serde(default)]
+    pub std_hours: String,
+    #[serde(default)]
+    pub rate: String,
+    /// 工序检验点（完工前需录工序检验单）
+    #[serde(default)]
+    pub qc_required: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct MrpRunReq {
+    #[serde(default)]
+    pub demands: Vec<MrpDemandDto>,
+    /// 若为 true 且 demands 为空，则从已确认销售订单收集需求
+    #[serde(default)]
+    pub from_sales: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct FormConvertReq {
+    from_item: String,
+    to_item: String,
+    qty: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct QcReq {
+    po_id: i64,
+    qty_insp: String,
+    #[serde(default)]
+    qty_fail: String,
+    #[serde(default)]
+    inspector: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct MpsRunReq {
+    #[serde(default)]
+    pub demands: Vec<MrpDemandDto>,
+    /// true = 合并已确认销售订单未发量（与手工行并集）
+    #[serde(default)]
+    pub from_sales: bool,
+    /// 建议交期（默认今天 +7）
+    #[serde(default)]
+    pub due_date: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct MpsConvertReq {
+    /// 空 = 用行净算计划量
+    #[serde(default)]
+    qty: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct RoughReq {
+    /// 日产能（件/日），空 = 10
+    #[serde(default)]
+    daily_qty: String,
+    #[serde(default)]
+    period: i32,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BomReq {
+    parent: String,
+    #[serde(default)]
+    children: Vec<BomChildReq>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ArchiveReq {
+    pub period: i32,
+    pub kind: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub file_no: String,
+    pub payload: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct CountReq {
+    #[serde(default)]
+    period: i32,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    warehouse: String,
+    #[serde(default)]
+    memo: String,
+    #[serde(default)]
+    lines: Vec<CountLineInput>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BatchRegisterReq {
+    #[serde(default)]
+    item: String,
+    #[serde(default)]
+    batch_no: String,
+    #[serde(default)]
+    production_date: String,
+    #[serde(default)]
+    warehouse: String,
+    #[serde(default)]
+    location: String,
+    #[serde(default)]
+    qty: String,
+    #[serde(default)]
+    direction: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TransferReq {
+    #[serde(default)]
+    period: i32,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    item: String,
+    #[serde(default)]
+    batch_no: String,
+    #[serde(default)]
+    from_warehouse: String,
+    #[serde(default)]
+    to_warehouse: String,
+    #[serde(default)]
+    qty: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct FefoReq {
+    #[serde(default)]
+    item: String,
+    #[serde(default)]
+    qty: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct LocationReq {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ItemPlanReq {
+    #[serde(default)]
+    item_code: String,
+    #[serde(default)]
+    safety_stock: String,
+    #[serde(default)]
+    lead_days: i32,
+    #[serde(default)]
+    lot_size: String,
+}

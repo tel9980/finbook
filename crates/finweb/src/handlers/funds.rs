@@ -1246,3 +1246,206 @@ pub(super) async fn funds_forecast_rolling_ep(
         "rows": findb::funds::funds_forecast_rolling(&db, from, n)?,
     })))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize)]
+pub(super) struct BillReq {
+    #[serde(default)]
+    pub id: i64,
+    pub kind: String,
+    pub no: String,
+    pub period: i32,
+    pub issue_date: String,
+    pub due_date: String,
+    #[serde(default)]
+    pub counterpart: String,
+    #[serde(default)]
+    pub bank: String,
+    #[serde(default)]
+    pub amount: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BillTransitionReq {
+    pub status: String,
+    pub date: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct LoanReq {
+    #[serde(default)]
+    pub id: i64,
+    pub kind: String,
+    pub no: String,
+    #[serde(default)]
+    pub bank: String,
+    #[serde(default)]
+    pub principal: String,
+    #[serde(default)]
+    pub rate_pct: String,
+    pub start_date: String,
+    pub end_date: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct LoanSettleReq {
+    #[serde(default)]
+    date: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct CashCountReq {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    account_code: String,
+    #[serde(default)]
+    counted: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct DayClearReq {
+    #[serde(default)]
+    account_code: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    clear: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct CashShiftReq {
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    to_user: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct CheckReq {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    no: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    bank_account: String,
+    #[serde(default)]
+    payee: String,
+    #[serde(default)]
+    amount: String,
+    #[serde(default)]
+    issued_date: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AdvanceReq {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    no: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    employee: String,
+    #[serde(default)]
+    purpose: String,
+    #[serde(default)]
+    amount: String,
+    #[serde(default)]
+    pay_account: String,
+    #[serde(default)]
+    expense_account: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct AdvanceSettleReq {
+    #[serde(default)]
+    date: Option<String>,
+    #[serde(default)]
+    expense_account: String,
+    #[serde(default)]
+    expense_amount: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ReceiptCreateReq {
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    fund_account: String,
+    #[serde(default)]
+    party: String,
+    #[serde(default)]
+    bank: String,
+    #[serde(default)]
+    cross_party: String,
+    #[serde(default)]
+    cross_amount: String,
+    #[serde(default)]
+    amount: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TransferCreateReq {
+    #[serde(default)]
+    date: String,
+    pub from_account: String,
+    pub to_account: String,
+    #[serde(default)]
+    pub bank: String,
+    pub amount: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct BankImportReq {
+    pub ymm: i32,
+    pub account: String,
+    #[serde(default)]
+    pub text: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BankAutoReq {
+    pub ymm: i32,
+    pub account: String,
+    #[serde(default)]
+    pub tolerance: i64,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BankLinkReq {
+    pub stmt_id: i64,
+    pub entry_id: i64,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BankStmtIdReq {
+    pub stmt_id: i64,
+}

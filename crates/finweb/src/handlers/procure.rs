@@ -713,3 +713,79 @@ pub(super) async fn save_purchase_req(
     let id = findb::procurement::pr_save(&db, &mut req)?;
     Ok(Json(serde_json::json!({ "id": id, "no": req.no })))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize)]
+pub(super) struct EstimateReq {
+    pub po_id: i64,
+    #[serde(default)]
+    pub period: i32,
+    pub item: String,
+    #[serde(default)]
+    pub est_amount: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct QuotaReq {
+    #[serde(default)]
+    pub period: i32,
+    pub supplier: String,
+    pub item: String,
+    #[serde(default)]
+    pub quota_qty: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ReceiptReq {
+    pub po_id: i64,
+    #[serde(default)]
+    pub period: i32,
+    #[serde(default)]
+    pub date: String,
+    pub qty: String,
+    #[serde(default)]
+    pub memo: String,
+    /// 仓库编码（留空 = 默认仓）
+    #[serde(default)]
+    pub warehouse: String,
+    /// 收货针对哪一行（物料编码）。留空 = 整单收货（单行订单 / 旧客户端）。
+    ///
+    /// 多行订单**必须**指定：否则这批货属于哪一行说不清，金额只能按订购量占比
+    /// 折算，而那个折算对部分收货是错的（两张行各 100 件、含税单价 11，实收 100 件
+    /// 全是第一行，折算摊成 550 而实际 1100），暂估封顶额度也会跟着错。
+    #[serde(default)]
+    pub item_code: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PaymentReq {
+    pub po_id: i64,
+    #[serde(default)]
+    pub period: i32,
+    #[serde(default)]
+    pub date: String,
+    pub amount: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct PoInput {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    period: i32,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    supplier_code: String,
+    #[serde(default)]
+    supplier_name: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    memo: String,
+    #[serde(default)]
+    lines: Vec<OrderLineInput>,
+}

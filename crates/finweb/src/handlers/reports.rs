@@ -1295,3 +1295,69 @@ pub(super) async fn export_income_statement_xlsx(
     user.require(Perm::Export)?;
     export_statement_xlsx(&state, &user, &q, StatementKind::Income)
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(Deserialize)]
+pub(super) struct BudgetRowReq {
+    /// 客户端编辑时会回传，但 upsert 按「期间+科目+部门+版本」定位，
+    /// 真正的行 id 由 budget_upsert_version 决定，故这里只收不用。
+    #[serde(default)]
+    #[allow(dead_code)]
+    id: i64,
+    period: i32,
+    account_code: String,
+    #[serde(default)]
+    dept: String,
+    amount: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct ClosePeriodReq {
+    /// 是否要求先结转损益才能结账
+    #[serde(default)]
+    pub require_carry: bool,
+}
+
+#[derive(Deserialize, Default)]
+pub(super) struct CustomReportReq {
+    #[serde(default)]
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub columns: Vec<String>,
+    #[serde(default)]
+    pub lines: Vec<CustomLineReq>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BVersionReq {
+    pub key: String,
+    pub name: String,
+    #[serde(default)]
+    pub is_current: bool,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct BCopyReq {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct NoteReq {
+    #[serde(default)]
+    pub id: i64,
+    pub report_key: String,
+    pub period: i32,
+    #[serde(default)]
+    pub seq: i32,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub content: String,
+}

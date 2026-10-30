@@ -575,3 +575,99 @@ pub struct ImportRunReq {
     #[serde(default)]
     pub mapping: std::collections::HashMap<String, String>,
 }
+
+// ===== 从 handlers.rs 收进来的共享请求/响应结构（v1.8.59）=====
+
+#[derive(Deserialize)]
+pub struct OrderTransitionReq {
+    pub status: String,
+}
+
+pub enum WfGate {
+    /// 无流程，或已到「通过」终态 → 调用方照常执行原业务动作
+    Continue,
+    /// 未到终态，已推进到某节点 → 调用方只推进流程、**不**改业务状态
+    Pending(String),
+    /// 本次动作被驳回 → 调用方不要改业务状态
+    Rejected,
+}
+
+#[derive(Deserialize)]
+pub struct AssetReq {
+    #[serde(default)]
+    pub id: i64,
+    pub code: String,
+    pub name: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub spec: String,
+    #[serde(default)]
+    pub dept: String,
+    pub asset_account: String,
+    pub dep_account: String,
+    pub expense_account: String,
+    pub original_value: String,
+    /// 残值率按百分数录入（5 = 5%）
+    #[serde(default)]
+    pub residual_rate: String,
+    pub life_months: i32,
+    #[serde(default)]
+    pub method: String,
+    /// 启用期间 YYYYMM
+    pub start_period: i32,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(serde::Deserialize, Default)]
+pub struct KindQuery {
+    #[serde(default)]
+    pub kind: String,
+}
+
+#[derive(Deserialize)]
+pub struct PayrollInput {
+    pub employee: String,
+    #[serde(default)]
+    pub dept: String,
+    pub gross: String,
+    #[serde(default)]
+    pub social: String,
+    #[serde(default)]
+    pub housing: String,
+    #[serde(default)]
+    pub deduction: String,
+    /// 专项附加扣除
+    #[serde(default)]
+    pub additional: String,
+    #[serde(default)]
+    pub social_co: String,
+    #[serde(default)]
+    pub housing_co: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Clone, Copy)]
+pub enum StatementKind {
+    BalanceSheet,
+    Income,
+    CashFlow,
+    Equity,
+}
+
+#[derive(serde::Serialize)]
+pub struct ReconcileSheetDto {
+    pub label: String,
+    pub rows: usize,
+    pub total: String,
+    pub hint: String,
+}
+
+#[derive(serde::Serialize)]
+pub struct ReconcileCheckDto {
+    pub name: String,
+    pub ok: bool,
+    pub detail: String,
+}

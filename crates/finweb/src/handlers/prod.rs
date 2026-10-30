@@ -1033,3 +1033,151 @@ pub(super) async fn run_period_end_cost(
         serde_json::json!({ "period": period.label(), "rows": rows, "apply": apply }),
     ))
 }
+
+// ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+#[derive(serde::Deserialize)]
+pub(super) struct ProdFromSoReq {
+    so_id: i64,
+    /// 计划数量；留空 = 下推该订单尚未认领的全部余量
+    #[serde(default)]
+    qty: String,
+    #[serde(default)]
+    date: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct OverheadReq {
+    period: i32,
+    amount: String,
+    /// cost（默认，按已归集成本）/ labor（按直接人工）/ qty（按计划产量）
+    #[serde(default)]
+    base: String,
+    /// true = 写入归集；false = 仅试算
+    #[serde(default)]
+    apply: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct WfTemplateApplyReq {
+    key: String,
+    biz_type: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct OpReportReq {
+    pub op_id: i64,
+    #[serde(default)]
+    pub qty: String,
+    #[serde(default)]
+    pub hours: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct OpFinishReq {
+    pub op_id: i64,
+}
+
+#[derive(Deserialize)]
+pub(super) struct OutsourceFeeReq {
+    amount: String,
+    #[serde(default)]
+    date: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ProdCreateReq {
+    item_code: String,
+    #[serde(default)]
+    qty: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    work_center: String,
+    /// inhouse（默认）/ outsourcing 委外
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    supplier_code: String,
+    #[serde(default)]
+    supplier_name: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ScheduleReq {
+    items: Vec<SchedItem>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ProdUpdateReq {
+    #[serde(default)]
+    qty: String,
+    /// 缺省=不变；传空串=清空计划日期
+    #[serde(default)]
+    plan_start: Option<String>,
+    #[serde(default)]
+    plan_end: Option<String>,
+    /// 缺省=不变
+    #[serde(default)]
+    memo: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ProdQcReq {
+    qty_insp: String,
+    #[serde(default)]
+    qty_fail: String,
+    #[serde(default)]
+    disposition: String,
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    memo: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ProdActReq {
+    #[serde(default)]
+    date: String,
+    #[serde(default)]
+    qty: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ApprovalStartReq {
+    pub biz_kind: String,
+    pub biz_id: i64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub approvers: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ApprovalActReq {
+    pub approve: bool,
+    #[serde(default)]
+    pub comment: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct CostMethodReq {
+    pub item: String,
+    #[serde(default)]
+    pub method: String,
+    #[serde(default)]
+    pub standard_cost: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SalesCostReq {
+    /// yyyymm，0/缺省 = 当前期间
+    #[serde(default)]
+    period: i32,
+    /// 计价方法 code（moving_average/fifo/…，缺省移动加权）
+    #[serde(default)]
+    method: String,
+    /// 结转日期，缺省 = 期间末日
+    #[serde(default)]
+    date: String,
+}

@@ -25,10 +25,19 @@ let bad = 0;
 //
 // ⚠️ 「文件找不到」必须算**失败**。第一版路径算错，`existsSync` 返回 false 就当无事
 //    发生 —— 检查自己失效却报喜。已有自检探针专门覆盖这一条。
+// 判断依据是「仓库里必然存在的文件」。v1.8.59 把 `tests/api.rs` 拆成了
+// `tests/api/main.rs` + 各域文件，因此两个路径都算 —— 只认旧路径的话，
+// 拆分当天整套依赖 FIX_ROOT 的卫生检查会一起报「定位不到仓库根」。
+function isRepoRoot(c) {
+  return (
+    fs.existsSync(path.join(c, "crates", "finweb", "tests", "api", "main.rs")) ||
+    fs.existsSync(path.join(c, "crates", "finweb", "tests", "api.rs"))
+  );
+}
 function resolveRepoRoot() {
   const cands = [path.join(__dirname, ".."), process.cwd()];
   for (const c of cands) {
-    if (fs.existsSync(path.join(c, "crates", "finweb", "tests", "api.rs"))) return c;
+    if (isRepoRoot(c)) return c;
   }
   return null;
 }
@@ -1321,6 +1330,7 @@ function fixFixtureFile() {
   if (!FIX_ROOT) return "crates/finweb/tests/api.rs";
   for (const rel of [
     "crates/finweb/tests/common/mod.rs",
+    "crates/finweb/tests/api/main.rs",
     "crates/finweb/tests/api.rs",
   ]) {
     const p = path.join(FIX_ROOT, ...rel.split("/"));
@@ -1640,7 +1650,7 @@ if (process.argv.includes("--selftest")) {
       apply: () => {
         const p2 = "tools/check-ci.js";
         const o = fs.readFileSync(p2, "utf8");
-        fs.writeFileSync(p2, o.replace('if (fs.existsSync(path.join(c, "crates", "finweb", "tests", "api.rs"))) return c;', "if (false) return c;"));
+        fs.writeFileSync(p2, o.replace("if (isRepoRoot(c)) return c;", "if (false) return c;"));
         return () => fs.writeFileSync(p2, o);
       },
     },

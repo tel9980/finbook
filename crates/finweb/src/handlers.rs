@@ -962,28 +962,7 @@ fn client_ip(headers: &HeaderMap) -> Option<String> {
 }
 
 
-#[derive(Deserialize)]
-struct LoginAttemptsQuery {
-    username: Option<String>,
-    limit: Option<u32>,
-}
 
-
-#[derive(Deserialize)]
-struct UnlockSecurityReq {
-    username: String,
-}
-
-
-#[derive(serde::Deserialize)]
-struct ProdFromSoReq {
-    so_id: i64,
-    /// 计划数量；留空 = 下推该订单尚未认领的全部余量
-    #[serde(default)]
-    qty: String,
-    #[serde(default)]
-    date: String,
-}
 
 
 // ═══════════════════════════════════════════════════════════════
@@ -1012,44 +991,6 @@ struct LcLineReq {
     memo: String,
 }
 
-
-#[derive(serde::Deserialize)]
-struct LcSaveReq {
-    #[serde(default)]
-    id: i64,
-    period: i32,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    supplier_code: String,
-    #[serde(default)]
-    supplier_name: String,
-    #[serde(default)]
-    basis: String,
-    #[serde(default)]
-    freight: String,
-    #[serde(default)]
-    duty: String,
-    #[serde(default)]
-    insurance: String,
-    #[serde(default)]
-    clearing: String,
-    #[serde(default)]
-    other: String,
-    #[serde(default)]
-    dr_account: String,
-    #[serde(default)]
-    cr_account: String,
-    /// 付款账户（贷方核算银行账户时必填）
-    #[serde(default)]
-    bank_account: String,
-    #[serde(default)]
-    expense_account: String,
-    #[serde(default)]
-    memo: String,
-    #[serde(default)]
-    lines: Vec<LcLineReq>,
-}
 
 
 fn lc_line_json(l: &findb::landedcost::LcLine) -> serde_json::Value {
@@ -1108,52 +1049,9 @@ fn lc_json(lc: &findb::landedcost::LandedCost) -> serde_json::Value {
 }
 
 
-#[derive(Deserialize)]
-struct OverheadReq {
-    period: i32,
-    amount: String,
-    /// cost（默认，按已归集成本）/ labor（按直接人工）/ qty（按计划产量）
-    #[serde(default)]
-    base: String,
-    /// true = 写入归集；false = 仅试算
-    #[serde(default)]
-    apply: bool,
-}
-
 
 // ---- 预算编制（当前激活版本的预算行，Web 入口） ----
 
-#[derive(Deserialize)]
-struct BudgetRowReq {
-    /// 客户端编辑时会回传，但 upsert 按「期间+科目+部门+版本」定位，
-    /// 真正的行 id 由 budget_upsert_version 决定，故这里只收不用。
-    #[serde(default)]
-    #[allow(dead_code)]
-    id: i64,
-    period: i32,
-    account_code: String,
-    #[serde(default)]
-    dept: String,
-    amount: String,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct ExportScheduleReq {
-    #[serde(default)]
-    id: i64,
-    kind: String,
-    #[serde(default)]
-    period_mode: String,
-    #[serde(default)]
-    at_time: String,
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    memo: String,
-}
 
 
 /// 生成唯一账套 key（文件名，不含扩展名）
@@ -1508,13 +1406,6 @@ fn wb_report_domain(
 
 
 /// 期末结账请求
-#[derive(Deserialize, Default)]
-struct ClosePeriodReq {
-    /// 是否要求先结转损益才能结账
-    #[serde(default)]
-    pub require_carry: bool,
-}
-
 
 fn can_view_vouchers(user: &CurrentUser) -> bool {
     user.can(Perm::Report)
@@ -1640,40 +1531,11 @@ fn default_true() -> bool {
 }
 
 
-#[derive(Deserialize)]
-struct AmendReq {
-    /// 更正原因（必填）。没有原因的更正等于没更正。
-    reason: String,
-}
-
-
-#[derive(Deserialize)]
-struct VoidReq {
-    /// 缺省 = true（作废）；恢复请显式传 false
-    #[serde(default = "default_true")]
-    void: bool,
-}
 
 
 /// 红字冲销请求：冲销凭证落到的期间与日期
-#[derive(Deserialize, Default)]
-struct ReverseVoucherReq {
-    #[serde(default)]
-    pub period: i32,
-    #[serde(default)]
-    pub date: String,
-}
-
 
 /// 断号重排请求：period + word
-#[derive(Deserialize, Default)]
-struct RenumberVoucherReq {
-    #[serde(default)]
-    pub period: i32,
-    #[serde(default)]
-    pub word: String,
-}
-
 
 // ---------------------------------------------------------------------------
 // 凭证附件（上传/下载/删除；数据超过阈值落 .attachments 目录，否则入库）
@@ -1752,29 +1614,9 @@ fn invoice_from_req(r: &InvoiceReq) -> Result<findb::invoices::Invoice, AppError
 }
 
 
-#[derive(Deserialize)]
-struct InvoiceFromPo {
-    po_id: i64,
-}
-
-
-#[derive(Deserialize)]
-struct InvoiceFromSo {
-    so_id: i64,
-}
 
 
 /// 发票列表查询参数
-#[derive(Deserialize, Default)]
-pub struct InvoiceListQuery {
-    #[serde(default)]
-    pub kind: String,
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
-    pub keyword: String,
-}
-
 
 // ---------------------------------------------------------------------------
 // 数据导入（其他软件 / CSV / Excel）
@@ -2110,17 +1952,6 @@ struct CustomLineReq {
 }
 
 
-#[derive(Deserialize, Default)]
-struct CustomReportReq {
-    #[serde(default)]
-    pub key: String,
-    pub name: String,
-    #[serde(default)]
-    pub columns: Vec<String>,
-    #[serde(default)]
-    pub lines: Vec<CustomLineReq>,
-}
-
 
 fn custom_json(r: &findb::mgmt::CustomReport) -> serde_json::Value {
     json!({
@@ -2136,164 +1967,20 @@ fn custom_json(r: &findb::mgmt::CustomReport) -> serde_json::Value {
 
 // ---- 存货核算：成本调整 ----
 
-#[derive(Deserialize)]
-struct StockAdjustReq {
-    #[serde(default)]
-    pub period: i32,
-    #[serde(default)]
-    pub date: String,
-    pub item: String,
-    #[serde(default)]
-    pub warehouse: String,
-    /// 调整数量（正=盘盈/调增，负=盘亏/调减）。**建账与盘盈必填**：
-    /// 只给金额不给数量会造出「数量 0、金额 > 0」的幽灵存货。
-    #[serde(default)]
-    pub qty: String,
-    /// 调整金额（正=调增，负=调减），十进制字符串
-    pub delta: String,
-    #[serde(default)]
-    pub memo: String,
-}
-
 
 // ---- 库存深度：序列号 / 多单位 / 账龄 / ABC / 组装拆卸 / 分仓库 ----
 
-#[derive(Deserialize)]
-struct SerialInReq {
-    pub item: String,
-    pub serials: Vec<String>,
-    #[serde(default)]
-    pub batch_no: String,
-    #[serde(default)]
-    pub date: String,
-}
 
 
-#[derive(Deserialize)]
-struct SerialOutReq {
-    pub serials: Vec<String>,
-    #[serde(default)]
-    pub date: String,
-}
-
-
-#[derive(Deserialize)]
-struct UnitReq {
-    pub item: String,
-    #[serde(default)]
-    pub base_unit: String,
-    #[serde(default)]
-    pub alt_unit: String,
-    #[serde(default)]
-    pub factor: String,
-}
-
-
-#[derive(Deserialize)]
-struct AssembleReq {
-    pub parent: String,
-    pub children: Vec<(String, String)>,
-    #[serde(default)]
-    pub memo: String,
-    #[serde(default)]
-    pub date: String,
-}
 
 
 // ---- 采购/销售深度：暂估 / 对账 / 配额 / 订单变更 ----
 
-#[derive(Deserialize)]
-struct EstimateReq {
-    pub po_id: i64,
-    #[serde(default)]
-    pub period: i32,
-    pub item: String,
-    #[serde(default)]
-    pub est_amount: String,
-}
 
 
-#[derive(Deserialize)]
-struct QuotaReq {
-    #[serde(default)]
-    pub period: i32,
-    pub supplier: String,
-    pub item: String,
-    #[serde(default)]
-    pub quota_qty: String,
-}
 
 
-#[derive(Deserialize)]
-struct ReceiptReq {
-    pub po_id: i64,
-    #[serde(default)]
-    pub period: i32,
-    #[serde(default)]
-    pub date: String,
-    pub qty: String,
-    #[serde(default)]
-    pub memo: String,
-    /// 仓库编码（留空 = 默认仓）
-    #[serde(default)]
-    pub warehouse: String,
-    /// 收货针对哪一行（物料编码）。留空 = 整单收货（单行订单 / 旧客户端）。
-    ///
-    /// 多行订单**必须**指定：否则这批货属于哪一行说不清，金额只能按订购量占比
-    /// 折算，而那个折算对部分收货是错的（两张行各 100 件、含税单价 11，实收 100 件
-    /// 全是第一行，折算摊成 550 而实际 1100），暂估封顶额度也会跟着错。
-    #[serde(default)]
-    pub item_code: String,
-}
 
-
-#[derive(Deserialize)]
-struct PaymentReq {
-    pub po_id: i64,
-    #[serde(default)]
-    pub period: i32,
-    #[serde(default)]
-    pub date: String,
-    pub amount: String,
-    #[serde(default)]
-    pub memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct ShipmentReq {
-    pub so_id: i64,
-    #[serde(default)]
-    pub period: i32,
-    #[serde(default)]
-    pub date: String,
-    pub qty: String,
-    #[serde(default)]
-    pub memo: String,
-    /// 仓库编码（留空 = 默认仓）
-    #[serde(default)]
-    pub warehouse: String,
-}
-
-
-#[derive(Deserialize)]
-struct SoPaymentReq {
-    pub so_id: i64,
-    #[serde(default)]
-    pub period: i32,
-    #[serde(default)]
-    pub date: String,
-    pub amount: String,
-    #[serde(default)]
-    pub memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct WfTemplateApplyReq {
-    key: String,
-    biz_type: String,
-}
 
 
 // ---------------- 单据套打（订单 / 收付款单）：字段白名单 + 批量紧凑分页 ----------------
@@ -2451,52 +2138,7 @@ struct OrderLineInput {
 }
 
 
-#[derive(Deserialize)]
-struct SoInput {
-    #[serde(default)]
-    id: i64,
-    #[serde(default)]
-    period: i32,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    customer_code: String,
-    #[serde(default)]
-    customer_name: String,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    memo: String,
-    #[serde(default)]
-    lines: Vec<OrderLineInput>,
-}
 
-
-#[derive(Deserialize)]
-struct PoInput {
-    #[serde(default)]
-    id: i64,
-    #[serde(default)]
-    period: i32,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    supplier_code: String,
-    #[serde(default)]
-    supplier_name: String,
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    memo: String,
-    #[serde(default)]
-    lines: Vec<OrderLineInput>,
-}
-
-
-#[derive(Deserialize)]
-struct OrderTransitionReq {
-    status: String,
-}
 
 
 /// 订单日期：缺省今天（非法值回退今天，不让单据失败）
@@ -2525,15 +2167,6 @@ fn po_status_parse(s: &str) -> Result<findb::scm::PoStatus, AppError> {
 
 
 /// 工作流闸门的判定结果
-enum WfGate {
-    /// 无流程，或已到「通过」终态 → 调用方照常执行原业务动作
-    Continue,
-    /// 未到终态，已推进到某节点 → 调用方只推进流程、**不**改业务状态
-    Pending(String),
-    /// 本次动作被驳回 → 调用方不要改业务状态
-    Rejected,
-}
-
 
 /// 工作流闸门。收成函数是为了让「哪种单据走工作流」只有这一处实现。
 ///
@@ -2566,50 +2199,10 @@ fn workflow_gate(
 }
 
 
-#[derive(Deserialize)]
-struct NoticeReq {
-    qty: String,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    memo: String,
-}
-
 
 // ---- 工艺路线 / 报工 ----
 
-#[derive(Deserialize)]
-struct RoutingOpDto {
-    #[serde(default)]
-    pub seq: i32,
-    pub op_code: String,
-    pub op_name: String,
-    #[serde(default)]
-    pub work_center: String,
-    #[serde(default)]
-    pub std_hours: String,
-    #[serde(default)]
-    pub rate: String,
-    /// 工序检验点（完工前需录工序检验单）
-    #[serde(default)]
-    pub qc_required: bool,
-}
 
-
-#[derive(Deserialize)]
-struct OpReportReq {
-    pub op_id: i64,
-    #[serde(default)]
-    pub qty: String,
-    #[serde(default)]
-    pub hours: String,
-}
-
-
-#[derive(Deserialize)]
-struct OpFinishReq {
-    pub op_id: i64,
-}
 
 
 #[derive(Deserialize)]
@@ -2622,72 +2215,13 @@ struct MrpDemandDto {
 }
 
 
-#[derive(Deserialize)]
-struct MrpRunReq {
-    #[serde(default)]
-    pub demands: Vec<MrpDemandDto>,
-    /// 若为 true 且 demands 为空，则从已确认销售订单收集需求
-    #[serde(default)]
-    pub from_sales: bool,
-}
-
 
 // ---- 库存作业：形态转换 / 质检 / 低库存预警（对标金蝶） ----
 
-#[derive(Deserialize)]
-struct FormConvertReq {
-    from_item: String,
-    to_item: String,
-    qty: String,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct QcReq {
-    po_id: i64,
-    qty_insp: String,
-    #[serde(default)]
-    qty_fail: String,
-    #[serde(default)]
-    inspector: String,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    memo: String,
-}
 
 
 // ---- 生产订单：下达 / 开工 / 领料 / 完工入库 + BOM（工厂链「业务单据同步凭证」） ----
 
-#[derive(Deserialize)]
-struct OutsourceFeeReq {
-    amount: String,
-    #[serde(default)]
-    date: String,
-}
-
-
-#[derive(Deserialize)]
-struct ProdCreateReq {
-    item_code: String,
-    #[serde(default)]
-    qty: String,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    work_center: String,
-    /// inhouse（默认）/ outsourcing 委外
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    supplier_code: String,
-    #[serde(default)]
-    supplier_name: String,
-}
 
 
 fn prod_act_date(s: &str) -> chrono::NaiveDate {
@@ -2698,35 +2232,7 @@ fn prod_act_date(s: &str) -> chrono::NaiveDate {
 
 // ---- MPS 主生产计划 / 粗排 / 细排（链6） ----
 
-#[derive(Deserialize)]
-struct MpsRunReq {
-    #[serde(default)]
-    pub demands: Vec<MrpDemandDto>,
-    /// true = 合并已确认销售订单未发量（与手工行并集）
-    #[serde(default)]
-    pub from_sales: bool,
-    /// 建议交期（默认今天 +7）
-    #[serde(default)]
-    pub due_date: String,
-}
 
-
-#[derive(Deserialize)]
-struct MpsConvertReq {
-    /// 空 = 用行净算计划量
-    #[serde(default)]
-    qty: String,
-}
-
-
-#[derive(Deserialize)]
-struct RoughReq {
-    /// 日产能（件/日），空 = 10
-    #[serde(default)]
-    daily_qty: String,
-    #[serde(default)]
-    period: i32,
-}
 
 
 #[derive(Deserialize)]
@@ -2739,56 +2245,9 @@ struct SchedItem {
 }
 
 
-#[derive(Deserialize)]
-struct ScheduleReq {
-    items: Vec<SchedItem>,
-}
 
 
-#[derive(Deserialize)]
-struct ProdUpdateReq {
-    #[serde(default)]
-    qty: String,
-    /// 缺省=不变；传空串=清空计划日期
-    #[serde(default)]
-    plan_start: Option<String>,
-    #[serde(default)]
-    plan_end: Option<String>,
-    /// 缺省=不变
-    #[serde(default)]
-    memo: Option<String>,
-}
 
-
-#[derive(Deserialize)]
-struct ProdQcReq {
-    qty_insp: String,
-    #[serde(default)]
-    qty_fail: String,
-    #[serde(default)]
-    disposition: String,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct ProdActReq {
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    qty: String,
-}
-
-
-#[derive(Deserialize)]
-struct BomReq {
-    parent: String,
-    #[serde(default)]
-    children: Vec<BomChildReq>,
-}
 
 
 #[derive(Deserialize)]
@@ -2801,221 +2260,24 @@ struct BomChildReq {
 }
 
 
-#[derive(Deserialize)]
-struct BVersionReq {
-    pub key: String,
-    pub name: String,
-    #[serde(default)]
-    pub is_current: bool,
-    #[serde(default)]
-    pub memo: String,
-}
 
 
-#[derive(Deserialize)]
-struct BCopyReq {
-    pub from: String,
-    pub to: String,
-}
 
 
-#[derive(Deserialize)]
-struct ApprovalStartReq {
-    pub biz_kind: String,
-    pub biz_id: i64,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub approvers: Vec<String>,
-}
-
-
-#[derive(Deserialize)]
-struct ApprovalActReq {
-    pub approve: bool,
-    #[serde(default)]
-    pub comment: String,
-}
-
-
-#[derive(Deserialize)]
-struct NoteReq {
-    #[serde(default)]
-    pub id: i64,
-    pub report_key: String,
-    pub period: i32,
-    #[serde(default)]
-    pub seq: i32,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub content: String,
-}
-
-
-#[derive(Deserialize)]
-struct ArchiveReq {
-    pub period: i32,
-    pub kind: String,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub file_no: String,
-    pub payload: String,
-}
 
 
 // ---------------------------------------------------------------------------
 // 资金：票据 / 融资 / 资金日报 / 资金预测
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct BillReq {
-    #[serde(default)]
-    pub id: i64,
-    pub kind: String,
-    pub no: String,
-    pub period: i32,
-    pub issue_date: String,
-    pub due_date: String,
-    #[serde(default)]
-    pub counterpart: String,
-    #[serde(default)]
-    pub bank: String,
-    #[serde(default)]
-    pub amount: String,
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
-    pub memo: String,
-}
 
 
-#[derive(Deserialize)]
-struct BillTransitionReq {
-    pub status: String,
-    pub date: String,
-}
 
 
-#[derive(Deserialize)]
-struct LoanReq {
-    #[serde(default)]
-    pub id: i64,
-    pub kind: String,
-    pub no: String,
-    #[serde(default)]
-    pub bank: String,
-    #[serde(default)]
-    pub principal: String,
-    #[serde(default)]
-    pub rate_pct: String,
-    pub start_date: String,
-    pub end_date: String,
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
-    pub memo: String,
-}
 
 
-#[derive(Deserialize)]
-struct LoanSettleReq {
-    #[serde(default)]
-    date: Option<String>,
-}
 
 
-#[derive(Deserialize)]
-struct CashCountReq {
-    #[serde(default)]
-    id: i64,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    account_code: String,
-    #[serde(default)]
-    counted: String,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct DayClearReq {
-    #[serde(default)]
-    account_code: String,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    clear: bool,
-}
-
-
-#[derive(Deserialize)]
-struct CashShiftReq {
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    to_user: String,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct CheckReq {
-    #[serde(default)]
-    id: i64,
-    #[serde(default)]
-    no: String,
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    bank_account: String,
-    #[serde(default)]
-    payee: String,
-    #[serde(default)]
-    amount: String,
-    #[serde(default)]
-    issued_date: String,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct AdvanceReq {
-    #[serde(default)]
-    id: i64,
-    #[serde(default)]
-    no: String,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    employee: String,
-    #[serde(default)]
-    purpose: String,
-    #[serde(default)]
-    amount: String,
-    #[serde(default)]
-    pay_account: String,
-    #[serde(default)]
-    expense_account: String,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct AdvanceSettleReq {
-    #[serde(default)]
-    date: Option<String>,
-    #[serde(default)]
-    expense_account: String,
-    #[serde(default)]
-    expense_amount: String,
-}
 
 
 fn opt_body_date(body: &axum::body::Bytes) -> Result<Option<chrono::NaiveDate>, AppError> {
@@ -3038,28 +2300,6 @@ fn opt_body_date(body: &axum::body::Bytes) -> Result<Option<chrono::NaiveDate>, 
     }
 }
 
-
-#[derive(Deserialize)]
-struct ReceiptCreateReq {
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    fund_account: String,
-    #[serde(default)]
-    party: String,
-    #[serde(default)]
-    bank: String,
-    #[serde(default)]
-    cross_party: String,
-    #[serde(default)]
-    cross_amount: String,
-    #[serde(default)]
-    amount: String,
-    #[serde(default)]
-    memo: String,
-}
 
 
 // ---------------- 收付款单审核流 + 存货盘点 ----------------
@@ -3095,19 +2335,6 @@ fn require_fund_doc_gate(user: &CurrentUser) -> Result<(), AppError> {
 
 // ---------------- 资金调拨（账户间转账） ----------------
 
-#[derive(Deserialize)]
-struct TransferCreateReq {
-    #[serde(default)]
-    date: String,
-    pub from_account: String,
-    pub to_account: String,
-    #[serde(default)]
-    pub bank: String,
-    pub amount: String,
-    #[serde(default)]
-    pub memo: String,
-}
-
 
 #[derive(Deserialize)]
 struct CountLineInput {
@@ -3122,113 +2349,17 @@ struct CountLineInput {
 }
 
 
-#[derive(Deserialize)]
-struct CountReq {
-    #[serde(default)]
-    period: i32,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    warehouse: String,
-    #[serde(default)]
-    memo: String,
-    #[serde(default)]
-    lines: Vec<CountLineInput>,
-}
-
 
 // ---------------- 批次与库位（对标金蝶批号/保质期/货位） ----------------
 
-#[derive(Deserialize)]
-struct BatchRegisterReq {
-    #[serde(default)]
-    item: String,
-    #[serde(default)]
-    batch_no: String,
-    #[serde(default)]
-    production_date: String,
-    #[serde(default)]
-    warehouse: String,
-    #[serde(default)]
-    location: String,
-    #[serde(default)]
-    qty: String,
-    #[serde(default)]
-    direction: String,
-    #[serde(default)]
-    memo: String,
-}
 
 
-#[derive(Deserialize)]
-struct TransferReq {
-    #[serde(default)]
-    period: i32,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    item: String,
-    #[serde(default)]
-    batch_no: String,
-    #[serde(default)]
-    from_warehouse: String,
-    #[serde(default)]
-    to_warehouse: String,
-    #[serde(default)]
-    qty: String,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct FefoReq {
-    #[serde(default)]
-    item: String,
-    #[serde(default)]
-    qty: String,
-}
-
-
-#[derive(Deserialize)]
-struct LocationReq {
-    #[serde(default)]
-    code: String,
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    memo: String,
-}
 
 
 // ---------------------------------------------------------------------------
 // 成本：计价配置 + 期末结价
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
-struct CostMethodReq {
-    pub item: String,
-    #[serde(default)]
-    pub method: String,
-    #[serde(default)]
-    pub standard_cost: String,
-}
-
-
-#[derive(Deserialize)]
-struct SalesCostReq {
-    /// yyyymm，0/缺省 = 当前期间
-    #[serde(default)]
-    period: i32,
-    /// 计价方法 code（moving_average/fifo/…，缺省移动加权）
-    #[serde(default)]
-    method: String,
-    /// 结转日期，缺省 = 期间末日
-    #[serde(default)]
-    date: String,
-}
 
 
 // ---------------------------------------------------------------------------
@@ -3262,41 +2393,6 @@ fn asset_json(a: &findb::assets::Asset) -> serde_json::Value {
 }
 
 
-#[derive(Deserialize)]
-struct AssetReq {
-    #[serde(default)]
-    pub id: i64,
-    pub code: String,
-    pub name: String,
-    #[serde(default)]
-    pub category: String,
-    #[serde(default)]
-    pub spec: String,
-    #[serde(default)]
-    pub dept: String,
-    pub asset_account: String,
-    pub dep_account: String,
-    pub expense_account: String,
-    pub original_value: String,
-    /// 残值率按百分数录入（5 = 5%）
-    #[serde(default)]
-    pub residual_rate: String,
-    pub life_months: i32,
-    #[serde(default)]
-    pub method: String,
-    /// 启用期间 YYYYMM
-    pub start_period: i32,
-    #[serde(default)]
-    pub memo: String,
-}
-
-
-#[derive(Deserialize, Default)]
-struct AssetDisposeReq {
-    pub ymm: i32,
-    #[serde(default)]
-    pub amount: String,
-}
 
 
 fn asset_from_req(r: &AssetReq) -> Result<findb::assets::Asset, AppError> {
@@ -3348,15 +2444,6 @@ fn asset_from_req(r: &AssetReq) -> Result<findb::assets::Asset, AppError> {
 }
 
 
-#[derive(Deserialize)]
-struct AssetImpairReq {
-    #[serde(default)]
-    period: i32,
-    amount: String,
-    #[serde(default)]
-    memo: String,
-}
-
 
 #[derive(Deserialize)]
 struct AssetCountLineReq {
@@ -3368,17 +2455,6 @@ struct AssetCountLineReq {
     memo: String,
 }
 
-
-#[derive(Deserialize)]
-struct AssetCountReq {
-    #[serde(default)]
-    period: i32,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    memo: String,
-    lines: Vec<AssetCountLineReq>,
-}
 
 
 // ---------------------------------------------------------------------------
@@ -3434,35 +2510,8 @@ fn reconcile_json(r: &findb::bank::Reconciliation) -> serde_json::Value {
 }
 
 
-#[derive(Deserialize, Default)]
-struct BankImportReq {
-    pub ymm: i32,
-    pub account: String,
-    #[serde(default)]
-    pub text: String,
-}
 
 
-#[derive(Deserialize)]
-struct BankAutoReq {
-    pub ymm: i32,
-    pub account: String,
-    #[serde(default)]
-    pub tolerance: i64,
-}
-
-
-#[derive(Deserialize)]
-struct BankLinkReq {
-    pub stmt_id: i64,
-    pub entry_id: i64,
-}
-
-
-#[derive(Deserialize)]
-struct BankStmtIdReq {
-    pub stmt_id: i64,
-}
 
 
 // ---------------------------------------------------------------------------
@@ -3507,55 +2556,10 @@ fn open_entry_json(e: &findb::settle::OpenEntry) -> serde_json::Value {
 }
 
 
-#[derive(Deserialize, Default)]
-struct SettleAutoReq {
-    pub account: String,
-    #[serde(default)]
-    pub ymm: i32,
-    #[serde(default)]
-    pub tolerance: String,
-}
 
-
-#[derive(Deserialize)]
-struct SettleRunReq {
-    pub from_entry: i64,
-    pub to_entry: i64,
-    pub amount: String,
-    /// 差异（现金折扣 / 抹零）金额：> 0 时自动出一张差异凭证把零头记入损益
-    #[serde(default)]
-    pub diff: String,
-    /// 差异科目（如 660305 财务费用-其他 / 6711 营业外支出）；差异为 0 时可空
-    #[serde(default)]
-    pub diff_account: String,
-}
-
-
-#[derive(Deserialize)]
-struct UnsettleReq {
-    pub id: i64,
-    /// 只撤销这么多（缺省 = 整条撤销）。
-    ///
-    /// 核销三张单共 5 万，事后发现其中一张该是 3 万 —— 以前只能整条撤销再重录，
-    /// 撤销的瞬间三张单全变「未核销」，账龄立刻虚高。
-    #[serde(default)]
-    pub amount: Option<String>,
-}
 
 
 /// 通用往来互抵请求：借方挂账 + 贷方挂账，科目/往来单位可以不同
-#[derive(Deserialize)]
-struct SettleCrossReq {
-    /// 借方挂账分录（被冲减的应收 / 预付等）
-    pub debit_entry: i64,
-    /// 贷方挂账分录（被冲减的应付 / 预收等）
-    pub credit_entry: i64,
-    pub amount: String,
-    /// 过渡凭证日期（`YYYY-MM-DD`，缺省今天）
-    #[serde(default)]
-    pub date: String,
-}
-
 
 /// 核销「未核销清单」默认返回多少行、最多多少行。
 ///
@@ -3566,49 +2570,9 @@ struct SettleCrossReq {
 
 // ---------------- 往来对冲单（应收 ↔ 应付相互抵销） ----------------
 
-#[derive(Deserialize)]
-struct OffsetCreateReq {
-    #[serde(default)]
-    date: String,
-    pub customer: String,
-    pub supplier: String,
-    #[serde(default)]
-    pub ar_account: String,
-    #[serde(default)]
-    pub ap_account: String,
-    pub amount: String,
-    #[serde(default)]
-    pub memo: String,
-}
-
 
 // ---- 往来对账单（对标金蝶「客户对账单」：按期间出账单 + 客户回签确认）----
 
-#[derive(Deserialize)]
-struct StatementReq {
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    account: String,
-    party_code: String,
-    #[serde(default)]
-    party_name: String,
-    /// 起始期间 ymm
-    from: i32,
-    /// 截止期间 ymm
-    to: i32,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct StatementStatusReq {
-    status: String,
-    /// 回签确认人（confirmed 时必填，用于留痕"谁替客户签的"）
-    #[serde(default)]
-    confirmed_by: String,
-}
 
 
 fn statement_json(s: &findb::statement::Statement) -> serde_json::Value {
@@ -3649,26 +2613,6 @@ fn statement_json(s: &findb::statement::Statement) -> serde_json::Value {
 
 // ---- 催款单 / 对账函（应收催收闭环） ----
 
-#[derive(Deserialize)]
-struct DunningReq {
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    account: String,
-    party_code: String,
-    #[serde(default)]
-    party_name: String,
-    #[serde(default)]
-    date: String,
-    #[serde(default)]
-    memo: String,
-}
-
-
-#[derive(Deserialize)]
-struct DunningStatusReq {
-    status: String,
-}
 
 
 // ---------------------------------------------------------------------------
@@ -3845,13 +2789,6 @@ struct BeginRowInput {
 }
 
 
-#[derive(Deserialize)]
-struct AccountReq {
-    account: Account,
-    #[serde(default)]
-    aux_kinds: Vec<String>,
-}
-
 
 /// 前端传辅助核算维度的 kind 字符串列表（如 ["customer","project"]），
 /// 由后端统一转成 AuxMask 位掩码，避免前端依赖位序。
@@ -3879,37 +2816,12 @@ fn build_aux_mask(kinds: &[String]) -> AuxMask {
 ///
 /// 保留 `#[serde(untagged)]` 的裸数组分支：老客户端与既有集成测试仍在发裸数组，
 /// 改成只认对象会让它们全部 422。
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum BeginSaveReq {
-    Wrapped {
-        #[serde(default)]
-        rows: Vec<BeginRowInput>,
-        #[serde(default)]
-        delete_ids: Vec<i64>,
-    },
-    Rows(Vec<BeginRowInput>),
-}
-
 
 // ---------------- 期初余额批量粘贴 ----------------
 
 /// 解析请求
-#[derive(Deserialize)]
-struct BeginBatchParseReq {
-    text: String,
-}
-
 
 /// 导入请求（前端回传确认过的行）
-#[derive(Deserialize)]
-struct BeginBatchImportReq {
-    rows: Vec<BeginBatchRow>,
-    /// 前端草稿里已有的行也要避开 —— 与桌面的 `existing` 口径一致
-    #[serde(default)]
-    existing: Vec<String>,
-}
-
 
 #[derive(Deserialize, serde::Serialize, Clone)]
 struct BeginBatchRow {
@@ -3951,11 +2863,6 @@ fn chart_ctx(
 
 
 // ---------------- 备份 / 恢复 ----------------
-#[derive(Deserialize)]
-struct BackupRestoreReq {
-    file: String,
-}
-
 
 /// 强制把 WAL 合并回主文件（TRUNCATE），使文件级复制（`fs::copy`）拿到一致快照。
 ///
@@ -4036,36 +2943,9 @@ fn backup_belongs_to(name: &str, key: &str) -> bool {
 }
 
 
-#[derive(Deserialize)]
-struct TemplateGenerateReq {
-    /// 期间 ymm，如 202601，缺省当前期间
-    #[serde(default)]
-    period: Option<i32>,
-    /// 凭证日期，缺省期间末日
-    #[serde(default)]
-    date: String,
-}
-
-
-#[derive(Deserialize)]
-struct ItemPlanReq {
-    #[serde(default)]
-    item_code: String,
-    #[serde(default)]
-    safety_stock: String,
-    #[serde(default)]
-    lead_days: i32,
-    #[serde(default)]
-    lot_size: String,
-}
 
 
 /// 预置档案端点的入参：只要类别
-#[derive(serde::Deserialize)]
-struct KindReq {
-    kind: AuxKind,
-}
-
 
 /// `?kind=` 查询串。
 ///
@@ -4075,32 +2955,10 @@ struct KindReq {
 /// 提示区空白，整条预置链路静默消失，而且**编译期和 Rust 测试都发现不了**
 /// （E2E 才暴露）。这是「参数从 URL 进来」比「从 body 进来」更危险的地方：
 /// body 少字段会 422，query 少字段也会 422，两者都很难在本地顺手测到。
-#[derive(serde::Deserialize, Default)]
-struct KindQuery {
-    #[serde(default)]
-    kind: String,
-}
-
 
 /// 辅助档案批量粘贴：解析（预览）
-#[derive(Deserialize)]
-struct AuxBatchParseReq {
-    kind: AuxKind,
-    text: String,
-}
-
 
 /// 辅助档案批量粘贴：真正落库
-#[derive(Deserialize)]
-struct AuxBatchImportReq {
-    kind: AuxKind,
-    /// 只导入前端回传的这些行。**不接受「重新解析一遍文本」**：
-    /// 用户在预览之后可能改过文本（比如去掉一行），若后端重新解析，
-    /// 实际导入的就不是他看到并确认过的那批 —— 正是「确认了 A 写进去 B」
-    /// 这类最难查的错。
-    rows: Vec<AuxBatchRow>,
-}
-
 
 #[derive(Deserialize, serde::Serialize, Clone)]
 struct AuxBatchRow {
@@ -4118,17 +2976,6 @@ struct AuxBatchRow {
 
 
 /// 解析结果里的一行（给前端渲染预览表格）
-#[derive(serde::Serialize)]
-struct AuxBatchRowView {
-    code: String,
-    name: String,
-    /// None = 可导入；Some = 跳过原因（中文文案）
-    skip: Option<String>,
-    parent_code: Option<String>,
-    memo: String,
-    disabled: bool,
-}
-
 
 // ===========================================================================
 // 工资管理（对齐桌面端 finui：工资表 / 个税明细 / 凭证生成，入口权限 VoucherNew）
@@ -4151,29 +2998,6 @@ fn req_date(s: &str, fallback: NaiveDate) -> Result<NaiveDate, AppError> {
         .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))
 }
 
-
-#[derive(Deserialize)]
-struct PayrollInput {
-    employee: String,
-    #[serde(default)]
-    dept: String,
-    gross: String,
-    #[serde(default)]
-    social: String,
-    #[serde(default)]
-    housing: String,
-    #[serde(default)]
-    deduction: String,
-    /// 专项附加扣除
-    #[serde(default)]
-    additional: String,
-    #[serde(default)]
-    social_co: String,
-    #[serde(default)]
-    housing_co: String,
-    #[serde(default)]
-    memo: String,
-}
 
 
 /// 工资行的数据范围过滤（列表 / 导出 / 银行代发 / 个税申报表共用，避免各处漏抄）
@@ -4198,45 +3022,8 @@ fn employee_bank(db: &findb::Db, code: &str) -> Result<(String, String), AppErro
 }
 
 
-#[derive(Deserialize)]
-struct GeneratePayrollReq {
-    #[serde(default)]
-    period: Option<String>,
-    rows: Vec<PayrollInput>,
-}
 
 
-#[derive(Deserialize)]
-struct PayrollAccrueReq {
-    #[serde(default)]
-    date: String,
-    expense: String,
-    wage_payable: String,
-    social_payable: String,
-    housing_payable: String,
-}
-
-
-#[derive(Deserialize)]
-struct PayrollSocialReq {
-    #[serde(default)]
-    date: String,
-    social_payable: String,
-    housing_payable: String,
-    personal_payable: String,
-    bank_account: String,
-}
-
-
-#[derive(Deserialize)]
-struct PayrollPayReq {
-    #[serde(default)]
-    date: String,
-    payable_account: String,
-    bank_account: String,
-    tax_account: String,
-    social_account: String,
-}
 
 
 // ===========================================================================
@@ -4252,22 +3039,6 @@ struct ClaimItemInput {
 }
 
 
-#[derive(Deserialize)]
-struct ClaimInput {
-    /// 期间 ymm，如 202601
-    #[serde(default)]
-    period: Option<i32>,
-    /// 业务日期 YYYY-MM-DD
-    biz_date: String,
-    applicant: String,
-    #[serde(default)]
-    dept: String,
-    reason: String,
-    amount: String,
-    #[serde(default)]
-    items: Vec<ClaimItemInput>,
-}
-
 
 fn claim_items(items: &[ClaimItemInput]) -> Result<Vec<business::ClaimItem>, AppError> {
     let mut out = Vec::with_capacity(items.len());
@@ -4282,18 +3053,6 @@ fn claim_items(items: &[ClaimItemInput]) -> Result<Vec<business::ClaimItem>, App
 }
 
 
-#[derive(Deserialize)]
-struct ClaimTransitionReq {
-    /// draft / submitted / approved / rejected / paid
-    status: String,
-}
-
-
-#[derive(Deserialize)]
-struct ClaimVoucherReq {
-    /// 贷方支付科目（如 100201 银行存款）
-    pay_account: String,
-}
 
 
 // ---------------------------------------------------------------------------
@@ -4356,14 +3115,6 @@ fn build_xlsx(sheets: &[crate::xlsxout::Sheet], filename: &str, bytes_hint: &str
 
 
 /// 三大报表 + 所有者权益变动表的导出目标
-#[derive(Clone, Copy)]
-enum StatementKind {
-    BalanceSheet,
-    Income,
-    CashFlow,
-    Equity,
-}
-
 
 impl StatementKind {
     fn filename(self) -> &'static str {
@@ -4614,39 +3365,7 @@ async fn sheet_upload(mut multipart: axum::extract::Multipart) -> Result<Vec<u8>
 ///
 /// 金额一律给**字符串**（`fmt_plain`）：前端直接显示，不做二次格式化 ——
 /// 对账页上一个千分位错位就会让人怀疑是数字错了，而它只是显示问题。
-#[derive(serde::Serialize)]
-struct ReconcileSheetDto {
-    label: String,
-    rows: usize,
-    total: String,
-    hint: String,
-}
 
-
-#[derive(serde::Serialize)]
-struct ReconcileCheckDto {
-    name: String,
-    ok: bool,
-    detail: String,
-}
-
-
-#[derive(serde::Serialize)]
-struct ReconcileDto {
-    /// 全部校验通过且不空
-    ok: bool,
-    one_liner: String,
-    empty: bool,
-    sheets: Vec<ReconcileSheetDto>,
-    debit_total: String,
-    credit_total: String,
-    balanced: bool,
-    asset_total: String,
-    liab_total: String,
-    equity_total: String,
-    checks: Vec<ReconcileCheckDto>,
-    issues: Vec<String>,
-}
 
 
 #[cfg(test)]
