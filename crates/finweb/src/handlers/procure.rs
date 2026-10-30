@@ -623,7 +623,6 @@ pub(super) async fn price_history_ep(
     })))
 }
 
-
 pub(super) async fn add_estimate(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -659,7 +658,6 @@ pub(super) async fn add_estimate(
     ))
 }
 
-
 pub(super) async fn list_estimates(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -678,7 +676,6 @@ pub(super) async fn list_estimates(
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
-
 // ---- 采购/销售全生命周期：请购 / 报价 / 到货 / 发货 / 付款 / 收款 / 退货 / 信用 ----
 
 pub(super) async fn list_purchase_req(
@@ -695,7 +692,6 @@ pub(super) async fn list_purchase_req(
     let rows = findb::procurement::pr_list(&db, period)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
-
 
 pub(super) async fn save_purchase_req(
     State(state): State<Arc<WebState>>,

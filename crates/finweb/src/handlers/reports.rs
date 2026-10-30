@@ -733,7 +733,13 @@ pub(super) async fn print_balance_sheet(
             Box::new(fincore::report::to_begin),
         ],
     )?;
-    let html = crate::report_html::report_table_html(&t, &user.company, "元", &print_opts_from_q(db.options().print, &q), can_edit);
+    let html = crate::report_html::report_table_html(
+        &t,
+        &user.company,
+        "元",
+        &print_opts_from_q(db.options().print, &q),
+        can_edit,
+    );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -838,7 +844,13 @@ pub(super) async fn print_equity_statement(
     let (from, to) = report_range(&state, &user, &q)?;
     let stmt = findb::reports::equity_statement(&db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
-    let html = crate::report_html::equity_html(&stmt, &user.company, &subtitle, &print_opts_from_q(db.options().print, &q), can_edit);
+    let html = crate::report_html::equity_html(
+        &stmt,
+        &user.company,
+        &subtitle,
+        &print_opts_from_q(db.options().print, &q),
+        can_edit,
+    );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
@@ -890,7 +902,6 @@ pub(super) async fn export_equity_xlsx(
     export_statement_xlsx(&state, &user, &q, StatementKind::Equity)
 }
 
-
 /// 预算行列表（当前激活版本）
 pub(super) async fn list_budget_rows(
     State(state): State<Arc<WebState>>,
@@ -921,7 +932,6 @@ pub(super) async fn list_budget_rows(
         "rows": rows,
     })))
 }
-
 
 /// 新增/修改预算行（按 期间+科目+部门+版本 upsert；版本 = 当前激活版本）
 pub(super) async fn save_budget_row(
@@ -969,7 +979,6 @@ pub(super) async fn save_budget_row(
     Ok(Json(json!({ "ok": true, "id": id })))
 }
 
-
 /// 结转损益：生成一张把损益类科目净额转入「本年利润」的凭证
 pub(super) async fn period_carry_forward(
     State(state): State<Arc<WebState>>,
@@ -992,7 +1001,9 @@ pub(super) async fn period_carry_forward(
     let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
     let rows = snap.carry_forward_rows(&chart);
     if rows.is_empty() {
-        return Err(AppError::bad_request("本期损益类（含成本类）科目没有发生额，无需结转"));
+        return Err(AppError::bad_request(
+            "本期损益类（含成本类）科目没有发生额，无需结转",
+        ));
     }
     // 已结转过就先说清楚，不要让用户对着「没有可结转的分录」去猜。
     //
@@ -1042,7 +1053,6 @@ pub(super) async fn period_carry_forward(
     Ok(Json(json!({ "id": id, "voucher_no": v.voucher_no() })))
 }
 
-
 pub(super) async fn export_trial_balance(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1065,7 +1075,6 @@ pub(super) async fn export_trial_balance(
     )
         .into_response())
 }
-
 
 /// 科目余额表导出 PDF（仅管理员与财务主管）
 pub(super) async fn export_trial_balance_pdf(
@@ -1093,7 +1102,6 @@ pub(super) async fn export_trial_balance_pdf(
         .into_response())
 }
 
-
 pub(super) async fn list_custom_reports(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1106,7 +1114,6 @@ pub(super) async fn list_custom_reports(
         .collect();
     Ok(Json(rows))
 }
-
 
 pub(super) async fn save_custom_report(
     State(state): State<Arc<WebState>>,
@@ -1152,7 +1159,6 @@ pub(super) async fn save_custom_report(
     Ok(Json(json!({ "key": key, "errors": errors })))
 }
 
-
 pub(super) async fn delete_custom_report(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1164,7 +1170,6 @@ pub(super) async fn delete_custom_report(
     db.log(user.username(), "报表", "删除自定义报表", &key)?;
     Ok(Json(json!({ "ok": true })))
 }
-
 
 // ---- 预算版本 ----
 
@@ -1180,7 +1185,6 @@ pub(super) async fn list_budget_versions(
         serde_json::json!({ "versions": versions, "current": current }),
     ))
 }
-
 
 // 预算版本 / 审批流 / 报表附注 / 会计档案的写操作统一要求 Perm::AccountEdit，
 // 与其余业务写路由保持一致。不要用 Perm::Report 把关：Report 是只读权限，
@@ -1205,7 +1209,6 @@ pub(super) async fn save_budget_version(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
-
 pub(super) async fn delete_budget_version(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1216,7 +1219,6 @@ pub(super) async fn delete_budget_version(
     advanced::bversion_delete(&db, &key)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
-
 
 pub(super) async fn activate_budget_version(
     State(state): State<Arc<WebState>>,
@@ -1233,7 +1235,6 @@ pub(super) async fn activate_budget_version(
     advanced::bversion_save(&db, &v)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
-
 
 pub(super) async fn print_income_statement(
     State(state): State<Arc<WebState>>,
@@ -1253,10 +1254,15 @@ pub(super) async fn print_income_statement(
         to,
         vec![Box::new(fincore::report::identity), Box::new(to_ytd)],
     )?;
-    let html = crate::report_html::report_table_html(&t, &user.company, "元", &print_opts_from_q(db.options().print, &q), can_edit);
+    let html = crate::report_html::report_table_html(
+        &t,
+        &user.company,
+        "元",
+        &print_opts_from_q(db.options().print, &q),
+        can_edit,
+    );
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
-
 
 pub(super) async fn update_template(
     State(state): State<Arc<WebState>>,
@@ -1273,7 +1279,6 @@ pub(super) async fn update_template(
     Ok(Json(json!({"ok": true})))
 }
 
-
 pub(super) async fn delete_template(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1285,7 +1290,6 @@ pub(super) async fn delete_template(
     db.log(user.username(), "凭证模板", "删除模板", &id.to_string())?;
     Ok(Json(json!({"ok": true})))
 }
-
 
 pub(super) async fn export_income_statement_xlsx(
     State(state): State<Arc<WebState>>,

@@ -24,9 +24,9 @@
 
 use fincore::account::Account;
 use fincore::balance::{BalanceRow, TrialBalance};
-use fincore::Money;
 use fincore::report::ReportTable;
 use fincore::AuxEntity;
+use fincore::Money;
 use findb::balances::BeginRow;
 
 use crate::xlsxout::{ColFmt, Sheet};
@@ -69,49 +69,48 @@ pub fn aux_sheet(rows: &[AuxEntity], kind_label: &str) -> Sheet {
     let mut extra: Vec<(&str, fn(&AuxEntity) -> String)> = Vec::new();
     match kind {
         Some(fincore::AuxKind::Customer) | Some(fincore::AuxKind::Supplier) => {
-            extra.push((
-                "税点%",
-                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::TAX_RATE).cloned().unwrap_or_default(),
-            ));
-            extra.push((
-                "开票情况",
-                |e: &AuxEntity| {
-                    fincore::auxiliary::tax_policy_label(
-                        e.prop(fincore::auxiliary::prop::TAX_RATE_POLICY)
-                            .map(|s| s.as_str())
-                            .unwrap_or(""),
-                    )
-                    .to_string()
-                },
-            ));
-            extra.push((
-                "信用额度",
-                |e: &AuxEntity| {
-                    e.prop(fincore::auxiliary::prop::CREDIT_LIMIT).cloned().unwrap_or_default()
-                },
-            ));
+            extra.push(("税点%", |e: &AuxEntity| {
+                e.prop(fincore::auxiliary::prop::TAX_RATE)
+                    .cloned()
+                    .unwrap_or_default()
+            }));
+            extra.push(("开票情况", |e: &AuxEntity| {
+                fincore::auxiliary::tax_policy_label(
+                    e.prop(fincore::auxiliary::prop::TAX_RATE_POLICY)
+                        .map(|s| s.as_str())
+                        .unwrap_or(""),
+                )
+                .to_string()
+            }));
+            extra.push(("信用额度", |e: &AuxEntity| {
+                e.prop(fincore::auxiliary::prop::CREDIT_LIMIT)
+                    .cloned()
+                    .unwrap_or_default()
+            }));
         }
         Some(fincore::AuxKind::Bank) => {
-            extra.push((
-                "开户行",
-                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::BANK_NAME).cloned().unwrap_or_default(),
-            ));
-            extra.push((
-                "银行账号",
-                |e: &AuxEntity| {
-                    e.prop(fincore::auxiliary::prop::BANK_ACCOUNT).cloned().unwrap_or_default()
-                },
-            ));
+            extra.push(("开户行", |e: &AuxEntity| {
+                e.prop(fincore::auxiliary::prop::BANK_NAME)
+                    .cloned()
+                    .unwrap_or_default()
+            }));
+            extra.push(("银行账号", |e: &AuxEntity| {
+                e.prop(fincore::auxiliary::prop::BANK_ACCOUNT)
+                    .cloned()
+                    .unwrap_or_default()
+            }));
         }
         Some(fincore::AuxKind::Item) => {
-            extra.push((
-                "规格型号",
-                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::SPEC).cloned().unwrap_or_default(),
-            ));
-            extra.push((
-                "计量单位",
-                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::UNIT).cloned().unwrap_or_default(),
-            ));
+            extra.push(("规格型号", |e: &AuxEntity| {
+                e.prop(fincore::auxiliary::prop::SPEC)
+                    .cloned()
+                    .unwrap_or_default()
+            }));
+            extra.push(("计量单位", |e: &AuxEntity| {
+                e.prop(fincore::auxiliary::prop::UNIT)
+                    .cloned()
+                    .unwrap_or_default()
+            }));
         }
         _ => {}
     }
@@ -166,14 +165,24 @@ pub fn items_sheet(rows: &[AuxEntity], safety: &dyn Fn(&str) -> Option<Money>) -
                 e.props.get("shelf_life_days").cloned().unwrap_or_default(),
                 safety(&e.code).map(|m| m.fmt_plain()).unwrap_or_default(),
                 e.memo.clone(),
-                e.prop(fincore::auxiliary::prop::UNIT).cloned().unwrap_or_default(),
+                e.prop(fincore::auxiliary::prop::UNIT)
+                    .cloned()
+                    .unwrap_or_default(),
                 if e.disabled { "停用" } else { "启用" }.to_string(),
             ]
         })
         .collect();
     Sheet::plain(
         "存货档案",
-        &["编码", "名称", "保质期天", "安全库存", "备注", "计量单位", "状态"],
+        &[
+            "编码",
+            "名称",
+            "保质期天",
+            "安全库存",
+            "备注",
+            "计量单位",
+            "状态",
+        ],
         &[T, T, I, M, T, T, T],
     )
     .with_rows(body)
@@ -420,7 +429,6 @@ fn sheet_name_of(title: &str) -> String {
 #[cfg(test)]
 mod tests {
 
-
     /// 对比表：上期有、本期没有的项目不能消失
     ///
     /// 「上个月买了设备、这个月没买」正是同比最该看见的事。按本期循环一遍就收工，
@@ -456,9 +464,21 @@ mod tests {
             vec![line("0202", "购建固定资产支付的现金", "500")],
         );
         let sh = cash_flow_compare_sheet(&cur, &prev, "本期", "上期");
-        let flat: String = sh.rows.iter().flatten().cloned().collect::<Vec<String>>().join("|");
-        assert!(flat.contains("购建固定资产"), "上期独有的投资活动被吞了：{flat}");
-        assert!(flat.contains("（上期有）"), "要标出来这是上期才有的事：{flat}");
+        let flat: String = sh
+            .rows
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<Vec<String>>()
+            .join("|");
+        assert!(
+            flat.contains("购建固定资产"),
+            "上期独有的投资活动被吞了：{flat}"
+        );
+        assert!(
+            flat.contains("（上期有）"),
+            "要标出来这是上期才有的事：{flat}"
+        );
         assert!(flat.contains("销售商品收到的现金"), "两期都有的项目");
     }
 
@@ -499,7 +519,13 @@ mod tests {
             .iter()
             .find(|s| s.name == "③ 账户余额")
             .expect("应有账户余额这张纸");
-        let bal_flat: String = bal.rows.iter().flatten().cloned().collect::<Vec<String>>().join("\u{1f}");
+        let bal_flat: String = bal
+            .rows
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<Vec<String>>()
+            .join("\u{1f}");
         assert!(
             !bal_flat.contains("应收账款"),
             "1122 的余额由客户应收那张纸生成，再让人填一遍会双计"
@@ -542,10 +568,7 @@ mod tests {
         let mut e = AuxEntity::new(fincore::AuxKind::Customer, "C001", "客户甲");
         e.parent_code = Some("C00".into());
         e.disabled = true;
-        e.set_prop(
-            fincore::auxiliary::prop::TAX_RATE,
-            String::from("13"),
-        );
+        e.set_prop(fincore::auxiliary::prop::TAX_RATE, String::from("13"));
         e.set_prop(
             fincore::auxiliary::prop::TAX_RATE_POLICY,
             String::from("sometimes"),
@@ -554,7 +577,14 @@ mod tests {
         assert_eq!(
             s.headers,
             vec![
-                "类型", "编码", "名称", "备注", "上级编码", "状态", "税点%", "开票情况",
+                "类型",
+                "编码",
+                "名称",
+                "备注",
+                "上级编码",
+                "状态",
+                "税点%",
+                "开票情况",
                 "信用额度"
             ]
         );
@@ -570,7 +600,15 @@ mod tests {
         let s = items_sheet(&[e], &|_| None);
         assert_eq!(
             s.headers,
-            vec!["编码", "名称", "保质期天", "安全库存", "备注", "计量单位", "状态"]
+            vec![
+                "编码",
+                "名称",
+                "保质期天",
+                "安全库存",
+                "备注",
+                "计量单位",
+                "状态"
+            ]
         );
     }
 
@@ -701,43 +739,62 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 /// 现金流量表：项目 | 流入 | 流出 | 净额
-pub fn cash_flow_sheet(
-    cf: &fincore::report::cashflow::CashFlowStatement,
-    subtitle: &str,
-) -> Sheet {
+pub fn cash_flow_sheet(cf: &fincore::report::cashflow::CashFlowStatement, subtitle: &str) -> Sheet {
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut emphasis: Vec<usize> = Vec::new();
 
-    let push_section =
-        |rows: &mut Vec<Vec<String>>,
-         emphasis: &mut Vec<usize>,
-         title: &str,
-         lines: &[fincore::report::cashflow::CashFlowLine],
-         net: &Money| {
-            emphasis.push(rows.len());
-            rows.push(vec![title.to_string(), String::new(), String::new(), String::new()]);
-            for l in lines {
-                rows.push(vec![
-                    format!("　{}", l.name),
-                    l.inflow.fmt_plain(),
-                    l.outflow.fmt_plain(),
-                    l.net.fmt_plain(),
-                ]);
-            }
-            emphasis.push(rows.len());
+    let push_section = |rows: &mut Vec<Vec<String>>,
+                        emphasis: &mut Vec<usize>,
+                        title: &str,
+                        lines: &[fincore::report::cashflow::CashFlowLine],
+                        net: &Money| {
+        emphasis.push(rows.len());
+        rows.push(vec![
+            title.to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ]);
+        for l in lines {
             rows.push(vec![
-                format!("{title}小计"),
-                String::new(),
-                String::new(),
-                net.fmt_plain(),
+                format!("　{}", l.name),
+                l.inflow.fmt_plain(),
+                l.outflow.fmt_plain(),
+                l.net.fmt_plain(),
             ]);
-            // 分组之间空一行，打印出来能断开
-            rows.push(Vec::new());
-        };
+        }
+        emphasis.push(rows.len());
+        rows.push(vec![
+            format!("{title}小计"),
+            String::new(),
+            String::new(),
+            net.fmt_plain(),
+        ]);
+        // 分组之间空一行，打印出来能断开
+        rows.push(Vec::new());
+    };
 
-    push_section(&mut rows, &mut emphasis, "一、经营活动产生的现金流量", &cf.operating, &cf.operating_net);
-    push_section(&mut rows, &mut emphasis, "二、投资活动产生的现金流量", &cf.investing, &cf.investing_net);
-    push_section(&mut rows, &mut emphasis, "三、筹资活动产生的现金流量", &cf.financing, &cf.financing_net);
+    push_section(
+        &mut rows,
+        &mut emphasis,
+        "一、经营活动产生的现金流量",
+        &cf.operating,
+        &cf.operating_net,
+    );
+    push_section(
+        &mut rows,
+        &mut emphasis,
+        "二、投资活动产生的现金流量",
+        &cf.investing,
+        &cf.investing_net,
+    );
+    push_section(
+        &mut rows,
+        &mut emphasis,
+        "三、筹资活动产生的现金流量",
+        &cf.financing,
+        &cf.financing_net,
+    );
     // 上面每个分组末尾塞了一个空行，最后那个多余的去掉
     if rows.last().map(|r| r.is_empty()).unwrap_or(false) {
         rows.pop();
@@ -846,7 +903,12 @@ pub fn cash_flow_compare_sheet(
                           title: &str,
                           a: &[fincore::report::cashflow::CashFlowLine],
                           b: &[fincore::report::cashflow::CashFlowLine]| {
-        rows.push(vec![title.to_string(), String::new(), String::new(), String::new()]);
+        rows.push(vec![
+            title.to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ]);
         emphasis.push(rows.len() - 1);
         // 以本期出现的项目为主序，上期有而本期没有的补在后面 —— 不能只按本期循环，
         // 否则「上期买过设备、这期没买」这件事在对比表里会凭空消失

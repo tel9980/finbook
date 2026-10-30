@@ -32,7 +32,10 @@ fn cache_control(h: &header::HeaderMap) -> String {
         .to_string()
 }
 
-async fn get(state: std::sync::Arc<finweb::state::WebState>, uri: &str) -> axum::response::Response {
+async fn get(
+    state: std::sync::Arc<finweb::state::WebState>,
+    uri: &str,
+) -> axum::response::Response {
     handlers::router(state)
         .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
         .await

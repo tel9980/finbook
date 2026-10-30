@@ -53,7 +53,10 @@ async fn partial_unsettle_rejects_a_bad_amount_before_touching_the_db() {
     .await;
     assert_eq!(code, StatusCode::BAD_REQUEST, "实际 {code} {body}");
     assert!(body.contains("不是合法金额"), "body={body}");
-    assert!(body.contains("5万"), "错误信息里要带上用户填的原值，body={body}");
+    assert!(
+        body.contains("5万"),
+        "错误信息里要带上用户填的原值，body={body}"
+    );
 }
 
 /// 空串等价于「没填」——整条撤销。
@@ -73,5 +76,8 @@ async fn blank_amount_means_full_unsettle() {
         !body.contains("不是合法金额"),
         "空串不该被当成非法金额，body={body}"
     );
-    assert!(body.contains("核销记录"), "应当落到「记录不存在」，实际 {code} {body}");
+    assert!(
+        body.contains("核销记录"),
+        "应当落到「记录不存在」，实际 {code} {body}"
+    );
 }

@@ -13,7 +13,11 @@ use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-async fn get_json(state: &Arc<finweb::state::WebState>, sid: &str, uri: &str) -> (StatusCode, Value) {
+async fn get_json(
+    state: &Arc<finweb::state::WebState>,
+    sid: &str,
+    uri: &str,
+) -> (StatusCode, Value) {
     let resp = finweb::handlers::router(state.clone())
         .oneshot(authed_get(uri, sid))
         .await
@@ -46,7 +50,14 @@ async fn wizard_lists_every_step_in_order() {
         .collect();
     assert_eq!(
         codes,
-        vec!["sequence", "unposted", "trial", "carry", "cost", "negative_cash"],
+        vec![
+            "sequence",
+            "unposted",
+            "trial",
+            "carry",
+            "cost",
+            "negative_cash"
+        ],
         "步骤清单变了就要同步改界面与文档"
     );
     for c in &codes {
@@ -59,7 +70,10 @@ async fn wizard_lists_every_step_in_order() {
     }
     assert_eq!(wiz["can_close"], true, "空账套第一期应当可以结账：{wiz}");
     assert_eq!(wiz["closed"], false);
-    assert_eq!(wiz["period"], "2026-01", "period 用 YYYY-MM（与 precheck 一致）");
+    assert_eq!(
+        wiz["period"], "2026-01",
+        "period 用 YYYY-MM（与 precheck 一致）"
+    );
 }
 
 /// 存一张草稿凭证 → 「凭证全部记账」这一步必须变为未完成，且 can_close 变 false
@@ -84,7 +98,10 @@ async fn draft_voucher_blocks_closing() {
     let (code, wiz) = get_json(&state, &sid, "/api/periods/202601/wizard").await;
     assert_eq!(code, StatusCode::OK);
     let unposted = step(&wiz, "unposted");
-    assert_eq!(unposted["ok"], false, "草稿凭证没记账，这一步不该打勾：{unposted}");
+    assert_eq!(
+        unposted["ok"], false,
+        "草稿凭证没记账，这一步不该打勾：{unposted}"
+    );
     assert_eq!(unposted["blocking"], true);
     assert_eq!(wiz["can_close"], false, "有未记账凭证就不能结账：{wiz}");
 }

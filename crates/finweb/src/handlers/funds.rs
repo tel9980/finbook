@@ -905,7 +905,6 @@ pub(super) async fn clear_bank(
     Ok(Json(json!({ "removed": n })))
 }
 
-
 pub(super) async fn list_cash_counts(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -916,7 +915,6 @@ pub(super) async fn list_cash_counts(
         serde_json::json!({ "rows": findb::funds::cash_count_list(&*db)? }),
     ))
 }
-
 
 /// 新增/修改现金盘点：账面余额与差异由服务端按资金日报（按日）口径重算
 pub(super) async fn save_cash_count(
@@ -972,7 +970,6 @@ pub(super) async fn save_cash_count(
     })))
 }
 
-
 /// 盘盈盘亏差异生成凭证
 pub(super) async fn cash_count_voucher(
     State(state): State<Arc<WebState>>,
@@ -991,7 +988,6 @@ pub(super) async fn cash_count_voucher(
     Ok(Json(json!({ "ok": true, "id": vid })))
 }
 
-
 /// 交接班列表（只读，财务报表权限）
 pub(super) async fn list_cash_shifts(
     State(state): State<Arc<WebState>>,
@@ -1008,7 +1004,6 @@ pub(super) async fn list_cash_shifts(
         json!({ "rows": findb::funds::cash_shift_list(&db, limit)? }),
     ))
 }
-
 
 /// 新建交班单：快照当日现金/银行结存、在库票据、未日清账户（服务端计算）
 pub(super) async fn create_cash_shift(
@@ -1050,7 +1045,6 @@ pub(super) async fn create_cash_shift(
     Ok(Json(json!({ "ok": true, "id": id, "shift": s })))
 }
 
-
 /// 日清日期查询：?account=&from=YYYY-MM-DD&to=YYYY-MM-DD（缺省 today~today）
 pub(super) async fn list_day_clear(
     State(state): State<Arc<WebState>>,
@@ -1079,7 +1073,6 @@ pub(super) async fn list_day_clear(
     let dates = findb::funds::day_clear_dates(&db, &account, from, to)?;
     Ok(Json(json!({ "dates": dates })))
 }
-
 
 /// 日清标记 / 取消
 pub(super) async fn set_day_clear(
@@ -1110,7 +1103,6 @@ pub(super) async fn set_day_clear(
     Ok(Json(json!({ "ok": true })))
 }
 
-
 pub(super) async fn list_receipts(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1119,7 +1111,6 @@ pub(super) async fn list_receipts(
     let db = &user.db;
     Ok(Json(json!({ "rows": findb::receipt::receipt_list(&*db)? })))
 }
-
 
 /// 新增收付款单：同事务生成资金凭证 + FIFO 自动核销（对标金蝶收款单/付款单）
 pub(super) async fn create_receipt(
@@ -1172,7 +1163,6 @@ pub(super) async fn create_receipt(
     Ok(Json(json!({ "ok": true, "id": id, "status": "draft" })))
 }
 
-
 pub(super) async fn list_transfers(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1183,7 +1173,6 @@ pub(super) async fn list_transfers(
         json!({ "rows": findb::transfer::transfer_list(&*db)? }),
     ))
 }
-
 
 /// 新增资金调拨单：只落草稿单据；凭证在「审核」时生成（对标金蝶录单 → 审核）
 pub(super) async fn create_transfer(
@@ -1223,7 +1212,6 @@ pub(super) async fn create_transfer(
     )?;
     Ok(Json(json!({ "ok": true, "id": id, "status": "draft" })))
 }
-
 
 /// 滚动资金预测（票据到期 + 融资起止按期间展开）
 pub(super) async fn funds_forecast_rolling_ep(

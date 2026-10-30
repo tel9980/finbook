@@ -22,7 +22,6 @@ use fincore::account::Account;
 use fincore::auxiliary::AuxEntity;
 use fincore::money::Money;
 
-
 /// 导出用的列类型（只有「文本」与「金额」两种，够用且不把 xlsx 细节漏进数据层）
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Col {
@@ -45,13 +44,7 @@ pub struct CollectionSheet {
 }
 
 impl CollectionSheet {
-    pub fn titled(
-        name: &str,
-        title: &str,
-        subtitle: &str,
-        headers: &[&str],
-        cols: &[Col],
-    ) -> Self {
+    pub fn titled(name: &str, title: &str, subtitle: &str, headers: &[&str], cols: &[Col]) -> Self {
         Self {
             name: name.to_string(),
             title: title.to_string(),
@@ -129,37 +122,38 @@ pub fn collection_template(
     );
 
     // ①② 往来：编码与名称都预填，金额留空
-    let parties = |name: &str, title: &str, code_head: &str, name_head: &str, rows: &[AuxEntity]| {
-        CollectionSheet::titled(
-            name,
-            title,
-            // 副标题里刻意不出现「编码」「科目」「项目」—— opener 靠这几个词找表头
-            "金额填正数（欠多少填多少）；单据号留空则自动生成",
-            &[code_head, name_head, "欠款金额", "单据号", "备注"],
-            &[
-                Col::Text,
-                Col::Text,
-                Col::Money,
-                Col::Text,
-                Col::Text,
-            ],
-        )
-        .with_rows(
-            rows.iter()
-                .filter(|e| !e.disabled)
-                .map(|e| {
-                    vec![
-                        e.code.clone(),
-                        e.name.clone(),
-                        String::new(),
-                        String::new(),
-                        String::new(),
-                    ]
-                })
-                .collect(),
-        )
-    };
-    out.push(parties("① 客户应收", "客户应收（客户欠我的钱）", "客户编码", "客户名称", customers));
+    let parties =
+        |name: &str, title: &str, code_head: &str, name_head: &str, rows: &[AuxEntity]| {
+            CollectionSheet::titled(
+                name,
+                title,
+                // 副标题里刻意不出现「编码」「科目」「项目」—— opener 靠这几个词找表头
+                "金额填正数（欠多少填多少）；单据号留空则自动生成",
+                &[code_head, name_head, "欠款金额", "单据号", "备注"],
+                &[Col::Text, Col::Text, Col::Money, Col::Text, Col::Text],
+            )
+            .with_rows(
+                rows.iter()
+                    .filter(|e| !e.disabled)
+                    .map(|e| {
+                        vec![
+                            e.code.clone(),
+                            e.name.clone(),
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                        ]
+                    })
+                    .collect(),
+            )
+        };
+    out.push(parties(
+        "① 客户应收",
+        "客户应收（客户欠我的钱）",
+        "客户编码",
+        "客户名称",
+        customers,
+    ));
     out.push(parties(
         "② 供应商应付",
         "供应商应付（我欠供应商的钱）",
@@ -575,7 +569,9 @@ fn collection_sheet_impl(
     let chart = crate::accounts::chart(db)?;
 
     // ---- ③ 账户余额；同时分资产/负债
-    let bal_rows = bal_sheet.map(|(_, r)| parse_balances(r)).unwrap_or_default();
+    let bal_rows = bal_sheet
+        .map(|(_, r)| parse_balances(r))
+        .unwrap_or_default();
     let mut begin_rows: Vec<BeginLine> = Vec::new();
     for line in &bal_rows {
         let code = &line.code;
@@ -588,9 +584,9 @@ fn collection_sheet_impl(
             continue;
         }
         if !chart.is_leaf(code) {
-            res.balances
-                .warnings
-                .push(format!("账户余额：{code} 不是末级科目，期初要填在末级上，已跳过"));
+            res.balances.warnings.push(format!(
+                "账户余额：{code} 不是末级科目，期初要填在末级上，已跳过"
+            ));
             res.balances.skipped += 1;
             continue;
         }
@@ -607,11 +603,7 @@ fn collection_sheet_impl(
         let mut bad = false;
         for (label, code_opt, kind) in [
             ("客户编码", &line.aux.customer, fincore::AuxKind::Customer),
-            (
-                "供应商编码",
-                &line.aux.supplier,
-                fincore::AuxKind::Supplier,
-            ),
+            ("供应商编码", &line.aux.supplier, fincore::AuxKind::Supplier),
             ("存货编码", &line.aux.item, fincore::AuxKind::Item),
             ("银行账户", &line.aux.bank, fincore::AuxKind::Bank),
         ] {
@@ -861,7 +853,15 @@ mod tests {
     #[test]
     fn balances_sheet_keeps_quantity_item_bank_and_party() {
         let rows = vec![
-            s(&["科目编码", "科目名称", "余额", "数量", "客户/供应商编码", "存货编码", "银行账户"]),
+            s(&[
+                "科目编码",
+                "科目名称",
+                "余额",
+                "数量",
+                "客户/供应商编码",
+                "存货编码",
+                "银行账户",
+            ]),
             s(&["140501", "库存商品", "5000", "2.5", "", "HG001", ""]),
             s(&["100201", "工行对公", "8000", "", "", "", "B01"]),
             s(&["2203", "预收账款", "8000", "", "C002", "", ""]),
@@ -921,7 +921,11 @@ mod tests {
         ];
         let p = parse_parties(&rows, "① 客户应收", &["客户编码", "编码"]);
         assert!(p.lines.is_empty(), "没有欠款不该产生单据");
-        assert!(p.out.warnings.is_empty(), "空行不该报错：{:?}", p.out.warnings);
+        assert!(
+            p.out.warnings.is_empty(),
+            "空行不该报错：{:?}",
+            p.out.warnings
+        );
     }
 
     #[test]
@@ -931,7 +935,10 @@ mod tests {
             s(&["C007", "鑫盛", "1234.56", "", ""]),
         ];
         let p = parse_parties(&rows, "① 客户应收", &["客户编码", "编码"]);
-        assert_eq!(p.lines[0].3, "QC-C007", "单据号空着必须补一个，否则台账里分不出两笔");
+        assert_eq!(
+            p.lines[0].3, "QC-C007",
+            "单据号空着必须补一个，否则台账里分不出两笔"
+        );
     }
 
     #[test]
@@ -966,7 +973,7 @@ mod tests {
 #[cfg(test)]
 mod template_tests {
     use super::*;
-    use fincore::account::{AcctCategory, Account, Chart, CodeScheme};
+    use fincore::account::{Account, AcctCategory, Chart, CodeScheme};
     use fincore::AuxKind;
 
     fn acct(code: &str, name: &str, cat: AcctCategory) -> Account {
@@ -998,13 +1005,28 @@ mod template_tests {
         let accounts = chart_accounts();
         let sheets = collection_template(&accounts, &[], &[]);
         let names: Vec<&str> = sheets.iter().map(|s| s.name.as_str()).collect();
-        assert_eq!(names, vec!["怎么填", "① 客户应收", "② 供应商应付", "③ 账户余额", "④ 基本资料"]);
+        assert_eq!(
+            names,
+            vec![
+                "怎么填",
+                "① 客户应收",
+                "② 供应商应付",
+                "③ 账户余额",
+                "④ 基本资料"
+            ]
+        );
 
         let bal = sheets.iter().find(|s| s.name == "③ 账户余额").unwrap();
         assert_eq!(
             bal.headers,
             vec![
-                "科目编码", "科目名称", "余额", "数量", "客户/供应商编码", "存货编码", "银行账户"
+                "科目编码",
+                "科目名称",
+                "余额",
+                "数量",
+                "客户/供应商编码",
+                "存货编码",
+                "银行账户"
             ]
         );
         let eq = sheets.iter().find(|s| s.name == "④ 基本资料").unwrap();
@@ -1023,8 +1045,14 @@ mod template_tests {
         let sheets = collection_template(&accounts, &[], &[]);
         let bal = sheets.iter().find(|s| s.name == "③ 账户余额").unwrap();
         let codes: Vec<&str> = bal.rows.iter().map(|r| r[0].as_str()).collect();
-        assert!(!codes.contains(&"1122"), "1122 由①生成，不能再填：{codes:?}");
-        assert!(!codes.contains(&"112201"), "112201 也是应收，不能填：{codes:?}");
+        assert!(
+            !codes.contains(&"1122"),
+            "1122 由①生成，不能再填：{codes:?}"
+        );
+        assert!(
+            !codes.contains(&"112201"),
+            "112201 也是应收，不能填：{codes:?}"
+        );
         assert!(!codes.contains(&"2202"), "2202 由②生成：{codes:?}");
         assert!(!codes.contains(&"220201"), "220201 也是应付：{codes:?}");
         // 低频科目必须在 —— 「在建工程、预付账款没进去」曾经是我的错觉，

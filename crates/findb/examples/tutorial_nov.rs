@@ -43,7 +43,11 @@ fn main() {
     }
 
     // 期初：银行 200,000、生产设备 40,000、实收资本 240,000
-    for (code, yb) in [("100201", "200000"), ("160101", "40000"), ("4001", "-240000")] {
+    for (code, yb) in [
+        ("100201", "200000"),
+        ("160101", "40000"),
+        ("4001", "-240000"),
+    ] {
         let mut r = findb::balances::BeginRow {
             id: 0,
             account_code: code.into(),
@@ -139,8 +143,7 @@ fn main() {
 
     println!("\n=== 结转损益凭证 ===");
     let chart = findb::accounts::chart(&db).unwrap();
-    let snap =
-        BalanceSnapshot::load(&db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
+    let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
     let rows = snap.carry_forward_rows(&chart);
     let mut cv = fincore::engine::generate_carry_forward(
         p,
@@ -154,7 +157,13 @@ fn main() {
     )
     .unwrap();
     for e in &cv.entries {
-        println!("  {} {:<14} 借 {:>12} 贷 {:>12}", e.account_code, e.summary, e.debit.fmt_plain(), e.credit.fmt_plain());
+        println!(
+            "  {} {:<14} 借 {:>12} 贷 {:>12}",
+            e.account_code,
+            e.summary,
+            e.debit.fmt_plain(),
+            e.credit.fmt_plain()
+        );
     }
     post(&db, &mut cv);
 
@@ -162,7 +171,13 @@ fn main() {
     let def = report::income::income_statement_def();
     let bq = BalanceQuery::range(p, p).with_exclude_carry(true);
     let s2 = BalanceSnapshot::load(&db, &bq).unwrap();
-    let t = report::render_single(&def, &s2, "恒亮氧化加工厂", "2026-11 至 2026-11", report::identity);
+    let t = report::render_single(
+        &def,
+        &s2,
+        "恒亮氧化加工厂",
+        "2026-11 至 2026-11",
+        report::identity,
+    );
     for r in &t.rows {
         let v = r.values.first().copied().unwrap_or(Money::ZERO);
         if !v.is_zero() {
@@ -172,7 +187,8 @@ fn main() {
 
     println!("\n=== 资产负债表（期末）===");
     let bdef = report::balance_sheet::balance_sheet_def();
-    let s3 = BalanceSnapshot::load(&db, &BalanceQuery::range(Period::new(2026, 1).unwrap(), p)).unwrap();
+    let s3 =
+        BalanceSnapshot::load(&db, &BalanceQuery::range(Period::new(2026, 1).unwrap(), p)).unwrap();
     let bt = report::render(
         &bdef,
         &s3,

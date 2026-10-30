@@ -343,11 +343,7 @@ impl Dashboard {
                             format!("{pct:.1}%")
                         };
                         ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(format!("利润率 {margin}"))
-                                    .size(12.0)
-                                    .weak(),
-                            );
+                            ui.label(RichText::new(format!("利润率 {margin}")).size(12.0).weak());
                             ui.label(RichText::new("·").weak().size(12.0));
                             ui.label(
                                 RichText::new(format!(
@@ -462,7 +458,8 @@ impl Dashboard {
                             );
                             let mut cash_sub = "现金 + 银行".to_string();
                             if !m.advance_in.is_zero() {
-                                cash_sub = format!("{} · 预收 {}", cash_sub, m.advance_in.fmt_money());
+                                cash_sub =
+                                    format!("{} · 预收 {}", cash_sub, m.advance_in.fmt_money());
                             }
                             cols[2].label(RichText::new(cash_sub).weak().size(11.0));
 
@@ -479,9 +476,7 @@ impl Dashboard {
                                     .color(net_c)
                                     .strong(),
                             );
-                            cols[3].label(
-                                RichText::new("应收 − 应付，不含现金").weak().size(11.0),
-                            );
+                            cols[3].label(RichText::new("应收 − 应付，不含现金").weak().size(11.0));
                         });
 
                         // ---- 明细：谁欠我、我欠谁 ----
@@ -491,9 +486,7 @@ impl Dashboard {
                             ui.columns(2, |cols| {
                                 cols[0].label(RichText::new("欠我最多的客户").weak().size(12.0));
                                 if m.top_customers.is_empty() {
-                                    cols[0].label(
-                                        RichText::new("没有未收款项").weak().size(11.0),
-                                    );
+                                    cols[0].label(RichText::new("没有未收款项").weak().size(11.0));
                                 }
                                 for c in m.top_customers.iter() {
                                     let overdue = c.max_days >= 90;
@@ -503,9 +496,7 @@ impl Dashboard {
                                                 .size(12.0),
                                         );
                                         ui.label(
-                                            RichText::new(c.amount.fmt_money())
-                                                .size(12.0)
-                                                .strong(),
+                                            RichText::new(c.amount.fmt_money()).size(12.0).strong(),
                                         );
                                         // 账龄：超过 90 天标红，这才是要催的
                                         let (txt, col) = if overdue {
@@ -527,7 +518,11 @@ impl Dashboard {
                                                 RichText::new(format!(
                                                     "↔ 我欠他 {} → 净{} {}",
                                                     c.also.fmt_money(),
-                                                    if c.net_is_receivable() { "他欠我" } else { "我欠他" },
+                                                    if c.net_is_receivable() {
+                                                        "他欠我"
+                                                    } else {
+                                                        "我欠他"
+                                                    },
                                                     c.net_with().fmt_money()
                                                 ))
                                                 .size(11.0)
@@ -539,9 +534,7 @@ impl Dashboard {
 
                                 cols[1].label(RichText::new("我欠最多的供应商").weak().size(12.0));
                                 if m.top_suppliers.is_empty() {
-                                    cols[1].label(
-                                        RichText::new("没有未付款项").weak().size(11.0),
-                                    );
+                                    cols[1].label(RichText::new("没有未付款项").weak().size(11.0));
                                 }
                                 for sp in m.top_suppliers.iter() {
                                     cols[1].horizontal(|ui| {
@@ -567,7 +560,11 @@ impl Dashboard {
                                                 RichText::new(format!(
                                                     "↔ 他欠我 {} → 净{} {}",
                                                     sp.also.fmt_money(),
-                                                    if sp.net_is_receivable() { "他欠我" } else { "我欠他" },
+                                                    if sp.net_is_receivable() {
+                                                        "他欠我"
+                                                    } else {
+                                                        "我欠他"
+                                                    },
                                                     sp.net_with().fmt_money()
                                                 ))
                                                 .size(11.0)

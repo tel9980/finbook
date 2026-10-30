@@ -531,8 +531,8 @@ pub(super) async fn export_options(
         },
         chrono::Local::now().format("%Y%m%d")
     );
-    let mut resp = Response::builder()
-        .header(header::CONTENT_TYPE, "application/json; charset=utf-8");
+    let mut resp =
+        Response::builder().header(header::CONTENT_TYPE, "application/json; charset=utf-8");
     if let Some(hv) = attachment_header(&name) {
         resp = resp.header(header::CONTENT_DISPOSITION, hv);
     }
@@ -752,7 +752,9 @@ pub(super) async fn restore_backup(
         let auto_name = format!("auto_{}_{}.fbk", stamp, key);
         let auto_path = backups_dir.join(&auto_name);
         std::fs::copy(&dst, &auto_path).map_err(|e| {
-            AppError::Internal(format!("恢复前自动备份失败，已中止（当前账套未被改动）：{e}"))
+            AppError::Internal(format!(
+                "恢复前自动备份失败，已中止（当前账套未被改动）：{e}"
+            ))
         })?;
 
         // 先复制到临时文件，成功后再替换主库：copy 中途失败不会留下半个 .fbk。
@@ -780,12 +782,8 @@ pub(super) async fn restore_backup(
                 // 新库打不开：用刚生成的自动备份回滚，保证用户至少回到恢复前状态。
                 let rolled = (|| -> std::io::Result<()> {
                     std::fs::copy(&auto_path, &dst)?;
-                    let _ = std::fs::remove_file(
-                        state2.books_dir.join(format!("{key}.fbk-wal")),
-                    );
-                    let _ = std::fs::remove_file(
-                        state2.books_dir.join(format!("{key}.fbk-shm")),
-                    );
+                    let _ = std::fs::remove_file(state2.books_dir.join(format!("{key}.fbk-wal")));
+                    let _ = std::fs::remove_file(state2.books_dir.join(format!("{key}.fbk-shm")));
                     Ok(())
                 })();
                 if let Ok(path) = std::fs::canonicalize(&dst) {
@@ -848,12 +846,13 @@ pub(super) async fn download_backup(
     let buf = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, AppError> {
         let mut buf = Vec::new();
         let mut zip = ZipWriter::new(io::Cursor::new(&mut buf));
-        let options: FileOptions<'_, ()> = FileOptions::default()
-            .compression_method(CompressionMethod::Deflated);
+        let options: FileOptions<'_, ()> =
+            FileOptions::default().compression_method(CompressionMethod::Deflated);
         let zerr = |e| AppError::Internal(format!("zip: {e}"));
 
         // .fbk 主文件
-        zip.start_file(format!("{key}.fbk"), options).map_err(&zerr)?;
+        zip.start_file(format!("{key}.fbk"), options)
+            .map_err(&zerr)?;
         let mut f = File::open(&src)?;
         io::copy(&mut f, &mut zip)?;
 
@@ -922,7 +921,6 @@ pub(super) async fn opening_sheet_template(
     build_xlsx(&sheets, "期初收集表.xlsx", "期初收集表")
 }
 
-
 /// 期初导入后的对账视图。
 ///
 /// 为什么不并进「预览」接口：预览回答「这份表能不能导」，对账回答「导完之后账上是不是
@@ -967,7 +965,6 @@ pub(super) async fn opening_sheet_reconcile(
     }))
 }
 
-
 /// 只体检不落库 —— 与正式导入走同一条代码路径，只是不写。
 pub(super) async fn preview_opening_sheet(
     State(_state): State<Arc<WebState>>,
@@ -994,7 +991,6 @@ pub(super) async fn preview_opening_sheet(
     })))
 }
 
-
 pub(super) async fn import_opening_sheet(
     State(_state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1017,7 +1013,6 @@ pub(super) async fn import_opening_sheet(
             .cloned().collect::<Vec<_>>(),
     })))
 }
-
 
 /// 导入账套：上传 .fbk（或含 .fbk 的备份 zip）→ 校验 → 落库到 books_dir → 注册
 pub(super) async fn import_book(

@@ -280,13 +280,11 @@ fn bill_entries(
     to: BillStatus,
 ) -> Option<(&'static str, AuxRef, &'static str, AuxRef, &'static str)> {
     let bank_aux = || AuxRef {
-        bank: Some(
-            if b.bank.trim().is_empty() {
-                "B01".to_string()
-            } else {
-                b.bank.trim().to_string()
-            },
-        ),
+        bank: Some(if b.bank.trim().is_empty() {
+            "B01".to_string()
+        } else {
+            b.bank.trim().to_string()
+        }),
         ..Default::default()
     };
     let sup_aux = || AuxRef {
@@ -584,13 +582,11 @@ fn loan_voucher_in(
     who: &str,
 ) -> Result<i64, DbError> {
     let bank_aux = AuxRef {
-        bank: Some(
-            if l.bank.trim().is_empty() {
-                "B01".to_string()
-            } else {
-                l.bank.trim().to_string()
-            },
-        ),
+        bank: Some(if l.bank.trim().is_empty() {
+            "B01".to_string()
+        } else {
+            l.bank.trim().to_string()
+        }),
         ..Default::default()
     };
     // 放款/收回的对方（借款人）没有独立字段，用机构字段占位作员工辅助（仅查非空）

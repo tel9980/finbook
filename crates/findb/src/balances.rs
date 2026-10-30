@@ -388,14 +388,12 @@ impl BalanceSnapshot {
 
         // 1) 先聚合同一 code 的所有 aux 维度 → 该 code 的直接值
         for ((code, _aux_key), row) in &rows {
-            let e = by_code
-                .entry(code.clone())
-                .or_insert_with(|| BalanceRow {
-                    account_code: code.clone(),
-                    account_name: String::new(),
-                    aux: AuxRef::default(),
-                    ..Default::default()
-                });
+            let e = by_code.entry(code.clone()).or_insert_with(|| BalanceRow {
+                account_code: code.clone(),
+                account_name: String::new(),
+                aux: AuxRef::default(),
+                ..Default::default()
+            });
             e.begin += row.begin;
             e.debit += row.debit;
             e.credit += row.credit;
@@ -413,7 +411,13 @@ impl BalanceSnapshot {
                 // 先取出子值，再修改父值（避免同时可变/不可变借用）
                 let child_vals = {
                     let child = by_code.get(&code).unwrap();
-                    (child.begin, child.debit, child.credit, child.ytd_debit, child.ytd_credit)
+                    (
+                        child.begin,
+                        child.debit,
+                        child.credit,
+                        child.ytd_debit,
+                        child.ytd_credit,
+                    )
                 };
                 if let Some(parent_row) = by_code.get_mut(&parent) {
                     parent_row.begin += child_vals.0;
@@ -457,8 +461,8 @@ impl BalanceSnapshot {
         let mut sum = Money::ZERO;
         for a in chart.all() {
             let capitalized = a.code.starts_with("5001");
-            let in_scope =
-                a.category.is_profit_loss() || (a.category == fincore::AcctCategory::Cost && !capitalized);
+            let in_scope = a.category.is_profit_loss()
+                || (a.category == fincore::AcctCategory::Cost && !capitalized);
             if !in_scope || !chart.is_leaf(&a.code) {
                 continue;
             }
@@ -574,7 +578,7 @@ impl BalanceSnapshot {
             if let Some(agg) = self.by_code.get(code) {
                 let mut r = agg.clone();
                 r.account_code = code.to_string(); // 保证返回的 account_code 与查询一致
-                // 数量账：by_code 不存 qty，需从 rows 聚合（仅在需要 qty 时）
+                                                   // 数量账：by_code 不存 qty，需从 rows 聚合（仅在需要 qty 时）
                 if self.qtys.iter().any(|((c, _), _)| c.starts_with(code)) {
                     let mut qr = QtyRow::default();
                     for ((c, ak), q) in &self.qtys {
@@ -1150,10 +1154,9 @@ fn ensure_begin_editable(conn: &rusqlite::Connection) -> DbResult<()> {
 fn ensure_begin_leaf(conn: &rusqlite::Connection, code: &str) -> DbResult<()> {
     let chart = crate::accounts::chart_of(conn)?;
     if chart.get(code).is_none() {
-        return Err(fincore::FinError::validate(format!(
-            "科目 {code} 不存在，不能录入期初余额"
-        ))
-        .into());
+        return Err(
+            fincore::FinError::validate(format!("科目 {code} 不存在，不能录入期初余额")).into(),
+        );
     }
     if !chart.is_leaf(code) {
         let kids: Vec<String> = chart
@@ -2612,16 +2615,27 @@ mod drill_tests {
             "profit_loss_rows 必须保持纯损益口径（不含成本类）"
         );
 
-        let cv = fincore::engine::generate_carry_forward(
-            p, date, "转", 1, &rows, &chart, "4103", "t",
-        )
-        .unwrap();
+        let cv =
+            fincore::engine::generate_carry_forward(p, date, "转", 1, &rows, &chart, "4103", "t")
+                .unwrap();
         let cost_line = cv.entries.iter().find(|e| e.account_code == "510105");
-        assert!(cost_line.is_some(), "结转凭证必须含 510105 分录：{:?}", cv.entries);
+        assert!(
+            cost_line.is_some(),
+            "结转凭证必须含 510105 分录：{:?}",
+            cv.entries
+        );
         assert_eq!(cost_line.unwrap().credit, Money::parse("15000").unwrap());
         // 本年利润 = 100000 - 15000
-        let pl = cv.entries.iter().find(|e| e.account_code == "4103").unwrap();
-        assert_eq!(pl.credit, Money::parse("85000").unwrap(), "净利润应为 85,000");
+        let pl = cv
+            .entries
+            .iter()
+            .find(|e| e.account_code == "4103")
+            .unwrap();
+        assert_eq!(
+            pl.credit,
+            Money::parse("85000").unwrap(),
+            "净利润应为 85,000"
+        );
     }
 
     /// `profit_loss_net` 含直接费用性质的成本类，但排除 5001 生产成本（会与存货重复计算）。

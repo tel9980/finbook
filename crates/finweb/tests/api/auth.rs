@@ -304,11 +304,7 @@ async fn platform_device_binding_and_reset() {
         .oneshot(authed_get("/api/books", &s1b))
         .await
         .unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::OK,
-        "已绑定设备的会话应仍然有效"
-    );
+    assert_eq!(resp.status(), StatusCode::OK, "已绑定设备的会话应仍然有效");
 
     // 第二台设备**必须被拒**：拿到口令的人不能悄悄多绑一台自己的机器
     let (status, _) = login_with_device(&state, "emp", "Emp654321", "dev-B").await;

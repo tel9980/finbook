@@ -178,11 +178,7 @@ impl PeriodEndView {
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("月结向导").strong());
-                ui.label(
-                    RichText::new("按顺序打勾，全绿就能结账")
-                        .weak()
-                        .small(),
-                );
+                ui.label(RichText::new("按顺序打勾，全绿就能结账").weak().small());
             });
             egui::Grid::new("month_close_steps")
                 .num_columns(3)
@@ -199,7 +195,11 @@ impl PeriodEndView {
                         ui.label(RichText::new(format!("{}. {}", i + 1, st.label)));
                         ui.label(RichText::new(mark).color(color));
                         ui.vertical(|ui| {
-                            ui.label(RichText::new(&st.detail).color(if st.ok { good } else { color }));
+                            ui.label(RichText::new(&st.detail).color(if st.ok {
+                                good
+                            } else {
+                                color
+                            }));
                             if !st.ok {
                                 ui.label(RichText::new(st.hint).weak().small());
                             }
@@ -216,11 +216,8 @@ impl PeriodEndView {
                 ui.label(RichText::new("✔ 清单已全部通过，可以直接结账").color(good));
             } else {
                 ui.label(
-                    RichText::new(format!(
-                        "✖ 还有 {} 项必须做完才能结账",
-                        wc.blockers().len()
-                    ))
-                    .color(bad),
+                    RichText::new(format!("✖ 还有 {} 项必须做完才能结账", wc.blockers().len()))
+                        .color(bad),
                 );
             }
         });

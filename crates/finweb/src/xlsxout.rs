@@ -71,7 +71,13 @@ impl Sheet {
     }
 
     /// 报表导出用：带标题与副标题，给人看。
-    pub fn titled(name: &str, title: &str, subtitle: &str, headers: &[&str], cols: &[ColFmt]) -> Self {
+    pub fn titled(
+        name: &str,
+        title: &str,
+        subtitle: &str,
+        headers: &[&str],
+        cols: &[ColFmt],
+    ) -> Self {
         Self {
             name: name.to_string(),
             title: Some(title.to_string()),
@@ -195,9 +201,7 @@ fn body_fmt(col: ColFmt) -> Format {
         ColFmt::Money => base
             .set_num_format("#,##0.00;[Red]-#,##0.00")
             .set_align(XlsxAlign::Right),
-        ColFmt::Int => base
-            .set_num_format("#,##0")
-            .set_align(XlsxAlign::Right),
+        ColFmt::Int => base.set_num_format("#,##0").set_align(XlsxAlign::Right),
         ColFmt::Text => base.set_align(XlsxAlign::Left),
     }
 }
@@ -219,8 +223,15 @@ pub fn build(sheets: &[Sheet]) -> Result<Vec<u8>, String> {
         // 有标题时，标题占第 0 行、副标题第 1 行，表头从第 2 行起。
         let mut row_cursor: u32 = 0;
         if let Some(t) = &s.title {
-            ws.merge_range(row_cursor, 0, row_cursor, (ncols - 1) as u16, t, &title_fmt())
-                .map_err(|e| format!("写标题失败：{e}"))?;
+            ws.merge_range(
+                row_cursor,
+                0,
+                row_cursor,
+                (ncols - 1) as u16,
+                t,
+                &title_fmt(),
+            )
+            .map_err(|e| format!("写标题失败：{e}"))?;
             ws.set_row_height(row_cursor, 24.0)
                 .map_err(|e| format!("设置行高失败：{e}"))?;
             row_cursor += 1;
@@ -309,7 +320,8 @@ pub fn build(sheets: &[Sheet]) -> Result<Vec<u8>, String> {
         }
     }
 
-    wb.save_to_buffer().map_err(|e| format!("生成 xlsx 失败：{e}"))
+    wb.save_to_buffer()
+        .map_err(|e| format!("生成 xlsx 失败：{e}"))
 }
 
 #[cfg(test)]

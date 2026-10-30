@@ -1461,10 +1461,7 @@ mod tests {
         });
 
         // 锁现在是中毒状态：老写法在这里会 panic
-        assert!(
-            r.get_user("pz1").unwrap().is_some(),
-            "毒化后仍应读得到用户"
-        );
+        assert!(r.get_user("pz1").unwrap().is_some(), "毒化后仍应读得到用户");
         assert!(
             r.authenticate("pz1", "Pass@1234").unwrap().is_some(),
             "毒化后仍应能登录"

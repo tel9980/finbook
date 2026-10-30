@@ -4986,7 +4986,8 @@ async fn backup_download_excludes_other_books_attachments() {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK, "建凭证应成功");
-        let vid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+        let vid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()
+            ["id"]
             .as_i64()
             .unwrap();
 
@@ -5015,7 +5016,10 @@ async fn backup_download_excludes_other_books_attachments() {
     }
 
     // 回到 A 下载打包，只应看到 A 的附件
-    assert_eq!(select_book(&state, &admin_sid, &a_key).await, StatusCode::OK);
+    assert_eq!(
+        select_book(&state, &admin_sid, &a_key).await,
+        StatusCode::OK
+    );
     let resp = handlers::router(state.clone())
         .oneshot(authed_get("/api/backup/download", &admin_sid))
         .await

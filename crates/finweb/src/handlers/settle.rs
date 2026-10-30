@@ -71,8 +71,14 @@ pub(super) async fn list_customers(
     let per = period_from_query(&state, &user, q.get("period"));
     let keyword = q.get("q").map(String::as_str).unwrap_or("");
     let only_open = matches!(q.get("only_open").map(String::as_str), Some("1" | "true"));
-    let page = q.get("page").and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
-    let page_size = q.get("page_size").and_then(|s| s.parse::<usize>().ok()).unwrap_or(50);
+    let page = q
+        .get("page")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1);
+    let page_size = q
+        .get("page_size")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(50);
     let result = findb::customers::list(&db, per, keyword, only_open, page, page_size)?;
     Ok(Json(json!({
         "rows": result.rows,
@@ -533,9 +539,10 @@ pub(super) async fn unsettle_endpoint(
     let db = &user.db;
     // 带了金额就是部分撤销；没带或为空串就是整条撤销
     let part = match req.amount.as_deref().map(str::trim) {
-        Some(s) if !s.is_empty() => Some(fincore::Money::parse(s).map_err(|e| {
-            AppError::bad_request(format!("撤销金额「{s}」不是合法金额：{e}"))
-        })?),
+        Some(s) if !s.is_empty() => Some(
+            fincore::Money::parse(s)
+                .map_err(|e| AppError::bad_request(format!("撤销金额「{s}」不是合法金额：{e}")))?,
+        ),
         _ => None,
     };
     match part {
@@ -674,17 +681,23 @@ pub(super) async fn export_settle_aging_xlsx(
     }
     let lines = findb::settle::aging(db, &account, upto, as_of, &buckets, None)?;
     let party = findb::settle::party_kind_in(db, &account);
-    let names: std::collections::HashMap<String, String> = findb::auxs::list(
-        db,
-        &fincore::AuxQuery::kind(party),
-    )?
-    .into_iter()
-    .map(|a| (a.code, a.name))
-    .collect();
+    let names: std::collections::HashMap<String, String> =
+        findb::auxs::list(db, &fincore::AuxQuery::kind(party))?
+            .into_iter()
+            .map(|a| (a.code, a.name))
+            .collect();
 
     let mut headers: Vec<String> = vec![
-        if party == fincore::AuxKind::Customer { "客户编码".into() } else { "供应商编码".into() },
-        if party == fincore::AuxKind::Customer { "客户名称".into() } else { "供应商名称".into() },
+        if party == fincore::AuxKind::Customer {
+            "客户编码".into()
+        } else {
+            "供应商编码".into()
+        },
+        if party == fincore::AuxKind::Customer {
+            "客户名称".into()
+        } else {
+            "供应商名称".into()
+        },
     ];
     for b in &buckets {
         headers.push(b.label.to_string());
@@ -759,7 +772,13 @@ pub(super) async fn export_settle_aging_xlsx(
         user.username(),
         "导出",
         "导出往来账龄",
-        &format!("{} 至 {} · 科目 {} · {} 行", upto.label(), as_of, account, lines.len()),
+        &format!(
+            "{} 至 {} · 科目 {} · {} 行",
+            upto.label(),
+            as_of,
+            account,
+            lines.len()
+        ),
     )?;
     let fname = format!("往来账龄_{}_{}.xlsx", account, as_of.format("%Y%m%d"));
     build_xlsx(&[sheet], &fname, "往来账龄")
@@ -930,7 +949,6 @@ pub(super) async fn save_begin(
     Ok(Json(json!({"ok": true, "count": n, "deleted": deleted})))
 }
 
-
 /// 坏账准备计提：按应收账龄生成「借 资产减值损失 / 贷 坏账准备」凭证
 pub(super) async fn bad_debt_provision_endpoint(
     State(state): State<Arc<WebState>>,
@@ -956,7 +974,6 @@ pub(super) async fn bad_debt_provision_endpoint(
     }
 }
 
-
 /// 对账单列表（可按 kind=ar|ap 过滤）
 pub(super) async fn list_statements(
     State(state): State<Arc<WebState>>,
@@ -971,7 +988,6 @@ pub(super) async fn list_statements(
         "rows": rows.iter().map(statement_json).collect::<Vec<_>>(),
     })))
 }
-
 
 /// 生成对账单（服务端算期初/本期发生/期末并快照，不信前端金额）
 pub(super) async fn create_statement(
@@ -1009,7 +1025,6 @@ pub(super) async fn create_statement(
     Ok(Json(statement_json(&s)))
 }
 
-
 /// 对账单状态流转：发出 / 客户回签确认 / 作废
 pub(super) async fn statement_status_ep(
     State(state): State<Arc<WebState>>,
@@ -1045,7 +1060,6 @@ pub(super) async fn statement_status_ep(
     Ok(Json(statement_json(&s)))
 }
 
-
 /// 催款单/对账函列表（可按 kind=ar|ap 过滤）
 pub(super) async fn list_dunnings(
     State(state): State<Arc<WebState>>,
@@ -1057,7 +1071,6 @@ pub(super) async fn list_dunnings(
     let rows = findb::settle::dunning_list(&db, q.get("kind").map(String::as_str), None)?;
     Ok(Json(json!({ "rows": rows })))
 }
-
 
 /// 生成催款单：按客商快照未核销分录 + 往来期初（服务端计算，无欠款拒绝）
 pub(super) async fn create_dunning(
@@ -1102,7 +1115,6 @@ pub(super) async fn create_dunning(
     )?;
     Ok(Json(json!({ "ok": true, "dunning": d })))
 }
-
 
 /// 期初批量粘贴：解析（预览）
 pub(super) async fn parse_begin_batch(
@@ -1163,7 +1175,6 @@ pub(super) async fn parse_begin_batch(
         },
     })))
 }
-
 
 /// 期初批量粘贴：导入前端确认过的行
 ///
@@ -1289,8 +1300,14 @@ pub(super) async fn get_settle_open(
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
     let db = &user.db;
-    let mut rows =
-        findb::settle::open_entries_with(&db, account.trim(), upto, include_all, !include_draft, party_filter.as_deref())?;
+    let mut rows = findb::settle::open_entries_with(
+        &db,
+        account.trim(),
+        upto,
+        include_all,
+        !include_draft,
+        party_filter.as_deref(),
+    )?;
     if !include_all {
         rows.retain(|e| e.is_open());
     }
@@ -1307,8 +1324,12 @@ pub(super) async fn get_settle_open(
     // 你往后翻页而变小 —— 那会让人以为钱变少了。
     let total = rows.len();
     let draft_cnt = rows.iter().filter(|e| !e.posted).count();
-    let sum_debit: fincore::Money = rows.iter().fold(fincore::Money::ZERO, |a, r| a + r.open().max(fincore::Money::ZERO));
-    let sum_credit: fincore::Money = rows.iter().fold(fincore::Money::ZERO, |a, r| a + (-r.open()).max(fincore::Money::ZERO));
+    let sum_debit: fincore::Money = rows.iter().fold(fincore::Money::ZERO, |a, r| {
+        a + r.open().max(fincore::Money::ZERO)
+    });
+    let sum_credit: fincore::Money = rows.iter().fold(fincore::Money::ZERO, |a, r| {
+        a + (-r.open()).max(fincore::Money::ZERO)
+    });
     // 分页：默认给 200 行。**为什么默认就截断而不保持「全量」**：v1.8.36 实测
     // 单科目 1980 张凭证时这个接口返回 222.9KB，6000 张会到近 700KB，
     // 而核销时人一次只看得到十几行。要全量就显式传 limit=0。

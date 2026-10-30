@@ -243,7 +243,13 @@ impl CustomReportView {
                         sh.push(row.iter().map(|v| v.fmt_plain()).collect());
                     }
                     let title = format!("{}（{}）", c.name, self.period(ctx).label());
-                    match crate::views::export::run_export(&sh, &c.name, &title, mode, &ctx.db().options()) {
+                    match crate::views::export::run_export(
+                        &sh,
+                        &c.name,
+                        &title,
+                        mode,
+                        &ctx.db().options(),
+                    ) {
                         Ok(m) => ctx.info(m),
                         Err(e) => ctx.error(e),
                     }

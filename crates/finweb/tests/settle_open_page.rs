@@ -80,7 +80,10 @@ async fn settle_open_pages_without_losing_the_total() {
     assert_eq!(all["total"], 3, "三张应收单都应未核销");
     assert_eq!(all["returned"], 3);
     assert_eq!(all["truncated"], false, "没截断就不要说自己截断了");
-    assert_eq!(all["sum_debit"], "600.00", "合计按未核销金额算：100+200+300");
+    assert_eq!(
+        all["sum_debit"], "600.00",
+        "合计按未核销金额算：100+200+300"
+    );
 
     // 显式 limit=2：给两行，但总数仍是 3
     let p1 = get_json(
@@ -115,10 +118,7 @@ async fn settle_open_pages_without_losing_the_total() {
         .iter()
         .map(|r| r["entry_id"].as_i64().unwrap())
         .collect();
-    assert!(
-        ids2.iter().all(|i| !ids1.contains(i)),
-        "两页不能出现同一行"
-    );
+    assert!(ids2.iter().all(|i| !ids1.contains(i)), "两页不能出现同一行");
 
     // limit=0 = 全量（导出与脚本的后路），不能被上限悄悄砍掉
     let full = get_json(
@@ -192,7 +192,10 @@ async fn settle_open_drills_into_one_party_with_age_in_days() {
     .await;
     assert_eq!(d["total"], 2, "按往来对象过滤后仍是这两张");
     assert_eq!(d["rows"][0]["days"], 21, "天数要按期间末算：{d}");
-    assert_eq!(d["rows"][0]["voucher_no"], "记-0001", "下钻要能直接报出凭证号");
+    assert_eq!(
+        d["rows"][0]["voucher_no"], "记-0001",
+        "下钻要能直接报出凭证号"
+    );
 
     // 换一个对象就是 0 笔——不能把别的客户的钱也算进来
     let other = get_json(

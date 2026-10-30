@@ -96,8 +96,10 @@ async fn scoped_user(
         "POST",
         "/api/users",
         boss_sid,
-        Some(json!({ "username": username, "display_name": "范围会计", "password": "",
-                     "role": role, "must_change_pwd": false })),
+        Some(
+            json!({ "username": username, "display_name": "范围会计", "password": "",
+                     "role": role, "must_change_pwd": false }),
+        ),
     )
     .await;
     assert_eq!(code, StatusCode::OK, "入套：{v}");
@@ -260,7 +262,14 @@ async fn own_voucher_only_cannot_touch_others_voucher() {
     .await;
 
     // 看不见
-    let (code, v) = call(&state, "GET", &format!("/api/vouchers/{vid}"), &scoped, None).await;
+    let (code, v) = call(
+        &state,
+        "GET",
+        &format!("/api/vouchers/{vid}"),
+        &scoped,
+        None,
+    )
+    .await;
     assert!(
         code == StatusCode::NOT_FOUND || code == StatusCode::FORBIDDEN,
         "别人的凭证不该查得到，实际 {code} {v}"

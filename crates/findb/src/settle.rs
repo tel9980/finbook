@@ -255,7 +255,10 @@ pub fn unsettle(db: &Db, id: i64) -> DbResult<()> {
     let tx = db.write_tx()?;
     let rec = record_of(&tx, id)?;
     guard_not_closed(&tx, &rec)?;
-    tx.execute("DELETE FROM settle_record WHERE id=?1", rusqlite::params![id])?;
+    tx.execute(
+        "DELETE FROM settle_record WHERE id=?1",
+        rusqlite::params![id],
+    )?;
     tx.commit()?;
     Ok(())
 }
@@ -283,7 +286,10 @@ pub fn unsettle_part(db: &Db, id: i64, amount: Money) -> DbResult<Money> {
     }
     let left = rec.amount - amount;
     if left.is_zero() {
-        tx.execute("DELETE FROM settle_record WHERE id=?1", rusqlite::params![id])?;
+        tx.execute(
+            "DELETE FROM settle_record WHERE id=?1",
+            rusqlite::params![id],
+        )?;
     } else {
         tx.execute(
             "UPDATE settle_record SET amount=?1 WHERE id=?2",
@@ -755,27 +761,28 @@ pub fn open_entries_with(
         .query_map(
             rusqlite::params![account, upto.ymm(), aux_key_filter],
             |r| {
-            let d: String = r.get(3)?;
-            let status: String = r.get(13)?;
-            Ok(OpenEntry {
-                entry_id: r.get(0)?,
-                voucher_id: r.get(1)?,
-                period: Period::from_ymm(r.get(2)?),
-                date: NaiveDate::parse_from_str(&d, "%Y-%m-%d")
-                    .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
-                word: r.get(4)?,
-                no: r.get(5)?,
-                line: r.get(6)?,
-                summary: r.get(7)?,
-                account_code: r.get(8)?,
-                aux_key: r.get(9)?,
-                settle_no: r.get(10)?,
-                debit: Money::parse_or_zero(&r.get::<_, String>(11)?),
-                credit: Money::parse_or_zero(&r.get::<_, String>(12)?),
-                settled: Money::ZERO,
-                posted: status == "posted",
-            })
-        })?
+                let d: String = r.get(3)?;
+                let status: String = r.get(13)?;
+                Ok(OpenEntry {
+                    entry_id: r.get(0)?,
+                    voucher_id: r.get(1)?,
+                    period: Period::from_ymm(r.get(2)?),
+                    date: NaiveDate::parse_from_str(&d, "%Y-%m-%d")
+                        .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()),
+                    word: r.get(4)?,
+                    no: r.get(5)?,
+                    line: r.get(6)?,
+                    summary: r.get(7)?,
+                    account_code: r.get(8)?,
+                    aux_key: r.get(9)?,
+                    settle_no: r.get(10)?,
+                    debit: Money::parse_or_zero(&r.get::<_, String>(11)?),
+                    credit: Money::parse_or_zero(&r.get::<_, String>(12)?),
+                    settled: Money::ZERO,
+                    posted: status == "posted",
+                })
+            },
+        )?
         .collect::<Result<Vec<_>, _>>()?;
 
     let ids: Vec<i64> = rows.iter().map(|r| r.entry_id).collect();
@@ -1276,7 +1283,10 @@ fn overdue_of(letter_date: NaiveDate, doc_date: NaiveDate, pay_days: Option<i64>
     let Some(days) = pay_days else {
         return 0;
     };
-    (letter_date - doc_date).num_days().saturating_sub(days).max(0)
+    (letter_date - doc_date)
+        .num_days()
+        .saturating_sub(days)
+        .max(0)
 }
 
 /// 明细行是否属于「对方欠我方」的那一侧。
@@ -1484,7 +1494,11 @@ pub fn dunning_create(
     //
     // 不翻会怎样：应付账款的分录本来就是贷方，`signed()` 是负数，一张正常的
     // 供应商发票会被判成「预付」。
-    let flip = match crate::accounts::chart(db).ok().as_ref().and_then(|c| c.get(account)) {
+    let flip = match crate::accounts::chart(db)
+        .ok()
+        .as_ref()
+        .and_then(|c| c.get(account))
+    {
         Some(a) => a.dir == fincore::account::Direction::Credit,
         None => account.starts_with('2'),
     };
@@ -3259,7 +3273,12 @@ mod tests {
         let rows = open_entries(db, "1122", upto, false).unwrap();
         rows.iter()
             .find(|r| want_debit && r.debit > Money::ZERO || !want_debit && r.credit > Money::ZERO)
-            .unwrap_or_else(|| panic!("找不到{}方的未核销分录", if want_debit { "借" } else { "贷" }))
+            .unwrap_or_else(|| {
+                panic!(
+                    "找不到{}方的未核销分录",
+                    if want_debit { "借" } else { "贷" }
+                )
+            })
             .entry_id
     }
 
@@ -3273,10 +3292,24 @@ mod tests {
         let p1 = Period::new(2026, 1).unwrap();
         let p2 = Period::new(2026, 2).unwrap();
         // 1 月：卖货挂应收 5000
-        post_two(&db, p1, 5, 1, ("112201", m("5000"), Some(("customer", "C01"))), ("1001", m("5000"), None));
+        post_two(
+            &db,
+            p1,
+            5,
+            1,
+            ("112201", m("5000"), Some(("customer", "C01"))),
+            ("1001", m("5000"), None),
+        );
         crate::periods::close(&db, p1, "tester", false).unwrap();
         // 2 月：客户还钱
-        post_two(&db, p2, 8, 2, ("1001", m("5000"), None), ("112201", m("5000"), Some(("customer", "C01"))));
+        post_two(
+            &db,
+            p2,
+            8,
+            2,
+            ("1001", m("5000"), None),
+            ("112201", m("5000"), Some(("customer", "C01"))),
+        );
 
         let ar = open_id(&db, p2, true);
         let cash = open_id(&db, p2, false);
@@ -3285,8 +3318,7 @@ mod tests {
         let recs = list(&db, "112201").unwrap();
         assert_eq!(recs.len(), 1);
         assert_eq!(
-            recs[0].period,
-            p2,
+            recs[0].period, p2,
             "核销发生在 2 月，记录就该记 202602；记成 202601 等于往已结账期间塞记录"
         );
     }
@@ -3297,8 +3329,22 @@ mod tests {
     fn unsettle_refuses_records_in_a_closed_period() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        post_two(&db, p, 5, 1, ("112201", m("5000"), Some(("customer", "C01"))), ("1001", m("5000"), None));
-        post_two(&db, p, 8, 2, ("1001", m("5000"), None), ("112201", m("5000"), Some(("customer", "C01"))));
+        post_two(
+            &db,
+            p,
+            5,
+            1,
+            ("112201", m("5000"), Some(("customer", "C01"))),
+            ("1001", m("5000"), None),
+        );
+        post_two(
+            &db,
+            p,
+            8,
+            2,
+            ("1001", m("5000"), None),
+            ("112201", m("5000"), Some(("customer", "C01"))),
+        );
         let ar = open_id(&db, p, true);
         let cash = open_id(&db, p, false);
         settle(&db, ar, cash, m("5000"), "tester").unwrap();
@@ -3307,7 +3353,11 @@ mod tests {
         crate::periods::close(&db, p, "tester", false).unwrap();
         let err = unsettle(&db, id).unwrap_err().to_string();
         assert!(err.contains("已结账"), "期望提示已结账，实际：{err}");
-        assert_eq!(list(&db, "112201").unwrap().len(), 1, "拒绝之后记录必须还在");
+        assert_eq!(
+            list(&db, "112201").unwrap().len(),
+            1,
+            "拒绝之后记录必须还在"
+        );
 
         // 反结账之后可以撤
         crate::periods::unclose(&db, p, "tester").unwrap();
@@ -3320,8 +3370,22 @@ mod tests {
     fn unsettle_part_reduces_the_record_and_reopens_the_amount() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        post_two(&db, p, 5, 1, ("112201", m("50000"), Some(("customer", "C01"))), ("1001", m("50000"), None));
-        post_two(&db, p, 8, 2, ("1001", m("50000"), None), ("112201", m("50000"), Some(("customer", "C01"))));
+        post_two(
+            &db,
+            p,
+            5,
+            1,
+            ("112201", m("50000"), Some(("customer", "C01"))),
+            ("1001", m("50000"), None),
+        );
+        post_two(
+            &db,
+            p,
+            8,
+            2,
+            ("1001", m("50000"), None),
+            ("112201", m("50000"), Some(("customer", "C01"))),
+        );
         let ar = open_id(&db, p, true);
         let cash = open_id(&db, p, false);
         settle(&db, ar, cash, m("50000"), "tester").unwrap();
@@ -3346,8 +3410,22 @@ mod tests {
     fn unsettle_part_rejects_more_than_the_record() {
         let db = mem();
         let p = Period::new(2026, 1).unwrap();
-        post_two(&db, p, 5, 1, ("112201", m("5000"), Some(("customer", "C01"))), ("1001", m("5000"), None));
-        post_two(&db, p, 8, 2, ("1001", m("5000"), None), ("112201", m("5000"), Some(("customer", "C01"))));
+        post_two(
+            &db,
+            p,
+            5,
+            1,
+            ("112201", m("5000"), Some(("customer", "C01"))),
+            ("1001", m("5000"), None),
+        );
+        post_two(
+            &db,
+            p,
+            8,
+            2,
+            ("1001", m("5000"), None),
+            ("112201", m("5000"), Some(("customer", "C01"))),
+        );
         let ar = open_id(&db, p, true);
         let cash = open_id(&db, p, false);
         settle(&db, ar, cash, m("3000"), "tester").unwrap();
@@ -3356,5 +3434,4 @@ mod tests {
         assert!(err.contains("超过"), "期望提示超过记录金额，实际：{err}");
         assert_eq!(list(&db, "112201").unwrap()[0].amount, m("3000"));
     }
-
 }

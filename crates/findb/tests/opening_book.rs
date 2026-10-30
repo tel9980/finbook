@@ -1,9 +1,9 @@
 //! 期初收集表端到端：造一本《期初收集表》，导入，然后核对台账与科目期初。
 
-use findb::Db;
 use fincore::account::BookOptions;
 use fincore::money::Money;
 use fincore::{AuxEntity, AuxKind};
+use findb::Db;
 use rust_xlsxwriter::{Format, Workbook};
 
 fn m(s: &str) -> Money {
@@ -11,14 +11,20 @@ fn m(s: &str) -> Money {
 }
 
 /// 造一本和 `examples/opening_sheet.rs` 同构的收集表（四张纸）。
-fn make_sheet(ar: &[(&str, &str, f64)], ap: &[(&str, &str, f64)], bal: &[(&str, f64)], eq: &[(&str, f64)]) -> Vec<u8> {
+fn make_sheet(
+    ar: &[(&str, &str, f64)],
+    ap: &[(&str, &str, f64)],
+    bal: &[(&str, f64)],
+    eq: &[(&str, f64)],
+) -> Vec<u8> {
     let mut wb = Workbook::new();
     let f = Format::new();
 
     // ① 客户应收：标题行 + 表头行 + 数据
     let s = wb.add_worksheet();
     s.set_name("① 客户应收").unwrap();
-    s.write_string(0, 0, "客户欠款（应收）· 截止 2026-10-31", &f).unwrap();
+    s.write_string(0, 0, "客户欠款（应收）· 截止 2026-10-31", &f)
+        .unwrap();
     for (c, h) in ["客户编码", "客户名称", "欠款金额", "单据号（可空）", "备注"]
         .iter()
         .enumerate()
@@ -37,10 +43,18 @@ fn make_sheet(ar: &[(&str, &str, f64)], ap: &[(&str, &str, f64)], bal: &[(&str, 
     // ② 供应商应付
     let s = wb.add_worksheet();
     s.set_name("② 供应商应付").unwrap();
-    s.write_string(0, 0, "欠供应商的钱（应付）· 截止 2026-10-31", &f).unwrap();
-    for (c, h) in ["供应商编码", "供应商名称", "品类", "欠款金额", "单据号（可空）", "备注"]
-        .iter()
-        .enumerate()
+    s.write_string(0, 0, "欠供应商的钱（应付）· 截止 2026-10-31", &f)
+        .unwrap();
+    for (c, h) in [
+        "供应商编码",
+        "供应商名称",
+        "品类",
+        "欠款金额",
+        "单据号（可空）",
+        "备注",
+    ]
+    .iter()
+    .enumerate()
     {
         s.write_string(1, c as u16, *h, &f).unwrap();
     }
@@ -57,7 +71,8 @@ fn make_sheet(ar: &[(&str, &str, f64)], ap: &[(&str, &str, f64)], bal: &[(&str, 
     // ③ 账户余额
     let s = wb.add_worksheet();
     s.set_name("③ 账户余额").unwrap();
-    s.write_string(0, 0, "各账户余额 · 截止 2026-10-31", &f).unwrap();
+    s.write_string(0, 0, "各账户余额 · 截止 2026-10-31", &f)
+        .unwrap();
     for (c, h) in ["科目编码", "账户", "余额", "说明"].iter().enumerate() {
         s.write_string(1, c as u16, *h, &f).unwrap();
     }
@@ -133,7 +148,11 @@ fn collection_sheet_lands_in_ledger_and_opening_balances() {
     assert_eq!(ap.len(), 1);
     assert_eq!(ap[0].amount, m("30000"));
     // 单据号是自动补的（表里空着），日期是启用期间前一天
-    assert!(ap[0].doc_no.starts_with("QC-"), "单据号应自动补：{}", ap[0].doc_no);
+    assert!(
+        ap[0].doc_no.starts_with("QC-"),
+        "单据号应自动补：{}",
+        ap[0].doc_no
+    );
     assert_eq!(ap[0].doc_date, "2026-10-31", "期初日期应是 10-31");
 
     // 科目期初：应收/应付合计 + 银行 + 实收资本 + 轧差的本年利润
@@ -155,7 +174,9 @@ fn collection_sheet_lands_in_ledger_and_opening_balances() {
 
     // 试算平衡必须开账就是平的
     let chart = findb::accounts::chart(&db).unwrap();
-    let snap = findb::balances::BalanceSnapshot::load(&db, &findb::balances::BalanceQuery::period(start)).unwrap();
+    let snap =
+        findb::balances::BalanceSnapshot::load(&db, &findb::balances::BalanceQuery::period(start))
+            .unwrap();
     let tb = snap.trial_balance(&chart);
     assert!(tb.begin_balanced(), "期初不平：{tb:?}");
 }
@@ -178,11 +199,16 @@ fn unbalanced_sheet_is_rejected_and_nothing_is_written() {
         .expect_err("不平必须报错");
     let msg = format!("{err}");
     assert!(msg.contains("不平"), "错误信息要讲清是不平：{msg}");
-    assert!(msg.contains("9,000.00"), "要把差额带出来（带千分位）：{msg}");
+    assert!(
+        msg.contains("9,000.00"),
+        "要把差额带出来（带千分位）：{msg}"
+    );
 
     // 一笔都没落库
     assert!(
-        findb::settle::arap_opening_list(&db, None).unwrap().is_empty(),
+        findb::settle::arap_opening_list(&db, None)
+            .unwrap()
+            .is_empty(),
         "拒绝时不能写进半个账套"
     );
     assert!(

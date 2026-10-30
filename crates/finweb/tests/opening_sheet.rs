@@ -9,9 +9,9 @@
 
 mod common;
 
-use common::{body_string, login, select_book, test_state};
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
+use common::{body_string, login, select_book, test_state};
 use finweb::handlers;
 use rust_xlsxwriter::{Format, Workbook};
 use std::sync::Arc;
@@ -47,8 +47,12 @@ fn collection_book(
 
     let s = wb.add_worksheet();
     s.set_name("① 客户应收").unwrap();
-    s.write_string(0, 0, "客户欠款（应收）· 截止 2026-10-31", &f).unwrap();
-    for (c, h) in ["客户编码", "客户名称", "欠款金额", "单据号（可空）", "备注"].iter().enumerate() {
+    s.write_string(0, 0, "客户欠款（应收）· 截止 2026-10-31", &f)
+        .unwrap();
+    for (c, h) in ["客户编码", "客户名称", "欠款金额", "单据号（可空）", "备注"]
+        .iter()
+        .enumerate()
+    {
         s.write_string(1, c as u16, *h, &f).unwrap();
     }
     for (i, (code, name, amt)) in ar.iter().enumerate() {
@@ -57,12 +61,24 @@ fn collection_book(
         s.write_string(r, 1, *name, &f).unwrap();
         money_cell(s, r, 2, *amt, &f);
     }
-    s.write_string(2 + ar.len() as u32, 1, "应收合计", &f).unwrap();
+    s.write_string(2 + ar.len() as u32, 1, "应收合计", &f)
+        .unwrap();
 
     let s = wb.add_worksheet();
     s.set_name("② 供应商应付").unwrap();
-    s.write_string(0, 0, "欠供应商的钱（应付）· 截止 2026-10-31", &f).unwrap();
-    for (c, h) in ["供应商编码", "供应商名称", "品类", "欠款金额", "单据号（可空）", "备注"].iter().enumerate() {
+    s.write_string(0, 0, "欠供应商的钱（应付）· 截止 2026-10-31", &f)
+        .unwrap();
+    for (c, h) in [
+        "供应商编码",
+        "供应商名称",
+        "品类",
+        "欠款金额",
+        "单据号（可空）",
+        "备注",
+    ]
+    .iter()
+    .enumerate()
+    {
         s.write_string(1, c as u16, *h, &f).unwrap();
     }
     for (i, (code, name, amt)) in ap.iter().enumerate() {
@@ -74,7 +90,8 @@ fn collection_book(
 
     let s = wb.add_worksheet();
     s.set_name("③ 账户余额").unwrap();
-    s.write_string(0, 0, "各账户余额 · 截止 2026-10-31", &f).unwrap();
+    s.write_string(0, 0, "各账户余额 · 截止 2026-10-31", &f)
+        .unwrap();
     for (c, h) in ["科目编码", "账户", "余额", "说明"].iter().enumerate() {
         s.write_string(1, c as u16, *h, &f).unwrap();
     }
@@ -180,7 +197,10 @@ async fn unbalanced_sheet_is_refused_at_the_api_and_writes_nothing() {
     let body = body_string(resp).await;
     // 实收资本 0 → 不平，接口必须拒绝并且把差额讲清楚
     assert_eq!(status, StatusCode::BAD_REQUEST, "不平应 400：{body}");
-    assert!(body.contains("不平") || body.contains("差额"), "要说清哪里不平：{body}");
+    assert!(
+        body.contains("不平") || body.contains("差额"),
+        "要说清哪里不平：{body}"
+    );
 
     let resp = handlers::router(state.clone())
         .oneshot(common::authed_get("/api/begin", &sid))
@@ -210,5 +230,8 @@ async fn a_plain_spreadsheet_is_refused_with_a_readable_reason() {
     let status = resp.status();
     let body = body_string(resp).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "不是收集表应 400：{body}");
-    assert!(body.contains("期初收集表"), "错误里要点名期初收集表：{body}");
+    assert!(
+        body.contains("期初收集表"),
+        "错误里要点名期初收集表：{body}"
+    );
 }

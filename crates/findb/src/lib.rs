@@ -24,8 +24,6 @@ pub mod docflow;
 pub mod exports;
 pub mod funds;
 pub mod imports;
-pub mod opening_book;
-pub mod opening_check;
 pub mod inventory2;
 pub mod invoices;
 pub mod landedcost;
@@ -33,6 +31,8 @@ pub mod manufacturing;
 pub mod mgmt;
 pub mod month_close;
 pub mod offset;
+pub mod opening_book;
+pub mod opening_check;
 pub mod periods;
 pub mod printform;
 pub mod procurement;
@@ -221,7 +221,10 @@ impl Db {
             fincore::CodeScheme(opts.code_scheme.clone()),
             fincore::chart::default_accounts(),
         );
-        problems.extend(crate::accounts::check_biz_accounts(&chart, &opts.biz_accounts));
+        problems.extend(crate::accounts::check_biz_accounts(
+            &chart,
+            &opts.biz_accounts,
+        ));
         problems
     }
 
@@ -241,11 +244,9 @@ impl Db {
         // 先校参数再建文件：宁可建不出来，也不要建出一个「要用三天才发现设置填错」的账套
         let problems = Self::validate_options_for_new_book(opts);
         if !problems.is_empty() {
-            return Err(FinError::Validate(format!(
-                "账套参数不合法：{}",
-                problems.join("；")
-            ))
-            .into());
+            return Err(
+                FinError::Validate(format!("账套参数不合法：{}", problems.join("；"))).into(),
+            );
         }
         if let Some(dir) = path.parent() {
             if !dir.as_os_str().is_empty() {
@@ -278,11 +279,9 @@ impl Db {
         // 与 create_with 同一条规矩：内存账套也是账套，夹具里的参数写错要当场报
         let problems = Self::validate_options_for_new_book(opts);
         if !problems.is_empty() {
-            return Err(FinError::Validate(format!(
-                "账套参数不合法：{}",
-                problems.join("；")
-            ))
-            .into());
+            return Err(
+                FinError::Validate(format!("账套参数不合法：{}", problems.join("；"))).into(),
+            );
         }
         let conn = Connection::open_in_memory()?;
         schema::init(&conn)?;
@@ -300,7 +299,6 @@ impl Db {
     ///
     /// `seed_admin=false` 时跳过内置管理员账号，留给上层走「首次登录即管理员」流程。
     fn seed_builtin(&self, opts: &BookOptions, seed_admin: bool) -> DbResult<()> {
-
         for a in default_accounts() {
             accounts::insert(self, &a)?;
         }

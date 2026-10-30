@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use fincore::{BookOptions, Period};
 use findb::balances::{BalanceQuery, BalanceSnapshot};
 use findb::Db;
-use fincore::{BookOptions, Period};
 
 fn bench_opts() -> BookOptions {
     BookOptions {

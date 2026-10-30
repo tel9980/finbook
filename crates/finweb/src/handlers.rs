@@ -21,8 +21,6 @@ pub(crate) use findb::accounts;
 pub(crate) use findb::advanced;
 pub(crate) use findb::balances::{self, BalanceQuery, BalanceSnapshot, BeginRow, LedgerQuery};
 pub(crate) use findb::periods;
-pub(crate) use zip::{CompressionMethod, ZipWriter};
-pub(crate) use zip::write::{FileOptions, FileOptionExtension};
 pub(crate) use findb::security;
 pub(crate) use findb::users;
 pub(crate) use findb::vouchers::{self, VoucherQuery};
@@ -31,16 +29,17 @@ pub(crate) use findb::{auxs, business, template};
 pub(crate) use serde::Deserialize;
 pub(crate) use serde_json::json;
 pub(crate) use tracing::error;
+pub(crate) use zip::write::{FileOptionExtension, FileOptions};
+pub(crate) use zip::{CompressionMethod, ZipWriter};
 
 pub(crate) use crate::dto::*;
 pub(crate) use crate::realm::{RealmBook, RealmDb};
-pub(crate) use tower_http::compression::predicate::{NotForContentType, Predicate, SizeAbove};
-pub(crate) use tower_http::compression::CompressionLayer;
 pub(crate) use crate::state::{
     clear_cookie_header, parse_money_checked, parse_period, period_param, period_range_param,
     period_to_str, AppError, CurrentUser, RealmUser, WebState,
 };
-
+pub(crate) use tower_http::compression::predicate::{NotForContentType, Predicate, SizeAbove};
+pub(crate) use tower_http::compression::CompressionLayer;
 
 // ---- 按域拆出去的子模块（v1.8.57）----
 pub(crate) mod assets;
@@ -110,7 +109,6 @@ async fn api_auth_gate(
     Ok(next.run(req).await)
 }
 
-
 /// 统一 fallback：/api/* 未匹配 → 已登录回 404、未登录回 401（M-9）；
 /// 其余路径走静态资源（SPA 资产；"/" 已由 serve_index 路由处理）。
 /// 静态服务从 main::build_app 移入此处，正是为了让 /api/* 不再落到
@@ -154,7 +152,6 @@ async fn spa_fallback(State(state): State<Arc<WebState>>, req: axum::extract::Re
         })
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
-
 
 /// 组装路由
 pub fn router(state: Arc<WebState>) -> Router {
@@ -201,7 +198,10 @@ pub fn router(state: Arc<WebState>) -> Router {
                 .layer(axum::extract::DefaultBodyLimit::max(MAX_IMPORT_BOOK_BYTES)),
         )
         // 空模板（已预填当前账套的科目/客户/供应商清单）
-        .route("/api/books/opening-sheet/template", get(opening_sheet_template))
+        .route(
+            "/api/books/opening-sheet/template",
+            get(opening_sheet_template),
+        )
         // 导入**之后**的对账：四张纸落库情况 + 五条交叉校验
         .route(
             "/api/books/opening-sheet/reconcile",
@@ -355,7 +355,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/reports/trial-balance", get(get_trial_balance))
         .route("/api/reports/account-detail", get(account_detail_ep))
         .route("/api/reports/trial-balance/print", get(print_trial_balance))
-        .route("/api/reports/trial-balance/xlsx", get(export_trial_balance_xlsx))
+        .route(
+            "/api/reports/trial-balance/xlsx",
+            get(export_trial_balance_xlsx),
+        )
         .route(
             "/api/reports/trial-balance/export",
             get(export_trial_balance),
@@ -394,7 +397,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         // 财务核心：三大报表（资产负债表/利润表/现金流量表）
         .route("/api/reports/balance-sheet", get(get_balance_sheet))
         .route("/api/reports/balance-sheet/print", get(print_balance_sheet))
-        .route("/api/reports/balance-sheet/xlsx", get(export_balance_sheet_xlsx))
+        .route(
+            "/api/reports/balance-sheet/xlsx",
+            get(export_balance_sheet_xlsx),
+        )
         .route("/api/reports/income-statement", get(get_income_statement))
         .route(
             "/api/reports/income-statement/print",
@@ -799,16 +805,17 @@ pub fn router(state: Arc<WebState>) -> Router {
         //
         // 已经压过的类型不再压：xlsx / zip 内部就是 deflate，再 gzip 一遍
         // 体积不变、CPU 白烧，大导出还会明显变慢。
-        .layer(CompressionLayer::new().compress_when(
-            SizeAbove::new(1024)
-                .and(NotForContentType::new("application/zip"))
-                .and(NotForContentType::new(
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )),
-        ))
+        .layer(
+            CompressionLayer::new().compress_when(
+                SizeAbove::new(1024)
+                    .and(NotForContentType::new("application/zip"))
+                    .and(NotForContentType::new(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )),
+            ),
+        )
         .with_state(state)
 }
-
 
 /// CSRF 纵深防御：对状态变更请求校验 Sec-Fetch-Site / Origin / Referer。
 ///
@@ -864,7 +871,6 @@ async fn csrf_guard(req: axum::extract::Request, next: axum::middleware::Next) -
     next.run(req).await
 }
 
-
 /// `scheme://host[:port]/...` 的主机是否与 Host 头一致（无 Host 头时无法比较，放行）
 fn origin_host_matches(url: &str, host: Option<&str>) -> bool {
     let Some(host) = host else { return true };
@@ -876,7 +882,6 @@ fn origin_host_matches(url: &str, host: Option<&str>) -> bool {
         .to_ascii_lowercase();
     !origin_host.is_empty() && origin_host == host
 }
-
 
 /// 返回 SPA 首页，并把 `{{V}}` 占位符替换为当前资源版本号。
 /// 版本号由静态文件 mtime 计算，任何前端改动都会使 URL 变化 → 浏览器缓存自动失效。
@@ -905,7 +910,6 @@ async fn serve_index(State(state): State<Arc<WebState>>) -> Response {
     );
     r
 }
-
 
 /// 账套可见列表：管理员全部可见；其余按授权三层（管理员 / 归属者 / 账套内成员）取并集。
 ///
@@ -941,7 +945,6 @@ fn visible_books(
     Ok(books)
 }
 
-
 /// 取来源 IP：优先反代写入的 X-Forwarded-For（首个地址）/ X-Real-IP。
 /// 直连（未配反代）时取不到，返回 None，仅跳过 IP 维度限流，账号维度仍生效。
 fn client_ip(headers: &HeaderMap) -> Option<String> {
@@ -960,10 +963,6 @@ fn client_ip(headers: &HeaderMap) -> Option<String> {
                 .and_then(pick)
         })
 }
-
-
-
-
 
 // ═══════════════════════════════════════════════════════════════
 // 到岸成本（Landed Cost）
@@ -991,8 +990,6 @@ struct LcLineReq {
     memo: String,
 }
 
-
-
 fn lc_line_json(l: &findb::landedcost::LcLine) -> serde_json::Value {
     json!({
         "id": l.id,
@@ -1011,7 +1008,6 @@ fn lc_line_json(l: &findb::landedcost::LcLine) -> serde_json::Value {
         "memo": l.memo,
     })
 }
-
 
 fn lc_json(lc: &findb::landedcost::LandedCost) -> serde_json::Value {
     // 刻意把明细拆到独立函数：这个 json! 宏展开到 25 个字段时已经撞上
@@ -1048,11 +1044,7 @@ fn lc_json(lc: &findb::landedcost::LandedCost) -> serde_json::Value {
     })
 }
 
-
-
 // ---- 预算编制（当前激活版本的预算行，Web 入口） ----
-
-
 
 /// 生成唯一账套 key（文件名，不含扩展名）
 fn make_book_key(raw: &str, owner: &str, realm: &RealmDb) -> Result<String, AppError> {
@@ -1087,7 +1079,6 @@ fn make_book_key(raw: &str, owner: &str, realm: &RealmDb) -> Result<String, AppE
     Ok(key)
 }
 
-
 /// 凡是要把口令写进存储的入口，都必须先过这道校验。
 ///
 /// 单密码统一后所有口令入口都走应用级 PasswordPolicy（默认 8 位且需含字母+数字）：
@@ -1095,7 +1086,6 @@ fn make_book_key(raw: &str, owner: &str, realm: &RealmDb) -> Result<String, AppE
 fn check_password(state: &WebState, pwd: &str) -> Result<(), AppError> {
     state.policy().check(pwd).map_err(AppError::bad_request)
 }
-
 
 fn current_period(state: &WebState, user: &CurrentUser) -> Period {
     let ymm = user
@@ -1110,14 +1100,12 @@ fn current_period(state: &WebState, user: &CurrentUser) -> Period {
         .unwrap_or_else(|_| Period::default())
 }
 
-
 /// 校验用户传入的期间（YYYYMM）：非法值返回 400。
 /// 直接用 `Period::from_ymm` 会让非法期间一路流到 `first_day()/last_day()` 处 panic，
 /// 在 `panic = "abort"` 的 release 下等于把整个服务打挂。
 fn period_checked(ymm: i32) -> Result<Period, AppError> {
     Period::from_ymm_checked(ymm).map_err(|e| AppError::bad_request(e.to_string()))
 }
-
 
 /// 首页首屏两块：本期赚没赚（利润口径）+ 钱在哪（往来口径）
 ///
@@ -1217,7 +1205,6 @@ fn home_brief(
     })
 }
 
-
 /// 当月最后一天（账龄基准）
 fn month_end(p: Period) -> chrono::NaiveDate {
     let first = chrono::NaiveDate::from_ymd_opt(p.year(), p.month(), 1);
@@ -1231,7 +1218,6 @@ fn month_end(p: Period) -> chrono::NaiveDate {
         _ => chrono::Local::now().date_naive(),
     }
 }
-
 
 /// 「钱在哪」取数失败时的空壳：首页显示 0，不让整页 500。
 fn empty_money_position() -> findb::advanced::MoneyPosition {
@@ -1251,7 +1237,6 @@ fn empty_money_position() -> findb::advanced::MoneyPosition {
     }
 }
 
-
 /// 从语句表按行名（包含匹配）提取首个数值列，取不到 → None（前端显示 "—"）
 fn stmt_val(t: &fincore::report::ReportTable, names: &[&str]) -> Option<Money> {
     t.rows
@@ -1260,7 +1245,6 @@ fn stmt_val(t: &fincore::report::ReportTable, names: &[&str]) -> Option<Money> {
         .and_then(|r| r.values.first())
         .copied()
 }
-
 
 /// 报表域：资产/负债/权益/收入/净利润卡片 + 资产与利润多期趋势
 fn wb_report_domain(
@@ -1404,7 +1388,6 @@ fn wb_report_domain(
     Ok(())
 }
 
-
 /// 期末结账请求
 
 fn can_view_vouchers(user: &CurrentUser) -> bool {
@@ -1415,7 +1398,6 @@ fn can_view_vouchers(user: &CurrentUser) -> bool {
         || user.can(Perm::VoucherPost)
 }
 
-
 /// 「仅看本人经手的业务单据」（own_doc_only）：工资按员工、报销按申请人匹配
 /// 当前登录人的用户名/显示名。只过滤列表是不够的——按 id/参数的读写入口都要过这里。
 fn doc_in_scope(user: &CurrentUser, who: &str) -> bool {
@@ -1425,7 +1407,6 @@ fn doc_in_scope(user: &CurrentUser, who: &str) -> bool {
     let who = who.trim();
     who == user.user.username || who == user.user.display_name
 }
-
 
 /// 一张报销单是否在当前用户的可见范围内。
 ///
@@ -1440,15 +1421,10 @@ fn claim_visible(user: &CurrentUser, c: &business::Claim) -> bool {
     user.user.data_scope.allows_dept(&c.dept) && doc_in_scope(user, &c.applicant)
 }
 
-
 /// 报销单列表/导出共用的数据范围过滤
-fn scope_claims<'a>(
-    user: &CurrentUser,
-    rows: &'a [business::Claim],
-) -> Vec<&'a business::Claim> {
+fn scope_claims<'a>(user: &CurrentUser, rows: &'a [business::Claim]) -> Vec<&'a business::Claim> {
     rows.iter().filter(|c| claim_visible(user, c)).collect()
 }
-
 
 fn to_item(v: &Voucher) -> VoucherListItem {
     VoucherListItem {
@@ -1469,7 +1445,6 @@ fn to_item(v: &Voucher) -> VoucherListItem {
         prepared_by: v.prepared_by.clone(),
     }
 }
-
 
 /// 从查询参数构造凭证列表条件。`list_vouchers` 与 `list_vouchers_page` **共用**
 /// 这一份：分页要显示「共 N 张」和合计，两者必须和列表看到的是同一批数据，
@@ -1493,7 +1468,6 @@ fn voucher_query_from(q: &HashMap<String, String>, user: &CurrentUser) -> Vouche
     }
     query
 }
-
 
 /// 解析银行科目：支持尾号简写。
 /// - 输入已是完整科目编码（如 `100201`）：原样返回
@@ -1525,13 +1499,9 @@ fn normalize_bank_account(chart: &fincore::Chart, account_code: &str) -> Option<
     }
 }
 
-
 fn default_true() -> bool {
     true
 }
-
-
-
 
 /// 红字冲销请求：冲销凭证落到的期间与日期
 
@@ -1554,7 +1524,6 @@ fn attachment_json(a: &findb::attach::Attachment) -> serde_json::Value {
         "added_at": a.added_at,
     })
 }
-
 
 // ---------------------------------------------------------------------------
 // 发票管理
@@ -1581,7 +1550,6 @@ fn invoice_json(inv: &findb::invoices::Invoice) -> serde_json::Value {
         "created_by": inv.created_by,
     })
 }
-
 
 fn invoice_from_req(r: &InvoiceReq) -> Result<findb::invoices::Invoice, AppError> {
     Ok(findb::invoices::Invoice {
@@ -1612,9 +1580,6 @@ fn invoice_from_req(r: &InvoiceReq) -> Result<findb::invoices::Invoice, AppError
         updated_at: String::new(),
     })
 }
-
-
-
 
 /// 发票列表查询参数
 
@@ -1650,7 +1615,6 @@ fn b64_decode(s: &str) -> Result<Vec<u8>, AppError> {
     Ok(out)
 }
 
-
 /// 导入 per-kind 鉴权：页面入口宽（NAV Report），动作按 kind 严管（迁移操作者=对应岗位）
 fn import_perm(kind: &str) -> Result<Perm, AppError> {
     Ok(match kind {
@@ -1661,7 +1625,6 @@ fn import_perm(kind: &str) -> Result<Perm, AppError> {
         _ => return Err(AppError::bad_request("未知导入类型 kind")),
     })
 }
-
 
 /// query 里的 period（YYYYMM 或 YYYY-MM），缺省用会话当前期间。
 ///
@@ -1677,12 +1640,10 @@ fn period_from_query(state: &WebState, user: &CurrentUser, raw: Option<&String>)
     }
 }
 
-
 /// `2026-01` / `202601` 都接受（前端两种都可能传来）。
 fn period_checked_digits(s: &str) -> i32 {
     s.replace('-', "").parse().unwrap_or(0)
 }
-
 
 // ---------------------------------------------------------------------------
 // 账簿 / 报表
@@ -1736,7 +1697,6 @@ fn ledger_query_from<'a>(
     Ok((db, chart, lq))
 }
 
-
 /// 计算科目余额表（供 JSON / 打印 / 导出复用）
 fn trial_balance_data(
     state: &WebState,
@@ -1761,7 +1721,6 @@ fn trial_balance_data(
     let totals = snap.trial_balance(&chart);
     Ok((rows, totals))
 }
-
 
 // ---------------------------------------------------------------------------
 // 数据导出（CSV，需 Export 权限；带 BOM 便于 Excel 直接打开中文）
@@ -1789,11 +1748,15 @@ fn csv_escape(s: &str) -> String {
     }
 }
 
-
 fn csv_response(filename: &str, rows: Vec<Vec<String>>) -> Response {
     let mut out = String::from("\u{feff}");
     for r in &rows {
-        out.push_str(&r.iter().map(|c| csv_escape(c)).collect::<Vec<_>>().join(","));
+        out.push_str(
+            &r.iter()
+                .map(|c| csv_escape(c))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
         out.push_str("\r\n");
     }
     let mut resp = out.into_response();
@@ -1808,7 +1771,6 @@ fn csv_response(filename: &str, rows: Vec<Vec<String>>) -> Response {
     }
     resp
 }
-
 
 // ---------------------------------------------------------------------------
 // 报表渲染
@@ -1876,7 +1838,6 @@ fn trial_balance_html(
     )
 }
 
-
 fn trial_balance_csv(rows: &[fincore::balance::BalanceRow]) -> String {
     let mut s = String::from("科目编码,科目名称,期初方向,期初余额,本期借方,本期贷方,期末方向,期末余额,本年累计借方,本年累计贷方\n");
     for r in rows {
@@ -1899,13 +1860,11 @@ fn trial_balance_csv(rows: &[fincore::balance::BalanceRow]) -> String {
     s
 }
 
-
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
-
 
 // ═══════════════════════════════════════════════════════════════
 // 税务申报表（增值税一般纳税人）
@@ -1922,8 +1881,6 @@ fn html_escape(s: &str) -> String {
 /// 分两级是有意的：看一眼本期数不落纸，导出 CSV 才是数据出系统。
 const _TAX_DOC: &str = "税务申报表";
 
-
-
 fn parse_voucher_status(s: &str) -> Option<fincore::VoucherStatus> {
     match s {
         "draft" => Some(fincore::VoucherStatus::Draft),
@@ -1933,7 +1890,6 @@ fn parse_voucher_status(s: &str) -> Option<fincore::VoucherStatus> {
         _ => None,
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // 自定义报表（UFO 公式）
@@ -1951,8 +1907,6 @@ struct CustomLineReq {
     pub bold: bool,
 }
 
-
-
 fn custom_json(r: &findb::mgmt::CustomReport) -> serde_json::Value {
     json!({
         "key": r.key,
@@ -1964,24 +1918,11 @@ fn custom_json(r: &findb::mgmt::CustomReport) -> serde_json::Value {
     })
 }
 
-
 // ---- 存货核算：成本调整 ----
-
 
 // ---- 库存深度：序列号 / 多单位 / 账龄 / ABC / 组装拆卸 / 分仓库 ----
 
-
-
-
-
 // ---- 采购/销售深度：暂估 / 对账 / 配额 / 订单变更 ----
-
-
-
-
-
-
-
 
 // ---------------- 单据套打（订单 / 收付款单）：字段白名单 + 批量紧凑分页 ----------------
 
@@ -1994,7 +1935,6 @@ fn doc_fields_from_q(q: &HashMap<String, String>) -> findb::printform::DocPrintF
     }
     f
 }
-
 
 /// 打印纸张：`a4` / `a5` / `third` / 自定义 `宽x高`（mm，50..=600），非法回退 a4
 fn doc_size_from_q(q: &HashMap<String, String>) -> String {
@@ -2016,7 +1956,6 @@ fn doc_size_from_q(q: &HashMap<String, String>) -> String {
     "a4".to_string()
 }
 
-
 /// `ids=1,2,3`（去重保序）；缺省返回空 = 由调用方按期间/全部取数
 fn print_ids(q: &HashMap<String, String>) -> Vec<i64> {
     let mut ids: Vec<i64> = q
@@ -2031,7 +1970,6 @@ fn print_ids(q: &HashMap<String, String>) -> Vec<i64> {
     ids.dedup();
     ids
 }
-
 
 fn so_to_print(o: findb::scm::SalesOrder) -> findb::printform::OrderPrint {
     findb::printform::OrderPrint {
@@ -2062,7 +2000,6 @@ fn so_to_print(o: findb::scm::SalesOrder) -> findb::printform::OrderPrint {
     }
 }
 
-
 fn po_to_print(o: findb::scm::PurchaseOrder) -> findb::printform::OrderPrint {
     findb::printform::OrderPrint {
         title: "采购订单".to_string(),
@@ -2092,7 +2029,6 @@ fn po_to_print(o: findb::scm::PurchaseOrder) -> findb::printform::OrderPrint {
     }
 }
 
-
 fn receipt_to_print(d: findb::receipt::ReceiptDoc) -> findb::printform::ReceiptPrint {
     findb::printform::ReceiptPrint {
         no: d.no,
@@ -2113,7 +2049,6 @@ fn receipt_to_print(d: findb::receipt::ReceiptDoc) -> findb::printform::ReceiptP
             .unwrap_or_default(),
     }
 }
-
 
 // ---------------- 订单 CRUD（销售/采购，对标金蝶订单流程） ----------------
 
@@ -2137,10 +2072,6 @@ struct OrderLineInput {
     memo: String,
 }
 
-
-
-
-
 /// 订单日期：缺省今天（非法值回退今天，不让单据失败）
 fn order_date(s: &str) -> NaiveDate {
     if s.trim().is_empty() {
@@ -2151,20 +2082,17 @@ fn order_date(s: &str) -> NaiveDate {
     }
 }
 
-
 fn so_status_parse(s: &str) -> Result<findb::scm::SoStatus, AppError> {
     findb::scm::status_from::<findb::scm::SoStatus>(s.trim()).ok_or_else(|| {
         AppError::bad_request("订单状态取值：Draft/Confirmed/PartialShip/Completed/Cancelled")
     })
 }
 
-
 fn po_status_parse(s: &str) -> Result<findb::scm::PoStatus, AppError> {
     findb::scm::status_from::<findb::scm::PoStatus>(s.trim()).ok_or_else(|| {
         AppError::bad_request("订单状态取值：Draft/Confirmed/PartialIn/Completed/Cancelled")
     })
 }
-
 
 /// 工作流闸门的判定结果
 
@@ -2198,12 +2126,7 @@ fn workflow_gate(
     }
 }
 
-
-
 // ---- 工艺路线 / 报工 ----
-
-
-
 
 #[derive(Deserialize)]
 struct MrpDemandDto {
@@ -2214,26 +2137,16 @@ struct MrpDemandDto {
     pub source: String,
 }
 
-
-
 // ---- 库存作业：形态转换 / 质检 / 低库存预警（对标金蝶） ----
 
-
-
 // ---- 生产订单：下达 / 开工 / 领料 / 完工入库 + BOM（工厂链「业务单据同步凭证」） ----
-
-
 
 fn prod_act_date(s: &str) -> chrono::NaiveDate {
     chrono::NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
         .unwrap_or_else(|_| chrono::Local::now().date_naive())
 }
 
-
 // ---- MPS 主生产计划 / 粗排 / 细排（链6） ----
-
-
-
 
 #[derive(Deserialize)]
 struct SchedItem {
@@ -2244,12 +2157,6 @@ struct SchedItem {
     end: String,
 }
 
-
-
-
-
-
-
 #[derive(Deserialize)]
 struct BomChildReq {
     child: String,
@@ -2259,26 +2166,9 @@ struct BomChildReq {
     loss: String,
 }
 
-
-
-
-
-
-
-
 // ---------------------------------------------------------------------------
 // 资金：票据 / 融资 / 资金日报 / 资金预测
 // ---------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
 
 fn opt_body_date(body: &axum::body::Bytes) -> Result<Option<chrono::NaiveDate>, AppError> {
     if body.is_empty() {
@@ -2299,8 +2189,6 @@ fn opt_body_date(body: &axum::body::Bytes) -> Result<Option<chrono::NaiveDate>, 
         None => Ok(None),
     }
 }
-
-
 
 // ---------------- 收付款单审核流 + 存货盘点 ----------------
 
@@ -2332,9 +2220,7 @@ fn require_fund_doc_gate(user: &CurrentUser) -> Result<(), AppError> {
     }
 }
 
-
 // ---------------- 资金调拨（账户间转账） ----------------
-
 
 #[derive(Deserialize)]
 struct CountLineInput {
@@ -2348,19 +2234,11 @@ struct CountLineInput {
     memo: String,
 }
 
-
-
 // ---------------- 批次与库位（对标金蝶批号/保质期/货位） ----------------
-
-
-
-
 
 // ---------------------------------------------------------------------------
 // 成本：计价配置 + 期末结价
 // ---------------------------------------------------------------------------
-
-
 
 // ---------------------------------------------------------------------------
 // 固定资产（与桌面端对齐：卡片 / 折旧计划 / 计提 / 清理）
@@ -2391,9 +2269,6 @@ fn asset_json(a: &findb::assets::Asset) -> serde_json::Value {
         "memo": a.memo,
     })
 }
-
-
-
 
 fn asset_from_req(r: &AssetReq) -> Result<findb::assets::Asset, AppError> {
     if r.code.trim().is_empty() {
@@ -2443,8 +2318,6 @@ fn asset_from_req(r: &AssetReq) -> Result<findb::assets::Asset, AppError> {
     })
 }
 
-
-
 #[derive(Deserialize)]
 struct AssetCountLineReq {
     asset_id: i64,
@@ -2454,8 +2327,6 @@ struct AssetCountLineReq {
     #[serde(default)]
     memo: String,
 }
-
-
 
 // ---------------------------------------------------------------------------
 // 银行对账（与桌面端对齐）
@@ -2477,7 +2348,6 @@ fn stmt_json(s: &findb::bank::Statement) -> serde_json::Value {
     })
 }
 
-
 fn book_entry_json(b: &findb::bank::BookEntry) -> serde_json::Value {
     json!({
         "entry_id": b.entry_id,
@@ -2490,7 +2360,6 @@ fn book_entry_json(b: &findb::bank::BookEntry) -> serde_json::Value {
         "credit": b.credit.fmt_money(),
     })
 }
-
 
 fn reconcile_json(r: &findb::bank::Reconciliation) -> serde_json::Value {
     json!({
@@ -2509,11 +2378,6 @@ fn reconcile_json(r: &findb::bank::Reconciliation) -> serde_json::Value {
     })
 }
 
-
-
-
-
-
 // ---------------------------------------------------------------------------
 // 往来核销（与桌面端对齐）
 // ---------------------------------------------------------------------------
@@ -2531,7 +2395,6 @@ fn open_entry_json_with_days(
     v["days"] = serde_json::json!((as_of - e.date).num_days().max(0));
     v
 }
-
 
 fn open_entry_json(e: &findb::settle::OpenEntry) -> serde_json::Value {
     json!({
@@ -2555,10 +2418,6 @@ fn open_entry_json(e: &findb::settle::OpenEntry) -> serde_json::Value {
     })
 }
 
-
-
-
-
 /// 通用往来互抵请求：借方挂账 + 贷方挂账，科目/往来单位可以不同
 
 /// 核销「未核销清单」默认返回多少行、最多多少行。
@@ -2566,14 +2425,9 @@ fn open_entry_json(e: &findb::settle::OpenEntry) -> serde_json::Value {
 /// 默认 200：一屏十几行，200 行足够翻；上限 2000 是防止有人写 `limit=999999`
 /// 把 700KB 的包又拉回来。
 
-
-
 // ---------------- 往来对冲单（应收 ↔ 应付相互抵销） ----------------
 
-
 // ---- 往来对账单（对标金蝶「客户对账单」：按期间出账单 + 客户回签确认）----
-
-
 
 fn statement_json(s: &findb::statement::Statement) -> serde_json::Value {
     json!({
@@ -2610,10 +2464,7 @@ fn statement_json(s: &findb::statement::Statement) -> serde_json::Value {
     })
 }
 
-
 // ---- 催款单 / 对账函（应收催收闭环） ----
-
-
 
 // ---------------------------------------------------------------------------
 // 三大报表：资产负债表 / 利润表 / 现金流量表（JSON + 打印预览）
@@ -2635,7 +2486,6 @@ fn report_range(
     period_range_param(q, year_start, cur)
 }
 
-
 /// 加载报表定义（优先账套内自定义，否则内置模板）
 fn report_def(
     db: &findb::Db,
@@ -2647,7 +2497,6 @@ fn report_def(
         .flatten()
         .unwrap_or(fallback)
 }
-
 
 /// 资产负债表 / 利润表共用渲染：返回 ReportTable
 fn statement_table(
@@ -2685,7 +2534,6 @@ fn statement_table(
     ))
 }
 
-
 /// ReportTable → JSON（行/值/样式）
 fn table_json(t: &fincore::report::ReportTable) -> serde_json::Value {
     let rows: Vec<serde_json::Value> = t
@@ -2711,13 +2559,15 @@ fn table_json(t: &fincore::report::ReportTable) -> serde_json::Value {
     })
 }
 
-
 /// 打印页的「试打」覆盖：`?po_font=9&po_orient=landscape…`
 ///
 /// 设置页的「试打一张」要能在**保存之前**看到效果，否则用户只能「改 → 存 → 去报表 →
 /// 打印 → 发现不对 → 回来再改」。这里只覆盖这次请求的渲染，不写库 —— 参数非法一律
 /// 忽略并沿用账套设置，宁可打不出新样式也不要打个 500。
-fn print_opts_from_q(mut po: fincore::PrintOptions, q: &HashMap<String, String>) -> fincore::PrintOptions {
+fn print_opts_from_q(
+    mut po: fincore::PrintOptions,
+    q: &HashMap<String, String>,
+) -> fincore::PrintOptions {
     let get = |k: &str| q.get(k).map(|v| v.trim()).filter(|v| !v.is_empty());
     if let Some(v) = get("po_orient") {
         if matches!(v, "auto" | "portrait" | "landscape") {
@@ -2762,7 +2612,6 @@ fn print_opts_from_q(mut po: fincore::PrintOptions, q: &HashMap<String, String>)
     po
 }
 
-
 fn to_ytd(k: fincore::report::AmountKind) -> fincore::report::AmountKind {
     match k {
         fincore::report::AmountKind::PeriodDebit => fincore::report::AmountKind::YearDebit,
@@ -2770,7 +2619,6 @@ fn to_ytd(k: fincore::report::AmountKind) -> fincore::report::AmountKind {
         other => other,
     }
 }
-
 
 // ---------------- 期初建账 ----------------
 #[derive(Deserialize)]
@@ -2788,8 +2636,6 @@ struct BeginRowInput {
     qty: Option<String>,
 }
 
-
-
 /// 前端传辅助核算维度的 kind 字符串列表（如 ["customer","project"]），
 /// 由后端统一转成 AuxMask 位掩码，避免前端依赖位序。
 fn build_aux_mask(kinds: &[String]) -> AuxMask {
@@ -2801,7 +2647,6 @@ fn build_aux_mask(kinds: &[String]) -> AuxMask {
     }
     mask
 }
-
 
 /// 期初保存请求。
 ///
@@ -2830,7 +2675,6 @@ struct BeginBatchRow {
     dir: String,
     amount: String,
 }
-
 
 /// 期末余额上下文：方向 + 末级编码（解析要靠它）
 ///
@@ -2861,7 +2705,6 @@ fn chart_ctx(
     Ok((dirs, leaves))
 }
 
-
 // ---------------- 备份 / 恢复 ----------------
 
 /// 强制把 WAL 合并回主文件（TRUNCATE），使文件级复制（`fs::copy`）拿到一致快照。
@@ -2878,7 +2721,6 @@ fn checkpoint_wal(db: &findb::Db) -> Result<(), AppError> {
     Ok(())
 }
 
-
 /// 当前账套引用的大附件文件（相对 `.attachments/` 的文件名）。
 fn book_attachment_paths(db: &Db) -> Result<Vec<String>, AppError> {
     let mut stmt = db
@@ -2894,7 +2736,6 @@ fn book_attachment_paths(db: &Db) -> Result<Vec<String>, AppError> {
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::Internal(format!("读取附件清单失败：{e}")))
 }
-
 
 /// 备份文件名是否属于 `key` 账套。
 ///
@@ -2915,7 +2756,6 @@ fn backup_stamp() -> String {
         now.timestamp_subsec_millis()
     )
 }
-
 
 fn backup_belongs_to(name: &str, key: &str) -> bool {
     let Some(stem) = name.strip_suffix(".fbk") else {
@@ -2941,9 +2781,6 @@ fn backup_belongs_to(name: &str, key: &str) -> bool {
     }
     &rest[pos + 1..] == key
 }
-
-
-
 
 /// 预置档案端点的入参：只要类别
 
@@ -2974,7 +2811,6 @@ struct AuxBatchRow {
     disabled: bool,
 }
 
-
 /// 解析结果里的一行（给前端渲染预览表格）
 
 // ===========================================================================
@@ -2988,7 +2824,6 @@ fn query_period(state: &WebState, user: &CurrentUser, q: &HashMap<String, String
         .unwrap_or_else(|| current_period(state, user))
 }
 
-
 /// 凭证生成请求里的日期，缺省用期间末日
 fn req_date(s: &str, fallback: NaiveDate) -> Result<NaiveDate, AppError> {
     if s.trim().is_empty() {
@@ -2997,8 +2832,6 @@ fn req_date(s: &str, fallback: NaiveDate) -> Result<NaiveDate, AppError> {
     NaiveDate::parse_from_str(s.trim(), "%Y-%m-%d")
         .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))
 }
-
-
 
 /// 工资行的数据范围过滤（列表 / 导出 / 银行代发 / 个税申报表共用，避免各处漏抄）
 /// 部门范围与「仅看本人经手的业务单据」叠加，与 own_doc_only 口径一致。
@@ -3011,7 +2844,6 @@ fn scope_payroll<'a>(
         .collect()
 }
 
-
 /// 员工银行信息（辅助档案 props.bank_account / bank_name）
 fn employee_bank(db: &findb::Db, code: &str) -> Result<(String, String), AppError> {
     let e = auxs::get(db, AuxKind::Employee, code)?;
@@ -3020,11 +2852,6 @@ fn employee_bank(db: &findb::Db, code: &str) -> Result<(String, String), AppErro
     let name = props.get("bank_name").cloned().unwrap_or_default();
     Ok((acc.trim().to_string(), name.trim().to_string()))
 }
-
-
-
-
-
 
 // ===========================================================================
 // 费用报销（对齐桌面端 finui：草稿→提交→审批→支付→生成凭证，入口权限 VoucherNew）
@@ -3038,8 +2865,6 @@ struct ClaimItemInput {
     memo: String,
 }
 
-
-
 fn claim_items(items: &[ClaimItemInput]) -> Result<Vec<business::ClaimItem>, AppError> {
     let mut out = Vec::with_capacity(items.len());
     for i in items {
@@ -3051,9 +2876,6 @@ fn claim_items(items: &[ClaimItemInput]) -> Result<Vec<business::ClaimItem>, App
     }
     Ok(out)
 }
-
-
-
 
 // ---------------------------------------------------------------------------
 // Excel（xlsx）导出 —— 需 Export 权限
@@ -3075,7 +2897,13 @@ fn claim_items(items: &[ClaimItemInput]) -> Result<Vec<business::ClaimItem>, App
 pub fn attachment_header(filename: &str) -> Option<axum::http::HeaderValue> {
     let ascii: String = filename
         .chars()
-        .map(|c| if c.is_ascii() && c != '"' && c != '\\' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii() && c != '"' && c != '\\' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let mut pct = String::new();
     for b in filename.as_bytes() {
@@ -3091,28 +2919,33 @@ pub fn attachment_header(filename: &str) -> Option<axum::http::HeaderValue> {
     .ok()
 }
 
-
 const XLSX_MIME: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 fn xlsx_response(filename: &str, bytes: Vec<u8>) -> Response {
     let mut resp = bytes.into_response();
-    resp.headers_mut()
-        .insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static(XLSX_MIME));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static(XLSX_MIME),
+    );
     if let Some(v) = attachment_header(filename) {
         resp.headers_mut().insert(header::CONTENT_DISPOSITION, v);
     }
     resp
 }
 
-
-fn build_xlsx(sheets: &[crate::xlsxout::Sheet], filename: &str, bytes_hint: &str) -> Result<Response, AppError> {
+fn build_xlsx(
+    sheets: &[crate::xlsxout::Sheet],
+    filename: &str,
+    bytes_hint: &str,
+) -> Result<Response, AppError> {
     let bytes = crate::xlsxout::build(sheets).map_err(AppError::BadRequest)?;
     if bytes.is_empty() {
-        return Err(AppError::Internal(format!("生成 {bytes_hint} 失败：内容为空")));
+        return Err(AppError::Internal(format!(
+            "生成 {bytes_hint} 失败：内容为空"
+        )));
     }
     Ok(xlsx_response(filename, bytes))
 }
-
 
 /// 三大报表 + 所有者权益变动表的导出目标
 
@@ -3126,7 +2959,6 @@ impl StatementKind {
         }
     }
 }
-
 
 fn export_statement_xlsx(
     state: &WebState,
@@ -3198,7 +3030,6 @@ fn export_statement_xlsx(
     )
 }
 
-
 // ---------------------------------------------------------------------------
 // 账套导入：把外部 .fbk（桌面端账套 / 另一台服务器导出的备份）搬进本服务
 //
@@ -3219,15 +3050,13 @@ const MAX_IMPORT_BOOK_BYTES: usize = 512 * 1024 * 1024;
 /// 3. schema 版本不能比本二进制新 —— 新版本的列旧代码不认识，
 ///    放进来之后第一次用到就 no such column，而且没有任何线索指向"版本太新"。
 fn validate_book_file(path: &std::path::Path) -> Result<(), AppError> {
-    let conn = rusqlite::Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .map_err(|e| {
-        AppError::bad_request(format!(
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| {
+                AppError::bad_request(format!(
             "这个文件不是 SQLite 数据库（{e}）。请确认上传的是 .fbk 账套文件或本系统导出的备份 zip"
         ))
-    })?;
+            })?;
     let check: String = conn
         .query_row("PRAGMA integrity_check", [], |r| r.get(0))
         .map_err(|e| AppError::bad_request(format!("账套文件无法读取：{e}")))?;
@@ -3257,7 +3086,6 @@ fn validate_book_file(path: &std::path::Path) -> Result<(), AppError> {
     }
     Ok(())
 }
-
 
 /// 从上传内容里取出 (账套字节, 附件列表)。
 ///
@@ -3320,9 +3148,7 @@ fn unpack_book_upload(
             }
         }
         let book = book.ok_or_else(|| {
-            AppError::bad_request(format!(
-                "压缩包里没有 .fbk 账套文件（收到的是 {filename}）"
-            ))
+            AppError::bad_request(format!("压缩包里没有 .fbk 账套文件（收到的是 {filename}）"))
         })?;
         return Ok((book, attach));
     }
@@ -3330,7 +3156,6 @@ fn unpack_book_upload(
         "不认识这个文件格式：需要 .fbk 账套文件，或本系统导出的备份 .zip",
     ))
 }
-
 
 /// 导入期初收集表：上传填好的《期初收集表.xlsx》→ 往来台账 + 科目期初一次落库。
 ///
@@ -3359,14 +3184,11 @@ async fn sheet_upload(mut multipart: axum::extract::Multipart) -> Result<Vec<u8>
     Ok(data)
 }
 
-
 /// 《期初收集表》的空模板：已预填当前账套的科目、客户、供应商清单。
 /// 期初对账视图的 DTO。
 ///
 /// 金额一律给**字符串**（`fmt_plain`）：前端直接显示，不做二次格式化 ——
 /// 对账页上一个千分位错位就会让人怀疑是数字错了，而它只是显示问题。
-
-
 
 #[cfg(test)]
 mod security_regression_tests {

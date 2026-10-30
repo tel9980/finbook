@@ -82,7 +82,10 @@ fn fill_core(src: &[u8], extra_ar: &[(&str, &str, &str)], paid_in: &str) -> Vec<
     // 为什么必须能追加：模板的 ①② 两张纸是按账套里的客户/供应商预填的，账套还没有
     // 档案时它们只有表头 —— 只在已有行上填数，测试就变成「什么都没填也全绿」。
     let set_row = |rows: &mut Vec<Vec<String>>, key: &str, mk: &dyn Fn() -> Vec<String>| {
-        if let Some(r) = rows.iter_mut().find(|r| r.first().map(|c| c.as_str()) == Some(key)) {
+        if let Some(r) = rows
+            .iter_mut()
+            .find(|r| r.first().map(|c| c.as_str()) == Some(key))
+        {
             let fresh = mk();
             for (i, v) in fresh.iter().enumerate() {
                 if i < r.len() {
@@ -100,10 +103,22 @@ fn fill_core(src: &[u8], extra_ar: &[(&str, &str, &str)], paid_in: &str) -> Vec<
         let mut rows = rows.clone();
         if name.contains("客户应收") {
             set_row(&mut rows, "C001", &|| {
-                vec!["C001".into(), "华达五金".into(), "50000".into(), "XS-001".into(), String::new()]
+                vec![
+                    "C001".into(),
+                    "华达五金".into(),
+                    "50000".into(),
+                    "XS-001".into(),
+                    String::new(),
+                ]
             });
             set_row(&mut rows, "C002", &|| {
-                vec!["C002".into(), "鑫盛电器".into(), "45000".into(), String::new(), String::new()]
+                vec![
+                    "C002".into(),
+                    "鑫盛电器".into(),
+                    "45000".into(),
+                    String::new(),
+                    String::new(),
+                ]
             });
             for (code, name, amt) in extra_ar {
                 set_row(&mut rows, code, &|| {
@@ -120,7 +135,13 @@ fn fill_core(src: &[u8], extra_ar: &[(&str, &str, &str)], paid_in: &str) -> Vec<
         }
         if name.contains("供应商应付") {
             set_row(&mut rows, "S001", &|| {
-                vec!["S001".into(), "宏源氧化".into(), "28000".into(), "CG-001".into(), String::new()]
+                vec![
+                    "S001".into(),
+                    "宏源氧化".into(),
+                    "28000".into(),
+                    "CG-001".into(),
+                    String::new(),
+                ]
             });
             filled += 1;
         }
@@ -171,10 +192,7 @@ async fn balance_sheet_carries_quantity_stock_and_bank() {
     let sid = boss_in_b1(&state).await;
 
     // 期初要用到的档案：存货 HG001、银行账户 B01
-    for (kind, text) in [
-        ("item", "HG001\t合页 2 寸\n"),
-        ("bank", "B01\t工行对公\n"),
-    ] {
+    for (kind, text) in [("item", "HG001\t合页 2 寸\n"), ("bank", "B01\t工行对公\n")] {
         let resp = finweb::handlers::router(state.clone())
             .oneshot(authed_post(
                 "/api/aux-batch",
@@ -183,9 +201,12 @@ async fn balance_sheet_carries_quantity_stock_and_bank() {
             ))
             .await
             .unwrap();
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap())
-                .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 1 << 20)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         // POST 只解析，真正落库是 PUT（必须把解析出来的 rows 原样带回）
         let resp = finweb::handlers::router(state.clone())
             .oneshot(authed_put(
@@ -242,15 +263,51 @@ fn fill_with_balance_extras(src: &[u8]) -> Vec<u8> {
         let mut rows = rows.clone();
         if name.contains("账户余额") {
             let push = |rows: &mut Vec<Vec<String>>, v: Vec<String>| {
-                if let Some(r) = rows.iter_mut().find(|r| r.first().map(|c| c.as_str()) == Some(&v[0])) {
+                if let Some(r) = rows
+                    .iter_mut()
+                    .find(|r| r.first().map(|c| c.as_str()) == Some(&v[0]))
+                {
                     *r = v;
                 } else {
                     rows.push(v);
                 }
             };
-            push(&mut rows, vec!["1001".into(), "库存现金".into(), "20000".into(), String::new(), String::new(), String::new(), String::new()]);
-            push(&mut rows, vec!["100201".into(), "工行对公".into(), "8000".into(), String::new(), String::new(), String::new(), "B01".into()]);
-            push(&mut rows, vec!["140501".into(), "库存商品".into(), "5000".into(), "2.5".into(), String::new(), "HG001".into(), String::new()]);
+            push(
+                &mut rows,
+                vec![
+                    "1001".into(),
+                    "库存现金".into(),
+                    "20000".into(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ],
+            );
+            push(
+                &mut rows,
+                vec![
+                    "100201".into(),
+                    "工行对公".into(),
+                    "8000".into(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    "B01".into(),
+                ],
+            );
+            push(
+                &mut rows,
+                vec![
+                    "140501".into(),
+                    "库存商品".into(),
+                    "5000".into(),
+                    "2.5".into(),
+                    String::new(),
+                    "HG001".into(),
+                    String::new(),
+                ],
+            );
         }
         if name.contains("基本资料") {
             rows.retain(|r| r.first().map(|c| c.as_str()) != Some("实收资本"));
@@ -297,7 +354,9 @@ async fn template_carries_the_current_books_account_codes() {
         .find(|(n, _)| n.contains("账户余额"))
         .expect("账户余额纸");
     assert!(
-        bal.1.iter().any(|r| r.first().map(|s| s.as_str()) == Some("1001")),
+        bal.1
+            .iter()
+            .any(|r| r.first().map(|s| s.as_str()) == Some("1001")),
         "账户余额纸里应当预填 1001 库存现金，实际前几行：{:?}",
         &bal.1.iter().take(5).collect::<Vec<_>>()
     );
@@ -323,7 +382,10 @@ async fn preview_does_not_write_then_import_does() {
     assert_eq!(code, StatusCode::OK, "预检应通过：{body}");
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["dry_run"], serde_json::json!(true));
-    assert_eq!(v["debit_total"], v["credit_total"], "预检应算出平衡：{body}");
+    assert_eq!(
+        v["debit_total"], v["credit_total"],
+        "预检应算出平衡：{body}"
+    );
 
     // 预检之后库里必须还是空的
     let begin = String::from_utf8(
@@ -340,7 +402,11 @@ async fn preview_does_not_write_then_import_does() {
         .to_vec(),
     )
     .unwrap();
-    assert_eq!(begin.trim(), "[]", "预检不许落库，实际 /api/begin = {begin}");
+    assert_eq!(
+        begin.trim(),
+        "[]",
+        "预检不许落库，实际 /api/begin = {begin}"
+    );
 
     // 正式导入
     let (code, body) = post_sheet(&state, &sid, "/api/books/opening-sheet", &filled).await;
@@ -392,7 +458,11 @@ async fn preview_rejects_an_unbalanced_sheet() {
     }
     let bytes = wb.save_to_buffer().unwrap();
     let (code, body) = post_sheet(&state, &sid, "/api/books/opening-sheet/preview", &bytes).await;
-    assert_eq!(code, StatusCode::BAD_REQUEST, "不平应当 400，实际 {code} {body}");
+    assert_eq!(
+        code,
+        StatusCode::BAD_REQUEST,
+        "不平应当 400，实际 {code} {body}"
+    );
     assert!(body.contains("不平"), "错误里要说清是不平：{body}");
 }
 
@@ -473,12 +543,8 @@ async fn get_json(state: &Arc<finweb::state::WebState>, sid: &str, uri: &str) ->
         .await
         .unwrap()
         .to_vec();
-    serde_json::from_slice(&raw).unwrap_or_else(|e| {
-        panic!(
-            "{uri} 不是 JSON：{e}\n{}",
-            String::from_utf8_lossy(&raw)
-        )
-    })
+    serde_json::from_slice(&raw)
+        .unwrap_or_else(|e| panic!("{uri} 不是 JSON：{e}\n{}", String::from_utf8_lossy(&raw)))
 }
 
 /// 正常导入之后，对账应当一片绿：四张纸都对得上、借贷相等、资产=负债+权益。
@@ -531,7 +597,11 @@ async fn reconcile_catches_ledger_without_booked_accounts() {
     assert_eq!(code, StatusCode::OK, "删期初应成功：{body}");
 
     let r = get_json(&state, &sid, "/api/books/opening-sheet/reconcile").await;
-    assert_eq!(r["ok"], serde_json::json!(false), "删掉科目期初后不该全绿：{r}");
+    assert_eq!(
+        r["ok"],
+        serde_json::json!(false),
+        "删掉科目期初后不该全绿：{r}"
+    );
     let issues = serde_json::to_string(&r["issues"]).unwrap();
     assert!(issues.contains("应收科目余额"), "要点名是哪条校验：{r}");
     // 台账那一边仍然是 95000 —— 这正是「两处都对、合起来不对」的样子
@@ -593,12 +663,21 @@ async fn reconcile_treats_debit_profit_as_a_loss() {
     let r = get_json(&state, &sid, "/api/books/opening-sheet/reconcile").await;
     assert_eq!(r["asset_total"], serde_json::json!("20000.00"), "{r}");
     // 50000 - 30000 = 20000：权益被亏损冲减
-    assert_eq!(r["equity_total"], serde_json::json!("20000.00"), "亏损要从权益里减掉：{r}");
+    assert_eq!(
+        r["equity_total"],
+        serde_json::json!("20000.00"),
+        "亏损要从权益里减掉：{r}"
+    );
     let balance = r["checks"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|c| c["name"].as_str().unwrap_or("").contains("资产 = 负债 + 权益"))
+        .find(|c| {
+            c["name"]
+                .as_str()
+                .unwrap_or("")
+                .contains("资产 = 负债 + 权益")
+        })
         .expect("要有资产负债结构那条校验");
     assert_eq!(balance["ok"], serde_json::json!(true), "{r}");
 }

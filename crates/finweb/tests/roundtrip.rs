@@ -115,8 +115,7 @@ fn 停用与上级编码导出后能导回() {
         },
     )
     .unwrap();
-    let bytes =
-        finweb::xlsxout::build(&[finweb::sheets::aux_sheet(&rows, "全部")]).unwrap();
+    let bytes = finweb::xlsxout::build(&[finweb::sheets::aux_sheet(&rows, "全部")]).unwrap();
 
     let dst = db_at(dir.path(), "b.fbk");
     let res = findb::imports::import_aux_bytes(&dst, &bytes, "tester").unwrap();
@@ -229,8 +228,9 @@ fn 期初余额导出后能导回且方向不变() {
         findb::balances::upsert_begin(&src, r).unwrap();
     }
     let saved = list_begin(&src).unwrap();
-    let sheet =
-        finweb::sheets::begin_sheet(&saved, &|c| src_chart.get(c).map(|a| a.name.clone()).unwrap_or_default());
+    let sheet = finweb::sheets::begin_sheet(&saved, &|c| {
+        src_chart.get(c).map(|a| a.name.clone()).unwrap_or_default()
+    });
     let bytes = finweb::xlsxout::build(&[sheet]).unwrap();
 
     let dst = db_at(dir.path(), "b.fbk");
@@ -375,7 +375,10 @@ fn 存货单位与停用状态导出后能导回() {
         .expect("存货没导进去");
     assert_eq!(got.prop_or(prop::UNIT, "-"), "吨", "计量单位丢了");
     assert_eq!(got.memo, "外发前存放");
-    assert_eq!(got.props.get("shelf_life_days").map(|s| s.as_str()), Some("365"));
+    assert_eq!(
+        got.props.get("shelf_life_days").map(|s| s.as_str()),
+        Some("365")
+    );
     let plan = findb::advanced::item_plan_get(&dst, "HG001")
         .unwrap()
         .expect("安全库存没导进去");

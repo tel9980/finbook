@@ -677,7 +677,11 @@ async fn dunning_amount_excludes_advance() {
         let dt = chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
         findb::settle::dunning_create(&db, "ar", "", "C01", "客户甲", dt, "", "boss").unwrap()
     };
-    assert_eq!(d.amount.fmt_plain(), "1000.00", "只算欠款 1000，不含预收 300");
+    assert_eq!(
+        d.amount.fmt_plain(),
+        "1000.00",
+        "只算欠款 1000，不含预收 300"
+    );
     assert_eq!(d.advance_total().fmt_plain(), "300.00", "预收要单列出来");
     assert_eq!(d.item_count, 1);
 }
@@ -715,7 +719,10 @@ async fn dunning_export_xlsx_has_detail() {
     assert_eq!(&bytes[..2], b"PK", "xlsx 是 zip 包");
     // 两个 Sheet 的名字都写在 zip 的文件名里
     let raw = String::from_utf8_lossy(&bytes);
-    assert!(raw.contains("sheet1.xml") && raw.contains("sheet2.xml"), "应有汇总+明细两个 Sheet");
+    assert!(
+        raw.contains("sheet1.xml") && raw.contains("sheet2.xml"),
+        "应有汇总+明细两个 Sheet"
+    );
 }
 
 /// 账龄基准日缺省 = 查询期间的最后一天（不是「今天」）。
@@ -730,12 +737,14 @@ async fn settle_aging_defaults_to_period_end() {
     post_ar(&state, &sid, "2026-01-05", "C01", "1000").await;
 
     let resp = handlers::router(state.clone())
-        .oneshot(authed_get("/api/settle/aging?account=1122&upto=2026-01", &sid))
+        .oneshot(authed_get(
+            "/api/settle/aging?account=1122&upto=2026-01",
+            &sid,
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let v: serde_json::Value =
-        serde_json::from_str(&body_string(resp).await).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
     let row = &v["rows"][0];
     let buckets = row["amounts"].as_array().expect("每档一个数");
     // 金额在 JSON 里是带千分位的字符串（"1,000.00"），要剥掉逗号再比

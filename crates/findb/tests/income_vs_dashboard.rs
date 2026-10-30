@@ -129,9 +129,17 @@ fn closing_profit_and_loss_keeps_both_sides_equal() {
     let chart = findb::accounts::chart(&db).unwrap();
     let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
     let rows = snap.carry_forward_rows(&chart);
-    let mut cv =
-        fincore::engine::generate_carry_forward(p, p.last_day(), "转", 1, &rows, &chart, "4103", "t")
-            .unwrap();
+    let mut cv = fincore::engine::generate_carry_forward(
+        p,
+        p.last_day(),
+        "转",
+        1,
+        &rows,
+        &chart,
+        "4103",
+        "t",
+    )
+    .unwrap();
     post(&db, &mut cv);
 
     assert_same(&db, p, "已结转损益");

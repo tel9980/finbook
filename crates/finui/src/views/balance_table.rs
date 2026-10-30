@@ -446,7 +446,13 @@ impl BalanceTableView {
                 self.from,
                 self.to
             );
-            match crate::views::export::run_export(&sh, &file_name, &title, mode, &ctx.db().options()) {
+            match crate::views::export::run_export(
+                &sh,
+                &file_name,
+                &title,
+                mode,
+                &ctx.db().options(),
+            ) {
                 Ok(m) => ctx.info(m),
                 Err(e) => ctx.error(e),
             }
@@ -488,7 +494,13 @@ impl BalanceTableView {
             }
             let file_name = format!("数量金额账_{}_{}", self.from, self.to);
             let title = format!("数量金额账（{} ~ {}）", self.from, self.to);
-            match crate::views::export::run_export(&sh, &file_name, &title, mode, &ctx.db().options()) {
+            match crate::views::export::run_export(
+                &sh,
+                &file_name,
+                &title,
+                mode,
+                &ctx.db().options(),
+            ) {
                 Ok(m) => ctx.info(m),
                 Err(e) => ctx.error(e),
             }

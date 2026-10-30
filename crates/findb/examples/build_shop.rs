@@ -54,13 +54,65 @@ const ITEMS: &[(&str, &str, &str, &str)] = &[
 /// 与供应商重名的三家（宏源加工 C019、勇唐加工厂 C020、东蓬二厂 C016）
 /// 名字必须与 SUPPLIERS 里一字不差，系统才认作「同一家的两面」。
 const CUSTOMERS: &[&str] = &[
-    "奇园江门", "火树银花", "姚祥峰", "信研", "弘丰合页", "鑫东飞", "金雨.亚太阳", "澳诗丹",
-    "西臣", "精耀", "格顿希尔", "雷老板", "金亚浪", "九曜", "维柯纳", "东蓬二厂", "英兰",
-    "图格乐", "宏源加工", "勇唐加工厂", "译彩", "利得丞", "金俊力", "英川", "生兴五金", "金麟发",
-    "峥喆五金", "钰亿霖", "轩万诚", "永达", "中创电机", "博亿", "金诺", "安合太平五金",
-    "实匠中山", "鼎诺五金衣架", "丫头衣架", "奥美宜家", "尚盛帅", "戈诺尼", "俐咖", "美吕",
-    "凯亚德", "金颐来", "贺老板", "创江", "创泰", "鑫卓越", "恋晴", "景河", "欣佑楚", "东豪",
-    "铝莱镁", "科迈", "锐政", "铮宝", "浩盈", "科正", "洲艺",
+    "奇园江门",
+    "火树银花",
+    "姚祥峰",
+    "信研",
+    "弘丰合页",
+    "鑫东飞",
+    "金雨.亚太阳",
+    "澳诗丹",
+    "西臣",
+    "精耀",
+    "格顿希尔",
+    "雷老板",
+    "金亚浪",
+    "九曜",
+    "维柯纳",
+    "东蓬二厂",
+    "英兰",
+    "图格乐",
+    "宏源加工",
+    "勇唐加工厂",
+    "译彩",
+    "利得丞",
+    "金俊力",
+    "英川",
+    "生兴五金",
+    "金麟发",
+    "峥喆五金",
+    "钰亿霖",
+    "轩万诚",
+    "永达",
+    "中创电机",
+    "博亿",
+    "金诺",
+    "安合太平五金",
+    "实匠中山",
+    "鼎诺五金衣架",
+    "丫头衣架",
+    "奥美宜家",
+    "尚盛帅",
+    "戈诺尼",
+    "俐咖",
+    "美吕",
+    "凯亚德",
+    "金颐来",
+    "贺老板",
+    "创江",
+    "创泰",
+    "鑫卓越",
+    "恋晴",
+    "景河",
+    "欣佑楚",
+    "东豪",
+    "铝莱镁",
+    "科迈",
+    "锐政",
+    "铮宝",
+    "浩盈",
+    "科正",
+    "洲艺",
 ];
 
 /// 供应商名单：(名称, 品类备注)。
@@ -106,25 +158,88 @@ const SUPPLIERS: &[(&str, &str)] = &[
 /// 小厂费用都走明细科目，录凭证时少填一项。
 const EXTRA_ACCOUNTS: &[(&str, &str, AcctCategory, Direction, Option<AuxKind>)] = &[
     // 制造/加工成本明细（原本 5101 下只有工资/折旧/水电/办公/其他）
-    ("510106", "厂房租金", AcctCategory::Cost, Direction::Debit, None),
-    ("510107", "宿舍租金", AcctCategory::Cost, Direction::Debit, None),
+    (
+        "510106",
+        "厂房租金",
+        AcctCategory::Cost,
+        Direction::Debit,
+        None,
+    ),
+    (
+        "510107",
+        "宿舍租金",
+        AcctCategory::Cost,
+        Direction::Debit,
+        None,
+    ),
     ("510108", "水费", AcctCategory::Cost, Direction::Debit, None),
     ("510109", "电费", AcctCategory::Cost, Direction::Debit, None),
-    ("510110", "煤气费", AcctCategory::Cost, Direction::Debit, None),
-    ("510111", "外发加工费", AcctCategory::Cost, Direction::Debit, None),
-    ("510112", "货车费用", AcctCategory::Cost, Direction::Debit, None),
-    ("510113", "化工材料", AcctCategory::Cost, Direction::Debit, None),
+    (
+        "510110",
+        "煤气费",
+        AcctCategory::Cost,
+        Direction::Debit,
+        None,
+    ),
+    (
+        "510111",
+        "外发加工费",
+        AcctCategory::Cost,
+        Direction::Debit,
+        None,
+    ),
+    (
+        "510112",
+        "货车费用",
+        AcctCategory::Cost,
+        Direction::Debit,
+        None,
+    ),
+    (
+        "510113",
+        "化工材料",
+        AcctCategory::Cost,
+        Direction::Debit,
+        None,
+    ),
     ("510114", "挂具", AcctCategory::Cost, Direction::Debit, None),
     // 管理费用明细（原本 6602 下已有工资/办公/差旅/招待/折旧/社保/租赁/中介/研发/其他）
-    ("660213", "货车加油充电", AcctCategory::Expense, Direction::Debit, None),
-    ("660214", "车辆路费", AcctCategory::Expense, Direction::Debit, None),
-    ("660215", "车辆维修年审", AcctCategory::Expense, Direction::Debit, None),
-    ("660216", "外部加工协作", AcctCategory::Expense, Direction::Debit, None),
+    (
+        "660213",
+        "货车加油充电",
+        AcctCategory::Expense,
+        Direction::Debit,
+        None,
+    ),
+    (
+        "660214",
+        "车辆路费",
+        AcctCategory::Expense,
+        Direction::Debit,
+        None,
+    ),
+    (
+        "660215",
+        "车辆维修年审",
+        AcctCategory::Expense,
+        Direction::Debit,
+        None,
+    ),
+    (
+        "660216",
+        "外部加工协作",
+        AcctCategory::Expense,
+        Direction::Debit,
+        None,
+    ),
 ];
 
 fn main() {
     let mut args = env::args().skip(1);
-    let path = PathBuf::from(args.next().expect("usage: build_shop <输出路径.fbk> [公司名]"));
+    let path = PathBuf::from(
+        args.next()
+            .expect("usage: build_shop <输出路径.fbk> [公司名]"),
+    );
     let company = args.next().unwrap_or_else(|| "小工厂".to_string());
 
     let _ = std::fs::remove_file(&path);
@@ -261,18 +376,18 @@ fn main() {
     // 只是单位一律写成"个"。这里按品类改成真实单位，并给新增的明细科目补上标记。
     // 非末级科目不记账，保持不挂辅助（与 chart.rs 的口径一致）。
     let qty_accounts: &[(&str, &str)] = &[
-        ("1401", "批"),     // 材料采购 —— 在途归集，按批次记
-        ("140301", "kg"),   // 原料及主要材料
-        ("140302", "kg"),   // 辅助材料 —— 化工料、染料的落脚点
-        ("140303", "kg"),   // 外购半成品
-        ("140304", "个"),   // 修理用备件
-        ("140305", "卷"),   // 包装材料
-        ("140306", "kg"),   // 燃料
-        ("140501", "个"),   // 产成品
-        ("140502", "个"),   // 自制半成品
-        ("141101", "卷"),   // 包装物
-        ("141102", "个"),   // 低值易耗品（挂具）
-        ("141103", "个"),   // 其他周转材料
+        ("1401", "批"),   // 材料采购 —— 在途归集，按批次记
+        ("140301", "kg"), // 原料及主要材料
+        ("140302", "kg"), // 辅助材料 —— 化工料、染料的落脚点
+        ("140303", "kg"), // 外购半成品
+        ("140304", "个"), // 修理用备件
+        ("140305", "卷"), // 包装材料
+        ("140306", "kg"), // 燃料
+        ("140501", "个"), // 产成品
+        ("140502", "个"), // 自制半成品
+        ("141101", "卷"), // 包装物
+        ("141102", "个"), // 低值易耗品（挂具）
+        ("141103", "个"), // 其他周转材料
     ];
     let mut nq = 0;
     for (code, unit) in qty_accounts {
@@ -311,7 +426,13 @@ fn main() {
     drop(db);
 
     println!();
-    println!("完成。合计：科目 {} 个（含新增 {}），客户 {}，供应商 {}（含外发厂），资金账户 {}",
-        list.len() + added, added, nc, ns, nb);
+    println!(
+        "完成。合计：科目 {} 个（含新增 {}），客户 {}，供应商 {}（含外发厂），资金账户 {}",
+        list.len() + added,
+        added,
+        nc,
+        ns,
+        nb
+    );
     let _ = Money::ZERO;
 }

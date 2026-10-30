@@ -257,7 +257,12 @@ mod close_cycle_tests {
 
     /// 记一张已记账凭证
     fn book(db: &Db, p: Period, no: i32, dr_code: &str, cr_code: &str, amt: &str) {
-        let mut v = Voucher::new(p, chrono::NaiveDate::from_ymd_opt(p.year(), p.month(), 10).unwrap(), "记", no);
+        let mut v = Voucher::new(
+            p,
+            chrono::NaiveDate::from_ymd_opt(p.year(), p.month(), 10).unwrap(),
+            "记",
+            no,
+        );
         v.push_entry(entry(1, dr_code, amt, "0"));
         v.push_entry(entry(2, cr_code, "0", amt));
         let id = vouchers::save(db, &mut v).unwrap();
@@ -266,7 +271,8 @@ mod close_cycle_tests {
 
     fn carry(db: &Db, p: Period, no: i32) {
         let chart = crate::accounts::chart(db).unwrap();
-        let snap = BalanceSnapshot::load(db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
+        let snap =
+            BalanceSnapshot::load(db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
         let rows: Vec<_> = snap
             .carry_forward_rows(&chart)
             .into_iter()
@@ -276,13 +282,16 @@ mod close_cycle_tests {
             return;
         }
         let date = chrono::NaiveDate::from_ymd_opt(p.year(), p.month(), 28).unwrap();
-        let mut v = generate_carry_forward(p, date, "记", no, &rows, &chart, PROFIT_ACCOUNT, "admin").unwrap();
+        let mut v =
+            generate_carry_forward(p, date, "记", no, &rows, &chart, PROFIT_ACCOUNT, "admin")
+                .unwrap();
         let id = vouchers::save(db, &mut v).unwrap();
         vouchers::post(db, id, "admin").unwrap();
     }
 
     fn profit_of(db: &Db, p: Period) -> Money {
-        let snap = BalanceSnapshot::load(db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
+        let snap =
+            BalanceSnapshot::load(db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
         snap.for_account(PROFIT_ACCOUNT, None).end()
     }
 
@@ -300,24 +309,40 @@ mod close_cycle_tests {
         // 未结转时不允许结账
         let problems = close(&db, p, "admin", true).unwrap();
         assert!(!problems.is_empty(), "未结转就结账必须被拒");
-        assert!(problems.iter().any(|s| s.contains("尚未结转")), "{problems:?}");
+        assert!(
+            problems.iter().any(|s| s.contains("尚未结转")),
+            "{problems:?}"
+        );
 
         // 结转后损益类净额归零，本年利润 = 15000（贷方）
         carry(&db, p, 3);
         assert_eq!(profit_of(&db, p), m("-15000"));
-        let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
+        let snap =
+            BalanceSnapshot::load(&db, &BalanceQuery::period(p).with_posted_only(true)).unwrap();
         for r in snap.carry_forward_rows(&chart) {
-            assert!((r.debit - r.credit).round2().is_zero(), "{} 未归零", r.account_code);
+            assert!(
+                (r.debit - r.credit).round2().is_zero(),
+                "{} 未归零",
+                r.account_code
+            );
         }
 
         // 结账成功，且该期间不再允许录凭证
         assert!(close(&db, p, "admin", true).unwrap().is_empty());
         assert_eq!(closed_upto(&db).unwrap(), Some(p));
         assert!(is_closed(&db, p).unwrap());
-        let mut v = Voucher::new(p, chrono::NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(), "记", 9);
+        let mut v = Voucher::new(
+            p,
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+            "记",
+            9,
+        );
         v.push_entry(entry(1, "1001", "100", "0"));
         v.push_entry(entry(2, "2241", "0", "100"));
-        assert!(vouchers::save(&db, &mut v).is_err(), "已结账期间必须拒写凭证");
+        assert!(
+            vouchers::save(&db, &mut v).is_err(),
+            "已结账期间必须拒写凭证"
+        );
 
         // 反结账后可以补账，重新结转、重新结账
         unclose(&db, p, "admin").unwrap();
@@ -347,7 +372,10 @@ mod close_cycle_tests {
         assert!(close(&db, p2, "admin", true).unwrap().is_empty());
 
         // 跳过 2 月直接结 3 月被拒（此时已结到 2 月，3 月其实可以；改测重复结账）
-        assert!(!precheck(&db, p2, false).unwrap().is_empty(), "重复结账必须被拒");
+        assert!(
+            !precheck(&db, p2, false).unwrap().is_empty(),
+            "重复结账必须被拒"
+        );
 
         // 反结账只能从最后期间
         assert!(!check_can_unclose(p1, Some(p2)).all().is_empty());
@@ -369,21 +397,61 @@ mod close_cycle_tests {
         assert!(!is_year_end(Period::new(2026, 11).unwrap()));
 
         // 盈利：贷方余额 → 借本年利润 贷未分配利润
-        let v = generate_year_end_carry(year_end, date, "记", 1, m("-44200"), "410401", &chart, "admin").unwrap();
+        let v = generate_year_end_carry(
+            year_end,
+            date,
+            "记",
+            1,
+            m("-44200"),
+            "410401",
+            &chart,
+            "admin",
+        )
+        .unwrap();
         assert_eq!(v.entries.len(), 2);
         assert_eq!(v.entries[0].debit, m("44200"));
         assert_eq!(v.entries[1].credit, m("44200"));
 
         // 亏损：借方余额 → 反向
-        let v = generate_year_end_carry(year_end, date, "记", 2, m("5000"), "410401", &chart, "admin").unwrap();
+        let v = generate_year_end_carry(
+            year_end,
+            date,
+            "记",
+            2,
+            m("5000"),
+            "410401",
+            &chart,
+            "admin",
+        )
+        .unwrap();
         assert_eq!(v.entries[0].credit, m("5000"));
         assert_eq!(v.entries[1].debit, m("5000"));
 
         // 余额为零：拒绝
-        assert!(generate_year_end_carry(year_end, date, "记", 3, Money::ZERO, "410401", &chart, "admin").is_err());
+        assert!(generate_year_end_carry(
+            year_end,
+            date,
+            "记",
+            3,
+            Money::ZERO,
+            "410401",
+            &chart,
+            "admin"
+        )
+        .is_err());
 
         // 目标科目不存在：拒绝
-        assert!(generate_year_end_carry(year_end, date, "记", 4, m("-1"), "999999", &chart, "admin").is_err());
+        assert!(generate_year_end_carry(
+            year_end,
+            date,
+            "记",
+            4,
+            m("-1"),
+            "999999",
+            &chart,
+            "admin"
+        )
+        .is_err());
     }
 
     /// 跨年：12 月结账后 1 月可以正常开始，closed_upto 正确推进
@@ -395,7 +463,10 @@ mod close_cycle_tests {
         assert_eq!(p_next, Period::new(2027, 1).unwrap());
 
         // 启用期间是 2026-01，必须从 1 月逐月结到 12 月，不能直接跳
-        assert!(!close(&db, p12, "admin", false).unwrap().is_empty(), "跳月必须被拒");
+        assert!(
+            !close(&db, p12, "admin", false).unwrap().is_empty(),
+            "跳月必须被拒"
+        );
         for mo in 1..=12u32 {
             let p = Period::new(2026, mo).unwrap();
             carry(&db, p, mo as i32);

@@ -432,7 +432,10 @@ mod tests {
         use fincore::{AuxRef, Entry, Money, Period, Voucher};
         let db = mem();
         // mem() 已建好默认科目，直接用现成的 112201
-        assert!(get(&db, "112201").unwrap().is_some(), "默认科目里应有 112201");
+        assert!(
+            get(&db, "112201").unwrap().is_some(),
+            "默认科目里应有 112201"
+        );
 
         // 没有分录时随便改
         let mut a1 = get(&db, "112201").unwrap().unwrap();
@@ -444,11 +447,19 @@ mod tests {
 
         // 记一张挂客户的分录
         let p = Period::new(2026, 11).unwrap();
-        let mut v = Voucher::new(p, chrono::NaiveDate::from_ymd_opt(2026, 11, 10).unwrap(), "记", 1);
+        let mut v = Voucher::new(
+            p,
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 10).unwrap(),
+            "记",
+            1,
+        );
         v.memo = "测试".into();
         let mut e1 = Entry::new(1, "112201", "测试");
         e1.debit = Money::parse("100").unwrap();
-        e1.aux = AuxRef { customer: Some("C001".into()), ..Default::default() };
+        e1.aux = AuxRef {
+            customer: Some("C001".into()),
+            ..Default::default()
+        };
         let mut e2 = Entry::new(2, "600101", "测试");
         e2.credit = Money::parse("100").unwrap();
         v.entries.push(e1);
@@ -460,7 +471,10 @@ mod tests {
         let mut a2 = get(&db, "112201").unwrap().unwrap();
         a2.aux = AuxMask::NONE;
         let err = update(&db, &a2).expect_err("有分录时不改辅助核算");
-        assert!(err.to_string().contains("不能改辅助核算"), "错误信息要讲清楚：{err}");
+        assert!(
+            err.to_string().contains("不能改辅助核算"),
+            "错误信息要讲清楚：{err}"
+        );
 
         // 但改名称仍然允许
         let mut a3 = get(&db, "112201").unwrap().unwrap();

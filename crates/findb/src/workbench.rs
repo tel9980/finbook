@@ -1044,7 +1044,16 @@ pub fn collect_report_trends(
     // 预填 0，保证每期都有键
     let mut m: BTreeMap<i32, (Money, Money, Money, Money, Money)> = BTreeMap::new();
     for p in &ps {
-        m.insert(p.ymm(), (Money::ZERO, Money::ZERO, Money::ZERO, Money::ZERO, Money::ZERO));
+        m.insert(
+            p.ymm(),
+            (
+                Money::ZERO,
+                Money::ZERO,
+                Money::ZERO,
+                Money::ZERO,
+                Money::ZERO,
+            ),
+        );
     }
 
     // 获取用户的数据范围过滤条件
@@ -1101,8 +1110,8 @@ pub fn collect_report_trends(
             Ok((
                 r.get::<_, i32>(0)?,
                 r.get::<_, String>(1)?,
-                r.get::<_, f64>(2)?,  // sum_debit as f64
-                r.get::<_, f64>(3)?,  // sum_credit as f64
+                r.get::<_, f64>(2)?, // sum_debit as f64
+                r.get::<_, f64>(3)?, // sum_credit as f64
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1125,11 +1134,26 @@ pub fn collect_report_trends(
     for (p, cat, d, c) in rows {
         let entry = by_period.entry(p).or_default();
         match cat.as_str() {
-            "Asset" => { entry.asset_debit += d; entry.asset_credit += c; }
-            "Liability" => { entry.liability_debit += d; entry.liability_credit += c; }
-            "Equity" => { entry.equity_debit += d; entry.equity_credit += c; }
-            "Income" => { entry.income_debit += d; entry.income_credit += c; }
-            "Expense" => { entry.expense_debit += d; entry.expense_credit += c; }
+            "Asset" => {
+                entry.asset_debit += d;
+                entry.asset_credit += c;
+            }
+            "Liability" => {
+                entry.liability_debit += d;
+                entry.liability_credit += c;
+            }
+            "Equity" => {
+                entry.equity_debit += d;
+                entry.equity_credit += c;
+            }
+            "Income" => {
+                entry.income_debit += d;
+                entry.income_credit += c;
+            }
+            "Expense" => {
+                entry.expense_debit += d;
+                entry.expense_credit += c;
+            }
             _ => {}
         }
     }
@@ -1152,13 +1176,16 @@ pub fn collect_report_trends(
         let net_profit = revenue - expense;
 
         // 转 Money（用 f64 字符串构造，仅用于趋势图展示，不参与账务计算）
-        m.insert(p.ymm(), (
-            Money::parse_or_zero(&asset_cum.to_string()),
-            Money::parse_or_zero(&liability_cum.to_string()),
-            Money::parse_or_zero(&equity_cum.to_string()),
-            Money::parse_or_zero(&revenue.to_string()),
-            Money::parse_or_zero(&net_profit.to_string()),
-        ));
+        m.insert(
+            p.ymm(),
+            (
+                Money::parse_or_zero(&asset_cum.to_string()),
+                Money::parse_or_zero(&liability_cum.to_string()),
+                Money::parse_or_zero(&equity_cum.to_string()),
+                Money::parse_or_zero(&revenue.to_string()),
+                Money::parse_or_zero(&net_profit.to_string()),
+            ),
+        );
     }
 
     Ok(m)

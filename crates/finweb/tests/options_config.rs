@@ -14,7 +14,11 @@ use serde_json::Value;
 use std::sync::Arc;
 use tower::ServiceExt;
 
-async fn get_json(state: &Arc<finweb::state::WebState>, sid: &str, uri: &str) -> (StatusCode, Value) {
+async fn get_json(
+    state: &Arc<finweb::state::WebState>,
+    sid: &str,
+    uri: &str,
+) -> (StatusCode, Value) {
     let resp = finweb::handlers::router(state.clone())
         .oneshot(authed_get(uri, sid))
         .await
@@ -137,7 +141,16 @@ async fn reset_only_touches_preferences() {
     assert_eq!(after["budget_control"], "");
     assert_eq!(after["enable_production"], false);
 
-    for k in ["company", "start_period", "code_scheme", "biz_accounts", "voucher_words"] {
-        assert_eq!(after[k], before[k], "{k} 与已记账数据绑定，恢复默认不能动它");
+    for k in [
+        "company",
+        "start_period",
+        "code_scheme",
+        "biz_accounts",
+        "voucher_words",
+    ] {
+        assert_eq!(
+            after[k], before[k],
+            "{k} 与已记账数据绑定，恢复默认不能动它"
+        );
     }
 }

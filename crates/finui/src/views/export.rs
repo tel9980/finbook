@@ -251,7 +251,10 @@ fn sheet_to_html(sheet: &Sheet, title: &str, opts: &fincore::account::BookOption
         headers.push_str(&format!("<th{cls}>{}</th>", escape_html(h)));
     }
     let company = if po.show_company {
-        format!("<div class='sub'>编制单位：{}</div>", escape_html(&opts.company))
+        format!(
+            "<div class='sub'>编制单位：{}</div>",
+            escape_html(&opts.company)
+        )
     } else {
         String::new()
     };

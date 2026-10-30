@@ -895,11 +895,11 @@ pub fn cash_flow_sheet_with_prev(
         ],
     );
     let push = |sh: &mut crate::views::export::Sheet,
-                    name: &str,
-                    i: Money,
-                    o: Money,
-                    n: Money,
-                    p: Option<Money>| {
+                name: &str,
+                i: Money,
+                o: Money,
+                n: Money,
+                p: Option<Money>| {
         sh.push(vec![
             name.to_string(),
             i.fmt_plain(),
@@ -913,8 +913,14 @@ pub fn cash_flow_sheet_with_prev(
     let lookup = |list: &[fincore::report::cashflow::CashFlowLine], name: &str| {
         list.iter().find(|l| l.name == name).map(|l| l.net)
     };
-    let sections: [(&str, &str, &[fincore::report::cashflow::CashFlowLine],
-                    &[fincore::report::cashflow::CashFlowLine], Money, Money); 3] = [
+    let sections: [(
+        &str,
+        &str,
+        &[fincore::report::cashflow::CashFlowLine],
+        &[fincore::report::cashflow::CashFlowLine],
+        Money,
+        Money,
+    ); 3] = [
         (
             "一、经营活动产生的现金流量",
             "经营活动产生的现金流量净额",
@@ -969,8 +975,22 @@ pub fn cash_flow_sheet_with_prev(
         cf.net_increase,
         Some(prev.net_increase),
     );
-    push(&mut sh, "加：期初现金余额", Money::ZERO, Money::ZERO, cf.begin_cash, Some(prev.begin_cash));
-    push(&mut sh, "期末现金余额", Money::ZERO, Money::ZERO, cf.end_cash, Some(prev.end_cash));
+    push(
+        &mut sh,
+        "加：期初现金余额",
+        Money::ZERO,
+        Money::ZERO,
+        cf.begin_cash,
+        Some(prev.begin_cash),
+    );
+    push(
+        &mut sh,
+        "期末现金余额",
+        Money::ZERO,
+        Money::ZERO,
+        cf.end_cash,
+        Some(prev.end_cash),
+    );
     sh
 }
 
@@ -1113,10 +1133,17 @@ mod compare_sheet_tests {
             "300",
             "300",
         );
-        let sh = cash_flow_sheet_with_prev(&cur, Some(&prev), "2026-09 至 2026-09", "2026-08 至 2026-08");
+        let sh = cash_flow_sheet_with_prev(
+            &cur,
+            Some(&prev),
+            "2026-09 至 2026-09",
+            "2026-08 至 2026-08",
+        );
         let texts: Vec<String> = sh.rows.iter().map(|r| r[0].clone()).collect();
         assert!(
-            texts.iter().any(|t| t.contains("购建固定资产支付的现金（上期有）")),
+            texts
+                .iter()
+                .any(|t| t.contains("购建固定资产支付的现金（上期有）")),
             "上期独有项目丢了：{texts:?}"
         );
         // 变动 = 本期 − 上期：1000 − 800 = 200

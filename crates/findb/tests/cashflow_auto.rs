@@ -4,10 +4,8 @@
 //! **没人标现金流量项目时，报表也能填出来；但只要有一点不确定，就必须老实说未归集。**
 
 use chrono::NaiveDate;
+use fincore::{AuxEntity, AuxKind, AuxRef, BookOptions, Chart, Entry, Money, Period, Voucher};
 use findb::{accounts, auxs, reports, vouchers, Db};
-use fincore::{
-    AuxEntity, AuxKind, AuxRef, BookOptions, Chart, Entry, Money, Period, Voucher,
-};
 
 const Y: i32 = 2026;
 
@@ -103,7 +101,11 @@ fn post(db: &Db, chart: &Chart, no: i32, spec: &[E]) {
         &v,
         &fincore::engine::ValidateCtx::new(chart, &db.options(), None),
     );
-    assert!(iss.is_empty(), "第 {no} 号凭证校验未通过：{:?}", iss.iter().collect::<Vec<_>>());
+    assert!(
+        iss.is_empty(),
+        "第 {no} 号凭证校验未通过：{:?}",
+        iss.iter().collect::<Vec<_>>()
+    );
     let id = vouchers::save(db, &mut v).expect("保存失败");
     vouchers::post_many(db, &[id], "李主管").expect("记账失败");
 }
@@ -111,7 +113,10 @@ fn post(db: &Db, chart: &Chart, no: i32, spec: &[E]) {
 /// 取某个现金流量项目的（借方, 贷方）发生额
 fn amount_of(db: &Db, code: &str) -> (Money, Money) {
     let d = reports::cash_flow_amounts_detail(db, p(11), p(11), None).unwrap();
-    d.amounts.get(code).copied().unwrap_or((Money::ZERO, Money::ZERO))
+    d.amounts
+        .get(code)
+        .copied()
+        .unwrap_or((Money::ZERO, Money::ZERO))
 }
 
 fn detail(db: &Db) -> reports::CashFlowAmounts {
@@ -187,7 +192,10 @@ fn paying_tax_goes_to_tax_paid() {
         &db,
         &chart,
         1,
-        &[line("22210103", "5000.00", "0"), bank("100201", "0", "5000.00")],
+        &[
+            line("22210103", "5000.00", "0"),
+            bank("100201", "0", "5000.00"),
+        ],
     );
 
     let (_, cr) = amount_of(&db, "0106");
@@ -203,7 +211,10 @@ fn interest_expense_goes_to_financing_not_operating() {
         &db,
         &chart,
         1,
-        &[line("660301", "1000.00", "0"), bank("100201", "0", "1000.00")],
+        &[
+            line("660301", "1000.00", "0"),
+            bank("100201", "0", "1000.00"),
+        ],
     );
 
     let (_, cr) = amount_of(&db, "0304");
@@ -314,13 +325,19 @@ fn statement_ties_with_cash_balance() {
         &db,
         &chart,
         2,
-        &[line("510103", "8000.00", "0"), bank("100201", "0", "8000.00")],
+        &[
+            line("510103", "8000.00", "0"),
+            bank("100201", "0", "8000.00"),
+        ],
     );
     post(
         &db,
         &chart,
         3,
-        &[line("160101", "30000.00", "0"), bank("100201", "0", "30000.00")],
+        &[
+            line("160101", "30000.00", "0"),
+            bank("100201", "0", "30000.00"),
+        ],
     );
 
     let stmt = reports::cash_flow_statement(&db, p(11), p(11), None).unwrap();
@@ -328,6 +345,9 @@ fn statement_ties_with_cash_balance() {
     assert_eq!(stmt.operating_net, m("105000.00"), "经营净额 113000-8000");
     assert_eq!(stmt.investing_net, m("-30000.00"), "投资净额 -30000");
     assert!(stmt.unassigned.is_zero(), "这组凭证应当全部能归集");
-    assert_eq!(stmt.auto_assigned, 3, "三张凭证各一行现金，全部按对方科目归集");
+    assert_eq!(
+        stmt.auto_assigned, 3,
+        "三张凭证各一行现金，全部按对方科目归集"
+    );
     assert_eq!(stmt.end_cash, m("175000.00"));
 }

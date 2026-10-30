@@ -1,8 +1,5 @@
 use super::*;
 
-
-
-
 // ---------------------------------------------------------------------------
 // 平台安全中心（口令策略 / 登录审计 / 账号解锁；均仅管理员）
 // ---------------------------------------------------------------------------
@@ -17,7 +14,6 @@ pub(super) async fn get_security_policy(
     }
     Ok(Json(json!(state.realm.policy()?)))
 }
-
 
 /// 口令策略保存（值域校验：过小会把全员锁死，过大等于策略失效）
 pub(super) async fn set_security_policy(
@@ -51,7 +47,6 @@ pub(super) async fn set_security_policy(
     Ok(Json(json!({ "ok": true })))
 }
 
-
 /// 当前处于锁定状态的平台账号
 pub(super) async fn list_locked_security_users(
     State(state): State<Arc<WebState>>,
@@ -75,7 +70,6 @@ pub(super) async fn list_locked_security_users(
     Ok(Json(json!({ "items": items })))
 }
 
-
 // ---------------------------------------------------------------------------
 // 账号管理（仅管理员）
 // ---------------------------------------------------------------------------
@@ -95,7 +89,6 @@ pub(super) async fn list_platform_users(
         .collect();
     Ok(Json(list))
 }
-
 
 pub(super) async fn create_platform_user(
     State(state): State<Arc<WebState>>,
@@ -121,7 +114,6 @@ pub(super) async fn create_platform_user(
     Ok(Json(json!({ "id": id })))
 }
 
-
 pub(super) async fn update_platform_user(
     State(state): State<Arc<WebState>>,
     user: RealmUser,
@@ -145,7 +137,6 @@ pub(super) async fn update_platform_user(
     Ok(Json(json!({"ok": true})))
 }
 
-
 pub(super) async fn delete_platform_user(
     State(state): State<Arc<WebState>>,
     user: RealmUser,
@@ -166,7 +157,6 @@ pub(super) async fn delete_platform_user(
     state.sessions.remove_by_username(&username);
     Ok(Json(json!({"ok": true})))
 }
-
 
 pub(super) async fn reset_platform_password(
     State(state): State<Arc<WebState>>,
@@ -194,7 +184,6 @@ pub(super) async fn reset_platform_password(
     Ok(Json(json!({"ok": true})))
 }
 
-
 /// 平台层重置设备绑定：解绑**全部**已绑定设备后，该账号可在任意设备重新登录
 /// （重置只重启一次首绑机会：该账号下一台登录的设备会被自动登记，再往后仍会被拒）
 pub(super) async fn reset_platform_device(
@@ -213,7 +202,6 @@ pub(super) async fn reset_platform_device(
     state.sessions.remove_by_username(&username);
     Ok(Json(json!({"ok": true})))
 }
-
 
 pub(super) async fn reset_user_password(
     State(state): State<Arc<WebState>>,

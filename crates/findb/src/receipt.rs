@@ -198,7 +198,11 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
         d.fund_account.clone()
     };
     let biz = db.options().biz_accounts.clone();
-    let party_base = if receipt { biz.ar.clone() } else { biz.ap.clone() };
+    let party_base = if receipt {
+        biz.ar.clone()
+    } else {
+        biz.ap.clone()
+    };
     // 一级科目根：覆盖该往来科目的全部下级叶子（按账套编码方案第一级长度截断）
     let scheme = db.options().code_scheme.clone();
     let root_len = scheme.first().map(|s| *s as usize).unwrap_or(4);
@@ -318,7 +322,9 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
         // 跨方多余 → 落账跨方默认科目（预收/预付性质）
         if cross_remaining.is_positive() {
             let pk = format!("{}\u{1f}{}", cross_account, cross_aux.key());
-            let slot = leg_alloc.entry(pk).or_insert((Money::ZERO, cross_aux.clone()));
+            let slot = leg_alloc
+                .entry(pk)
+                .or_insert((Money::ZERO, cross_aux.clone()));
             slot.0 += cross_remaining;
         }
     }
@@ -697,22 +703,20 @@ mod tests {
         );
 
         // 守卫：空往来单位 / 零金额（建单即拦）
-        assert!(
-            receipt_create(
-                &db,
-                "receipt",
-                d(2026, 1, 16),
-                "1001",
-                "",
-                "",
-                "",
-                Money::ZERO,
-                m("1"),
-                "",
-                "u"
-            )
-            .is_err()
-        );
+        assert!(receipt_create(
+            &db,
+            "receipt",
+            d(2026, 1, 16),
+            "1001",
+            "",
+            "",
+            "",
+            Money::ZERO,
+            m("1"),
+            "",
+            "u"
+        )
+        .is_err());
         assert!(receipt_create(
             &db,
             "receipt",

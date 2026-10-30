@@ -216,7 +216,10 @@ pub fn list(
         }
         let empty = Vec::new();
         let lines = grouped.get(&ent.code).unwrap_or(&empty);
-        let opening = opening_by_party.get(&ent.code).copied().unwrap_or(Money::ZERO);
+        let opening = opening_by_party
+            .get(&ent.code)
+            .copied()
+            .unwrap_or(Money::ZERO);
         let mut s = summarize(&ent.code, &ent.name, lines, opening);
         s.parent_code = ent.parent_code.clone().unwrap_or_default();
         s.disabled = ent.disabled;

@@ -5,14 +5,20 @@
 //! 表里直接列出账套中已建好的客户/供应商编码，工厂照着填金额即可，
 //! 避免"名字对不上"这种最费时间的返工。
 
-use findb::Db;
 use fincore::AuxKind;
+use findb::Db;
 use rust_xlsxwriter::{Format, Workbook, XlsxAlign, XlsxBorder, XlsxColor};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let out = args.first().cloned().unwrap_or_else(|| "期初收集表.xlsx".into());
-    let fbk = args.get(1).cloned().unwrap_or_else(|| "小工厂账套.fbk".into());
+    let out = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "期初收集表.xlsx".into());
+    let fbk = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| "小工厂账套.fbk".into());
 
     let db = Db::open(&fbk).expect("打开账套");
     let mut cust = findb::auxs::list(&db, &fincore::AuxQuery::kind(AuxKind::Customer))
@@ -23,7 +29,13 @@ fn main() {
     let mut supp = findb::auxs::list(&db, &fincore::AuxQuery::kind(AuxKind::Supplier))
         .expect("供应商")
         .into_iter()
-        .map(|e| (e.code, e.name, e.props.get("品类").cloned().unwrap_or_default()))
+        .map(|e| {
+            (
+                e.code,
+                e.name,
+                e.props.get("品类").cloned().unwrap_or_default(),
+            )
+        })
         .collect::<Vec<_>>();
     cust.sort();
     supp.sort();
@@ -65,8 +77,15 @@ fn main() {
     s.set_column_width(1, 20).ok();
     s.set_column_width(2, 60).ok();
 
-    s.merge_range(0, 0, 0, 2, "小工厂 · 期初数据收集表（截止 2026-10-31）", &title)
-        .expect("title");
+    s.merge_range(
+        0,
+        0,
+        0,
+        2,
+        "小工厂 · 期初数据收集表（截止 2026-10-31）",
+        &title,
+    )
+    .expect("title");
     s.set_row_height(0, 28).ok();
 
     let lines: &[(&str, &str)] = &[
@@ -74,24 +93,42 @@ fn main() {
         ("一、要填哪三块", ""),
         ("", "① 客户欠你的钱（应收）：每个客户一行"),
         ("", "② 你欠供应商的钱（应付）：每个供应商一行"),
-        ("", "③ 各账户的余额：G 行、N 行、微信、现金、电表里还躺着的钱"),
+        (
+            "",
+            "③ 各账户的余额：G 行、N 行、微信、现金、电表里还躺着的钱",
+        ),
         ("", ""),
         ("二、填完怎么检查", ""),
         ("", "① 应收合计 + 账户余额合计 + 存货 + 设备 = 资产合计"),
         ("", "② 应付合计 + 欠薪 + 欠税 = 负债合计"),
         ("", "③ 资产 − 负债 = 所有者权益（老板投的本钱 + 之前赚的）"),
-        ("", "差额填在「基本资料」表的实收资本/本年利润里，两边必须相等"),
+        (
+            "",
+            "差额填在「基本资料」表的实收资本/本年利润里，两边必须相等",
+        ),
         ("", ""),
         ("三、几个注意", ""),
         ("", "· 金额填正数，不要带负号，也不要带「元」「¥」"),
-        ("", "· 客户/供应商编码已经建好，照着下拉选名字即可，不要改编码"),
+        (
+            "",
+            "· 客户/供应商编码已经建好，照着下拉选名字即可，不要改编码",
+        ),
         ("", "· 没有欠款的客户留空，不用填 0"),
-        ("", "· 电费是「先充后用」：账户余额里要算上电表里还躺着的钱，"),
-        ("", "  这笔钱在账上记在 122101 备用金（电费）下，不是电费费用"),
+        (
+            "",
+            "· 电费是「先充后用」：账户余额里要算上电表里还躺着的钱，",
+        ),
+        (
+            "",
+            "  这笔钱在账上记在 122101 备用金（电费）下，不是电费费用",
+        ),
         ("", "· 抹零的钱不用单独填，按实收金额填就行"),
         ("", ""),
         ("四、填完之后", ""),
-        ("", "把这张表发回来，我帮你转成系统的期初数据；或者你自己照着录进"),
+        (
+            "",
+            "把这张表发回来，我帮你转成系统的期初数据；或者你自己照着录进",
+        ),
         ("", "系统的「期初余额」和「往来核销 → 期初明细」里。"),
     ];
     let mut r: u32 = 2;
@@ -140,7 +177,8 @@ fn main() {
         &Format::new().set_bold().set_num_format("#,##0.00"),
     )
     .ok();
-    s.write_string(last + 3, 1, "只填有欠款的，没欠款留空即可", &note).ok();
+    s.write_string(last + 3, 1, "只填有欠款的，没欠款留空即可", &note)
+        .ok();
 
     // ---------- Sheet 3: 供应商应付 ----------
     let s = wb.add_worksheet();
@@ -155,9 +193,16 @@ fn main() {
     s.merge_range(0, 0, 0, 5, "欠供应商的钱（应付）· 截止 2026-10-31", &title)
         .expect("t");
     s.set_row_height(0, 26).ok();
-    for (c, h) in ["供应商编码", "供应商名称", "品类", "欠款金额", "单据号（可空）", "备注"]
-        .iter()
-        .enumerate()
+    for (c, h) in [
+        "供应商编码",
+        "供应商名称",
+        "品类",
+        "欠款金额",
+        "单据号（可空）",
+        "备注",
+    ]
+    .iter()
+    .enumerate()
     {
         s.write_string(1, c as u16, *h, &head).ok();
     }
@@ -199,9 +244,17 @@ fn main() {
         ("100202", "N银行结算户（当现金用）", "银行对账单上的余额"),
         ("100203", "微信钱包", "微信零钱里的余额"),
         ("1001", "库存现金", "手上现钞"),
-        ("122101", "备用金 — 电费充值余额", "电表里还躺着多少钱（先充后用）"),
+        (
+            "122101",
+            "备用金 — 电费充值余额",
+            "电表里还躺着多少钱（先充后用）",
+        ),
         ("1123", "预付账款", "预付给供应商、还没收到货的钱（可空）"),
-        ("140302", "辅助材料（存货）", "仓库里化工料、辅料的成本价金额（可空）"),
+        (
+            "140302",
+            "辅助材料（存货）",
+            "仓库里化工料、辅料的成本价金额（可空）",
+        ),
         ("140305", "包装材料（存货）", "包装物金额（可空）"),
         ("1601", "固定资产原值", "设备、车、厂房原值合计（可空）"),
         ("1602", "累计折旧", "到 10 月底已提折旧（填正数，可空）"),
@@ -221,7 +274,8 @@ fn main() {
     s.set_column_width(1, 20).ok();
     s.set_column_width(2, 52).ok();
 
-    s.merge_range(0, 0, 0, 2, "基本资料与平衡检查", &title).expect("t");
+    s.merge_range(0, 0, 0, 2, "基本资料与平衡检查", &title)
+        .expect("t");
     s.set_row_height(0, 26).ok();
     s.write_string(1, 0, "项目", &head).ok();
     s.write_string(1, 1, "金额", &head).ok();
@@ -237,7 +291,10 @@ fn main() {
         ("负债合计", "= 应付 + 欠薪 + 欠税"),
         ("所有者权益（轧差）", "= 资产合计 − 负债合计"),
         ("其中：实收资本 4001", "老板实际投进去的本钱"),
-        ("其中：本年利润 4103", "= 所有者权益 − 实收资本（前期赚的没分掉的）"),
+        (
+            "其中：本年利润 4103",
+            "= 所有者权益 − 实收资本（前期赚的没分掉的）",
+        ),
         ("平衡检查", "应为 0：实收资本 + 本年利润 − 所有者权益"),
     ];
     for (i, (k, m)) in rows.iter().enumerate() {
@@ -249,5 +306,9 @@ fn main() {
 
     wb.save(&out).expect("保存");
     println!("已生成 {out}");
-    println!("  客户 {} 家、供应商 {} 家已预填编码与名称", cust.len(), supp.len());
+    println!(
+        "  客户 {} 家、供应商 {} 家已预填编码与名称",
+        cust.len(),
+        supp.len()
+    );
 }

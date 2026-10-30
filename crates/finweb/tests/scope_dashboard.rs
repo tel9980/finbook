@@ -38,7 +38,10 @@ async fn get_json(
 /// 造一张 借 1001 100 / 贷 6001 100 的已记账凭证，并返回当期 ymm。
 async fn seed_cash_and_income(state: &Arc<finweb::state::WebState>, sid: &str) -> i32 {
     let (_, dash) = get_json(state, sid, "/api/dashboard").await;
-    let cur = dash["current_period"].as_str().expect("dashboard 有当前期间").to_string();
+    let cur = dash["current_period"]
+        .as_str()
+        .expect("dashboard 有当前期间")
+        .to_string();
     let cur_ymm: i32 = cur.replace('-', "").parse().unwrap();
     let date = format!("{cur}-15");
 
@@ -62,7 +65,11 @@ async fn seed_cash_and_income(state: &Arc<finweb::state::WebState>, sid: &str) -
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let vid = v["id"].as_i64().expect("凭证 id");
     let resp = handlers::router(state.clone())
-        .oneshot(authed_post(&format!("/api/vouchers/{vid}/post"), sid, json!({})))
+        .oneshot(authed_post(
+            &format!("/api/vouchers/{vid}/post"),
+            sid,
+            json!({}),
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "记账");

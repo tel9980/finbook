@@ -350,7 +350,8 @@ mod tests {
     #[test]
     fn transfer_unaudit_and_delete_chain() {
         let db = mem();
-        let id = transfer_create(&db, d(2026, 1, 5), "100201", "1001", "", m("300"), "", "u").unwrap();
+        let id =
+            transfer_create(&db, d(2026, 1, 5), "100201", "1001", "", m("300"), "", "u").unwrap();
         let vid = transfer_audit(&db, id, "u").unwrap();
         assert!(transfer_delete(&db, id).is_err(), "凭证存在时不能删单");
 

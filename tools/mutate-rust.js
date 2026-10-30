@@ -289,8 +289,8 @@ const MUT = [
     // 现金流量项目档案无法经数据导入迁移 → 「导出全部 → 导进另一个账套」不完整
     name: "⑬ 辅助档案不认现金流量项目",
     file: "crates/findb/src/imports.rs",
-    from: '        "现金流量" | "现金流量项目" | "现金流" | "cashflow" | "cf" => fincore::AuxKind::CashFlow,',
-    to: '        "__not_a_kind__" => fincore::AuxKind::CashFlow,',
+    from: '        "现金流量" | "现金流量项目" | "现金流" | "cashflow" | "cf" => {\n            fincore::AuxKind::CashFlow\n        }',
+    to: '        "__not_a_kind__" => {\n            fincore::AuxKind::CashFlow\n        }',
     cmd: FIMPORT("import_aux_accepts_cashflow_kind"),
   },
   {
@@ -340,8 +340,8 @@ const MUT = [
     // 档案导出不带税点列 → 59 个客户的税点只能一个个点开改，导出表改完导回去全没了
     name: "⑮ 档案导出不带税点列",
     file: "crates/finweb/src/sheets.rs",
-    from: "                |e: &AuxEntity| e.prop(fincore::auxiliary::prop::TAX_RATE).cloned().unwrap_or_default(),",
-    to: "                |_e: &AuxEntity| String::new(),",
+    from: "                e.prop(fincore::auxiliary::prop::TAX_RATE)\n                    .cloned()\n                    .unwrap_or_default()",
+    to: "                String::new()",
     cmd: ROUND("客户税点与开票情况导出后能导回"),
   },
   {
@@ -373,7 +373,7 @@ const MUT = [
     // 存货导出不带计量单位 → 改完导回去单位没了
     name: "⑮ 存货导出不带计量单位",
     file: "crates/finweb/src/sheets.rs",
-    from: "                e.prop(fincore::auxiliary::prop::UNIT).cloned().unwrap_or_default(),",
+    from: "                e.prop(fincore::auxiliary::prop::UNIT)\n                    .cloned()\n                    .unwrap_or_default(),",
     to: "                String::new(),",
     cmd: ROUND("存货单位与停用状态导出后能导回"),
   },
@@ -563,7 +563,7 @@ const MUT = [
     // 预算控制值拼错（warning）不报 → 静默按"关闭"跑，超预算一路放行
     name: "㉑ 预算控制拼错也放行",
     file: "crates/fincore/src/account.rs",
-    from: '        if !matches!(\n            self.budget_control.trim(),\n            "" | "off" | "warn" | "strong"\n        ) {',
+    from: '        if !matches!(self.budget_control.trim(), "" | "off" | "warn" | "strong") {',
     to: '        if false {',
     cmd: FOPT("options_validation_catches_silent_misconfigurations"),
   },
@@ -710,8 +710,8 @@ const MUT = [
   {
     name: "㉒ 空串被当成非法金额",
     file: "crates/finweb/src/handlers/settle.rs",
-    from: "        Some(s) if !s.is_empty() => Some(fincore::Money::parse(s).map_err(|e| {",
-    to: "        Some(s) => Some(fincore::Money::parse(s).map_err(|e| {",
+    from: "        Some(s) if !s.is_empty() => Some(",
+    to: "        Some(s) => Some(",
     cmd: FUNS("blank_amount_means_full_unsettle"),
   },
   {
@@ -913,7 +913,7 @@ const MUT = [
   {
     name: "㉜ 催款明细不算逾期",
     file: "crates/findb/src/settle.rs",
-    from: "    (letter_date - doc_date).num_days().saturating_sub(days).max(0)",
+    from: "    (letter_date - doc_date)\n        .num_days()\n        .saturating_sub(days)\n        .max(0)",
     to: "    0",
     cmd: FSETTLE("dunning_items_carry_overdue_days_from_pay_days"),
   },

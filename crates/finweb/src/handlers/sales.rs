@@ -909,7 +909,6 @@ pub(super) async fn get_notices(
     })))
 }
 
-
 pub(super) async fn update_invoice(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -939,7 +938,6 @@ pub(super) async fn update_invoice(
     Ok(Json(json!({ "ok": true })))
 }
 
-
 pub(super) async fn delete_invoice(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -957,7 +955,6 @@ pub(super) async fn delete_invoice(
     Ok(Json(json!({ "ok": true })))
 }
 
-
 pub(super) async fn get_tax_options(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -966,7 +963,6 @@ pub(super) async fn get_tax_options(
     let db = &user.db;
     Ok(Json(json!(findb::taxdecl::TaxOptions::load(&*db)?)))
 }
-
 
 pub(super) async fn save_tax_options(
     State(state): State<Arc<WebState>>,
@@ -1008,7 +1004,6 @@ pub(super) async fn save_tax_options(
     db.log(user.username(), "税务", "税务参数", "更新申报表参数")?;
     Ok(Json(json!({ "ok": true, "options": req })))
 }
-
 
 pub(super) async fn get_change_log(
     State(state): State<Arc<WebState>>,

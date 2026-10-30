@@ -179,10 +179,7 @@ impl CashFlowStatement {
             parts.push(format!("{} 笔按对方科目自动归集", self.auto_assigned));
         }
         if self.ambiguous > 0 {
-            parts.push(format!(
-                "{} 笔对方科目指向不同项目、未归集",
-                self.ambiguous
-            ));
+            parts.push(format!("{} 笔对方科目指向不同项目、未归集", self.ambiguous));
         }
         if !self.unassigned.is_zero() {
             parts.push(format!("未归集金额 {}", self.unassigned.fmt_money()));

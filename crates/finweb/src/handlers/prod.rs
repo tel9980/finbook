@@ -975,7 +975,6 @@ pub(super) async fn sales_cost_ep(
     }
 }
 
-
 pub(super) async fn list_cost_configs(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -985,7 +984,6 @@ pub(super) async fn list_cost_configs(
     let rows = findb::business::cost_configs(&*db)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
-
 
 pub(super) async fn save_cost_method(
     State(state): State<Arc<WebState>>,
@@ -1004,7 +1002,6 @@ pub(super) async fn save_cost_method(
     )?;
     Ok(Json(json!({ "ok": true })))
 }
-
 
 pub(super) async fn run_period_end_cost(
     State(state): State<Arc<WebState>>,

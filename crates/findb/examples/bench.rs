@@ -63,7 +63,11 @@ fn main() {
         let e = AuxEntity::new(AuxKind::Item, &format!("HG{i:03}"), format!("存货{i}"));
         findb::auxs::insert(&db, &e).unwrap();
     }
-    for (code, name) in [("B01", "G银行对公户"), ("B02", "N银行结算户"), ("B03", "微信钱包")] {
+    for (code, name) in [
+        ("B01", "G银行对公户"),
+        ("B02", "N银行结算户"),
+        ("B03", "微信钱包"),
+    ] {
         findb::auxs::insert(&db, &AuxEntity::new(AuxKind::Bank, code, name)).unwrap();
     }
     println!("档案 91 条：{:?}", t.elapsed());
@@ -180,11 +184,19 @@ fn main() {
     let as_of = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
     let mut t = Instant::now();
     let ft = findb::advanced::financial_totals(&db, cur, cur, None).unwrap();
-    println!("financial_totals        {:>10?}  净利 {}", t.elapsed(), ft.net_profit);
+    println!(
+        "financial_totals        {:>10?}  净利 {}",
+        t.elapsed(),
+        ft.net_profit
+    );
 
     t = Instant::now();
     let fa = findb::advanced::financial_analysis(&db, cur, None).unwrap();
-    println!("financial_analysis      {:>10?}  成本动因 {}", t.elapsed(), fa.cost_drivers.len());
+    println!(
+        "financial_analysis      {:>10?}  成本动因 {}",
+        t.elapsed(),
+        fa.cost_drivers.len()
+    );
 
     t = Instant::now();
     let mp = findb::advanced::money_position(&db, cur, as_of, None).unwrap();
@@ -200,21 +212,21 @@ fn main() {
     println!("status_summary          {:>10?}  {:?}", t.elapsed(), ss);
 
     let chart = findb::accounts::chart(&db).unwrap();
-    let snap = findb::balances::BalanceSnapshot::load(
-        &db,
-        &findb::balances::BalanceQuery::period(cur),
-    )
-    .unwrap();
+    let snap =
+        findb::balances::BalanceSnapshot::load(&db, &findb::balances::BalanceQuery::period(cur))
+            .unwrap();
     t = Instant::now();
     let tb = snap.trial_balance(&chart);
-    println!("trial_balance           {:>10?}  期末借 {}", t.elapsed(), tb.end_debit);
+    println!(
+        "trial_balance           {:>10?}  期末借 {}",
+        t.elapsed(),
+        tb.end_debit
+    );
 
     t = Instant::now();
-    let _s1 = findb::balances::BalanceSnapshot::load(
-        &db,
-        &findb::balances::BalanceQuery::period(cur),
-    )
-    .unwrap();
+    let _s1 =
+        findb::balances::BalanceSnapshot::load(&db, &findb::balances::BalanceQuery::period(cur))
+            .unwrap();
     println!("snapshot（单期）        {:>10?}", t.elapsed());
 
     t = Instant::now();
@@ -239,23 +251,41 @@ fn main() {
         None,
     )
     .unwrap();
-    println!("aging(112201)           {:>10?}  客户 {}", t.elapsed(), ar.len());
+    println!(
+        "aging(112201)           {:>10?}  客户 {}",
+        t.elapsed(),
+        ar.len()
+    );
 
     t = Instant::now();
     let open = findb::settle::open_entries(&db, "112201", cur, false).unwrap();
-    println!("open_entries(112201)    {:>10?}  未核销 {}", t.elapsed(), open.len());
+    println!(
+        "open_entries(112201)    {:>10?}  未核销 {}",
+        t.elapsed(),
+        open.len()
+    );
 
     t = Instant::now();
     let aux = findb::auxs::list(&db, &fincore::AuxQuery::default()).unwrap();
-    println!("auxs::list（全部）      {:>10?}  档案 {}", t.elapsed(), aux.len());
+    println!(
+        "auxs::list（全部）      {:>10?}  档案 {}",
+        t.elapsed(),
+        aux.len()
+    );
 
     t = Instant::now();
     let br = findb::balances::list_begin(&db).unwrap();
-    println!("list_begin              {:>10?}  期初 {}", t.elapsed(), br.len());
+    println!(
+        "list_begin              {:>10?}  期初 {}",
+        t.elapsed(),
+        br.len()
+    );
 
     println!(
         "库文件 {} KB",
-        std::fs::metadata(&path).map(|m| m.len() / 1024).unwrap_or(0)
+        std::fs::metadata(&path)
+            .map(|m| m.len() / 1024)
+            .unwrap_or(0)
     );
 
     // ── 导入路径：整批一个事务 ──────────────────────────────────
@@ -296,4 +326,3 @@ fn main() {
     }
     let _ = snap;
 }
-

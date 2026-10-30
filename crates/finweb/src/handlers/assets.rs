@@ -1,8 +1,5 @@
 use super::*;
 
-
-
-
 pub(super) async fn list_assets(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -55,7 +52,6 @@ pub(super) async fn list_assets(
     })))
 }
 
-
 pub(super) async fn create_asset(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -76,7 +72,6 @@ pub(super) async fn create_asset(
     )?;
     Ok(Json(json!({ "id": id })))
 }
-
 
 pub(super) async fn update_asset(
     State(state): State<Arc<WebState>>,
@@ -120,7 +115,6 @@ pub(super) async fn update_asset(
     Ok(Json(json!({ "ok": true })))
 }
 
-
 pub(super) async fn delete_asset(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -138,7 +132,6 @@ pub(super) async fn delete_asset(
     )?;
     Ok(Json(json!({ "ok": true })))
 }
-
 
 pub(super) async fn list_asset_deps(
     State(state): State<Arc<WebState>>,
@@ -162,7 +155,6 @@ pub(super) async fn list_asset_deps(
     Ok(Json(json!({ "rows": rows })))
 }
 
-
 /// 资产卡片变更历史（对标金蝶固定资产变动历史）
 pub(super) async fn list_asset_changes(
     State(state): State<Arc<WebState>>,
@@ -173,7 +165,6 @@ pub(super) async fn list_asset_changes(
     let db = &user.db;
     Ok(Json(json!({ "rows": findb::assets::changes(&db, id)? })))
 }
-
 
 /// 固定资产 ↔ 总账对账（原值/累计折旧逐科目差异）
 pub(super) async fn asset_gl_reconcile(
@@ -199,7 +190,6 @@ pub(super) async fn asset_gl_reconcile(
         "dep_diff": r.dep_diff.fmt_money(),
     })))
 }
-
 
 /// 资产减值（记录减值累计；净值口径由卡片原值-累计折旧-减值体现）
 pub(super) async fn impair_asset(
@@ -228,7 +218,6 @@ pub(super) async fn impair_asset(
     )?;
     Ok(Json(json!({ "ok": true, "id": aid })))
 }
-
 
 /// 资产盘点单（草稿）：行 = 卡片 + 是否盘实
 pub(super) async fn save_asset_count(
@@ -282,7 +271,6 @@ pub(super) async fn save_asset_count(
     Ok(Json(json!({ "ok": true, "id": id, "no": c.no })))
 }
 
-
 /// 资产盘点过账：盘亏（found=false）标记为停用
 pub(super) async fn post_asset_count(
     State(state): State<Arc<WebState>>,
@@ -301,7 +289,6 @@ pub(super) async fn post_asset_count(
     Ok(Json(json!({ "ok": true, "lost": n })))
 }
 
-
 /// 资产盘点单列表（含明细）
 pub(super) async fn list_asset_counts(
     State(state): State<Arc<WebState>>,
@@ -311,7 +298,6 @@ pub(super) async fn list_asset_counts(
     let db = &user.db;
     Ok(Json(json!({ "rows": findb::assets::ac_list(&*db)? })))
 }
-
 
 pub(super) async fn dispose_asset(
     State(state): State<Arc<WebState>>,
@@ -341,7 +327,6 @@ pub(super) async fn dispose_asset(
     Ok(Json(json!({ "ok": true, "voucher_id": vid })))
 }
 
-
 pub(super) async fn depreciate_assets(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -359,7 +344,6 @@ pub(super) async fn depreciate_assets(
         "voucher_no": res.voucher_no,
     })))
 }
-
 
 pub(super) async fn delete_asset_deps_period(
     State(state): State<Arc<WebState>>,

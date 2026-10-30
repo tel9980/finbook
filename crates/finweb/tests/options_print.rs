@@ -10,8 +10,8 @@
 
 mod common;
 
-use common::{authed_get, authed_put, body_string, login, select_book, test_state};
 use axum::http::StatusCode;
+use common::{authed_get, authed_put, body_string, login, select_book, test_state};
 use finweb::handlers;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -69,7 +69,10 @@ async fn print_settings_survive_save_and_reload() {
     assert_eq!(st, StatusCode::OK, "合法参数应保存成功：{body}");
 
     let back = get_options(&state, &sid).await;
-    assert_eq!(back["print"]["orientation"], "landscape", "方向没存住：{back}");
+    assert_eq!(
+        back["print"]["orientation"], "landscape",
+        "方向没存住：{back}"
+    );
     assert_eq!(back["print"]["font_pt"], 9, "字号没存住：{back}");
     assert_eq!(back["print"]["margin_mm"], 20);
     assert_eq!(back["print"]["show_page_no"], false);
@@ -171,8 +174,14 @@ async fn paper_sizes_survive_save_and_reload() {
     assert_eq!(st, StatusCode::OK, "合法纸型应保存成功：{body}");
 
     let back = get_options(&state, &sid).await;
-    assert_eq!(back["print"]["voucher_paper"], "A5", "凭证纸型没存住：{back}");
-    assert_eq!(back["print"]["doc_paper"], "third", "单据纸型没存住：{back}");
+    assert_eq!(
+        back["print"]["voucher_paper"], "A5",
+        "凭证纸型没存住：{back}"
+    );
+    assert_eq!(
+        back["print"]["doc_paper"], "third",
+        "单据纸型没存住：{back}"
+    );
 }
 
 #[tokio::test]

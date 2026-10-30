@@ -142,10 +142,7 @@ pub fn reconcile_begin(db: &Db) -> DbResult<BeginReconcile> {
         }
 
         // 按科目类别汇总（资产/负债/权益），类别取自科目表而不是编码前缀
-        let cat = chart
-            .as_ref()
-            .and_then(|c| c.get(code))
-            .map(|a| a.category);
+        let cat = chart.as_ref().and_then(|c| c.get(code)).map(|a| a.category);
         let key = match cat {
             Some(AcctCategory::Asset) | Some(AcctCategory::Common) => "asset",
             Some(AcctCategory::Liability) => "liab",

@@ -873,7 +873,10 @@ impl BookOptions {
         if self.code_scheme.is_empty() {
             out.push("科目编码级长不能为空（如 4-2-2-2）".to_string());
         } else if self.code_scheme.len() > 8 {
-            out.push(format!("科目编码最多 8 级，当前 {} 级", self.code_scheme.len()));
+            out.push(format!(
+                "科目编码最多 8 级，当前 {} 级",
+                self.code_scheme.len()
+            ));
         } else if let Some(bad) = self.code_scheme.iter().find(|s| !(1..=12u8).contains(*s)) {
             out.push(format!("科目编码每级应为 1–12 位，当前有 {bad} 位"));
         }
@@ -896,7 +899,11 @@ impl BookOptions {
         if self.base_currency.trim().is_empty() {
             out.push("本位币不能为空（一般为 CNY）".to_string());
         } else if !(self.base_currency.trim().len() == 3
-            && self.base_currency.trim().chars().all(|c| c.is_ascii_alphabetic()))
+            && self
+                .base_currency
+                .trim()
+                .chars()
+                .all(|c| c.is_ascii_alphabetic()))
         {
             out.push(format!(
                 "本位币应填三位字母代码（如 CNY / USD），当前是「{}」",
@@ -912,10 +919,7 @@ impl BookOptions {
         if self.tax_no.chars().count() > 30 {
             out.push("纳税识别号过长（最多 30 个字）".to_string());
         }
-        if !matches!(
-            self.budget_control.trim(),
-            "" | "off" | "warn" | "strong"
-        ) {
+        if !matches!(self.budget_control.trim(), "" | "off" | "warn" | "strong") {
             // 认不出的值会被当成「关闭」，用户以为开了预算控制，其实一直没管
             out.push(format!(
                 "预算控制只能是 关闭/warn/strong，当前是「{}」（认不出的值按关闭处理）",
@@ -1074,7 +1078,11 @@ mod tests {
         assert!(!o.enable_production);
         assert_eq!(o.budget_control, "");
         assert!(o.doc_prefixes.is_empty());
-        assert_eq!(o.print, crate::print::PrintOptions::default(), "版式整套回默认");
+        assert_eq!(
+            o.print,
+            crate::print::PrintOptions::default(),
+            "版式整套回默认"
+        );
         assert!(o.validate().is_empty(), "恢复默认后必须仍然是一份合法配置");
     }
 
@@ -1118,7 +1126,11 @@ mod tests {
     #[test]
     fn options_validation_catches_silent_misconfigurations() {
         let mut o = BookOptions::default();
-        assert!(o.validate().is_empty(), "默认值必须自洽：{:?}", o.validate());
+        assert!(
+            o.validate().is_empty(),
+            "默认值必须自洽：{:?}",
+            o.validate()
+        );
 
         o.budget_control = "warning".into();
         assert!(o.validate().iter().any(|x| x.contains("warning")));
@@ -1149,7 +1161,11 @@ mod tests {
         assert!(o.validate().iter().any(|x| x.contains("企业名称")));
 
         o.company = "某厂".into();
-        assert!(o.validate().is_empty(), "改回来就该通过：{:?}", o.validate());
+        assert!(
+            o.validate().is_empty(),
+            "改回来就该通过：{:?}",
+            o.validate()
+        );
     }
 
     #[test]

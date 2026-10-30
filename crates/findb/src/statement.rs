@@ -124,11 +124,7 @@ pub fn get(db: &Db, id: i64) -> DbResult<Option<Statement>> {
 }
 
 /// 对账单列表（可按 kind='ar'/'ap' 与 party_code 过滤）
-pub fn list(
-    db: &Db,
-    kind: Option<&str>,
-    party_code: Option<&str>,
-) -> DbResult<Vec<Statement>> {
+pub fn list(db: &Db, kind: Option<&str>, party_code: Option<&str>) -> DbResult<Vec<Statement>> {
     let mut out = Vec::new();
     let party = party_code.filter(|s| !s.trim().is_empty());
     match kind.filter(|k| !k.trim().is_empty()) {
@@ -242,11 +238,14 @@ pub fn create(
     // 取该科目下全部**已记账**分录（含已核销——对账单要对全流水），再按期间切分。
     // include_all=true 才会带上已核销的行。
     // 在 SQL 层面按往来单位过滤（customer=C01 / supplier=S01），避免全量取回再 filter。
-    let aux_frag = crate::balances::aux_key_frag(party, if kind == "ar" {
-        AuxKind::Customer
-    } else {
-        AuxKind::Supplier
-    });
+    let aux_frag = crate::balances::aux_key_frag(
+        party,
+        if kind == "ar" {
+            AuxKind::Customer
+        } else {
+            AuxKind::Supplier
+        },
+    );
     let all = crate::settle::open_entries_with(db, account, to, true, true, Some(&aux_frag))?;
 
     // 站在「对方欠我」的角度统一看：

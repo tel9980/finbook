@@ -2024,8 +2024,8 @@ fn fin_totals_impl(
     let cur_liab =
         (b("2001") + b("2201") + b("2202") + b("2203") + b("2211") + b("2221") + b("2241"))
             .negated(); // 负债贷方余额为负，取负得正数
-    // 科目表只读一次。原来这两个合计各读一遍科目表，而 financial_analysis
-    // 要逐月调这个函数，10 个月就是 20 次全表读——纯浪费。
+                        // 科目表只读一次。原来这两个合计各读一遍科目表，而 financial_analysis
+                        // 要逐月调这个函数，10 个月就是 20 次全表读——纯浪费。
     let accounts = crate::accounts::list(db)?;
     let total_asset = {
         // 全部 1 开头资产类（借方正）合计
@@ -2070,7 +2070,10 @@ fn fin_totals_impl(
                 continue;
             }
             // 只取末级：父科目余额是子科目之和，重复相加会翻倍
-            if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+            if accounts
+                .iter()
+                .any(|x| x.code.starts_with(&a.code) && x.code != a.code)
+            {
                 continue;
             }
             s += exp(&a.code);
@@ -2391,7 +2394,11 @@ pub fn cost_driver_accounts(db: &Db) -> DbResult<Vec<(String, String)>> {
         ("6402".to_string(), "其他业务成本".to_string()),
     ];
     let accounts = crate::accounts::list(db)?;
-    let is_leaf = |code: &str| !accounts.iter().any(|x| x.code.starts_with(code) && x.code != code);
+    let is_leaf = |code: &str| {
+        !accounts
+            .iter()
+            .any(|x| x.code.starts_with(code) && x.code != code)
+    };
     for a in accounts.iter() {
         if !matches!(a.category, fincore::account::AcctCategory::Cost) || !is_leaf(&a.code) {
             continue;
@@ -2554,7 +2561,10 @@ pub fn financial_analysis(
                 if !matches!(a.category, fincore::account::AcctCategory::Cost) {
                     continue;
                 }
-                if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+                if accounts
+                    .iter()
+                    .any(|x| x.code.starts_with(&a.code) && x.code != a.code)
+                {
                     continue;
                 }
                 v += exp_of(&a.code);
@@ -2599,20 +2609,21 @@ pub fn financial_analysis(
     //
     // 不一致的后果：首页净利润把 5101 算进成本，而这里不列出来，老板点开
     // "成本构成"会发现明细加起来对不上合计，这是最容易被质疑的一类不一致。
-    let mut cost_drivers: Vec<DriverItem> = [("6401", "主营业务成本", -1i8), ("6402", "其他业务成本", -1)]
-        .iter()
-        .map(|(c, n, _d)| {
-            // 营业成本构成显示为正数（成本规模）
-            let cur = exp(&snap_cur, c);
-            let prv = exp(&snap_prev, c);
-            DriverItem {
-                code: c.to_string(),
-                name: n.to_string(),
-                amount: cur,
-                prev_amount: prv,
-            }
-        })
-        .collect();
+    let mut cost_drivers: Vec<DriverItem> =
+        [("6401", "主营业务成本", -1i8), ("6402", "其他业务成本", -1)]
+            .iter()
+            .map(|(c, n, _d)| {
+                // 营业成本构成显示为正数（成本规模）
+                let cur = exp(&snap_cur, c);
+                let prv = exp(&snap_prev, c);
+                DriverItem {
+                    code: c.to_string(),
+                    name: n.to_string(),
+                    amount: cur,
+                    prev_amount: prv,
+                }
+            })
+            .collect();
     for (code, name) in cost_driver_accounts(db)?.into_iter().skip(2) {
         // skip(2)：前两条 6401/6402 上面已经加过了，这里只补成本类科目
         let cur = exp(&snap_cur, &code);
@@ -2630,7 +2641,12 @@ pub fn financial_analysis(
     }
     {
         // 金额大的排前面：老板要的是"钱主要花哪了"，不是科目表顺序
-        cost_drivers.sort_by(|x, y| y.amount.to_f64().partial_cmp(&x.amount.to_f64()).unwrap_or(std::cmp::Ordering::Equal));
+        cost_drivers.sort_by(|x, y| {
+            y.amount
+                .to_f64()
+                .partial_cmp(&x.amount.to_f64())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     // 净利润构成（利润表口径）：营业收入、营业成本、税金、三项费用、资产减值、营业外、所得税
@@ -2724,7 +2740,10 @@ pub fn money_position(
                 continue;
             }
             // 只取末级：父科目余额是子科目之和，重复相加翻倍
-            if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+            if accounts
+                .iter()
+                .any(|x| x.code.starts_with(&a.code) && x.code != a.code)
+            {
                 continue;
             }
             // 逐户：把该科目下每个往来单位的**期末余额**单独判断极性后再汇总。
@@ -2770,18 +2789,29 @@ pub fn money_position(
             if !prefixes.iter().any(|p| a.code.starts_with(p)) {
                 continue;
             }
-            if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+            if accounts
+                .iter()
+                .any(|x| x.code.starts_with(&a.code) && x.code != a.code)
+            {
                 continue;
             }
             let rows = snap.aux_breakdown(&a.code);
             if rows.is_empty() {
                 let e = snap.for_account(&a.code, None).end().round2();
-                if e.is_positive() { d += e; } else { c += e.abs(); }
+                if e.is_positive() {
+                    d += e;
+                } else {
+                    c += e.abs();
+                }
                 continue;
             }
             for r in rows.iter() {
                 let e = r.end().round2();
-                if e.is_positive() { d += e; } else { c += e.abs(); }
+                if e.is_positive() {
+                    d += e;
+                } else {
+                    c += e.abs();
+                }
             }
         }
         (d, c)
@@ -2816,14 +2846,14 @@ pub fn money_position(
         if !a.code.starts_with("1122") {
             continue;
         }
-        if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+        if accounts
+            .iter()
+            .any(|x| x.code.starts_with(&a.code) && x.code != a.code)
+        {
             continue;
         }
         for r in snap.aux_breakdown(&a.code) {
-            let key = crate::balances::aux_key_value_of(
-                &r.aux.key(),
-                fincore::AuxKind::Customer,
-            );
+            let key = crate::balances::aux_key_value_of(&r.aux.key(), fincore::AuxKind::Customer);
             if key.is_empty() {
                 continue;
             }
@@ -2909,8 +2939,20 @@ pub fn money_position(
         });
     }
     // 同一客户可能挂在多个应收科目下，合并后再排序
-    top_customers.sort_by(|a, b| b.amount.to_f64().partial_cmp(&a.amount.to_f64()).unwrap_or(std::cmp::Ordering::Equal));
-    top_customers.dedup_by(|b, a| if a.code == b.code { a.amount += b.amount; true } else { false });
+    top_customers.sort_by(|a, b| {
+        b.amount
+            .to_f64()
+            .partial_cmp(&a.amount.to_f64())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    top_customers.dedup_by(|b, a| {
+        if a.code == b.code {
+            a.amount += b.amount;
+            true
+        } else {
+            false
+        }
+    });
     top_customers.truncate(5);
 
     let mut top_suppliers: Vec<PartyMoney> = Vec::new();
@@ -2919,14 +2961,14 @@ pub fn money_position(
         if !a.code.starts_with("2202") {
             continue;
         }
-        if accounts.iter().any(|x| x.code.starts_with(&a.code) && x.code != a.code) {
+        if accounts
+            .iter()
+            .any(|x| x.code.starts_with(&a.code) && x.code != a.code)
+        {
             continue;
         }
         for r in snap.aux_breakdown(&a.code) {
-            let key = crate::balances::aux_key_value_of(
-                &r.aux.key(),
-                fincore::AuxKind::Supplier,
-            );
+            let key = crate::balances::aux_key_value_of(&r.aux.key(), fincore::AuxKind::Supplier);
             if key.is_empty() {
                 continue;
             }
@@ -2959,8 +3001,20 @@ pub fn money_position(
             also_is_receivable: false,
         });
     }
-    top_suppliers.sort_by(|a, b| b.amount.to_f64().partial_cmp(&a.amount.to_f64()).unwrap_or(std::cmp::Ordering::Equal));
-    top_suppliers.dedup_by(|b, a| if a.code == b.code { a.amount += b.amount; true } else { false });
+    top_suppliers.sort_by(|a, b| {
+        b.amount
+            .to_f64()
+            .partial_cmp(&a.amount.to_f64())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    top_suppliers.dedup_by(|b, a| {
+        if a.code == b.code {
+            a.amount += b.amount;
+            true
+        } else {
+            false
+        }
+    });
     top_suppliers.truncate(5);
 
     // ---- 双向身份合并：同一单位既欠我又被我欠 ----
@@ -3085,7 +3139,12 @@ mod tests {
         let p = Period::new(2026, 3).unwrap();
         // 一笔收入 + 两笔成本：房租记在 5101 制造费用下（成本类，最容易被漏），
         // 另一笔走 6401 主营业务成本
-        post(&db, p, 1, &[("112201", "30000", "0"), ("600101", "0", "30000")]);
+        post(
+            &db,
+            p,
+            1,
+            &[("112201", "30000", "0"), ("600101", "0", "30000")],
+        );
         post(
             &db,
             p,
@@ -3112,7 +3171,10 @@ mod tests {
         );
         // 合计也得对得上 financial_totals 的营业成本
         let t = financial_totals(&db, p, p, None).unwrap();
-        let sum: Money = mine.iter().map(|d| d.amount).fold(Money::ZERO, |x, y| x + y);
+        let sum: Money = mine
+            .iter()
+            .map(|d| d.amount)
+            .fold(Money::ZERO, |x, y| x + y);
         assert_eq!(sum, t.cost, "成本构成合计应等于营业成本");
         assert_eq!(t.cost, m("20000"));
     }
@@ -3129,12 +3191,32 @@ mod tests {
         let db = tmpdb("fin_ytd_eq");
         let start = Period::new(2026, 1).unwrap();
         // 1 月：一笔收入 + 一笔费用（累计从 1 月起算）
-        post(&db, start, 1, &[("112201", "50000", "0"), ("600101", "0", "50000")]);
-        post(&db, start, 2, &[("660201", "8000", "0"), ("1001", "0", "8000")]);
+        post(
+            &db,
+            start,
+            1,
+            &[("112201", "50000", "0"), ("600101", "0", "50000")],
+        );
+        post(
+            &db,
+            start,
+            2,
+            &[("660201", "8000", "0"), ("1001", "0", "8000")],
+        );
         // 3 月：成本类支出（5101 制造费用，最容易被漏的那一类）
         let p = Period::new(2026, 3).unwrap();
-        post(&db, p, 1, &[("112201", "20000", "0"), ("600101", "0", "20000")]);
-        post(&db, p, 2, &[("510105", "6000", "0"), ("220201", "0", "6000")]);
+        post(
+            &db,
+            p,
+            1,
+            &[("112201", "20000", "0"), ("600101", "0", "20000")],
+        );
+        post(
+            &db,
+            p,
+            2,
+            &[("510105", "6000", "0"), ("220201", "0", "6000")],
+        );
 
         let by_scan = financial_totals(&db, p, start, None).unwrap();
         let by_ytd = financial_ytd(&db, p, None).unwrap();
@@ -3143,7 +3225,10 @@ mod tests {
             by_ytd.revenue, by_scan.revenue,
             "本年累计收入必须与从 1 月扫到本期一致"
         );
-        assert_eq!(by_ytd.cost, by_scan.cost, "本年累计成本必须一致（含制造费用）");
+        assert_eq!(
+            by_ytd.cost, by_scan.cost,
+            "本年累计成本必须一致（含制造费用）"
+        );
         assert_eq!(
             by_ytd.net_profit, by_scan.net_profit,
             "本年累计净利润必须一致——首页就是显示这个数"
@@ -3170,7 +3255,12 @@ mod tests {
         use crate::balances::{BalanceQuery, BalanceSnapshot};
         let db = tmpdb("snap_cache");
         let p = Period::new(2026, 4).unwrap();
-        post(&db, p, 1, &[("112201", "1000", "0"), ("600101", "0", "1000")]);
+        post(
+            &db,
+            p,
+            1,
+            &[("112201", "1000", "0"), ("600101", "0", "1000")],
+        );
 
         let q = BalanceQuery::period(p).with_exclude_carry(true);
         let first = BalanceSnapshot::load(&db, &q).unwrap();

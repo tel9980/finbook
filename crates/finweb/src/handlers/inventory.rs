@@ -1038,7 +1038,6 @@ pub(super) async fn save_item_plan(
     Ok(Json(json!({ "ok": true })))
 }
 
-
 pub(super) async fn list_landed_cost(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1056,7 +1055,6 @@ pub(super) async fn list_landed_cost(
         "total_to_expense": rows.iter().map(|r| r.total_to_expense()).sum::<fincore::Money>().fmt_money(),
     })))
 }
-
 
 pub(super) async fn save_landed_cost(
     State(state): State<Arc<WebState>>,
@@ -1136,7 +1134,6 @@ pub(super) async fn save_landed_cost(
     ))
 }
 
-
 pub(super) async fn serial_in_endpoint(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1154,7 +1151,6 @@ pub(super) async fn serial_in_endpoint(
     Ok(Json(serde_json::json!({ "ok": true, "count": n })))
 }
 
-
 pub(super) async fn list_serial(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1169,7 +1165,6 @@ pub(super) async fn list_serial(
     let rows = findb::inventory2::serial_list(&db, &item)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
-
 
 pub(super) async fn get_transfer_report(
     State(state): State<Arc<WebState>>,
@@ -1193,7 +1188,6 @@ pub(super) async fn get_transfer_report(
         .collect();
     Ok(Json(serde_json::json!({ "rows": items })))
 }
-
 
 /// 批次调拨（Warehouse）：batch_no 空 → FEFO 近效期自动选批（首条不足量 400 提示分批）
 pub(super) async fn do_transfer(
@@ -1259,7 +1253,6 @@ pub(super) async fn do_transfer(
     ))
 }
 
-
 pub(super) async fn list_locations(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1268,7 +1261,6 @@ pub(super) async fn list_locations(
     let db = &user.db;
     Ok(Json(json!({ "rows": findb::batch::location_list(&*db)? })))
 }
-
 
 pub(super) async fn save_location(
     State(state): State<Arc<WebState>>,

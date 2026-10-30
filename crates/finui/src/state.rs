@@ -243,9 +243,7 @@ impl NavItem {
             | NavItem::Settle
             | NavItem::Invoice
             | NavItem::Payroll
-            | NavItem::Claims => {
-                Some(Perm::VoucherNew)
-            }
+            | NavItem::Claims => Some(Perm::VoucherNew),
             NavItem::Budget
             | NavItem::BudgetAlerts
             | NavItem::DimProfit
@@ -670,17 +668,17 @@ mod simple_nav_tests {
     #[test]
     fn simple_nav_covers_daily_chain() {
         for need in [
-            NavItem::Account,      // 科目
-            NavItem::BeginBalance, // 期初建账
-            NavItem::VoucherNew,   // 填制凭证
-            NavItem::VoucherList,  // 凭证查询
-            NavItem::Ledger,       // 账簿
-            NavItem::BalanceTable, // 余额表
-            NavItem::Reports,      // 报表
-            NavItem::PeriodEnd,    // 期末处理
-            NavItem::Backup,       // 备份
-            NavItem::Funds,        // 资金管理（多银行 + 微信）
-            NavItem::Claims,       // 费用报销
+            NavItem::Account,                // 科目
+            NavItem::BeginBalance,           // 期初建账
+            NavItem::VoucherNew,             // 填制凭证
+            NavItem::VoucherList,            // 凭证查询
+            NavItem::Ledger,                 // 账簿
+            NavItem::BalanceTable,           // 余额表
+            NavItem::Reports,                // 报表
+            NavItem::PeriodEnd,              // 期末处理
+            NavItem::Backup,                 // 备份
+            NavItem::Funds,                  // 资金管理（多银行 + 微信）
+            NavItem::Claims,                 // 费用报销
             NavItem::Aux(AuxKind::Customer), // 客户档案
         ] {
             assert!(need.daily_core(), "{} 被精简模式藏起来了", need.label());

@@ -252,7 +252,9 @@ impl BeginView {
             }
             if ui
                 .button("期初收集表")
-                .on_hover_text("四张纸（客户/供应商/账户/基本资料）一次填完 —— 下载、导入、导入后对账")
+                .on_hover_text(
+                    "四张纸（客户/供应商/账户/基本资料）一次填完 —— 下载、导入、导入后对账",
+                )
                 .clicked()
                 && can_edit
             {
@@ -794,8 +796,7 @@ impl BeginView {
                 return;
             }
         };
-        let accounts: Vec<fincore::account::Account> =
-            chart.all().into_iter().cloned().collect();
+        let accounts: Vec<fincore::account::Account> = chart.all().into_iter().cloned().collect();
         let q = |k: fincore::AuxKind| {
             findb::auxs::list(
                 ctx.db(),
@@ -966,9 +967,7 @@ impl BeginView {
                 .resizable(true)
                 .default_width(600.0)
                 .show(ui.ctx(), |ui| {
-                    ui.label(
-                        RichText::new(findb::opening_check::one_liner(r)).strong(),
-                    );
+                    ui.label(RichText::new(findb::opening_check::one_liner(r)).strong());
                     ui.add_space(6.0);
                     for s in &r.sheets {
                         ui.label(format!(
@@ -1091,7 +1090,13 @@ impl BeginView {
                 },
             ]);
         }
-        match crate::views::export::run_export(&sh, "期初余额", "期初余额", mode, &ctx.db().options()) {
+        match crate::views::export::run_export(
+            &sh,
+            "期初余额",
+            "期初余额",
+            mode,
+            &ctx.db().options(),
+        ) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }

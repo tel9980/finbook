@@ -69,7 +69,10 @@ async fn dunning_letter_is_a_printable_document() {
     let id = create_dunning(&state, &sid).await;
 
     let resp = finweb::handlers::router(state.clone())
-        .oneshot(authed_get(&format!("/api/settle/dunnings/{id}/print"), &sid))
+        .oneshot(authed_get(
+            &format!("/api/settle/dunnings/{id}/print"),
+            &sid,
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);

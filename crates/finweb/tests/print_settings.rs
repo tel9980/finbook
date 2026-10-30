@@ -66,7 +66,10 @@ async fn a_single_drag_is_saved_without_touching_the_rest() {
     let after = get_options(&state, &sid).await;
     assert_eq!(after["print"]["font_pt"], 13, "字号没存住");
     assert_eq!(after["print"]["show_page_no"], false, "页码开关没存住");
-    assert_eq!(after["print"]["voucher_paper"], "241x140", "凭证纸型被冲掉了");
+    assert_eq!(
+        after["print"]["voucher_paper"], "241x140",
+        "凭证纸型被冲掉了"
+    );
     assert_eq!(after["print"]["ledger_paper"], "A5", "账簿纸型被冲掉了");
     assert_eq!(after["print"]["offset_x_mm"], -3, "套打偏移被冲掉了");
 }

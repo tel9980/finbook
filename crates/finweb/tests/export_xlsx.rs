@@ -138,7 +138,12 @@ async fn settle_aging_export_as_xlsx() {
     let sid = boss_in_b1(&state).await;
     fetch_xlsx(&state, &sid, "/api/settle/aging/xlsx?account=1122").await;
     // 按年分档（与天数分档走不同的桶）也要能出
-    fetch_xlsx(&state, &sid, "/api/settle/aging/xlsx?account=1122&scheme=year").await;
+    fetch_xlsx(
+        &state,
+        &sid,
+        "/api/settle/aging/xlsx?account=1122&scheme=year",
+    )
+    .await;
 
     // 应付也要能导：文件名与表头都得跟着科目走。
     // 只测 1122 的话，"写死 1122"这个错法照样绿灯 —— 而它会让会计把应付账龄
@@ -182,15 +187,14 @@ async fn exports_require_login() {
     let (state, _dir, _tmp) = test_state();
     for uri in ["/api/export/aux", "/api/reports/balance-sheet/xlsx"] {
         let resp = handlers::router(state.clone())
-            .oneshot(
-                Request::builder()
-                    .uri(uri)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED, "{uri} 未登录应 401");
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "{uri} 未登录应 401"
+        );
     }
 }
 
@@ -260,10 +264,17 @@ async fn upload_fbk_registers_a_usable_book() {
     assert_eq!(status, StatusCode::OK, "导入账套应成功：{body}");
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     let key = v["key"].as_str().expect("应返回账套 key").to_string();
-    assert_eq!(v["company"], serde_json::json!("外部搬来的厂"), "公司名应从账套里读出来");
+    assert_eq!(
+        v["company"],
+        serde_json::json!("外部搬来的厂"),
+        "公司名应从账套里读出来"
+    );
 
     // 落盘了、没留下临时文件
-    assert!(books_dir.join(format!("{key}.fbk")).is_file(), "账套文件应落盘");
+    assert!(
+        books_dir.join(format!("{key}.fbk")).is_file(),
+        "账套文件应落盘"
+    );
     let leftovers: Vec<String> = std::fs::read_dir(&books_dir)
         .unwrap()
         .flatten()
@@ -408,12 +419,16 @@ async fn big_responses_are_gzipped_but_xlsx_is_not() {
     let resp = handlers::router(state.clone()).oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(
-        resp.headers().get(header::CONTENT_ENCODING).map(|v| v.to_str().unwrap()),
+        resp.headers()
+            .get(header::CONTENT_ENCODING)
+            .map(|v| v.to_str().unwrap()),
         Some("gzip"),
         "大 JSON 响应应当 gzip"
     );
     assert_eq!(
-        resp.headers().get(header::VARY).map(|v| v.to_str().unwrap()),
+        resp.headers()
+            .get(header::VARY)
+            .map(|v| v.to_str().unwrap()),
         Some("accept-encoding"),
         "压缩层要声明 Vary: accept-encoding，否则缓存会把压缩体发给不支持的客户端"
     );

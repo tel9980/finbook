@@ -1,8 +1,5 @@
 use super::*;
 
-
-
-
 pub(super) async fn download_attachment(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -42,7 +39,6 @@ pub(super) async fn download_attachment(
     }
     Ok(resp)
 }
-
 
 pub(super) async fn delete_attachment(
     State(state): State<Arc<WebState>>,

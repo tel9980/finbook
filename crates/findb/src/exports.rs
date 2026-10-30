@@ -11,7 +11,10 @@ use crate::{Db, DbResult};
 
 /// 获取期间的起止日期（用于按日期过滤没有 period 字段的表，如 dunning）
 fn period_range(p: Period) -> (String, String) {
-    (p.first_day().format("%Y-%m-%d").to_string(), p.last_day().format("%Y-%m-%d").to_string())
+    (
+        p.first_day().format("%Y-%m-%d").to_string(),
+        p.last_day().format("%Y-%m-%d").to_string(),
+    )
 }
 
 /// 构建导出 CSV（kind: vouchers / trial / payroll / claims / dunning_ar / dunning_ap）→ (文件名前缀, 行集)
@@ -107,7 +110,15 @@ pub fn build_csv(db: &Db, kind: &str, period: Period) -> DbResult<(String, Vec<V
         }
         k if k.starts_with("dunning_") => {
             let kind = &k["dunning_".len()..];
-            let mut rows = vec![header(&["催款单号", "日期", "往来单位", "往来单位名称", "金额", "状态", "备注"])];
+            let mut rows = vec![header(&[
+                "催款单号",
+                "日期",
+                "往来单位",
+                "往来单位名称",
+                "金额",
+                "状态",
+                "备注",
+            ])];
             let mut st = db.conn().prepare(
                 "SELECT no, date, party_code, party_name, amount, status, memo FROM dunning
                  WHERE kind=?1 AND date >= ?2 AND date <= ?3 ORDER BY date DESC, id DESC",
@@ -130,7 +141,10 @@ pub fn build_csv(db: &Db, kind: &str, period: Period) -> DbResult<(String, Vec<V
             }
             Ok((format!("dunning_{}_{}", kind, period.ymm()), rows))
         }
-        _ => Err(fincore::FinError::msg("未知导出类型（vouchers/trial/payroll/claims/dunning_ar/dunning_ap）").into()),
+        _ => Err(fincore::FinError::msg(
+            "未知导出类型（vouchers/trial/payroll/claims/dunning_ar/dunning_ap）",
+        )
+        .into()),
     }
 }
 
@@ -293,17 +307,12 @@ pub fn sched_run(db: &Db, id: i64, dir: &std::path::Path) -> DbResult<String> {
     Ok(path.to_string_lossy().to_string())
 }
 
-
 /// 导出催款记录为 Excel（多 Sheet：催款单、对账单）
 ///
 /// `kind` = "ar" 或 "ap"；`period` 用于按日期过滤。
 /// 返回 (文件名, Excel 二进制数据)。
-pub fn build_dunning_excel(
-    db: &Db,
-    kind: &str,
-    period: Period,
-) -> DbResult<(String, Vec<u8>)> {
-    use rust_xlsxwriter::{Workbook, Format, XlsxAlign, XlsxColor, XlsxBorder, XlsxError};
+pub fn build_dunning_excel(db: &Db, kind: &str, period: Period) -> DbResult<(String, Vec<u8>)> {
+    use rust_xlsxwriter::{Format, Workbook, XlsxAlign, XlsxBorder, XlsxColor, XlsxError};
 
     if kind != "ar" && kind != "ap" {
         return Err(fincore::FinError::msg("kind 必须是 ar 或 ap").into());
@@ -369,15 +378,45 @@ pub fn build_dunning_excel(
             ))
         })?;
         for r in it {
-            let (no, kind_s, party_code, party_name, period_from, period_to,
-                 begin_balance, period_increase, period_decrease, end_balance,
-                 line_count, status, memo, created_by, created_at, sent_at, confirmed_by, confirmed_at) = r?;
+            let (
+                no,
+                kind_s,
+                party_code,
+                party_name,
+                period_from,
+                period_to,
+                begin_balance,
+                period_increase,
+                period_decrease,
+                end_balance,
+                line_count,
+                status,
+                memo,
+                created_by,
+                created_at,
+                sent_at,
+                confirmed_by,
+                confirmed_at,
+            ) = r?;
             statement_rows.push(vec![
-                no, kind_s, party_code, party_name,
-                period_from, period_to,
-                begin_balance, period_increase, period_decrease, end_balance,
-                line_count.to_string(), status.to_string(), memo,
-                created_by, created_at, sent_at, confirmed_by, confirmed_at,
+                no,
+                kind_s,
+                party_code,
+                party_name,
+                period_from,
+                period_to,
+                begin_balance,
+                period_increase,
+                period_decrease,
+                end_balance,
+                line_count.to_string(),
+                status.to_string(),
+                memo,
+                created_by,
+                created_at,
+                sent_at,
+                confirmed_by,
+                confirmed_at,
             ]);
         }
     }
@@ -402,7 +441,15 @@ pub fn build_dunning_excel(
     // Sheet 1: 催款单
     let sheet1 = workbook.add_worksheet();
     sheet1.set_name("催款单")?;
-    let dunning_headers = ["催款单号", "日期", "往来单位", "往来单位名称", "金额", "状态", "备注"];
+    let dunning_headers = [
+        "催款单号",
+        "日期",
+        "往来单位",
+        "往来单位名称",
+        "金额",
+        "状态",
+        "备注",
+    ];
     for (col, h) in dunning_headers.iter().enumerate() {
         sheet1.write_string(0, col as u16, *h, &header_fmt)?;
     }
@@ -429,18 +476,35 @@ pub fn build_dunning_excel(
     let sheet2 = workbook.add_worksheet();
     sheet2.set_name("对账单")?;
     let statement_headers = [
-        "单号", "类型", "往来单位", "往来单位名称",
-        "起始期间", "截止期间",
-        "期初余额", "本期增", "本期减", "期末余额",
-        "行数", "状态", "备注",
-        "制单人", "制单时间", "发出时间", "确认人", "确认时间",
+        "单号",
+        "类型",
+        "往来单位",
+        "往来单位名称",
+        "起始期间",
+        "截止期间",
+        "期初余额",
+        "本期增",
+        "本期减",
+        "期末余额",
+        "行数",
+        "状态",
+        "备注",
+        "制单人",
+        "制单时间",
+        "发出时间",
+        "确认人",
+        "确认时间",
     ];
     for (col, h) in statement_headers.iter().enumerate() {
         sheet2.write_string(0, col as u16, *h, &header_fmt)?;
     }
     for (row_idx, row) in statement_rows.iter().enumerate() {
         for (col_idx, cell) in row.iter().enumerate() {
-            let fmt = if matches!(col_idx, 6 | 7 | 8 | 9) { &money_fmt } else { &text_fmt };
+            let fmt = if matches!(col_idx, 6 | 7 | 8 | 9) {
+                &money_fmt
+            } else {
+                &text_fmt
+            };
             if matches!(col_idx, 6 | 7 | 8 | 9) {
                 let val = cell.parse::<f64>().unwrap_or(0.0);
                 sheet2.write_number(row_idx as u32 + 1, col_idx as u16, val, &fmt)?;

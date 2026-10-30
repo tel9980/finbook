@@ -7,8 +7,8 @@
 
 use egui::{RichText, Ui};
 use fincore::{Money, Perm};
-use rust_decimal::Decimal;
 use findb::invoices::{Invoice, InvoiceQuery};
+use rust_decimal::Decimal;
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -72,10 +72,7 @@ pub fn split_amount_tax(total: &str, rate_pct: &str) -> Result<(String, String),
     let divisor = Decimal::ONE + rate.inner() / Decimal::from(100);
     let amount = (total.inner() / divisor).round_dp(2);
     let tax = (total.inner() - amount).round_dp(2);
-    Ok((
-        Money::new(amount).fmt_plain(),
-        Money::new(tax).fmt_plain(),
-    ))
+    Ok((Money::new(amount).fmt_plain(), Money::new(tax).fmt_plain()))
 }
 
 impl InvoiceView {
@@ -154,7 +151,14 @@ impl InvoiceView {
                 .spacing([12.0, 4.0])
                 .show(ui, |ui| {
                     for h in [
-                        "开票日期", "类型", "发票号码", "对方", "价税合计", "税额", "状态", "操作",
+                        "开票日期",
+                        "类型",
+                        "发票号码",
+                        "对方",
+                        "价税合计",
+                        "税额",
+                        "状态",
+                        "操作",
                     ] {
                         ui.label(RichText::new(h).strong());
                     }
@@ -263,10 +267,8 @@ impl InvoiceView {
             if pend_n > 0 {
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new(
-                        "⚠ 还有待认证的进项票：认证前不能抵扣，申报时会白白多缴这段税。",
-                    )
-                    .color(palette::WARN),
+                    RichText::new("⚠ 还有待认证的进项票：认证前不能抵扣，申报时会白白多缴这段税。")
+                        .color(palette::WARN),
                 );
             }
         });
@@ -279,12 +281,18 @@ impl InvoiceView {
         let mut open = true;
         let mut save = false;
         let mut cancel = false;
-        egui::Window::new(if e.id == 0 { "登记发票" } else { "编辑发票" })
-            .open(&mut open)
-            .resizable(false)
-            .collapsible(false)
-            .show(ui.ctx(), |ui| {
-                egui::Grid::new("invoice_edit").num_columns(2).show(ui, |ui| {
+        egui::Window::new(if e.id == 0 {
+            "登记发票"
+        } else {
+            "编辑发票"
+        })
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .show(ui.ctx(), |ui| {
+            egui::Grid::new("invoice_edit")
+                .num_columns(2)
+                .show(ui, |ui| {
                     ui.label("类型");
                     ui.horizontal(|ui| {
                         ui.selectable_value(&mut e.kind, "in".to_string(), "进项（收到的）");
@@ -303,7 +311,11 @@ impl InvoiceView {
                     ui.label("发票号码");
                     ui.add_sized([200.0, 22.0], egui::TextEdit::singleline(&mut e.number));
                     ui.end_row();
-                    ui.label(if e.kind == "in" { "销售方" } else { "购买方" });
+                    ui.label(if e.kind == "in" {
+                        "销售方"
+                    } else {
+                        "购买方"
+                    });
                     ui.add_sized([260.0, 22.0], egui::TextEdit::singleline(&mut e.buyer));
                     ui.end_row();
                     ui.label("对方名称");
@@ -333,30 +345,29 @@ impl InvoiceView {
                     ui.add_sized([260.0, 22.0], egui::TextEdit::singleline(&mut e.memo));
                     ui.end_row();
                 });
-                // 实算一遍给用户看着：填完就能对上票面
-                match split_amount_tax(&e.amount_tax, &e.tax_rate) {
-                    Ok((amount, tax)) => {
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(format!("不含税 {amount} ＋ 税额 {tax} = 价税合计"))
-                                .weak(),
-                        );
-                    }
-                    Err(msg) => {
-                        ui.add_space(4.0);
-                        ui.label(RichText::new(msg).color(palette::WARN));
-                    }
+            // 实算一遍给用户看着：填完就能对上票面
+            match split_amount_tax(&e.amount_tax, &e.tax_rate) {
+                Ok((amount, tax)) => {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("不含税 {amount} ＋ 税额 {tax} = 价税合计")).weak(),
+                    );
                 }
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    if ui.button("保存").clicked() {
-                        save = true;
-                    }
-                    if ui.button("取消").clicked() {
-                        cancel = true;
-                    }
-                });
+                Err(msg) => {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(msg).color(palette::WARN));
+                }
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui.button("保存").clicked() {
+                    save = true;
+                }
+                if ui.button("取消").clicked() {
+                    cancel = true;
+                }
             });
+        });
 
         if cancel || !open {
             self.edit = None;
@@ -447,6 +458,8 @@ mod tests {
         assert!(split_amount_tax("100", "abc").unwrap_err().contains("abc"));
         assert!(split_amount_tax("", "13").unwrap_err().contains("没填"));
         // 税率越界要拦住：填成 130 会算出负的税额，而票面上看不出来
-        assert!(split_amount_tax("100", "130").unwrap_err().contains("0–100"));
+        assert!(split_amount_tax("100", "130")
+            .unwrap_err()
+            .contains("0–100"));
     }
 }

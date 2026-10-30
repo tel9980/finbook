@@ -86,11 +86,7 @@ struct VoucherLine {
 }
 
 /// 按模板从 CSV 行提取期初余额行
-fn extract_begin_line(
-    tmpl: ImportTemplate,
-    f: &[String],
-    map: &HeadMap,
-) -> Option<BeginLine> {
+fn extract_begin_line(tmpl: ImportTemplate, f: &[String], map: &HeadMap) -> Option<BeginLine> {
     let code = f.first()?.trim().to_string();
     if code.is_empty() || !code.chars().any(|c| c.is_ascii_digit()) {
         return None;
@@ -374,7 +370,9 @@ fn aux_kind_of_dim(s: &str) -> Option<fincore::AuxKind> {
 /// 「客户,存货」→ AuxMask。分隔符认中英文逗号、顿号、斜杠、分号。
 fn parse_aux_mask(s: &str) -> fincore::account::AuxMask {
     let mut m = fincore::account::AuxMask::NONE;
-    for part in s.split(|c: char| c == ',' || c == '，' || c == '、' || c == '/' || c == ';' || c == '；') {
+    for part in
+        s.split(|c: char| c == ',' || c == '，' || c == '、' || c == '/' || c == ';' || c == '；')
+    {
         if let Some(k) = aux_kind_of_dim(part) {
             m = m.with(k);
         }
@@ -539,7 +537,9 @@ pub fn read_xlsx_bytes(bytes: &[u8]) -> Result<Vec<Vec<String>>, fincore::FinErr
 ///
 /// 期初收集表是一个工作簿四张纸（客户应收/供应商应付/账户余额/基本资料），
 /// 只读第一张等于只导了客户。
-pub fn read_xlsx_sheets(bytes: &[u8]) -> Result<Vec<(String, Vec<Vec<String>>)>, fincore::FinError> {
+pub fn read_xlsx_sheets(
+    bytes: &[u8],
+) -> Result<Vec<(String, Vec<Vec<String>>)>, fincore::FinError> {
     check_zip_bomb(bytes)?;
     use calamine::{open_workbook_auto_from_rs, Data, Reader};
     let mut wb = open_workbook_auto_from_rs(Cursor::new(bytes))
@@ -877,7 +877,9 @@ fn aux_kind_of(s: &str) -> Option<fincore::AuxKind> {
         // 现金流量项目也能建档案（`AuxKind::CashFlow`），但这里原来漏了 ——
         // 「导出全部辅助档案 → 导进另一个账套」这条闭环里，现金流量项目必然被
         // 当成「类型无法识别」跳过。少几条档案不会报错，搬账套的人发现不了。
-        "现金流量" | "现金流量项目" | "现金流" | "cashflow" | "cf" => fincore::AuxKind::CashFlow,
+        "现金流量" | "现金流量项目" | "现金流" | "cashflow" | "cf" => {
+            fincore::AuxKind::CashFlow
+        }
         _ => return None,
     })
 }
@@ -979,10 +981,22 @@ fn import_aux_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<ImportR
         // 也不该凭空给它写个空值；而用户想清空某一格，删掉内容导回来仍然是空，
         // 效果一样。
         for (aliases, key) in [
-            (&["税点%", "税点", "税率%", "税率"][..], fincore::auxiliary::prop::TAX_RATE),
-            (&["信用额度", "信用额度（0=不限）"][..], fincore::auxiliary::prop::CREDIT_LIMIT),
-            (&["开户行", "开户银行"][..], fincore::auxiliary::prop::BANK_NAME),
-            (&["银行账号", "账号"][..], fincore::auxiliary::prop::BANK_ACCOUNT),
+            (
+                &["税点%", "税点", "税率%", "税率"][..],
+                fincore::auxiliary::prop::TAX_RATE,
+            ),
+            (
+                &["信用额度", "信用额度（0=不限）"][..],
+                fincore::auxiliary::prop::CREDIT_LIMIT,
+            ),
+            (
+                &["开户行", "开户银行"][..],
+                fincore::auxiliary::prop::BANK_NAME,
+            ),
+            (
+                &["银行账号", "账号"][..],
+                fincore::auxiliary::prop::BANK_ACCOUNT,
+            ),
             (&["规格型号", "规格"][..], fincore::auxiliary::prop::SPEC),
             (&["计量单位", "单位"][..], fincore::auxiliary::prop::UNIT),
         ] {
@@ -1048,8 +1062,7 @@ fn import_items_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResult<Impor
         let mut e = fincore::auxiliary::AuxEntity::new(fincore::AuxKind::Item, code.clone(), name);
         let shelf = map.cell(f, &["保质期天", "保质期"], 2);
         if !shelf.is_empty() {
-            e.props
-                .insert("shelf_life_days".into(), shelf);
+            e.props.insert("shelf_life_days".into(), shelf);
         }
         // 「单位」「状态」「备注」是 v1.8.22 才进表的：网页存货页面一直在显示
         // 这三列，导出的表里却没有 —— 改完导回去，单位就没了。
@@ -2722,7 +2735,8 @@ mod tests {
         assert_eq!(e.name, "客户甲");
         assert_eq!(e.memo, "月结30天", "备注被写到了别处");
         assert_eq!(
-            e.prop(fincore::auxiliary::prop::TAX_RATE).map(|s| s.as_str()),
+            e.prop(fincore::auxiliary::prop::TAX_RATE)
+                .map(|s| s.as_str()),
             Some("13"),
             "税点跟着列名走，不该看位置"
         );

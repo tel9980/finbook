@@ -46,7 +46,11 @@ async fn voucher(
 
 async fn post_voucher(state: &Arc<WebState>, sid: &str, id: i64) {
     let resp = handlers::router(state.clone())
-        .oneshot(authed_post(&format!("/api/vouchers/{id}/post"), sid, serde_json::json!({})))
+        .oneshot(authed_post(
+            &format!("/api/vouchers/{id}/post"),
+            sid,
+            serde_json::json!({}),
+        ))
         .await
         .unwrap();
     let status = resp.status();
@@ -74,7 +78,10 @@ async fn paste_aux(state: &Arc<WebState>, sid: &str, kind: &str, text: &str) {
     assert_eq!(status, StatusCode::OK, "粘档案预览应成功：{txt}");
     let preview: serde_json::Value = serde_json::from_str(&txt).unwrap();
     let rows = preview["rows"].clone();
-    assert!(rows.as_array().map(|a| !a.is_empty()).unwrap_or(false), "预览应有行：{txt}");
+    assert!(
+        rows.as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        "预览应有行：{txt}"
+    );
 
     let resp = handlers::router(state.clone())
         .oneshot(authed_put(
@@ -164,7 +171,10 @@ async fn home_brief_is_derived_from_vouchers() {
     // 成本口径含**未结转的制造费用**（510105），这是 v1.8.12 修的那个口径：
     // 只算 6401+6402 会让房租水电整块消失在利润表外，净利润虚高。
     assert_eq!(b["cost"], "23,000.00", "营业成本应含 510105 制造费用：{b}");
-    assert_eq!(b["net_profit"], "77,000.00", "净利润 = 100,000 − 23,000：{b}");
+    assert_eq!(
+        b["net_profit"], "77,000.00",
+        "净利润 = 100,000 − 23,000：{b}"
+    );
     assert_eq!(b["margin"], 77.0, "利润率应 77.0：{b}");
     assert_eq!(b["unposted"], 0, "全部已记账，不该有警告：{b}");
 
@@ -177,7 +187,10 @@ async fn home_brief_is_derived_from_vouchers() {
     let top = &m["top_customers"][0];
     assert_eq!(top["name"], "奇园江门", "欠我最多的客户应带名字：{m}");
     assert_eq!(top["amount"], "100,000.00", "{m}");
-    assert!(top["max_days"].as_i64().unwrap() >= 0, "账龄应是个非负数：{m}");
+    assert!(
+        top["max_days"].as_i64().unwrap() >= 0,
+        "账龄应是个非负数：{m}"
+    );
 }
 
 /// 收入为零时利润率是「没法算」，不是 0%
@@ -272,7 +285,10 @@ async fn party_with_two_identities_shows_net() {
         assert_eq!(p["net"], "13,000.00", "净额应是 28,000 − 15,000：{b}");
     }
     // 方向：客户行「他欠我 15,000」少于「我欠他 28,000」→ 净我欠他
-    assert_eq!(cust["net_is_receivable"], false, "客户行净额方向应翻成我欠他：{b}");
+    assert_eq!(
+        cust["net_is_receivable"], false,
+        "客户行净额方向应翻成我欠他：{b}"
+    );
     assert_eq!(supp["net_is_receivable"], false, "供应商行仍是我欠他：{b}");
 }
 
@@ -302,7 +318,11 @@ async fn selecting_a_book_lands_on_current_period_not_start_period() {
     .await;
     post_voucher(&state, &sid, id).await;
     let resp = handlers::router(state.clone())
-        .oneshot(authed_post("/api/periods/202601/close", &sid, serde_json::json!({})))
+        .oneshot(authed_post(
+            "/api/periods/202601/close",
+            &sid,
+            serde_json::json!({}),
+        ))
         .await
         .unwrap();
     let st = resp.status();

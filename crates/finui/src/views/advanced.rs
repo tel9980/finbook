@@ -189,7 +189,8 @@ impl MultiColumnView {
             sh.push(row);
         }
         let title = format!("多栏账（{}-{}）", self.main, self.period_text);
-        match crate::views::export::run_export(&sh, "多栏账", &title, mode, &ctx.db().options()) {
+        match crate::views::export::run_export(&sh, "多栏账", &title, mode, &ctx.db().options())
+        {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }
@@ -313,7 +314,8 @@ impl SummaryTableView {
             ]);
         }
         let title = format!("摘要汇总表（{}）", self.period_text);
-        match crate::views::export::run_export(&sh, "摘要汇总表", &title, mode, &ctx.db().options()) {
+        match crate::views::export::run_export(&sh, "摘要汇总表", &title, mode, &ctx.db().options())
+        {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }
@@ -428,7 +430,13 @@ impl RatiosView {
             sh.push(vec![r.name.clone(), r.display.clone(), r.formula.clone()]);
         }
         let title = format!("财务指标分析（{}）", self.period_text);
-        match crate::views::export::run_export(&sh, "财务指标分析", &title, mode, &ctx.db().options()) {
+        match crate::views::export::run_export(
+            &sh,
+            "财务指标分析",
+            &title,
+            mode,
+            &ctx.db().options(),
+        ) {
             Ok(m) => ctx.info(m),
             Err(e) => ctx.error(e),
         }

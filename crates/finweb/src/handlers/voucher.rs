@@ -872,7 +872,6 @@ pub(super) async fn print_ledger_form(
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
-
 pub(super) async fn list_voucher_attachments(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -891,7 +890,6 @@ pub(super) async fn list_voucher_attachments(
     Ok(Json(list))
 }
 
-
 pub(super) async fn upload_voucher_attachment(
     State(_state): State<Arc<WebState>>,
     Path(id): Path<i64>,
@@ -904,8 +902,8 @@ pub(super) async fn upload_voucher_attachment(
     // 所以先在块内做完「这张凭证能不能动」的校验，再解析上传体，最后落库。
     let voucher_no = {
         let db = &user.db;
-        let v = vouchers::get(&db, id)?
-            .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+        let v =
+            vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
         if !user.user.can_see_voucher(&v) {
             return Err(AppError::forbidden("无权为该凭证上传附件"));
         }
@@ -924,10 +922,7 @@ pub(super) async fn upload_voucher_attachment(
         .map_err(|e| AppError::bad_request(format!("上传解析失败：{e}")))?
     {
         if field.name() == Some("file") {
-            name = field
-                .file_name()
-                .unwrap_or("attachment")
-                .to_string();
+            name = field.file_name().unwrap_or("attachment").to_string();
             let bytes = field
                 .bytes()
                 .await

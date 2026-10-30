@@ -51,10 +51,7 @@ impl MonthClose {
 
     /// 还差哪几步（按清单顺序）
     pub fn blockers(&self) -> Vec<&CloseStep> {
-        self.steps
-            .iter()
-            .filter(|s| s.blocking && !s.ok)
-            .collect()
+        self.steps.iter().filter(|s| s.blocking && !s.ok).collect()
     }
 }
 
@@ -91,10 +88,7 @@ pub fn report(db: &Db, p: Period) -> DbResult<MonthClose> {
                 p.label()
             ),
         ),
-        None if p == opts.start_period => (
-            true,
-            format!("首次结账从启用期间 {} 开始", p.label()),
-        ),
+        None if p == opts.start_period => (true, format!("首次结账从启用期间 {} 开始", p.label())),
         None => (
             false,
             format!("首次结账必须从启用期间 {} 开始", opts.start_period.label()),
@@ -119,9 +113,7 @@ pub fn report(db: &Db, p: Period) -> DbResult<MonthClose> {
         detail: if unposted == 0 {
             format!("本期已记账 {posted} 张")
         } else {
-            format!(
-                "还有 {unposted} 张未记账（草稿 {drafts} 张 / 已审核未记账 {audited} 张）"
-            )
+            format!("还有 {unposted} 张未记账（草稿 {drafts} 张 / 已审核未记账 {audited} 张）")
         },
         hint: "到「凭证」页全选后点「记账」；草稿要先生成完整凭证。",
     });
@@ -201,7 +193,12 @@ pub fn report(db: &Db, p: Period) -> DbResult<MonthClose> {
         }
         let r = snap.for_account(&a.code, None);
         if r.end() < fincore::Money::ZERO {
-            neg.push(format!("{} {} 期末 {}", a.code, a.name, r.end().fmt_money()));
+            neg.push(format!(
+                "{} {} 期末 {}",
+                a.code,
+                a.name,
+                r.end().fmt_money()
+            ));
         }
     }
     steps.push(CloseStep {
@@ -283,7 +280,12 @@ mod tests {
         e1.aux.bank = Some("B01".into());
         let mut e2 = fincore::voucher::Entry::new(2, "600102", "收入");
         e2.credit = fincore::Money::parse("100").unwrap();
-        let mut v = fincore::Voucher::new(p1, chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(), "记", 1);
+        let mut v = fincore::Voucher::new(
+            p1,
+            chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+            "记",
+            1,
+        );
         v.entries = vec![e1, e2];
         v.memo = "test".to_string();
         v.status = fincore::voucher::VoucherStatus::Posted;

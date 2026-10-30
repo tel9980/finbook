@@ -182,30 +182,31 @@ pub fn cash_flow_html(
         p.map(|x| x.financing_net),
     );
 
-    let mut push_total = |label: &str, v: fincore::Money, pv: Option<fincore::Money>, bold: bool| {
-        if bold {
-            body.push_str(&format!(
-                "<tr style='font-weight:bold;background:#fafafa'><td>{}</td><td></td><td></td>\
+    let mut push_total =
+        |label: &str, v: fincore::Money, pv: Option<fincore::Money>, bold: bool| {
+            if bold {
+                body.push_str(&format!(
+                    "<tr style='font-weight:bold;background:#fafafa'><td>{}</td><td></td><td></td>\
                  <td class='r'>{}</td>",
-                esc(label),
-                v.fmt_money()
-            ));
-        } else {
-            body.push_str(&format!(
-                "<tr><td>{}</td><td></td><td></td><td class='r'>{}</td>",
-                esc(label),
-                v.fmt_money()
-            ));
-        }
-        if extra {
-            body.push_str(&format!(
-                "<td class='r'>{}</td><td class='r'>{}</td>",
-                pv.map(|x| x.fmt_money()).unwrap_or_default(),
-                (v - pv.unwrap_or(fincore::Money::ZERO)).fmt_money()
-            ));
-        }
-        body.push_str("</tr>");
-    };
+                    esc(label),
+                    v.fmt_money()
+                ));
+            } else {
+                body.push_str(&format!(
+                    "<tr><td>{}</td><td></td><td></td><td class='r'>{}</td>",
+                    esc(label),
+                    v.fmt_money()
+                ));
+            }
+            if extra {
+                body.push_str(&format!(
+                    "<td class='r'>{}</td><td class='r'>{}</td>",
+                    pv.map(|x| x.fmt_money()).unwrap_or_default(),
+                    (v - pv.unwrap_or(fincore::Money::ZERO)).fmt_money()
+                ));
+            }
+            body.push_str("</tr>");
+        };
     push_total(
         "现金及现金等价物净增加额",
         cf.net_increase,
@@ -230,7 +231,11 @@ pub fn cash_flow_html(
             "勾稽：净增加额与期初期末差不等，请检查未标注现金流量的凭证"
         },
     );
-    let color = if cf.fully_assigned() { "#2e7d32" } else { "#c00" };
+    let color = if cf.fully_assigned() {
+        "#2e7d32"
+    } else {
+        "#c00"
+    };
     note(&mut body, color, &cf.assignment_note());
 
     let mut head = String::from(
@@ -294,7 +299,6 @@ pub fn equity_html(
         can_edit,
     )
 }
-
 
 /// 预览页控制条：有「系统设置」权限时用这个 —— 每一项都是**立刻生效 + 存进账套**。
 ///
@@ -430,12 +434,20 @@ pub fn page_shell(
     };
     let time_cell = format!(
         "<span id='q-tm'{}>打印时间：{}</span>",
-        if po.show_printed_at { "" } else { " style='display:none'" },
+        if po.show_printed_at {
+            ""
+        } else {
+            " style='display:none'"
+        },
         chrono::Local::now().format("%Y-%m-%d %H:%M")
     );
     let sig_div = format!(
         "<div class='sig' id='q-sg'{}>{}</div>",
-        if po.show_signatures { "" } else { " style='display:none'" },
+        if po.show_signatures {
+            ""
+        } else {
+            " style='display:none'"
+        },
         po.signature_html()
     );
     // 预览页的控制条分两种：
@@ -446,7 +458,10 @@ pub fn page_shell(
             EDIT_BAR,
             EDIT_JS
                 .replace("__COLS__", &cols.to_string())
-                .replace("__AUTOCOLS__", &fincore::print::AUTO_LANDSCAPE_COLS.to_string())
+                .replace(
+                    "__AUTOCOLS__",
+                    &fincore::print::AUTO_LANDSCAPE_COLS.to_string(),
+                )
                 .replace("__MG__", &po.margin_mm.to_string())
                 .replace("__PT__", &po.font_pt.to_string())
                 .replace("__DIR__", &po.orientation)
@@ -609,9 +624,9 @@ mod tests {
             true,
         );
         for need in [
-            "id='p-f'",              // 字号滑块
-            "id='p-m'",              // 页边距滑块
-            "id='p-o'",              // 方向
+            "id='p-f'",                    // 字号滑块
+            "id='p-m'",                    // 页边距滑块
+            "id='p-o'",                    // 方向
             "/api/reports/print-settings", // 保存地址
         ] {
             assert!(html.contains(need), "缺 {need}：预览页改不了也存不住");

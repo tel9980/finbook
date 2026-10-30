@@ -168,7 +168,10 @@ impl PrintOptions {
             out.push(format!("打印字号应在 9–14 之间，当前是 {}", self.font_pt));
         }
         if !(5..=30).contains(&self.margin_mm) {
-            out.push(format!("页边距应在 5–30 毫米之间，当前是 {}", self.margin_mm));
+            out.push(format!(
+                "页边距应在 5–30 毫米之间，当前是 {}",
+                self.margin_mm
+            ));
         }
         if self.show_signatures && self.sign_line.trim().is_empty() {
             out.push("选了显示落款，但落款文字是空的".to_string());
@@ -356,7 +359,6 @@ pub fn is_number_like(s: &str) -> bool {
     t.chars().any(|c| c.is_ascii_digit())
 }
 
-
 /// 打印版式的**局部**改动。
 ///
 /// 预览页上「点一下方向、拖一下字号」发的是这个，而不是整个 [`PrintOptions`]：
@@ -514,7 +516,10 @@ mod tests {
         let mut p = PrintOptions::default();
         assert!(p.page_css(3).contains("counter(page)"));
         p.show_page_no = false;
-        assert!(!p.page_css(3).contains("counter(page)"), "关掉页码后不能再输出页边距盒子");
+        assert!(
+            !p.page_css(3).contains("counter(page)"),
+            "关掉页码后不能再输出页边距盒子"
+        );
     }
 
     #[test]
@@ -525,7 +530,10 @@ mod tests {
         assert_eq!(p.signature_html(), "");
         p.show_signatures = true;
         p.sign_line = "<b>制表</b>".into();
-        assert!(p.signature_html().contains("&lt;b&gt;"), "落款里的字符要转义");
+        assert!(
+            p.signature_html().contains("&lt;b&gt;"),
+            "落款里的字符要转义"
+        );
     }
 
     #[test]
@@ -553,7 +561,10 @@ mod tests {
     fn page_box_has_no_font_rules_so_taoda_keeps_its_grid() {
         let p = PrintOptions::default();
         let box_css = p.page_box_css("A4 landscape", 10);
-        assert!(!box_css.contains("font-size:1"), "套打纸型不该被正文字号冲掉：{box_css}");
+        assert!(
+            !box_css.contains("font-size:1"),
+            "套打纸型不该被正文字号冲掉：{box_css}"
+        );
         assert!(p.page_css(4).contains("font-size:11pt"), "报表才需要字号");
     }
 
@@ -568,7 +579,10 @@ mod tests {
         assert!(probs.iter().any(|x| x.contains("30")), "{probs:?}");
         assert!(probs.iter().any(|x| x.contains("当前是 1")), "{probs:?}");
         assert!(probs.iter().any(|x| x.contains("sideways")), "{probs:?}");
-        assert!(probs.iter().any(|x| x.contains("40")), "偏移越界也要报出来：{probs:?}");
+        assert!(
+            probs.iter().any(|x| x.contains("40")),
+            "偏移越界也要报出来：{probs:?}"
+        );
     }
 
     #[test]

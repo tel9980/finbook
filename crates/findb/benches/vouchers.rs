@@ -1,8 +1,8 @@
+use chrono::NaiveDate;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use findb::{Db, vouchers};
 use fincore::voucher::{Entry, Voucher};
 use fincore::{BookOptions, Money, Period};
-use chrono::NaiveDate;
+use findb::{vouchers, Db};
 
 /// 构建一张 `line_cnt` 行的平衡凭证（借 1001，贷 1002）
 fn make_voucher(line_cnt: usize) -> Voucher {
@@ -15,12 +15,20 @@ fn make_voucher(line_cnt: usize) -> Voucher {
     );
     let half = line_cnt / 2;
     for i in 0..half {
-        let mut e = Entry::new((i * 2 + 1) as i32, "1001".to_string(), "bench 借方".to_string());
+        let mut e = Entry::new(
+            (i * 2 + 1) as i32,
+            "1001".to_string(),
+            "bench 借方".to_string(),
+        );
         e.debit = Money::parse("100.00").unwrap();
         v.push_entry(e);
     }
     for i in 0..(line_cnt - half) {
-        let mut e = Entry::new((i * 2 + 2) as i32, "1002".to_string(), "bench 贷方".to_string());
+        let mut e = Entry::new(
+            (i * 2 + 2) as i32,
+            "1002".to_string(),
+            "bench 贷方".to_string(),
+        );
         e.credit = Money::parse("100.00").unwrap();
         v.push_entry(e);
     }

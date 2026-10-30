@@ -128,11 +128,13 @@ pub fn update(db: &Db, e: &AuxEntity) -> DbResult<()> {
 /// 正确做法是**停用**（`disabled = true`）：新凭证选不到，历史账一切照旧。
 pub fn delete(db: &Db, id: i64) -> DbResult<()> {
     // 先查这条档案是什么，才知道要去哪张凭证里找引用
-    let mut st = db.conn().prepare(
-        "SELECT kind, code, name FROM aux_entity WHERE id = ?1",
-    )?;
+    let mut st = db
+        .conn()
+        .prepare("SELECT kind, code, name FROM aux_entity WHERE id = ?1")?;
     let (kind_s, code, name): (String, String, String) = st
-        .query_row(rusqlite::params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .query_row(rusqlite::params![id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
         .map_err(|_| FinError::not_found("档案已不存在"))?;
     drop(st);
 
@@ -378,11 +380,7 @@ pub fn import_many(db: &Db, items: &[AuxEntity]) -> DbResult<usize> {
 /// 另一条，就该提示用户"这家已经是你的供应商了，要不要一起建客户档案"，
 /// 而不是让他手工再找一遍 —— 漏建的后果是首页看不到这家单位的另一头，
 /// 净头寸算不准。
-pub fn find_other_role_by_name(
-    db: &Db,
-    kind: AuxKind,
-    name: &str,
-) -> DbResult<Option<AuxEntity>> {
+pub fn find_other_role_by_name(db: &Db, kind: AuxKind, name: &str) -> DbResult<Option<AuxEntity>> {
     let name = name.trim();
     if name.is_empty() {
         return Ok(None);
@@ -908,11 +906,19 @@ mod preset_tests {
 
         // 记一张引用 C900 的分录
         let p = Period::new(2026, 11).unwrap();
-        let mut v = Voucher::new(p, chrono::NaiveDate::from_ymd_opt(2026, 11, 10).unwrap(), "记", 1);
+        let mut v = Voucher::new(
+            p,
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 10).unwrap(),
+            "记",
+            1,
+        );
         v.memo = "测试".into();
         let mut e1 = Entry::new(1, "112201", "测试");
         e1.debit = Money::parse("100").unwrap();
-        e1.aux = AuxRef { customer: Some("C900".into()), ..Default::default() };
+        e1.aux = AuxRef {
+            customer: Some("C900".into()),
+            ..Default::default()
+        };
         let mut e2 = Entry::new(2, "600101", "测试");
         e2.credit = Money::parse("100").unwrap();
         v.entries.push(e1);
@@ -921,7 +927,10 @@ mod preset_tests {
         crate::vouchers::post(&db, vid, "admin").unwrap();
 
         let err = delete(&db, got.id).expect_err("被引用的档案不能删");
-        assert!(err.to_string().contains("不能删除"), "错误信息要讲清楚：{err}");
+        assert!(
+            err.to_string().contains("不能删除"),
+            "错误信息要讲清楚：{err}"
+        );
         // 档案还在
         assert!(get(&db, AuxKind::Customer, "C900").unwrap().is_some());
     }

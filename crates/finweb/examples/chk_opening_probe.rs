@@ -87,7 +87,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let put = |rows: &mut Vec<Vec<String>>, code: &str, cols: &[(usize, &str)]| {
-        let at = match rows.iter().position(|r| r.first().map(|s| s.as_str()) == Some(code)) {
+        let at = match rows
+            .iter()
+            .position(|r| r.first().map(|s| s.as_str()) == Some(code))
+        {
             Some(i) => i,
             None => {
                 rows.push(vec![code.to_string(), String::new()]);
@@ -115,7 +118,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let i3 = idx(&data, "③ 账户余额");
     put(&mut data[i3].1, "1001", &[(2, "2000")]);
     put(&mut data[i3].1, "100201", &[(2, "8000"), (6, "B01")]);
-    put(&mut data[i3].1, "140501", &[(2, "5000"), (3, "2.5"), (5, "HG001")]);
+    put(
+        &mut data[i3].1,
+        "140501",
+        &[(2, "5000"), (3, "2.5"), (5, "HG001")],
+    );
     put(&mut data[i3].1, "2203", &[(2, "8000"), (4, "C002")]);
 
     // ④ 实收资本：2000 + 8000 + 5000 + 50000 = 65000 资产，减 28000 应付、8000 预收 → 35000
@@ -160,7 +167,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "  {:8} 金额 {:>10}  数量 {:>8}  {}",
             r.account_code,
             r.year_begin.fmt_plain(),
-            r.qty_begin.map(|q| q.fmt_plain()).unwrap_or_else(|| "-".into()),
+            r.qty_begin
+                .map(|q| q.fmt_plain())
+                .unwrap_or_else(|| "-".into()),
             aux.join(" ")
         );
     }

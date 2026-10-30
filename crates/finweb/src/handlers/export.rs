@@ -393,42 +393,145 @@ pub(super) async fn import_template(
         // 老的四列文件仍然能导（认不出列名就退回按位置取）。
         "aux" => vec![
             vec![
-                "类型", "编码", "名称", "备注", "上级编码", "状态", "税点%", "开票情况",
-                "信用额度", "开户行", "银行账号", "规格型号", "计量单位",
+                "类型",
+                "编码",
+                "名称",
+                "备注",
+                "上级编码",
+                "状态",
+                "税点%",
+                "开票情况",
+                "信用额度",
+                "开户行",
+                "银行账号",
+                "规格型号",
+                "计量单位",
             ],
             vec![
-                "客户", "C01", "示例客户", "月结 30 天", "", "启用", "13", "每次都开票",
-                "50000", "", "", "", "",
+                "客户",
+                "C01",
+                "示例客户",
+                "月结 30 天",
+                "",
+                "启用",
+                "13",
+                "每次都开票",
+                "50000",
+                "",
+                "",
+                "",
+                "",
             ],
             vec![
-                "供应商", "S01", "示例供应商", "", "", "启用", "3", "有时开有时不开", "", "", "",
-                "", "",
+                "供应商",
+                "S01",
+                "示例供应商",
+                "",
+                "",
+                "启用",
+                "3",
+                "有时开有时不开",
+                "",
+                "",
+                "",
+                "",
+                "",
             ],
             vec![
-                "银行", "B01", "基本户", "", "", "启用", "", "", "", "工商银行江门分行",
-                "6222xxxx", "", "",
+                "银行",
+                "B01",
+                "基本户",
+                "",
+                "",
+                "启用",
+                "",
+                "",
+                "",
+                "工商银行江门分行",
+                "6222xxxx",
+                "",
+                "",
             ],
             vec![
-                "存货", "I01", "示例存货", "", "", "启用", "", "", "", "", "", "φ20 圆钢", "吨",
+                "存货",
+                "I01",
+                "示例存货",
+                "",
+                "",
+                "启用",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "φ20 圆钢",
+                "吨",
             ],
         ],
         "item" => vec![
-            vec!["编码", "名称", "保质期天", "安全库存", "备注", "计量单位", "状态"],
+            vec![
+                "编码",
+                "名称",
+                "保质期天",
+                "安全库存",
+                "备注",
+                "计量单位",
+                "状态",
+            ],
             vec!["I01", "示例存货", "365", "100", "", "吨", "启用"],
         ],
         "account" => vec![
             vec![
-                "编码", "名称", "类别", "方向", "备注", "辅助核算维度", "数量单位", "币种",
-                "现金科目", "银行科目", "状态",
+                "编码",
+                "名称",
+                "类别",
+                "方向",
+                "备注",
+                "辅助核算维度",
+                "数量单位",
+                "币种",
+                "现金科目",
+                "银行科目",
+                "状态",
             ],
             vec![
-                "1001", "库存现金", "资产", "借", "", "", "", "", "是", "", "启用",
+                "1001",
+                "库存现金",
+                "资产",
+                "借",
+                "",
+                "",
+                "",
+                "",
+                "是",
+                "",
+                "启用",
             ],
             vec![
-                "112201", "应收账款-货款", "资产", "借", "", "客户", "", "", "", "", "启用",
+                "112201",
+                "应收账款-货款",
+                "资产",
+                "借",
+                "",
+                "客户",
+                "",
+                "",
+                "",
+                "",
+                "启用",
             ],
             vec![
-                "140501", "原材料", "资产", "借", "", "存货", "吨", "", "", "", "启用",
+                "140501",
+                "原材料",
+                "资产",
+                "借",
+                "",
+                "存货",
+                "吨",
+                "",
+                "",
+                "",
+                "启用",
             ],
         ],
         "opening_stock" => vec![
@@ -469,13 +572,38 @@ pub(super) async fn import_template(
                 "银行账户",
             ],
             vec![
-                "1001", "库存现金", "借", "1000", "0", "0", "", "", "", "", "", "", "", "",
+                "1001",
+                "库存现金",
+                "借",
+                "1000",
+                "0",
+                "0",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
             ],
             // 分户期初：金额挂在应收账款上、客户靠「客户编码」这一列分。
             // 小厂最常搬的就是这笔「华达还欠我 5 万」，没有这一列搬过去就查不到分户。
             vec![
-                "112201", "应收账款-货款", "借", "50000", "0", "0", "", "C01", "", "", "", "",
-                "", "",
+                "112201",
+                "应收账款-货款",
+                "借",
+                "50000",
+                "0",
+                "0",
+                "",
+                "C01",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
             ],
         ],
         "arap_opening" => vec![
@@ -1000,7 +1128,11 @@ pub(super) async fn export_dunning(
     user.require(Perm::Export)?;
     let db = &user.db;
     let period = period_param(q.get("period"), current_period(&state, &user))?;
-    let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty()).unwrap_or("ar");
+    let kind = q
+        .get("kind")
+        .map(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("ar");
     if kind != "ar" && kind != "ap" {
         return Err(AppError::bad_request("kind 必须是 ar 或 ap"));
     }
@@ -1012,7 +1144,10 @@ pub(super) async fn export_dunning(
         "导出催款记录",
         &format!("{} {} 行", period.label(), rows.len().saturating_sub(1)),
     )?;
-    Ok(csv_response(&format!("dunning_{}_{}.csv", kind, period.ymm()), rows))
+    Ok(csv_response(
+        &format!("dunning_{}_{}.csv", kind, period.ymm()),
+        rows,
+    ))
 }
 
 /// 催款单 / 对账函导出成 Excel：**带明细**。
@@ -1043,8 +1178,16 @@ pub(super) async fn export_dunning_xlsx(
         .into_iter()
         .filter(|d| d.period.ymm() == period.ymm())
         .collect();
-    let type_label = if kind == "ar" { "催款单" } else { "对账函" };
-    let head = if kind == "ar" { "应收金额" } else { "应付金额" };
+    let type_label = if kind == "ar" {
+        "催款单"
+    } else {
+        "对账函"
+    };
+    let head = if kind == "ar" {
+        "应收金额"
+    } else {
+        "应付金额"
+    };
     let owed_head = if kind == "ar" { "应收" } else { "应付" };
     let adv_head = if kind == "ar" { "预收" } else { "预付" };
 
@@ -1100,9 +1243,23 @@ pub(super) async fn export_dunning_xlsx(
     let mut sheet = crate::xlsxout::Sheet::titled(
         type_label,
         &format!("{} {}", type_label, period.label()),
-        &format!("共 {} 张 · {} 合计 {}", list.len(), owed_head, mean.fmt_money()),
+        &format!(
+            "共 {} 张 · {} 合计 {}",
+            list.len(),
+            owed_head,
+            mean.fmt_money()
+        ),
         &[
-            "单号", "日期", "类型", "科目", "客商编码", "客商名称", head, adv_head, "笔数", "状态",
+            "单号",
+            "日期",
+            "类型",
+            "科目",
+            "客商编码",
+            "客商名称",
+            head,
+            adv_head,
+            "笔数",
+            "状态",
             "备注",
         ],
         &cols,
@@ -1124,7 +1281,14 @@ pub(super) async fn export_dunning_xlsx(
         &format!("{}明细 {}", type_label, period.label()),
         "方向为「预收/预付」的行是我方欠对方的钱，不计入合计",
         &[
-            "单号", "客商编码", "客商名称", "单据号", "日期", "摘要", "金额", "方向",
+            "单号",
+            "客商编码",
+            "客商名称",
+            "单据号",
+            "日期",
+            "摘要",
+            "金额",
+            "方向",
         ],
         &dcols,
     )
@@ -1517,7 +1681,6 @@ pub(super) async fn export_begin_xlsx(user: CurrentUser) -> Result<Response, App
     build_xlsx(&[sheet], "期初余额.xlsx", "期初余额")
 }
 
-
 // ---- 导出计划任务（每日定时 CSV） ----
 
 /// 计划任务列表
@@ -1529,7 +1692,6 @@ pub(super) async fn list_export_schedules(
     let db = &user.db;
     Ok(Json(json!({ "rows": findb::exports::sched_list(&*db)? })))
 }
-
 
 /// 新增/修改计划任务
 pub(super) async fn save_export_schedule(
@@ -1564,7 +1726,6 @@ pub(super) async fn save_export_schedule(
     Ok(Json(json!({ "ok": true, "id": id })))
 }
 
-
 /// 删除计划任务
 pub(super) async fn delete_export_schedule(
     State(state): State<Arc<WebState>>,
@@ -1577,7 +1738,6 @@ pub(super) async fn delete_export_schedule(
     db.log(user.username(), "导出", "删除计划任务", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
-
 
 /// 解析并返回预览。不写库 —— 前端把预览给用户看，确认后再调 PUT 导入。
 ///
@@ -1614,7 +1774,6 @@ pub(super) async fn parse_aux_batch(
         "empty": parsed.is_empty(),
     })))
 }
-
 
 /// 导入前端确认过的那些行
 pub(super) async fn import_aux_batch(
@@ -1654,7 +1813,11 @@ pub(super) async fn import_aux_batch(
             continue;
         }
         let mut e = AuxEntity::new(req.kind, code, name);
-        e.parent_code = r.parent_code.as_ref().map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        e.parent_code = r
+            .parent_code
+            .as_ref()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
         e.memo = r.memo.trim().to_string();
         e.disabled = r.disabled;
         items.push(e);

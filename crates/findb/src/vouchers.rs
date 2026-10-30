@@ -318,9 +318,7 @@ pub fn list_page_keyset(
     }
     let id_param_idx = params.len(); // v.id > ? 的参数位置（若 last_id 存在则已 push）
 
-    let mut sql = format!(
-        "SELECT {VOUCHER_COLS} FROM voucher v WHERE 1=1{whered}",
-    );
+    let mut sql = format!("SELECT {VOUCHER_COLS} FROM voucher v WHERE 1=1{whered}",);
     if q.last_id.is_some() {
         sql.push_str(&format!(" AND v.id > ?{}", id_param_idx + 1));
     }
@@ -334,7 +332,11 @@ pub fn list_page_keyset(
         .collect::<Result<Vec<_>, _>>()?;
 
     let has_more = rows.len() > limit as usize;
-    let rows = if has_more { rows.into_iter().take(limit as usize).collect() } else { rows };
+    let rows = if has_more {
+        rows.into_iter().take(limit as usize).collect()
+    } else {
+        rows
+    };
     let next_id = rows.last().map(|v| v.id);
 
     Ok((rows, next_id, has_more))

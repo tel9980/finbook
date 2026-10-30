@@ -281,12 +281,14 @@ impl SettleView {
 
         if self.tab == SettleTab::Aging {
             let as_of = self.as_of_date(upto);
-            self.lines = findb::settle::aging(ctx.db(), &self.account, upto, as_of, &self.buckets, None)
-                .unwrap_or_default();
+            self.lines =
+                findb::settle::aging(ctx.db(), &self.account, upto, as_of, &self.buckets, None)
+                    .unwrap_or_default();
         }
         if self.tab == SettleTab::Statement {
             let kind = self.st_kind.clone();
-            self.statements = findb::statement::list(ctx.db(), Some(&kind), None).unwrap_or_default();
+            self.statements =
+                findb::statement::list(ctx.db(), Some(&kind), None).unwrap_or_default();
         }
     }
 
@@ -765,7 +767,11 @@ impl SettleView {
                             let r = findb::settle::unsettle_part(ctx.db(), id, amt);
                             if let Some(left) = ctx.handle(r) {
                                 ctx.log("往来", "部分撤销核销", &format!("#{id} 撤销 {amt}"));
-                                ctx.info(format!("已撤销 {}，余 {}", amt.fmt_money(), left.fmt_money()));
+                                ctx.info(format!(
+                                    "已撤销 {}，余 {}",
+                                    amt.fmt_money(),
+                                    left.fmt_money()
+                                ));
                                 self.dirty = true;
                             }
                         }
@@ -1355,11 +1361,20 @@ impl SettleView {
                 ui.selectable_value(&mut self.dun_kind, "ar".to_string(), "催款函（应收）");
                 ui.selectable_value(&mut self.dun_kind, "ap".to_string(), "对账函（应付）");
                 ui.separator();
-                ui.label(if self.dun_kind == "ar" { "客户" } else { "供应商" });
+                ui.label(if self.dun_kind == "ar" {
+                    "客户"
+                } else {
+                    "供应商"
+                });
                 ui.add_sized(
                     [110.0, 22.0],
-                    egui::TextEdit::singleline(&mut self.dun_party)
-                        .hint_text(if self.dun_kind == "ar" { "C001" } else { "S001" }),
+                    egui::TextEdit::singleline(&mut self.dun_party).hint_text(
+                        if self.dun_kind == "ar" {
+                            "C001"
+                        } else {
+                            "S001"
+                        },
+                    ),
                 );
                 ui.separator();
                 ui.label("附注");
@@ -1391,7 +1406,11 @@ impl SettleView {
                     .unwrap_or_else(|| party.clone());
                 let account = {
                     let b = ctx.db().options().biz_accounts.clone();
-                    if kind == "ar" { b.ar } else { b.ap }
+                    if kind == "ar" {
+                        b.ar
+                    } else {
+                        b.ap
+                    }
                 };
                 let today = chrono::Local::now().date_naive();
                 let who = ctx.user().username.clone();
@@ -1464,8 +1483,8 @@ impl SettleView {
             match findb::settle::dunning_status(ctx.db(), id, "sent") {
                 Ok(()) => {
                     let kind = self.dun_kind.clone();
-                    self.dunnings =
-                        findb::settle::dunning_list(ctx.db(), Some(&kind), None).unwrap_or_default();
+                    self.dunnings = findb::settle::dunning_list(ctx.db(), Some(&kind), None)
+                        .unwrap_or_default();
                 }
                 Err(e) => ctx.toast(format!("标记失败：{e}")),
             }
@@ -1488,70 +1507,78 @@ impl SettleView {
     fn show_statement(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         let mut create = false;
 
-        widgets::card(ui, "往来对账单（发客户对账 → 回签确认）", |ui| {
-            ui.label(
-                RichText::new(
-                    "对账单是某期间的完整流水：期初余额 + 本期增加 − 本期减少 = 期末余额，\
+        widgets::card(
+            ui,
+            "往来对账单（发客户对账 → 回签确认）",
+            |ui| {
+                ui.label(
+                    RichText::new(
+                        "对账单是某期间的完整流水：期初余额 + 本期增加 − 本期减少 = 期末余额，\
                      逐行带滚动余额。生成时快照落库，之后改凭证、再核销都不影响已发出的对账单。\
                      客户回签后才算对上——没回签的会一直挂在「已发出」里，提醒你去问。",
-                )
-                .weak(),
-            );
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label("类型");
-                ui.selectable_value(&mut self.st_kind, "ar".to_string(), "应收对账单");
-                ui.selectable_value(&mut self.st_kind, "ap".to_string(), "应付对账单");
-                ui.separator();
-                ui.label(if self.st_kind == "ar" { "客户" } else { "供应商" });
-                ui.add_sized(
-                    [110.0, 22.0],
-                    egui::TextEdit::singleline(&mut self.st_party)
-                        .hint_text(if self.st_kind == "ar" { "C001" } else { "S001" }),
+                    )
+                    .weak(),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("类型");
+                    ui.selectable_value(&mut self.st_kind, "ar".to_string(), "应收对账单");
+                    ui.selectable_value(&mut self.st_kind, "ap".to_string(), "应付对账单");
+                    ui.separator();
+                    ui.label(if self.st_kind == "ar" {
+                        "客户"
+                    } else {
+                        "供应商"
+                    });
+                    ui.add_sized(
+                        [110.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.st_party)
+                            .hint_text(if self.st_kind == "ar" { "C001" } else { "S001" }),
                     );
-                ui.separator();
-                ui.label("期间");
-                ui.add_sized(
-                    [84.0, 22.0],
-                    egui::TextEdit::singleline(&mut self.st_from).hint_text("2026-11"),
-                );
-                ui.label("至");
-                ui.add_sized(
-                    [84.0, 22.0],
-                    egui::TextEdit::singleline(&mut self.st_to).hint_text("2026-11"),
-                );
-            });
-            ui.horizontal(|ui| {
-                ui.label("备注");
-                ui.add_sized(
-                    [300.0, 22.0],
-                    egui::TextEdit::singleline(&mut self.st_memo)
-                        .hint_text("如：截止 XX 月往来明细，请核对后签章回传"),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(
-                            ctx.can(Perm::VoucherNew),
-                            egui::Button::new(
-                                RichText::new("生成对账单").color(egui::Color32::WHITE),
-                            )
-                            .fill(palette::PRIMARY),
-                        )
-                        .clicked()
-                    {
-                        create = true;
-                    }
+                    ui.separator();
+                    ui.label("期间");
+                    ui.add_sized(
+                        [84.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.st_from).hint_text("2026-11"),
+                    );
+                    ui.label("至");
+                    ui.add_sized(
+                        [84.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.st_to).hint_text("2026-11"),
+                    );
                 });
-            });
-            ui.label(
-                RichText::new(
-                    "客商编码在对账单里用的是档案编码（客户 C001…、供应商 S001…），\
+                ui.horizontal(|ui| {
+                    ui.label("备注");
+                    ui.add_sized(
+                        [300.0, 22.0],
+                        egui::TextEdit::singleline(&mut self.st_memo)
+                            .hint_text("如：截止 XX 月往来明细，请核对后签章回传"),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(
+                                ctx.can(Perm::VoucherNew),
+                                egui::Button::new(
+                                    RichText::new("生成对账单").color(egui::Color32::WHITE),
+                                )
+                                .fill(palette::PRIMARY),
+                            )
+                            .clicked()
+                        {
+                            create = true;
+                        }
+                    });
+                });
+                ui.label(
+                    RichText::new(
+                        "客商编码在对账单里用的是档案编码（客户 C001…、供应商 S001…），\
                      科目留空则取账套默认应收 / 应付。",
-                )
-                .weak()
-                .size(12.0),
-            );
-        });
+                    )
+                    .weak()
+                    .size(12.0),
+                );
+            },
+        );
 
         if create {
             self.do_create_statement(ctx);
@@ -1612,7 +1639,13 @@ impl SettleView {
                 ctx.log(
                     "往来",
                     "生成往来对账单",
-                    &format!("{} {} {}~{}", st.no, st.party_name, st.period_from.code(), st.period_to.code()),
+                    &format!(
+                        "{} {} {}~{}",
+                        st.no,
+                        st.party_name,
+                        st.period_from.code(),
+                        st.period_to.code()
+                    ),
                 );
                 ctx.info(format!(
                     "已生成对账单 {}：期末余额 {}（正=对方欠我方），发出后等客户回签",
@@ -1684,7 +1717,10 @@ impl SettleView {
                             }
                             if st.status == "draft"
                                 && ui
-                                    .add_enabled(ctx.can(Perm::VoucherNew), egui::Button::new("发出").small())
+                                    .add_enabled(
+                                        ctx.can(Perm::VoucherNew),
+                                        egui::Button::new("发出").small(),
+                                    )
                                     .clicked()
                             {
                                 action = Some((st.id, "sent"));
@@ -1727,7 +1763,6 @@ impl SettleView {
             }
         }
 
-
         if let Some(st) = detail {
             self.show_statement_detail(ctx, ui, &st);
         }
@@ -1739,7 +1774,12 @@ impl SettleView {
     ///
     /// 这张表就是打印给客户签字的那张——所以金额正负口径要一眼看懂：
     /// **正 = 对方欠我方**，负数 = 我方欠对方（预收/预付）。
-    fn show_statement_detail(&mut self, _ctx: &AppCtx<'_>, ui: &mut Ui, st: &findb::statement::Statement) {
+    fn show_statement_detail(
+        &mut self,
+        _ctx: &AppCtx<'_>,
+        ui: &mut Ui,
+        st: &findb::statement::Statement,
+    ) {
         let mut open = true;
         egui::Window::new(format!("{} {}", st.kind_label(), st.no))
             .collapsible(false)
@@ -1831,7 +1871,9 @@ impl SettleView {
                                     ui.label("");
                                 }
                                 2 => {
-                                    ui.label(RichText::new(format!("共 {} 笔", st.line_count)).weak());
+                                    ui.label(
+                                        RichText::new(format!("共 {} 笔", st.line_count)).weak(),
+                                    );
                                 }
                                 3 => widgets::report_amount(ui, st.period_increase, true),
                                 4 => widgets::report_amount(ui, st.period_decrease, true),

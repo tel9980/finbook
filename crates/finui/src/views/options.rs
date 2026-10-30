@@ -210,10 +210,7 @@ impl OptionsView {
                 });
                 ui.end_row();
             });
-        ui.label(
-            RichText::new("前缀只能用字母或数字、最多 8 个字符；留空用默认值。")
-                .weak(),
-        );
+        ui.label(RichText::new("前缀只能用字母或数字、最多 8 个字符；留空用默认值。").weak());
 
         ui.add_space(6.0);
         ui.separator();
@@ -259,8 +256,7 @@ impl OptionsView {
         ui.separator();
         ui.label(RichText::new("打印预览").strong());
         ui.label(
-            RichText::new("这些是账套级设置：改完保存，本账套所有报表打印都用同一套版式")
-                .weak(),
+            RichText::new("这些是账套级设置：改完保存，本账套所有报表打印都用同一套版式").weak(),
         );
         egui::Grid::new("print_options")
             .num_columns(2)
@@ -268,7 +264,11 @@ impl OptionsView {
             .show(ui, |ui| {
                 ui.label("纸张方向");
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut o.print.orientation, "auto".to_string(), "自动（列多转横向）");
+                    ui.radio_value(
+                        &mut o.print.orientation,
+                        "auto".to_string(),
+                        "自动（列多转横向）",
+                    );
                     ui.radio_value(&mut o.print.orientation, "portrait".to_string(), "纵向");
                     ui.radio_value(&mut o.print.orientation, "landscape".to_string(), "横向");
                 });
@@ -281,10 +281,7 @@ impl OptionsView {
                             .range(9..=14)
                             .suffix(" pt"),
                     );
-                    ui.label(
-                        RichText::new("9–14；列多或内容长时调小些，能少折几行")
-                            .weak(),
-                    );
+                    ui.label(RichText::new("9–14；列多或内容长时调小些，能少折几行").weak());
                 });
                 ui.end_row();
 
@@ -329,10 +326,7 @@ impl OptionsView {
                             .range(-20..=20)
                             .suffix(" mm"),
                     );
-                    ui.label(
-                        RichText::new("正数=向右/向下；针式打印机走纸偏时用来对位")
-                            .weak(),
-                    );
+                    ui.label(RichText::new("正数=向右/向下；针式打印机走纸偏时用来对位").weak());
                 });
                 ui.end_row();
 
@@ -366,10 +360,7 @@ impl OptionsView {
                                             continue;
                                         }
                                         if ui
-                                            .selectable_label(
-                                                val.eq_ignore_ascii_case(v),
-                                                *l,
-                                            )
+                                            .selectable_label(val.eq_ignore_ascii_case(v), *l)
                                             .clicked()
                                         {
                                             *val = v.to_string();
@@ -444,7 +435,11 @@ impl OptionsView {
     fn export_config(&mut self, ctx: &mut AppCtx<'_>, o: &BookOptions) {
         let name = format!(
             "{}_账套参数_{}.json",
-            if o.company.trim().is_empty() { "账套" } else { o.company.trim() },
+            if o.company.trim().is_empty() {
+                "账套"
+            } else {
+                o.company.trim()
+            },
             chrono::Local::now().format("%Y%m%d")
         );
         let Some(path) = rfd::FileDialog::new()

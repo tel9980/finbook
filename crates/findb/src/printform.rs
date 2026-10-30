@@ -305,11 +305,7 @@ pub struct LedgerPrint {
 }
 
 /// 生成账簿套打 HTML。标准三栏账版式：日期 / 凭证字号 / 摘要 / 借 / 贷 / 借或贷 / 余额。
-pub fn ledger_form_html(
-    company: &str,
-    ledger: &LedgerPrint,
-    po: &fincore::PrintOptions,
-) -> String {
+pub fn ledger_form_html(company: &str, ledger: &LedgerPrint, po: &fincore::PrintOptions) -> String {
     let mut body = String::new();
     for r in &ledger.rows {
         body.push_str(&format!(
@@ -1161,8 +1157,12 @@ mod tests {
             memo: "回款".to_string(),
             voucher_no: "记-0007".to_string(),
         };
-        let html =
-            super::receipt_forms_html("甲公司", std::slice::from_ref(&d), &Default::default(), &po());
+        let html = super::receipt_forms_html(
+            "甲公司",
+            std::slice::from_ref(&d),
+            &Default::default(),
+            &po(),
+        );
         assert!(html.contains("收款单"), "标题应为收款单");
         assert!(html.contains("壹仟贰佰叁拾肆元伍角陆分"), "金额大写");
         assert!(html.contains("记-0007") && html.contains("资金账户"));
@@ -1204,7 +1204,8 @@ mod tests {
             memo: String::new(),
             voucher_no: String::new(),
         };
-        let html = super::receipt_forms_sized_html("甲", &[d], &Default::default(), "third", false, &po());
+        let html =
+            super::receipt_forms_sized_html("甲", &[d], &Default::default(), "third", false, &po());
         assert!(html.contains("99mm 210mm"), "三等分应输出自定义 @page 尺寸");
     }
 
@@ -1295,8 +1296,14 @@ mod tests {
         let mut q = po();
         q.show_page_no = false;
         let html = voucher_form_html("某某公司", "2026-09", &prints, true, &q);
-        assert!(!html.contains("counter(page)"), "关了页码就不能有页边距盒子");
-        assert!(html.contains("size:A4 landscape"), "没选纸型时凭证仍是横向 A4");
+        assert!(
+            !html.contains("counter(page)"),
+            "关了页码就不能有页边距盒子"
+        );
+        assert!(
+            html.contains("size:A4 landscape"),
+            "没选纸型时凭证仍是横向 A4"
+        );
     }
 
     /// 纸型可选：小厂的凭证纸常常是 A5 或 241×140 连续纸，而凭证套打原来写死
@@ -1311,16 +1318,25 @@ mod tests {
         let mut p = po();
         p.voucher_paper = "A5".to_string();
         let html = voucher_form_html("某某公司", "2026-09", &prints, true, &p);
-        assert!(html.contains("size:A5 landscape"), "选了 A5 就该是 A5：{html}");
+        assert!(
+            html.contains("size:A5 landscape"),
+            "选了 A5 就该是 A5：{html}"
+        );
         assert!(!html.contains("size:A4 landscape"), "不能两套纸型同时出现");
 
         p.voucher_paper = "241x140".to_string();
         let html = voucher_form_html("某某公司", "2026-09", &prints, true, &p);
-        assert!(html.contains("size:241mm 140mm"), "自定义尺寸要原样进 @page");
+        assert!(
+            html.contains("size:241mm 140mm"),
+            "自定义尺寸要原样进 @page"
+        );
 
         // 认不出来的值不该让人打不出纸：兜底 A4，同时保存时会被 problems() 挡住
         p.voucher_paper = "B5".to_string();
-        assert!(p.problems().iter().any(|m| m.contains("凭证套打纸型")), "B5 应报错");
+        assert!(
+            p.problems().iter().any(|m| m.contains("凭证套打纸型")),
+            "B5 应报错"
+        );
         let html = voucher_form_html("某某公司", "2026-09", &prints, true, &p);
         assert!(html.contains("size:A4 landscape"), "脏值兜底 A4");
 

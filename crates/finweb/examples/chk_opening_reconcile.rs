@@ -13,10 +13,10 @@
 
 use std::collections::BTreeMap;
 
-use fincore::account::BookOptions;
-use fincore::{AuxEntity, AuxKind};
 use fincore::account::Account;
+use fincore::account::BookOptions;
 use fincore::money::Money;
+use fincore::{AuxEntity, AuxKind};
 
 fn m(s: &str) -> Money {
     Money::parse(s).unwrap()
@@ -47,37 +47,36 @@ fn build_filled_sheet(
     accounts: &[&Account],
     customers: &[AuxEntity],
     suppliers: &[AuxEntity],
-    ar: &[(&str, &str, &str)],   // (客户编码, 单据号, 金额)
-    ap: &[(&str, &str, &str)],   // (供应商编码, 单据号, 金额)
-    bal: &[(&str, &str)],        // (科目编码, 金额)
-    basic: &[(&str, &str)],      // (项目, 金额) 实收资本/本年利润
+    ar: &[(&str, &str, &str)], // (客户编码, 单据号, 金额)
+    ap: &[(&str, &str, &str)], // (供应商编码, 单据号, 金额)
+    bal: &[(&str, &str)],      // (科目编码, 金额)
+    basic: &[(&str, &str)],    // (项目, 金额) 实收资本/本年利润
 ) -> Vec<u8> {
     let mut sheets = finweb::sheets::opening_collection_template(accounts, customers, suppliers);
     // 哪张纸对应哪类内容靠表名判断（模板里 ①②③④ 都在表名里）
     for sheet in sheets.iter_mut() {
-    for row in sheet.rows.iter_mut() {
-        let first = row.first().cloned().unwrap_or_default();
-        // ① 客户应收：编码在 ar 里就填单据号与金额
-        // 列序是 编码 / 名称 / 欠款金额 / 单据号 / 备注 —— 金额在第 3 列
-        if let Some((_, doc, amt)) = ar.iter().find(|(c, _, _)| *c == first) {
-            row[2] = amt.to_string();
-            row[3] = doc.to_string();
+        for row in sheet.rows.iter_mut() {
+            let first = row.first().cloned().unwrap_or_default();
+            // ① 客户应收：编码在 ar 里就填单据号与金额
+            // 列序是 编码 / 名称 / 欠款金额 / 单据号 / 备注 —— 金额在第 3 列
+            if let Some((_, doc, amt)) = ar.iter().find(|(c, _, _)| *c == first) {
+                row[2] = amt.to_string();
+                row[3] = doc.to_string();
+            }
+            // ② 供应商应付（sheet 内 ② 的行首也是编码，用 ap 列表区分）
+            if let Some((_, doc, amt)) = ap.iter().find(|(c, _, _)| *c == first) {
+                row[2] = amt.to_string();
+                row[3] = doc.to_string();
+            }
+            // ③ 账户余额：第 3 列是金额
+            if let Some((_, amt)) = bal.iter().find(|(c, _)| *c == first) {
+                row[2] = amt.to_string();
+            }
+            // ④ 基本资料：第 2 列是金额
+            if let Some((_, amt)) = basic.iter().find(|(k, _)| first.starts_with(*k)) {
+                row[1] = amt.to_string();
+            }
         }
-        // ② 供应商应付（sheet 内 ② 的行首也是编码，用 ap 列表区分）
-        if let Some((_, doc, amt)) = ap.iter().find(|(c, _, _)| *c == first) {
-            row[2] = amt.to_string();
-            row[3] = doc.to_string();
-        }
-        // ③ 账户余额：第 3 列是金额
-        if let Some((_, amt)) = bal.iter().find(|(c, _)| *c == first) {
-            row[2] = amt.to_string();
-        }
-        // ④ 基本资料：第 2 列是金额
-        if let Some((_, amt)) = basic.iter().find(|(k, _)| first.starts_with(*k)) {
-            row[1] = amt.to_string();
-        }
-    }
-
     }
     if std::env::var("DUMP_SHEET").is_ok() {
         for sh in &sheets {
@@ -205,14 +204,20 @@ fn main() {
     // ── 场景 B：只导台账没导科目（模拟「两处都对、合起来不对」）──
     println!("\n\n──── 场景 B：把 112201 的期初删掉，模拟「只导台账没导科目」────");
     db.conn()
-        .execute("DELETE FROM begin_balance WHERE account_code LIKE '1122%'", [])
+        .execute(
+            "DELETE FROM begin_balance WHERE account_code LIKE '1122%'",
+            [],
+        )
         .unwrap();
     show("场景 B：台账有、科目没有", &db);
 
     // ── 场景 C：往来单位编码笔误 ────────────────────────────────
     println!("\n\n──── 场景 C：把一条台账的客户编码改成档案里没有的 ────");
     db.conn()
-        .execute("UPDATE arap_opening SET party_code='C999' WHERE party_code='C002'", [])
+        .execute(
+            "UPDATE arap_opening SET party_code='C999' WHERE party_code='C002'",
+            [],
+        )
         .unwrap();
     show("场景 C：编码笔误", &db);
 

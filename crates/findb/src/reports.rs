@@ -279,9 +279,7 @@ pub fn cash_flow_amounts_detail(
                     let votes: std::collections::BTreeSet<&'static str> = counters
                         .iter()
                         .filter(|c| !(counters.len() > 1 && c.starts_with("2221")))
-                        .filter_map(|c| {
-                            fincore::report::cashflow_rules::item_for(c, dir)
-                        })
+                        .filter_map(|c| fincore::report::cashflow_rules::item_for(c, dir))
                         .collect();
                     match votes.len() {
                         1 => {
@@ -362,12 +360,14 @@ pub fn cash_begin_end(
 ///
 /// 「等长」是关键：本期是 3 个月，上期就得取 3 个月，否则两列不可比
 /// （季度报里出现「3 个月 vs 1 个月」，同比变成月比季）。
-pub fn prior_range(from: fincore::Period, to: fincore::Period) -> (fincore::Period, fincore::Period) {
-    let months = ((to.ymm() / 100 - from.ymm() / 100) * 12
-        + (to.ymm() % 100) as i32
+pub fn prior_range(
+    from: fincore::Period,
+    to: fincore::Period,
+) -> (fincore::Period, fincore::Period) {
+    let months = ((to.ymm() / 100 - from.ymm() / 100) * 12 + (to.ymm() % 100) as i32
         - (from.ymm() % 100) as i32
         + 1)
-        .max(1) as usize;
+    .max(1) as usize;
     // 末尾是本期起始月的前一个月，再往前推 months-1 个月就是上期的起点。
     // 曾经的写法把 `prev_to` 也往前推了 months-1，于是 3 个月的对比实际取的是
     // 「再往前两个月的那 3 个月」——差两个月，看着像数字都对，其实是另一段时间。
@@ -445,8 +445,7 @@ pub fn equity_statement(
     ];
     let mut inputs = Vec::with_capacity(4);
     for (name, codes) in names {
-        let (mut begin, mut change, mut end) =
-            (Money::ZERO, Money::ZERO, Money::ZERO);
+        let (mut begin, mut change, mut end) = (Money::ZERO, Money::ZERO, Money::ZERO);
         for code in codes {
             let r = snap.for_account(code, None);
             // 权益类贷方正：年初/年末 = -余额（带符号余额为借正贷负）
@@ -1088,7 +1087,10 @@ mod tests {
             &db,
             p,
             1,
-            vec![("1001", "借", "1000000", None), ("4001", "贷", "1000000", None)],
+            vec![
+                ("1001", "借", "1000000", None),
+                ("4001", "贷", "1000000", None),
+            ],
         );
         // 收入 500、税金 200 → 未结转净利 300
         cash_voucher(
@@ -1118,11 +1120,7 @@ mod tests {
         );
 
         let stmt = equity_statement(&db, p, p, None).unwrap();
-        let na = stmt
-            .lines
-            .iter()
-            .find(|l| l.name == "未分配利润")
-            .unwrap();
+        let na = stmt.lines.iter().find(|l| l.name == "未分配利润").unwrap();
         // 300（未结转）+ 700（4103）+ 100（4104）= 1100
         assert_eq!(na.end, Money::parse("1100").unwrap());
         assert!(stmt.ties());
@@ -1358,7 +1356,10 @@ mod compare_window_tests {
     #[test]
     fn single_month_takes_the_month_before() {
         let (f, t) = prior_range(p("2026-03"), p("2026-03"));
-        assert_eq!((f.code(), t.code()), ("2026-02".to_string(), "2026-02".to_string()));
+        assert_eq!(
+            (f.code(), t.code()),
+            ("2026-02".to_string(), "2026-02".to_string())
+        );
     }
 
     #[test]
@@ -1371,6 +1372,9 @@ mod compare_window_tests {
     #[test]
     fn window_crosses_the_year_boundary() {
         let (f, t) = prior_range(p("2026-01"), p("2026-02"));
-        assert_eq!((f.code(), t.code()), ("2025-11".to_string(), "2025-12".to_string()));
+        assert_eq!(
+            (f.code(), t.code()),
+            ("2025-11".to_string(), "2025-12".to_string())
+        );
     }
 }
