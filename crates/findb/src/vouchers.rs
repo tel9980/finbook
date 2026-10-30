@@ -38,6 +38,13 @@ pub struct VoucherQuery {
     pub scope_account_from: String,
     /// 数据范围上界（科目编码，含端点及下级）。空 = 不限。
     pub scope_account_to: String,
+    /// 数据范围允许的部门编码（`DataScope::depts`）。空 = 不限。
+    ///
+    /// 语义必须与 `DataScope::allows_dept` 严格一致：**没打部门标签**的分录
+    /// 不算越界（`allows_dept("")` 恒真——多数凭证根本不填部门），只有打了
+    /// 标签的分录才必须落在列表内。否则一张没选部门的费用凭证会让所有部门
+    /// 会计都看不见它。
+    pub scope_depts: Vec<String>,
     /// 排序：true 为按日期+凭证号升序（默认），false 为降序
     pub asc: bool,
     /// 键集分页游标：只返回 id 大于此值的行，配合 ORDER BY id ASC。
@@ -66,9 +73,8 @@ impl VoucherQuery {
 
     /// 套用用户的数据范围（DataScope）：
     /// - `own_voucher_only`：只看本人填制的凭证。
-    /// - 科目范围：凭证可能涉及多个科目，查询层不便预过滤，
-    ///   由界面层对结果逐张调用 `User::can_see_voucher` 过滤
-    ///   （账簿/余额表等按科目聚合的模块则在查询条件里取交集）。
+    /// - 科目区间与部门：下推到 SQL，必须与 `User::can_see_voucher` 同口径，
+    ///   否则分页 `total` 会比实际能翻到的张数大（见 `list_page` 的注释）。
     pub fn with_data_scope(mut self, u: &User) -> Self {
         let scope = &u.data_scope;
         if scope.own_voucher_only {
@@ -78,15 +84,19 @@ impl VoucherQuery {
         }
         self.scope_account_from = scope.account_from.trim().to_string();
         self.scope_account_to = scope.account_to.trim().to_string();
+        // 原样拷贝（不 trim / 不过滤空串）：SQL 侧要跟 `allows_dept` 的逐字比较
+        // 完全对齐，这里多做一步归一化反而会让两侧判定分叉。
+        self.scope_depts = scope.depts.clone();
         self
     }
 
-    /// 只套用科目区间部分的数据范围（不依赖 `User`）。
+    /// 只套用区间型数据范围（科目区间 + 部门），不依赖 `User`。
     /// **不含 `own_voucher_only`**：那一位需要 `username`，调用方自己设
     /// `prepared_by`。用 `with_data_scope` 就不用操心这个。
-    pub fn with_account_scope(mut self, scope: &fincore::user::DataScope) -> Self {
+    pub fn with_range_scope(mut self, scope: &fincore::user::DataScope) -> Self {
         self.scope_account_from = scope.account_from.trim().to_string();
         self.scope_account_to = scope.account_to.trim().to_string();
+        self.scope_depts = scope.depts.clone();
         self
     }
 }
@@ -256,10 +266,11 @@ pub fn list(db: &Db, q: &VoucherQuery) -> DbResult<Vec<Voucher>> {
 /// **返回的凭证同样只含表头**（没有分录），要借贷合计/摘要得再调 `fill_entries`
 /// —— 与 `list` 的约定完全一致，不要以为分页版自带明细。
 ///
-/// `total` 与权限过滤的一致性依赖 `with_account_scope` 把数据范围**下推到
-/// SQL**（见该方法的注释）；`own_voucher_only` 早就由 `with_data_scope` 变成
-/// `prepared_by = ?` 了。调用方仍可再 `retain` 一次做兜底，但那时若真过滤掉了
-/// 行就说明 SQL 条件写错了，应该报错而不是默默给出错误页码。
+/// `total` 与权限过滤的一致性依赖 `with_data_scope` / `with_range_scope` 把数据
+/// 范围（科目区间 + 部门）**下推到 SQL**（见这两个方法的注释）；`own_voucher_only`
+/// 也早就由 `with_data_scope` 变成 `prepared_by = ?` 了。调用方仍可再 `retain`
+/// 一次做兜底，但那时若真过滤掉了行就说明 SQL 条件写错了，应该报错而不是默默
+/// 给出错误页码。
 pub fn list_page(
     db: &Db,
     q: &VoucherQuery,
@@ -412,6 +423,34 @@ fn build_where(q: &VoucherQuery) -> DbResult<(String, Vec<Box<dyn rusqlite::type
         );
         params.push(Box::new(hi.to_string()));
         params.push(Box::new(format!("{}%", crate::escape_like(hi))));
+    }
+    // 数据范围的部门区间下推到 SQL，语义照抄 `DataScope::allows_dept`：
+    //   depts 为空      → 不限
+    //   分录没打部门标签 → 放行（`allows_dept("")` 恒真）
+    //   分录打了部门标签 → 必须落在允许列表内
+    // 「有没有部门片段」要按 `\x1fdept=` 判：aux_key 由 `AuxRef::key_parts` 用
+    // \x1f 连接 `kind=value` 而成，两端补分隔符后既不会命中别的维度，也不会
+    // 像裸子串那样把 `dept=` 匹配到值里面去。
+    // 注：Rust 侧对分录的部门值做了 `trim()` 兜底，这里按原值整段比较；部门
+    // 编码是界面上选出来的档案码，不带首尾空白，两种口径等价。
+    if !q.scope_depts.is_empty() {
+        sql.push_str(
+            " AND NOT EXISTS(SELECT 1 FROM voucher_entry e WHERE e.voucher_id=v.id
+                             AND (char(31) || e.aux_key || char(31)) LIKE ? ESCAPE '\\'
+                             AND NOT (",
+        );
+        params.push(Box::new("%\u{1f}dept=%".to_string()));
+        for (i, d) in q.scope_depts.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(" OR ");
+            }
+            sql.push_str("(char(31) || e.aux_key || char(31)) LIKE ? ESCAPE '\\'");
+            params.push(Box::new(format!(
+                "%\u{1f}dept={}\u{1f}%",
+                crate::escape_like(d)
+            )));
+        }
+        sql.push_str("))");
     }
     if let Some(ref aux) = q.aux {
         // 逐维度整段匹配，不能把整条 aux_key 当子串 LIKE：
@@ -1674,6 +1713,93 @@ mod tests {
                 total as usize,
                 rust_ids.len(),
                 "范围 [{from}..{to}] 下 COUNT(*) 与 can_see_voucher 过滤后的张数不一致"
+            );
+        }
+    }
+
+    /// 造一张带部门标签的凭证：`rows` 为 (科目, 部门)，部门 `None` = 该分录不打标签。
+    /// 科目仍用不需要辅助核算的末级科目，避免撞上保存守卫。
+    fn dept_voucher(db: &Db, day: u32, rows: &[(&str, Option<&str>)]) -> i64 {
+        let p = Period::new(2026, 1).unwrap();
+        let mut v = Voucher::new(
+            p,
+            chrono::NaiveDate::from_ymd_opt(2026, 1, day).unwrap(),
+            "记",
+            0,
+        );
+        v.no = next_no(db, p, "记").unwrap();
+        v.memo = format!("部门范围测试 {}", day);
+        for (i, (code, dept)) in rows.iter().enumerate() {
+            let mut e = Entry::new(i as i32 + 1, *code, *code);
+            e.aux.dept = dept.map(|s| s.to_string());
+            if i == 0 {
+                e.debit = Money::parse("120.00").unwrap();
+            } else {
+                e.credit = Money::parse("120.00").unwrap();
+            }
+            v.push_entry(e);
+        }
+        save(db, &mut v).unwrap()
+    }
+
+    /// 部门范围下推到 SQL 后必须与 `can_see_voucher` 同口径：没打部门标签的分录
+    /// 不算越界，打了标签的分录必须落在允许列表内。
+    ///
+    /// 和 `list_page_scope_matches_can_see_voucher` 同一套路（SQL 集合 == Rust 集合），
+    /// 额外再对一份**显式期望**：只比对两侧无法发现"两边一起错"的情况。
+    #[test]
+    fn list_page_dept_scope_matches_can_see_voucher() {
+        let db = mem();
+        let d01 = dept_voucher(&db, 5, &[("660201", Some("D01")), ("1001", Some("D01"))]);
+        let d02 = dept_voucher(&db, 6, &[("660201", Some("D02")), ("1001", Some("D02"))]);
+        let untagged = dept_voucher(&db, 7, &[("660201", None), ("1001", None)]);
+        let mixed_ok = dept_voucher(&db, 8, &[("660201", Some("D01")), ("1001", None)]);
+        let mixed_bad = dept_voucher(&db, 9, &[("660201", None), ("1001", Some("D02"))]);
+
+        let cases: Vec<(Vec<&str>, Vec<i64>)> = vec![
+            (vec![], vec![d01, d02, untagged, mixed_ok, mixed_bad]),
+            (vec!["D01"], vec![d01, untagged, mixed_ok]),
+            (vec!["D02"], vec![d02, untagged, mixed_bad]),
+            (
+                vec!["D01", "D02"],
+                vec![d01, d02, untagged, mixed_ok, mixed_bad],
+            ),
+            (vec!["D99"], vec![untagged]),
+        ];
+        for (depts, want) in cases {
+            let mut u = fincore::user::User::default();
+            u.username = "tester".into();
+            u.display_name = "测试".into();
+            u.data_scope.depts = depts.iter().map(|s| s.to_string()).collect();
+            let mut q = VoucherQuery::period(Period::new(2026, 1).unwrap()).with_data_scope(&u);
+            q.limit = None;
+            let mut sql_ids: Vec<i64> = list(&db, &q).unwrap().iter().map(|v| v.id).collect();
+            sql_ids.sort();
+            // Rust 侧：必须先 fill_entries 再过滤（空 entries 时 all() 恒真）
+            let mut base = VoucherQuery::period(Period::new(2026, 1).unwrap());
+            base.limit = None;
+            let mut all = list(&db, &base).unwrap();
+            fill_entries(&db, &mut all).unwrap();
+            let mut rust_ids: Vec<i64> = all
+                .iter()
+                .filter(|v| u.can_see_voucher(v))
+                .map(|v| v.id)
+                .collect();
+            rust_ids.sort();
+            assert_eq!(
+                sql_ids, want,
+                "部门范围 {depts:?} 下 SQL 下推结果与显式期望不符"
+            );
+            assert_eq!(
+                sql_ids, rust_ids,
+                "部门范围 {depts:?} 下 SQL 下推与 can_see_voucher 不一致"
+            );
+            // 分页的 COUNT 必须等于过滤后的真实张数，否则 total 会算错页码
+            let (_, total) = list_page(&db, &q, 0, 10).unwrap();
+            assert_eq!(
+                total as usize,
+                want.len(),
+                "部门范围 {depts:?} 下 COUNT(*) 与过滤后的张数不一致"
             );
         }
     }

@@ -602,6 +602,10 @@ impl User {
     }
     /// 凭证是否在数据范围内可见：
     /// - 科目范围：凭证涉及的全部科目都在范围内才可见（空范围 = 不限制）
+    /// - 部门范围：凭证涉及的全部**带部门标签**的分录都在范围内才可见
+    ///   （没打部门标签的分录不算越界 —— 与报销/工资的口径一致：`allows_dept("")`
+    ///   为 `true`。否则一张没选部门的费用凭证会让所有部门会计都看不见它，
+    ///   而实际情况是本厂大部分凭证根本不填部门）
     /// - 本人凭证：`own_voucher_only` 时仅制单人本人可见
     pub fn can_see_voucher(&self, v: &crate::voucher::Voucher) -> bool {
         let scope = &self.data_scope;
@@ -610,7 +614,8 @@ impl User {
         }
         let has_account_limit =
             !scope.account_from.trim().is_empty() || !scope.account_to.trim().is_empty();
-        if !has_account_limit {
+        let has_dept_limit = !scope.depts.is_empty();
+        if !has_account_limit && !has_dept_limit {
             return true;
         }
         // 「全部科目都在范围内」= 逐条 `all`：一张凭证若有一条分录落在范围外
@@ -618,9 +623,11 @@ impl User {
         // 早先这里是 `any`，与上面注释的规格相反——范围外的科目金额会随整张
         // 凭证一起泄露（实测确认）。空凭证视为不可见更安全，但没有分录的凭证
         // 本不该存在，这里按"无可见证据"处理。
-        v.entries
-            .iter()
-            .all(|e| scope.allows_account(&e.account_code))
+        v.entries.iter().all(|e| {
+            (!has_account_limit || scope.allows_account(&e.account_code))
+                && (!has_dept_limit
+                    || scope.allows_dept(e.aux.dept.as_deref().unwrap_or("").trim()))
+        })
     }
 }
 
@@ -930,6 +937,79 @@ mod tests {
         // 空范围不限制
         let un = User::new("acc2", "会计二", Role::Accountant);
         assert!(un.can_see_voucher(&mk(&["1122", "1001"])));
+    }
+
+    /// 部门范围只判定**带部门标签**的分录，没打标签的一律放行。
+    ///
+    /// 「空部门 = 放行」不是放水：本厂大部分凭证根本不填部门，若按「全部部门
+    /// 都在范围内」硬判，部门会计会丢掉所有没选部门的费用凭证。
+    #[test]
+    fn can_see_voucher_dept_scope_only_judges_tagged_entries() {
+        use crate::money::Money;
+        use crate::period::Period;
+        use crate::voucher::{AuxRef, Entry, Voucher};
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        let mut u = User::new("acc1", "会计一", Role::Accountant);
+        u.data_scope.depts = vec!["D01".into()];
+
+        let mk = |rows: &[(&str, Option<&str>)]| -> Voucher {
+            let mut v = Voucher::new(Period::new(2026, 1).unwrap(), d, "记", 1);
+            v.prepared_by = "acc1".into();
+            for (i, (c, dept)) in rows.iter().enumerate() {
+                let mut e = Entry::new(i as i32 + 1, *c, "s");
+                e.aux = AuxRef {
+                    dept: dept.map(|s| s.to_string()),
+                    ..Default::default()
+                };
+                if i % 2 == 0 {
+                    e.debit = Money::parse("100").unwrap();
+                } else {
+                    e.credit = Money::parse("100").unwrap();
+                }
+                v.entries.push(e);
+            }
+            v.renumber();
+            v
+        };
+
+        assert!(
+            u.can_see_voucher(&mk(&[("660201", Some("D01")), ("1001", Some("D01"))])),
+            "部门标签都在范围内应可见"
+        );
+        assert!(
+            !u.can_see_voucher(&mk(&[("660201", Some("D02")), ("1001", Some("D02"))])),
+            "部门标签越界应不可见"
+        );
+        assert!(
+            u.can_see_voucher(&mk(&[("660201", None), ("1001", None)])),
+            "没打部门标签的分录不算越界"
+        );
+        assert!(
+            u.can_see_voucher(&mk(&[("660201", Some("D01")), ("1001", None)])),
+            "混合：有标签的那条在范围内即可见"
+        );
+        assert!(
+            !u.can_see_voucher(&mk(&[("660201", None), ("1001", Some("D02"))])),
+            "混合：只要有一条带标签的分录越界，整张凭证都不可见"
+        );
+        assert!(
+            u.can_see_voucher(&mk(&[("660201", Some("  ")), ("1001", None)])),
+            "只有空白的部门等同没打标签"
+        );
+        // 部门与科目两个范围是 AND
+        u.data_scope.account_from = "6602".into();
+        u.data_scope.account_to = "6602".into();
+        assert!(
+            u.can_see_voucher(&mk(&[("660201", Some("D01")), ("660201", None)])),
+            "科目与部门都在范围内才可见"
+        );
+        assert!(
+            !u.can_see_voucher(&mk(&[("660201", Some("D01")), ("1001", None)])),
+            "部门在范围内但科目越界，仍不可见"
+        );
+        // 部门范围为空 = 不限制
+        let un = User::new("acc2", "会计二", Role::Accountant);
+        assert!(un.can_see_voucher(&mk(&[("660201", Some("D99"))])));
     }
 
     /// 口令长度按**字符**计，不是字节。

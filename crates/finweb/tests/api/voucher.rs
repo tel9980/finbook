@@ -2231,6 +2231,129 @@ async fn voucher_page_total_respects_data_scope() {
     assert_eq!(money_num(scoped["debit_total"].as_str().unwrap()), 600.0);
 }
 
+/// 部门范围同样要下推到 SQL：`total` 必须与 `can_see_voucher` 同口径，否则
+/// 「共 6 张」却只翻得出 3 张（`list_vouchers_page` 的 debug_assert 会直接炸）。
+///
+/// 关键语义：**没打部门标签的凭证仍然可见**。本厂大部分凭证不填部门，
+/// 若把这类凭证判成越界，部门会计会凭空少掉一半账。
+#[tokio::test]
+async fn voucher_page_total_respects_dept_scope() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 三批各 3 张，借贷两侧打同一个部门标签：D01 / D02 / 不打标签。
+    for (no_base, dept) in [(1, Some("D01")), (11, Some("D02")), (21, None)] {
+        for k in 0..3i32 {
+            let label = dept.unwrap_or("未打标签");
+            let mut e1 = serde_json::json!({
+                "line": 1, "account_code": "660201", "summary": label,
+                "debit": "100", "credit": "0"
+            });
+            let mut e2 = serde_json::json!({
+                "line": 2, "account_code": "1001", "summary": "现金",
+                "debit": "0", "credit": "100"
+            });
+            if let Some(d) = dept {
+                e1["aux"] = serde_json::json!({ "dept": d });
+                e2["aux"] = serde_json::json!({ "dept": d });
+            }
+            let resp = handlers::router(state.clone())
+                .oneshot(authed_post(
+                    "/api/vouchers",
+                    &sid,
+                    serde_json::json!({
+                        "id": 0, "period": 202601, "date": "2026-01-15", "word": "记",
+                        "no": no_base + k, "attachments": 0,
+                        "memo": format!("部门 {} 第 {k} 张", label),
+                        "entries": [e1, e2]
+                    }),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::OK,
+                "{label} 第 {k} 张应保存成功：{}",
+                body_string(resp).await
+            );
+        }
+    }
+
+    // 管理员不限部门：9 张
+    let all = get_voucher_page(&state, &sid, "period=202601&page_size=100").await;
+    assert_eq!(all["total"], 9, "管理员应看到全部 9 张");
+
+    // 建一个只允许看 D01 的会计（两层账号：先平台开通，再拉进 b1，最后设范围）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/platform/users",
+            &sid,
+            serde_json::json!({
+                "username": "deptscoped", "display_name": "部门会计", "password": "Dept@123456"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "开通平台账号：{}",
+        body_string(resp).await
+    );
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/users",
+            &sid,
+            serde_json::json!({
+                "username": "deptscoped", "display_name": "部门会计", "password": "Dept@123456",
+                "role": "accountant", "must_change_pwd": false
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "拉进 b1：{}",
+        body_string(resp).await
+    );
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_put(
+            "/api/users/deptscoped",
+            &sid,
+            serde_json::json!({ "data_scope": { "depts": ["D01"] } }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "设部门范围应成功");
+
+    // 平台层开通的账号默认 must_change_pwd，不改密就进不了账套（401）。
+    let (st, sid0) = login(&state, "deptscoped", "Dept@123456").await;
+    assert_eq!(st, StatusCode::OK, "deptscoped 首登");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/change-password",
+            &sid0,
+            serde_json::json!({ "old": "Dept@123456", "new": "Dept!23456" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "首登改密");
+    let (st, sid2) = login(&state, "deptscoped", "Dept!23456").await;
+    assert_eq!(st, StatusCode::OK, "改密后重登");
+    assert_eq!(select_book(&state, &sid2, "b1").await, StatusCode::OK);
+
+    let scoped = get_voucher_page(&state, &sid2, "period=202601&page_size=100").await;
+    assert_eq!(
+        scoped["total"], 6,
+        "部门范围 D01 时应看到 6 张（D01 那批 + 没打标签那批）"
+    );
+    for it in scoped["items"].as_array().unwrap() {
+        assert_ne!(it["summary"], "D02", "别的部门那批不该出现");
+    }
+    assert_eq!(money_num(scoped["debit_total"].as_str().unwrap()), 600.0);
+}
+
 /// 采购暂估自动出凭证：登记（借存货/贷应付-供应商）+ 冲回反向 + 幂等。
 #[tokio::test]
 async fn estimate_auto_voucher() {
