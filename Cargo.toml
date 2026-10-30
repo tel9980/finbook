@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/fincore", "crates/findb", "crates/finui", "crates/finbook", "crates/finweb"]
 
 [workspace.package]
-version = "1.8.57"
+version = "1.8.58"
 edition = "2021"
 license = "MIT"
 authors = ["FinBook"]
@@ -32,6 +32,22 @@ rand = "0.8"
 # 密钥是 32 字节随机熵，没有低熵口令可「猜」；慢哈希的存在意义是拖慢暴力破解，
 # 用在这里只会让**每个 API 请求**都付 ~100ms，与外部系统对接的吞吐直接冲突。
 sha2 = "0.10"
+
+# dev/test 默认是 `debug = 2`（完整 DWARF：变量、类型、泛型实例的每一份）。
+# 这个仓库泛型用得多（`Money`/`ReportTable`/axum 的 handler Future 每处都实例化一次），
+# 完整调试信息能占到产物的 6 成以上：`libfinweb-*.rlib` 单份 259MB。
+#
+# 实测（同一份代码，只改这一个开关）：
+#   debug = 2（默认）  259.0 MB
+#   debug = 1          157.8 MB   （-39%）
+#   debug = 0           98.5 MB   （-62%）
+#
+# `debug = 1` 保留**行号表**：panic 的 backtrace 依然打印 `文件:行`，日常定位够用；
+# 丢掉的只是「在 gdb/lldb 里看变量值」。真要单步调变量，临时用
+#   CARGO_PROFILE_DEV_DEBUG=2 cargo build -p finweb
+# 覆盖回来即可，不需要改这个文件。
+[profile.dev]
+debug = 1
 
 [profile.release]
 opt-level = 2

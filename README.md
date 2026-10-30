@@ -230,11 +230,36 @@
 > `admin/admin123`（演示账号不强制改密），否则发布包里的登录说明就是假的。
 ---
 ## 7.1 本机构建：日常跑 release，别让 debug 把磁盘吃掉
+
+### 先调低 dev 的调试信息：`debug = 1`（v1.8.58 起）
+
+`Cargo.toml` 里 `[profile.dev] debug = 1`。这不是"省一点"，是省三分之一：
+
+| `debug` | 完整跑一遍测试后 `target/debug/deps` | `target/debug` 合计 | 最大的测试二进制 |
+|---------|--------------------------------------|--------------------|------------------|
+| `2`（Rust 默认） | 9.1 GB | **13 GB** | 283 MB |
+| `1`（本仓库默认） | 6.2 GB | **8.4 GB** | 188 MB |
+| `0` | 2.9 GB | **4.0 GB** | 75 MB |
+
+（2026-10-30 实测，每次 `cargo clean --profile dev` 后 `cargo test --workspace --no-run`
+重新构建。仓库有 36 个测试二进制，每个都链接一份 `finweb`。）
+
+`debug = 1` 只保留**行号表**：panic 的 backtrace 依然打印 `文件:行`，日常定位够用；
+丢掉的只是 gdb/lldb 里看变量值。真要单步看变量：
+
+```bash
+CARGO_PROFILE_DEV_DEBUG=2 cargo build -p finweb   # 临时覆盖，不改文件
+```
+
+`debug = 0` 更省，但 backtrace 只剩地址，只适合磁盘实在紧张时临时用。
+
+### 再看累积增长与清理
+
 实测同一个仓库（2026-10-27，本机）：
 | 目录 | 大小 | 说明 |
 |------|------|------|
 | `target/debug`（连续跑了一周测试之后） | **45 GB** | `incremental` 15 GB、`deps` 27 GB |
-| `target/debug`（`cargo clean --profile dev` 之后重新编译一次） | 8.7 GB | 干净状态的基线 |
+| `target/debug`（`cargo clean --profile dev` 之后重新编译一次） | 8.7 GB → **8.4 GB**（改用 `debug = 1` 后） | 干净状态的基线 |
 | `target/release` | 543 MB | 与干净 debug 差 16 倍，与累积 debug 差 80 倍 |
 也就是说：**debug 产物会随「改代码 → 跑测试」的次数一直涨**（每次改动都往
 `deps/` 里堆一份新的 rlib、往 `incremental/` 里堆一版中间态），涨到 45 GB 时
