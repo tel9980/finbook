@@ -114,21 +114,21 @@ const MUT = [
   },
   {
     name: "㉟ 账龄不查科目范围（范围外也给出数字）",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/settle.rs",
     from: "    if !user.user.can_see_account(account.trim()) {",
     to: "    if false {",
     cmd: SCOPE("settle_endpoints_refuse_out_of_scope_accounts"),
   },
   {
     name: "③ 去掉期初的科目存在性校验",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/settle.rs",
     from: "    if !codes.is_empty() {",
     to: "    if false {",
     cmd: API("begin_rejects_nonexistent_account"),
   },
   {
     name: "④ 去掉 delete_ids 的删除语义",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/settle.rs",
     from: "        if *id > 0 {\n            balances::delete_begin_on",
     to: "        if false {\n            balances::delete_begin_on",
     cmd: API("begin_delete_ids_actually_remove_rows"),
@@ -142,7 +142,7 @@ const MUT = [
   },
   {
     name: "⑤ 会计读 /api/options 重新收紧成 403",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/books.rs",
     from:
       "    if !user.can(Perm::SysOption) && !(user.can(Perm::VoucherPost) || user.can(Perm::VoucherAudit))\n    {",
     to: "    if !user.can(Perm::SysOption) {",
@@ -154,7 +154,7 @@ const MUT = [
     // 自己也有 `user.require(Perm::SysOption)`。**变异打错地方比不打更糟**：它会
     // 让人以为"这条测过了"。
     name: "⑤ 读放宽时把写权限检查也一起删掉（读放宽≠写放宽）",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/books.rs",
     from:
       ') -> Result<Json<serde_json::Value>, AppError> {\n    user.require(Perm::SysOption)?;\n    let db = &user.db;\n    // 落库前校验',
     to:
@@ -163,14 +163,14 @@ const MUT = [
   },
   {
     name: "⑦ 账套层免改密不再同步到平台层",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/auth.rs",
     from: "    if !req.must_change_pwd && ru.must_change_pwd {",
     to: "    if false {",
     cmd: API("book_level_no_password_change_flag_reaches_the_login_gate"),
   },
   {
     name: "⑧ 去掉「已结转过」判定",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/reports.rs",
     from: "    if !carried.is_empty() && rows",
     to: "    if false && !carried.is_empty() && rows",
     cmd: API("carry_forward_twice_explains_it_was_already_carried"),
@@ -192,7 +192,7 @@ const MUT = [
     // handlers 在调用引擎之前已经查过本期结转凭证并直接返回「已结转过」。
     // 变异指向一条**不可达的路径**，测试只能靠运气（CI 上偶然红过）。
     // 改成把守卫的条件关掉，才真正考验测试守不守这件事。
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/reports.rs",
     from: "    if !carried.is_empty() && rows.iter().all(|r| r.debit.round2().eq(&r.credit.round2())) {",
     to: "    if false {",
     cmd: API("carry_forward_twice_explains_it_was_already_carried"),
@@ -208,8 +208,8 @@ const MUT = [
   },
   {
     // 只放开"审"不放开"撤审" → 会计能审却撤不回来
-    name: "⑨ 撤审仍用旧判据（能审不能撤）",
-    file: "crates/finweb/src/handlers.rs",
+    name: "⑨ 撤审仍用旧判据（能审却撤不回）",
+    file: "crates/finweb/src/handlers/funds.rs",
     from: "    require_fund_doc_gate(&user)?;\n    let db = &user.db;\n    findb::receipt::receipt_unaudit(&db, id)?;",
     to: "    user.require(Perm::VoucherAudit)?;\n    let db = &user.db;\n    findb::receipt::receipt_unaudit(&db, id)?;",
     cmd: API("receipt_audit_gates_on_audit_or_post_permission"),
@@ -381,7 +381,7 @@ const MUT = [
     // 导入账套后不与平台身份对齐改密标记 → 桌面版搬来的账套（admin 那行是
     // 「首次必须改密」）在 Web 端每个接口都 401，前端退回选择页
     name: "⑯ 导入账套后不对齐改密标记（导入成功但进不去）",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/books.rs",
     from: "                    if u.must_change_pwd != ru.must_change_pwd {\n                        u.must_change_pwd = ru.must_change_pwd;",
     to: "                    if false {\n                        u.must_change_pwd = ru.must_change_pwd;",
     cmd: XLSX("upload_fbk_registers_a_usable_book"),
@@ -439,8 +439,8 @@ const MUT = [
   {
     // 进账套仍停在「建账首月」→ 结了 9 个月的账，首页整块显示的是 1 月的数，
     // 而且不会自己动。老板只会得出一个结论：系统算错了。
-    name: "⑱ 进账套的当前期间退回建账首月",
-    file: "crates/finweb/src/handlers.rs",
+    name: "⑱ 进账套仍停在建账首月",
+    file: "crates/finweb/src/handlers/books.rs",
     from: "        let ymm = periods::current_period(&db)\n            .unwrap_or_else(|_| db.options().start_period)\n            .ymm();",
     to: "        let ymm = db.options().start_period.ymm();",
     cmd: HOME("selecting_a_book_lands_on_current_period_not_start_period"),
@@ -578,7 +578,7 @@ const MUT = [
   {
     // 总数按本页算 → 翻页时「共 N 笔」变小，会计会以为钱少了
     name: "㉓ 未核销总数跟着页走",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/settle.rs",
     from: '        "total": total,\n        "returned": page.len(),',
     to: '        "total": page.len(),\n        "returned": page.len(),',
     cmd: SOPEN("settle_open_pages_without_losing_the_total"),
@@ -586,7 +586,7 @@ const MUT = [
   {
     // 截断了却不说 → 表现是「这单明明还欠着，核销页里找不到」
     name: "㉓ 截断了却不说",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/settle.rs",
     from: '        "truncated": limit != 0 && offset + page.len() < total,',
     to: '        "truncated": false,',
     cmd: SOPEN("settle_open_pages_without_losing_the_total"),
@@ -642,7 +642,7 @@ const MUT = [
   {
     // 账龄导出不认往来科目 → 导出来的表永远是 1122 的，导出 2202 时用户不知道
     name: "㉒ 账龄导出写死应收科目",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/settle.rs",
     from: '    let account = q.get("account").cloned().unwrap_or_else(|| "1122".into());\n    let account = account.trim().to_string();',
     to: '    let account = "1122".to_string();',
     cmd: XLSX("settle_aging_export_as_xlsx"),
@@ -666,7 +666,7 @@ const MUT = [
   {
     // 账龄基准日回退成「今天」→ 查 1 月的账龄全落最老一档，与桌面端两个答案
     name: "㉔ 账龄基准日回退成今天",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/settle.rs",
     from: "        .unwrap_or_else(|| upto.last_day());",
     to: "        .unwrap_or_else(|| chrono::Local::now().date_naive());",
     cmd: FCUST("settle_aging_defaults_to_period_end"),
@@ -674,7 +674,7 @@ const MUT = [
   {
     // 催款单导出只剩汇总 Sheet → 客户问「哪几张单凑的」答不上来
     name: "㉔ 催款单导出丢掉明细表",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/export.rs",
     from: 'build_xlsx(&[sheet, dsheet], &fname, "催款单")',
     to: 'build_xlsx(&[sheet], &fname, "催款单")',
     cmd: FCUST("dunning_export_xlsx_has_detail"),
@@ -709,7 +709,7 @@ const MUT = [
   },
   {
     name: "㉒ 空串被当成非法金额",
-    file: "crates/finweb/src/handlers.rs",
+    file: "crates/finweb/src/handlers/settle.rs",
     from: "        Some(s) if !s.is_empty() => Some(fincore::Money::parse(s).map_err(|e| {",
     to: "        Some(s) => Some(fincore::Money::parse(s).map_err(|e| {",
     cmd: FUNS("blank_amount_means_full_unsettle"),
@@ -932,10 +932,10 @@ const MUT = [
     cmd: FSH("cash_flow_compare_keeps_last_period_only_items"),
   },
 
-  // ⑭ 现金流量表打印页也要有上期对比（v1.8.51）
+  // ⑭ 现金流量表打印页也要有上期对比（v1.8.53）
   {
-    name: "⑭ 打印页不给上期对比",
-    file: "crates/finweb/src/handlers.rs",
+    name: "⑭ 现金流量表打印页丢掉上期对比列",
+    file: "crates/finweb/src/handlers/reports.rs",
     from: "        Some(&prev),\n    );\n    Ok(([(header::CONTENT_TYPE, \"text/html; charset=utf-8\")], html).into_response())",
     to: "        None,\n    );\n    Ok(([(header::CONTENT_TYPE, \"text/html; charset=utf-8\")], html).into_response())",
     cmd: CFRINT("cash_flow_print_page_carries_last_period_columns"),

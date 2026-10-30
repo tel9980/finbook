@@ -75,7 +75,7 @@ function runGuardSelfTest(label, scriptName) {
 function fnBodyOf(src, name) {
   const ls = src.split(/\r?\n/);
   const st = ls.findIndex((l) =>
-    new RegExp("^\\s*(?:pub(?:\\(crate\\))?\\s+)?(?:async\\s+)?fn\\s+" + name + "\\s*\\(").test(l)
+    new RegExp("^\\s*(?:pub(?:\\([a-z]+\\))?\\s+)?(?:async\\s+)?fn\\s+" + name + "\\s*\\(").test(l)
   );
   if (st < 0) return null;
   let depth = 0;
@@ -824,16 +824,39 @@ const SESS_RULES = [
          "旧会话不会被清——改完口令却还有别的设备能继续用。" },
 ];
 if (FIX_ROOT) {
-  const hSrc = fs.readFileSync(path.join(FIX_ROOT, "crates", "finweb", "src", "handlers.rs"), "utf8");
+  // v1.8.57 起 handlers.rs 按域拆成 16 个文件。这里做两件事：
+  //   1) 把 `handlers.rs` + `handlers/*.rs` 一起纳入搜索（判据仍是「调用点所在函数」，
+  //      不是全文件 grep —— 同名方法在多个文件里都出现）；
+  //   2) 找不到时把**搜过的文件**列出来，免得下次搬文件又在猜。
+  const hDir = path.join(FIX_ROOT, "crates", "finweb", "src", "handlers");
+  const hFiles = {};
+  {
+    const main = path.join(FIX_ROOT, "crates", "finweb", "src", "handlers.rs");
+    hFiles["handlers.rs"] = fs.readFileSync(main, "utf8");
+    if (fs.existsSync(hDir)) {
+      for (const f of fs.readdirSync(hDir).filter((x) => x.endsWith(".rs"))) {
+        hFiles["handlers/" + f] = fs.readFileSync(path.join(hDir, f), "utf8");
+      }
+    }
+  }
+  const whereIs = (fn) => {
+    for (const [name, src] of Object.entries(hFiles)) {
+      const body = fnBodyOf(src, fn);
+      if (body) return { file: name, body };
+    }
+    return null;
+  };
+  const searched = Object.keys(hFiles).sort().join(", ");
   let sessBad = 0;
   for (const r of SESS_RULES) {
-    const body = fnBodyOf(hSrc, r.fn);
-    if (!body) {
+    const hit = whereIs(r.fn);
+    if (!hit) {
       bad++;
       sessBad++;
-      console.log(`FAIL handlers.rs 里找不到 ${r.fn}() —— 函数改名时本检查要跟着改`);
+      console.log(`FAIL 找不到 ${r.fn}()（搜过 ${searched}）—— 函数改名或搬家时本检查要跟着改`);
       continue;
     }
+    const body = hit.body;
     const used = ["remove_by_username_and_device", "remove_others", "remove_by_username"].filter(
       (m) => new RegExp("\\." + m + "\\(").test(body)
     );
@@ -848,8 +871,14 @@ if (FIX_ROOT) {
   }
   // 反向：重置设备 / 停用 / 删号必须全清，否则旧设备上的会话还能用到自然过期
   for (const fn of ["reset_platform_device", "reset_user_device", "delete_platform_user"]) {
-    const body = fnBodyOf(hSrc, fn);
-    if (!body) { bad++; sessBad++; console.log(`FAIL handlers.rs 里找不到 ${fn}()`); continue; }
+    const hit2 = whereIs(fn);
+    if (!hit2) {
+      bad++;
+      sessBad++;
+      console.log(`FAIL 找不到 ${fn}()（搜过 ${searched}）`);
+      continue;
+    }
+    const body = hit2.body;
     if (!/\.remove_by_username\(/.test(body)) {
       bad++;
       sessBad++;
@@ -1573,7 +1602,7 @@ if (process.argv.includes("--selftest")) {
       // 改密用错 → 改完口令，别的设备上的旧会话照样能用。
       name: "改密改成只清本设备会话（别的设备不被踢）",
       apply: () => {
-        const p2 = "crates/finweb/src/handlers.rs";
+        const p2 = "crates/finweb/src/handlers/auth.rs";
         const o = fs.readFileSync(p2, "utf8");
         fs.writeFileSync(p2, o.replace("state.sessions.remove_others(&user.username, &user.token);", "state.sessions.remove_by_username(&user.username);"));
         return () => fs.writeFileSync(p2, o);
@@ -1583,7 +1612,7 @@ if (process.argv.includes("--selftest")) {
       // 重置设备绑定时不全会话 → 旧设备上的会话还能用到自然过期，等于没重置。
       name: "重置设备绑定时不清该用户会话（旧设备不被踢）",
       apply: () => {
-        const p2 = "crates/finweb/src/handlers.rs";
+        const p2 = "crates/finweb/src/handlers/platform.rs";
         const o = fs.readFileSync(p2, "utf8");
         const nl = o.includes("\r\n") ? "\r\n" : "\n";
         fs.writeFileSync(p2, o.split("    state.sessions.remove_by_username(&username);").join("    let _ = &username;"));
