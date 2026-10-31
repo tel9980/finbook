@@ -42,8 +42,17 @@ test("客供料台账：来料 → 交货 → 超交被拦 → 结存与对账�
   // 这个 bug 会被判成通过（toast 只是个 DOM 元素，存没存要看列表）。
   await fillConsign(page, "out", "50");
   await expect(page.locator("#toast")).toContainText("超出可核销数量", { timeout: 15_000 });
+  // 保存被拒时界面**故意不关窗口**（留着让人改数字），但遮罩会挡住背后的工具栏，
+  // 所以要先自己关掉再点查询——不关就是等点击超时，报错还指在下一行上。
+  await page.click("#cs-cancel");
   await page.click("#cs-load");
   await expect(page.locator("#cs-docs tbody tr")).toHaveCount(2, { timeout: 15_000 });
+  // 再问一次服务端：列表条数只说明渲染了几行，入库了没有得看接口
+  const afterOver = await (await page.request.get("/api/consign/docs")).json();
+  expect(
+    (afterOver.docs || []).map((d) => d.no),
+    "超交被拒后不该多出一张单据",
+  ).toHaveLength(2);
 
   // 客户对账单：期初 0 / 来料 100 / 交货 60 / 期末 40
   await page.click("#cs-stmt");
@@ -98,9 +107,16 @@ test("加工费规则：面积计价 → 最低收费兜底 → 加急费", asyn
   await page.fill("#pr-rrate", "120");
   await page.click("#pr-save");
   await expect(page.locator("#toast")).toContainText("0-100", { timeout: 15_000 });
+  // 同上：被拒时窗口不关，遮罩挡着后面的按钮，先关窗
+  await page.click("#pr-cancel");
   // 规则数仍是 1（没存进去）
   await page.click("#pr-reload");
   await expect(page.locator("#pr-list tbody tr")).toHaveCount(1, { timeout: 15_000 });
+  const afterBad = await (await page.request.get("/api/price-rules")).json();
+  expect(
+    (afterBad.rules || []).map((r) => r.name),
+    "加急率越界的规则不该存进去",
+  ).toHaveLength(1);
 });
 
 test("计件工资：报工流水 → 按人汇总 → 回填工资表（幂等）", async ({ page }) => {
