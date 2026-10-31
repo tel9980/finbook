@@ -576,7 +576,7 @@ pub fn account_daily_report(
     // 期初快照与逐日行集必须同口径（H-3）：都按 posted_only 过滤
     let mut bq = BalanceQuery::range(from, to).with_posted_only(posted_only);
     if let Some(u) = scope {
-        bq = bq.with_user_scope(u);
+        bq = bq.with_user_scope(u).with_dept_scope(u);
     }
     let snap = BalanceSnapshot::load(db, &bq)?;
     let begin = snap.for_account(code, None).begin;
@@ -596,6 +596,10 @@ pub fn account_daily_report(
         vec![Box::new(from.ymm()), Box::new(to.ymm()), Box::new(pattern)];
     if let Some(u) = scope {
         crate::push_report_scope(&mut sql, &mut params, &u.data_scope, &u.username);
+        // 日报表是账簿口径：与期初快照一致地按部门收窄（凭证列表同一条判定）
+        if let Some(c) = crate::balances::dept_scope_cond("e", &u.data_scope.depts, &mut params) {
+            sql.push_str(&format!(" AND {c}"));
+        }
     }
     sql.push_str(" ORDER BY v.date");
     let mut stmt = db.conn().prepare(&sql)?;

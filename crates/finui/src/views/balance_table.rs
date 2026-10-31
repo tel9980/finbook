@@ -132,7 +132,9 @@ impl BalanceTableView {
                 if ct.is_empty() { None } else { Some(ct) },
             );
         }
-        // 数据范围（科目范围 + 仅本人凭证）：与用户手动选择取交集
+        // 数据范围（科目范围 + 仅本人凭证）：与用户手动选择取交集。
+        // 余额表不带部门——它是公司级控制表，收窄后借贷必然不平（对方分录不挂部门），
+        // 部门口径请看明细账 / 多维损益。
         q = q.with_user_scope(ctx.user());
 
         match BalanceSnapshot::load(ctx.db(), &q) {

@@ -361,8 +361,10 @@ impl FundsView {
                     prepared_by: None,
                     code_from: None,
                     code_to: None,
+                    dept_scope: Vec::new(),
                 }
-                .with_user_scope(ctx.user());
+                .with_user_scope(ctx.user())
+                .with_dept_scope(ctx.user());
                 let rows = findb::balances::journal(ctx.db(), ctx.chart(), &q).unwrap_or_default();
                 let mut sh = crate::views::export::Sheet::new(
                     "出纳日记账",
@@ -1286,8 +1288,10 @@ impl FundsView {
             prepared_by: None,
             code_from: None,
             code_to: None,
+            dept_scope: Vec::new(),
         }
-        .with_user_scope(ctx.user());
+        .with_user_scope(ctx.user())
+        .with_dept_scope(ctx.user());
         let rows = findb::balances::journal(ctx.db(), ctx.chart(), &q).unwrap_or_default();
         let cleared = findb::funds::day_clear_dates(ctx.db(), &code, p.first_day(), p.last_day())
             .unwrap_or_default();

@@ -50,10 +50,9 @@ impl Chk {
     }
     /// 已知问题：照样打印实算结果，但不计入失败。
     ///
-    /// 目前只有一条：「报表不按部门过滤」。凭证列表按部门过滤（`DataScope.depts`
-    /// 下推到 SQL），而明细账/余额表的 `with_user_scope` 完全没看 depts，
-    /// 于是部门会计在凭证里看不到别部门的凭证、在余额表里却看得到别部门的金额。
-    /// 改哪一边（过滤 or 明确标成「全公司口径」）要产品定，先摆在这里。
+    /// 目前**没有**已知问题（v1.8.61 把部门口径定案后全部转正）。留着这个出口是因为
+    /// 体检脚本的价值就在「把还没定论的事摆出来而不是让它变绿」：写新检查时如果发现
+    /// 的产品问题不该由这一次改，就用它挂着，并在此处写清挂的是什么、等谁定。
     fn known(&mut self, cond: bool, label: &str, detail: String) {
         self.checks += 1;
         if cond {
@@ -363,6 +362,7 @@ fn main() {
             prepared_by: None,
             code_from: None,
             code_to: None,
+            dept_scope: Vec::new(),
         };
         let rows = findb::balances::ledger(&db, &chart, &lq).unwrap();
         let ldebit: Money = rows.iter().fold(Money::ZERO, |s, r| s + r.debit);
@@ -417,8 +417,11 @@ fn main() {
         prepared_by: None,
         code_from: None,
         code_to: None,
+        dept_scope: Vec::new(),
     }
-    .with_user_scope(&dept_user);
+    .with_user_scope(&dept_user)
+    // v1.8.62：明细账按部门收窄（与凭证列表同一条判定）
+    .with_dept_scope(&dept_user);
     let ledger_rows = findb::balances::ledger(&db, &chart, &lq).unwrap();
     let ledger_debit: Money = ledger_rows.iter().fold(Money::ZERO, |s, r| s + r.debit);
 
@@ -451,7 +454,7 @@ fn main() {
         truth.fmt_plain(),
         all_dept.fmt_plain()
     );
-    c.known(
+    c.ok(
         ledger_debit == truth,
         "B2 明细账只含本部门分录",
         format!(
@@ -460,13 +463,15 @@ fn main() {
             truth.fmt_plain()
         ),
     );
-    c.known(
-        bal_debit == truth,
-        "B3 科目余额表只含本部门发生额",
+    // 余额表/试算是**公司级控制表**，故意不按部门收窄：真实凭证的对方分录
+    // （银行/往来）不挂部门，收窄后一张本来平衡的表会算成不平。
+    c.ok(
+        bal_debit == all_dept,
+        "B3 科目余额表保持公司口径（按设计，不是越权）",
         format!(
-            "余额表 {} / 真值 {}",
+            "余额表 {} / 全公司真值 {}",
             bal_debit.fmt_plain(),
-            truth.fmt_plain()
+            all_dept.fmt_plain()
         ),
     );
 

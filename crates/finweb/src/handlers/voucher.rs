@@ -777,8 +777,10 @@ pub(super) async fn print_ledger_form(
         prepared_by: None,
         code_from: None,
         code_to: None,
+        dept_scope: Vec::new(),
     }
-    .with_user_scope(&user.user);
+    .with_user_scope(&user.user)
+    .with_dept_scope(&user.user);
     let acct = chart
         .get(&code)
         .map(|a| format!("{} {}", code, a.name))
@@ -787,7 +789,9 @@ pub(super) async fn print_ledger_form(
     // 期初余额
     let snap = BalanceSnapshot::load(
         &db,
-        &BalanceQuery::range(from, from).with_user_scope(&user.user),
+        &BalanceQuery::range(from, from)
+            .with_user_scope(&user.user)
+            .with_dept_scope(&user.user),
     )?;
     let (bd, bamt) = fincore::signed_to_dir_amount(snap.for_account(&code, None).begin);
     let begin_dir = if bamt.is_zero() {

@@ -2270,12 +2270,26 @@ async fn voucher_page_total_respects_dept_scope() {
                 ))
                 .await
                 .unwrap();
+            let status = resp.status();
+            let body = body_string(resp).await;
             assert_eq!(
-                resp.status(),
+                status,
                 StatusCode::OK,
-                "{label} 第 {k} 张应保存成功：{}",
-                body_string(resp).await
+                "{label} 第 {k} 张应保存成功：{body}"
             );
+            let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+                .as_i64()
+                .expect("保存应返回凭证 id");
+            // 明细账/余额表默认只算已记账凭证（posted_only=true），不记账查到的是空表
+            let resp = handlers::router(state.clone())
+                .oneshot(authed_post(
+                    &format!("/api/vouchers/{id}/post"),
+                    &sid,
+                    serde_json::json!({}),
+                ))
+                .await
+                .unwrap();
+            assert_ok(resp, &format!("{label} 第 {k} 张应记账成功")).await;
         }
     }
 
@@ -2352,6 +2366,61 @@ async fn voucher_page_total_respects_dept_scope() {
         assert_ne!(it["summary"], "D02", "别的部门那批不该出现");
     }
     assert_eq!(money_num(scoped["debit_total"].as_str().unwrap()), 600.0);
+
+    // ── 账簿口径 vs 汇总口径（v1.8.62 定案）──────────────────────────
+    // 明细账/总账是「逐笔」类入口，和凭证列表同粒度，必须一起收窄；
+    // 科目余额表/试算是公司级控制表，一直全公司——按部门收窄会把一张平表算成不平：
+    // 真实凭证的对方分录（银行/往来）不挂部门，只有费用侧挂。
+    // /api/ledger 直接返回数组
+    let ledger = get_json(
+        &state,
+        &sid2,
+        "/api/ledger?code=660201&from=202601&to=202601",
+    )
+    .await;
+    let rows = ledger.as_array().expect("明细账应返回数组").clone();
+    // 本部门 3 笔 + 没打标签 3 笔（无标签按「全公司」放行）= 6，D02 那批必须消失
+    assert_eq!(
+        rows.len(),
+        6,
+        "部门会计在 660201 的明细账应收窄为本部门 + 无标签：{ledger}"
+    );
+    let d01 = rows
+        .iter()
+        .filter(|r| r["aux"]["dept"].as_str() == Some("D01"))
+        .count();
+    assert_eq!(d01, 3, "本部门那 3 笔必须在：{ledger}");
+    for r in &rows {
+        assert_ne!(r["summary"], "D02", "别的部门那批不该出现在明细账：{r}");
+    }
+    let admin_ledger = get_json(
+        &state,
+        &sid,
+        "/api/ledger?code=660201&from=202601&to=202601",
+    )
+    .await;
+    assert_eq!(
+        admin_ledger.as_array().unwrap().len(),
+        9,
+        "管理员明细账应含全部 9 笔"
+    );
+
+    let tb = get_json(
+        &state,
+        &sid2,
+        "/api/reports/trial-balance?from=202601&to=202601",
+    )
+    .await;
+    assert_eq!(
+        tb["totals"]["debit"], tb["totals"]["credit"],
+        "余额表/试算必须保持公司口径且借贷平衡：{}",
+        tb["totals"]
+    );
+    assert_eq!(
+        tb["totals"]["debit"], "900.00",
+        "余额表不该按部门收窄（公司口径 9 张 × 100）：{}",
+        tb["totals"]
+    );
 }
 
 /// 采购暂估自动出凭证：登记（借存货/贷应付-供应商）+ 冲回反向 + 幂等。
@@ -5046,4 +5115,14 @@ async fn backup_download_excludes_other_books_attachments() {
     );
     assert_eq!(attachments[0], a_data.as_bytes());
     assert_ne!(attachments[0], b_data.as_bytes());
+}
+
+/// GET 一个端点并解析 JSON（失败即报错，带响应体）。
+async fn get_json(state: &Arc<WebState>, sid: &str, path: &str) -> serde_json::Value {
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(path, sid))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "GET {path} 应 200");
+    serde_json::from_str(&body_string(resp).await).unwrap()
 }

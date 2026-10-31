@@ -48,6 +48,16 @@ pub struct BalanceQuery {
     pub exclude_carry: bool,
     /// 只统计某人填制的凭证（数据范围 own_voucher_only）
     pub prepared_by: Option<String>,
+    /// 部门数据范围（`DataScope.depts`，由 `with_dept_scope` 填充）。
+    ///
+    /// **只有「逐笔」类账簿开它**（明细账 / 总账 / 日记账 / 日报表）：这些入口
+    /// 和凭证列表是同一个粒度，收窄后部门会计看到的和凭证列表一模一样。
+    ///
+    /// 汇总类**一律不开**：科目余额表、试算平衡、资产负债表/利润表/现金流量表。
+    /// 原因是硬性的——真实凭证的对方分录（银行、往来）不挂部门，只有费用侧挂在
+    /// 部门上；把两侧都按部门收窄，一张本来平衡的表会算成「借方 400 / 贷方 600」。
+    /// 汇总口径按全公司出，部门口径看明细账与多维损益（`mgmt::dim_profit`）。
+    pub dept_scope: Vec<String>,
 }
 
 impl BalanceQuery {
@@ -63,6 +73,7 @@ impl BalanceQuery {
             max_level: None,
             posted_only: true,
             prepared_by: None,
+            dept_scope: Vec::new(),
             exclude_carry: false,
         }
     }
@@ -127,6 +138,9 @@ impl BalanceQuery {
 
     /// 套用用户完整数据范围：科目区间 + "仅本人填制的凭证"。
     /// 报表/账簿统一用它，避免"配置了范围却看到全量"的静默越权。
+    ///
+    /// **故意不包含部门**：报表（资产负债表/利润表/现金流量表）必须保持公司口径
+    /// 才能平衡、才是法定口径。要按部门收窄的**账簿**请再调一次 `with_dept_scope`。
     pub fn with_user_scope(mut self, user: &fincore::user::User) -> Self {
         let own = user.data_scope.own_voucher_only;
         self = self.with_data_scope(&user.data_scope);
@@ -135,6 +149,49 @@ impl BalanceQuery {
         }
         self
     }
+
+    /// 账簿专用：把部门数据范围收窄到用户能看的部门。
+    ///
+    /// 口径与凭证列表一致——**没打部门标签的分录按「全公司」放行**
+    /// （`DataScope::allows_dept("")` 恒真）。不放行的话，一张没选部门的
+    /// 房租凭证会从所有部门会计的账上消失，借方有贷方没有，账面立刻不平。
+    pub fn with_dept_scope(mut self, user: &fincore::user::User) -> Self {
+        self.dept_scope = user.data_scope.depts.clone();
+        self
+    }
+}
+
+/// 部门数据范围的 SQL 条件（不含前导 `AND`，供三处账簿 SQL 共用）。
+///
+/// 判定与凭证列表下推（`vouchers::build_where`）同一条：
+/// 「分录没有部门标签」或「部门在允许列表里」。`aux_key` 形如
+/// `\x1fdept=D01\x1f客户=C001\x1f`，找部门片段靠定界符包夹，不会把
+/// 部门码 `D01` 误配到 `D010`。
+pub(crate) fn dept_scope_cond(
+    alias: &str,
+    depts: &[String],
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+) -> Option<String> {
+    if depts.is_empty() {
+        return None;
+    }
+    params.push(Box::new("%\u{1f}dept=%".to_string()));
+    let mut out = format!(
+        "((char(31) || {alias}.aux_key || char(31)) NOT LIKE ?{}",
+        params.len()
+    );
+    for d in depts {
+        params.push(Box::new(format!(
+            "%\u{1f}dept={}\u{1f}%",
+            crate::escape_like(d)
+        )));
+        out.push_str(&format!(
+            " OR (char(31) || {alias}.aux_key || char(31)) LIKE ?{}",
+            params.len()
+        ));
+    }
+    out.push(')');
+    Some(out)
 }
 
 /// 某一时点的余额快照。加载一次，多处复用。
@@ -192,7 +249,7 @@ impl BalanceSnapshot {
     /// 所以宁可把整个 BalanceQuery 都摊进来。
     fn cache_key(db: &Db, q: &BalanceQuery, start: Period) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             start.ymm(),
             q.from.ymm(),
             q.to.ymm(),
@@ -207,6 +264,7 @@ impl BalanceSnapshot {
             q.max_level.map(|v| v as i64).unwrap_or(-1),
             q.posted_only,
             q.exclude_carry,
+            q.dept_scope.join(","),
             format!(
                 "{}|{}",
                 q.prepared_by.as_deref().unwrap_or(""),
@@ -244,6 +302,9 @@ impl BalanceSnapshot {
             if let Some(t) = &q.code_to {
                 params.push(Box::new(t.clone()));
                 conds.push(format!("account_code <= ?{}", params.len()));
+            }
+            if let Some(c) = dept_scope_cond("begin_balance", &q.dept_scope, &mut params) {
+                conds.push(c);
             }
             if !conds.is_empty() {
                 sql.push_str(" WHERE ");
@@ -316,6 +377,9 @@ impl BalanceSnapshot {
             if let Some(who) = &q.prepared_by {
                 params.push(Box::new(who.clone()));
                 sql.push_str(&format!(" AND v.prepared_by = ?{}", params.len()));
+            }
+            if let Some(c) = dept_scope_cond("e", &q.dept_scope, &mut params) {
+                sql.push_str(&format!(" AND {c}"));
             }
             let mut stmt = db.conn().prepare(&sql)?;
             let refs: Vec<&dyn rusqlite::types::ToSql> =
@@ -1281,6 +1345,8 @@ pub struct LedgerQuery {
     /// 数据范围科目区间（由 with_user_scope 填充）
     pub code_from: Option<String>,
     pub code_to: Option<String>,
+    /// 部门数据范围（由 `with_dept_scope` 填充；账簿口径，理由见 `BalanceQuery::dept_scope`）
+    pub dept_scope: Vec<String>,
 }
 
 impl Default for LedgerQuery {
@@ -1298,6 +1364,7 @@ impl Default for LedgerQuery {
             prepared_by: None,
             code_from: None,
             code_to: None,
+            dept_scope: Vec::new(),
         }
     }
 }
@@ -1321,9 +1388,18 @@ impl LedgerQuery {
         self
     }
 
+    /// 账簿专用：按用户能看的部门收窄（口径见 `BalanceQuery::with_dept_scope`）
+    pub fn with_dept_scope(mut self, user: &fincore::user::User) -> Self {
+        self.dept_scope = user.data_scope.depts.clone();
+        self
+    }
+
     /// 数据范围是否为空（无任何限制）
     pub fn scope_unrestricted(&self) -> bool {
-        self.prepared_by.is_none() && self.code_from.is_none() && self.code_to.is_none()
+        self.prepared_by.is_none()
+            && self.code_from.is_none()
+            && self.code_to.is_none()
+            && self.dept_scope.is_empty()
     }
 }
 
@@ -1338,6 +1414,7 @@ pub fn ledger(db: &Db, chart: &Chart, q: &LedgerQuery) -> DbResult<Vec<LedgerRow
     bq.prepared_by = q.prepared_by.clone();
     bq.code_from = q.code_from.clone();
     bq.code_to = q.code_to.clone();
+    bq.dept_scope = q.dept_scope.clone();
     let snap = BalanceSnapshot::load(db, &bq)?;
     let mut running = snap.for_account(&q.code, q.aux.as_ref()).begin;
     let mut qty_running = snap
@@ -1382,6 +1459,9 @@ pub fn ledger(db: &Db, chart: &Chart, q: &LedgerQuery) -> DbResult<Vec<LedgerRow
     if let Some(t) = &q.code_to {
         params.push(Box::new(t.clone()));
         sql.push_str(&format!(" AND e.account_code <= ?{}", params.len()));
+    }
+    if let Some(c) = dept_scope_cond("e", &q.dept_scope, &mut params) {
+        sql.push_str(&format!(" AND {c}"));
     }
     sql.push_str(" ORDER BY v.date, v.word, v.no, e.line");
     let mut stmt = db.conn().prepare(&sql)?;
@@ -1464,6 +1544,7 @@ pub fn general_ledger(db: &Db, q: &LedgerQuery) -> DbResult<Vec<GeneralLedgerRow
     bq.prepared_by = q.prepared_by.clone();
     bq.code_from = q.code_from.clone();
     bq.code_to = q.code_to.clone();
+    bq.dept_scope = q.dept_scope.clone();
     let snap = BalanceSnapshot::load(db, &bq)?;
     let mut running = snap.for_account(&q.code, q.aux.as_ref()).begin;
 
@@ -1501,6 +1582,9 @@ pub fn general_ledger(db: &Db, q: &LedgerQuery) -> DbResult<Vec<GeneralLedgerRow
     if let Some(t) = &q.code_to {
         params.push(Box::new(t.clone()));
         sql.push_str(&format!(" AND e.account_code <= ?{}", params.len()));
+    }
+    if let Some(c) = dept_scope_cond("e", &q.dept_scope, &mut params) {
+        sql.push_str(&format!(" AND {c}"));
     }
     let mut stmt = db.conn().prepare(&sql)?;
     let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
@@ -1850,6 +1934,7 @@ mod tests {
             prepared_by: None,
             code_from: None,
             code_to: None,
+            dept_scope: Vec::new(),
         };
 
         // 仅已记账：只出行账，滚动余额与默认快照期末一致
@@ -2018,6 +2103,7 @@ mod tests {
                 prepared_by: None,
                 code_from: None,
                 code_to: None,
+                dept_scope: Vec::new(),
             },
         )
         .unwrap();
@@ -2060,6 +2146,7 @@ mod tests {
                 prepared_by: None,
                 code_from: None,
                 code_to: None,
+                dept_scope: Vec::new(),
             },
         )
         .unwrap();
@@ -2655,6 +2742,109 @@ mod drill_tests {
             Money::parse("85000").unwrap(),
             "净利润应为 85,000"
         );
+    }
+
+    /// 部门数据范围：账簿收窄、报表不收窄。
+    ///
+    /// 曾经的窟窿：`DataScope.depts` 只进了凭证列表，账簿照旧全公司合计——
+    /// 同一个部门会计，凭证列表里 192 张（看不到别部门），余额表却是三部门
+    /// 合计 238800（本部门真值 79600）。两个入口各说一套，谁也不敢用。
+    ///
+    /// 定案：**账簿（明细账/总账/日记账/余额表/日报表）按部门收窄，财务报表
+    /// 保持公司口径**——报表要平衡、要是法定口径，收窄到某个部门既不合法也不
+    /// 成立（资产科目根本不挂部门）。所以 `with_user_scope` 不动部门，
+    /// 需要收窄的账簿再调 `with_dept_scope`。
+    ///
+    /// 口径与凭证列表一致：没打部门标签的分录按「全公司」放行，否则一张没选
+    /// 部门的房租凭证会从所有部门会计的账上消失，借方有、贷方没有，账面立刻不平。
+    #[test]
+    fn dept_scope_narrows_ledgers_but_not_reports() {
+        use crate::{accounts, auxs, vouchers};
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let date = p.last_day();
+
+        let mut a = accounts::get(&db, "660201").unwrap().expect("660201 存在");
+        a.aux = fincore::AuxMask::NONE.with(AuxKind::Dept);
+        accounts::update(&db, &a).unwrap();
+        for (code, name) in [("D01", "生产部"), ("D02", "销售部")] {
+            auxs::insert(&db, &fincore::AuxEntity::new(AuxKind::Dept, code, name)).unwrap();
+        }
+
+        // 三笔费用：D01 100、D02 200、没选部门 300（都贷银行存款，银行不挂部门）
+        for (no, dept, amt) in [
+            (1, Some("D01"), "100"),
+            (2, Some("D02"), "200"),
+            (3, None, "300"),
+        ] {
+            let mut v = fincore::Voucher::new(p, date, "记", no);
+            let mut e = Entry::new(1, "660201", "费用");
+            e.debit = Money::parse(amt).unwrap();
+            e.aux.dept = dept.map(|d| d.to_string());
+            v.entries.push(e);
+            let mut e = Entry::new(2, "1001", "付款");
+            e.credit = Money::parse(amt).unwrap();
+            v.entries.push(e);
+            let mut v = v;
+            let id = vouchers::save(&db, &mut v).unwrap();
+            vouchers::post(&db, id, "t").unwrap();
+        }
+
+        let mut u =
+            fincore::user::User::new("dept_acc", "部门会计", fincore::user::Role::Accountant);
+        u.data_scope.depts = vec!["D01".to_string()];
+
+        // 报表口径（只 with_user_scope）：部门不生效，仍是全公司 600
+        let report =
+            BalanceSnapshot::load(&db, &BalanceQuery::period(p).with_user_scope(&u)).unwrap();
+        assert_eq!(
+            report.for_account("660201", None).debit,
+            Money::parse("600").unwrap(),
+            "财务报表必须保持公司口径"
+        );
+
+        // 账簿口径：本部门 100 + 没打标签的 300 = 400
+        let book = BalanceSnapshot::load(
+            &db,
+            &BalanceQuery::period(p)
+                .with_user_scope(&u)
+                .with_dept_scope(&u),
+        )
+        .unwrap();
+        assert_eq!(
+            book.for_account("660201", None).debit,
+            Money::parse("400").unwrap(),
+            "余额表应收窄到本部门（+ 无部门分录）"
+        );
+        // 汇总口径（余额表/试算）不带部门：全公司 600，两侧都全才平衡
+        let tb = report.trial_balance(&accounts::chart(&db).unwrap());
+        assert!(
+            tb.period_debit == tb.period_credit && tb.end_debit == tb.end_credit,
+            "全公司口径的试算必须平衡：{:?}",
+            tb
+        );
+
+        // 明细账：两行（D01 + 无部门），金额 100 / 300
+        let chart = accounts::chart(&db).unwrap();
+        let rows = ledger(
+            &db,
+            &chart,
+            &LedgerQuery {
+                code: "660201".to_string(),
+                from: p,
+                to: p,
+                ..Default::default()
+            }
+            .with_user_scope(&u)
+            .with_dept_scope(&u),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2, "明细账应收窄到本部门：{rows:?}");
+        let depts: Vec<String> = rows
+            .iter()
+            .map(|r| r.aux.dept.clone().unwrap_or_else(|| "无".into()))
+            .collect();
+        assert_eq!(depts, vec!["D01".to_string(), "无".to_string()]);
     }
 
     /// 挂了部门的损益／成本科目，结转必须**逐部门出行**并带上部门。

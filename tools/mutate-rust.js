@@ -1020,6 +1020,23 @@ const MUT = [
     cmd: ["test", "-p", "fincore", "--lib", "engine::validate::tests::dept_aux_is_optional"],
   },
   {
+    // 明细账不收窄部门：部门会计在凭证列表里看不到别部门，明细账里却看得见。
+    name: "㉟ 明细账不吃部门范围",
+    file: "crates/findb/src/balances.rs",
+    from: '    if let Some(c) = dept_scope_cond("e", &q.dept_scope, &mut params) {\n        sql.push_str(&format!(" AND {c}"));\n    }\n    sql.push_str(" ORDER BY v.date, v.word, v.no, e.line");',
+    to: '    sql.push_str(" ORDER BY v.date, v.word, v.no, e.line");',
+    cmd: ["test", "-p", "findb", "--lib", "balances::drill_tests::dept_scope_narrows_ledgers_but_not_reports"],
+  },
+  {
+    // 余额表也按部门收窄（我差点这么改）：借方本部门、贷方银行全公司，
+    // 一张本来平衡的表被算成不平，而且没人会觉得是权限问题。
+    name: "㉟ 余额表也按部门收窄（借贷不平）",
+    file: "crates/finweb/src/handlers.rs",
+    from: "    let bq = BalanceQuery::range(from, to).with_user_scope(&user.user);",
+    to: "    let bq = BalanceQuery::range(from, to)\n        .with_user_scope(&user.user)\n        .with_dept_scope(&user.user);",
+    cmd: ["test", "-p", "finweb", "--test", "api", "--", "voucher_page_total_respects_dept_scope"],
+  },
+  {
     // 部门只挂上级科目：default_accounts 会把非末级的 aux 清零，等于一条都没开。
     name: "㉞ 部门只挂在上级科目上",
     file: "crates/fincore/src/chart.rs",

@@ -1692,8 +1692,11 @@ fn ledger_query_from<'a>(
         prepared_by: None,
         code_from: None,
         code_to: None,
+        dept_scope: Vec::new(),
     }
-    .with_user_scope(&user.user);
+    .with_user_scope(&user.user)
+    // 账簿口径：部门会计只看本部门（+ 无部门标签）的分录，和凭证列表一致
+    .with_dept_scope(&user.user);
     Ok((db, chart, lq))
 }
 
@@ -1714,6 +1717,9 @@ fn trial_balance_data(
     // 与其它报表同一套校验：区间敲错 / 倒置都返回 400，不静默换一个区间
     // （理由与实测数据见 `state::period_param`）
     let (from, to) = period_range_param(q, start, current_period(state, user))?;
+    // 这里**不**带部门：科目余额表/试算平衡是公司级控制表，两侧都收窄才可能平，
+    // 而真实凭证的对方分录（银行/往来）根本不挂部门——收窄后必然「借方有、贷方没有」，
+    // 一张本来平衡的表被算成不平。部门口径看明细账或多维损益。
     let bq = BalanceQuery::range(from, to).with_user_scope(&user.user);
     let snap = BalanceSnapshot::load(&db, &bq)?;
     let chart = accounts::chart(&db)?;
