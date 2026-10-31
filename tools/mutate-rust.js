@@ -1037,6 +1037,15 @@ const MUT = [
     cmd: ["test", "-p", "finweb", "--test", "api", "--", "voucher_page_total_respects_dept_scope"],
   },
   {
+    // 折旧凭证要求必填部门：默认科目表给费用科目挂了部门之后，没填「使用部门」的卡片
+    // 就再也计提不了（E2E `#as-accrue` 直接 400，界面显示「本期已计提记录 0 条」）。
+    name: "㊱ 折旧凭证要求必填部门（没填部门就报错）",
+    file: "crates/findb/src/assets.rs",
+    from: '            AuxKind::Dept => {\n                if !dept.trim().is_empty() {\n                    e.aux.dept = Some(dept.to_string());\n                }\n            }',
+    to: '            AuxKind::Dept => {\n                if dept.trim().is_empty() {\n                    return Err(                    fincore::FinError::msg(format!("科目 {code} {} 要求核算部门", acct.name)).into());\n                }\n                e.aux.dept = Some(dept.to_string());\n            }',
+    cmd: ["test", "-p", "findb", "--lib", "assets::tests::dep_accrual_does_not_require_dept"],
+  },
+  {
     // 部门只挂上级科目：default_accounts 会把非末级的 aux 清零，等于一条都没开。
     name: "㉞ 部门只挂在上级科目上",
     file: "crates/fincore/src/chart.rs",

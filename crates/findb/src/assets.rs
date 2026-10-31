@@ -695,15 +695,13 @@ fn fill_dep_aux(chart: &Chart, e: &mut Entry, code: &str, dept: &str) -> DbResul
         .ok_or_else(|| fincore::FinError::msg(format!("科目 {code} 不存在，请先在科目表里维护")))?;
     for k in acct.aux.list() {
         match k {
+            // 部门是**可选**维度（见 `fincore::engine::validate`）：卡片没填「使用部门」
+            // 时按「全公司/未分配」入账，不能因此拒绝计提 —— 默认科目表给费用科目挂了
+            // 部门之后，若还要求必填，没填部门的卡片就再也计提不了折旧。
             AuxKind::Dept => {
-                if dept.trim().is_empty() {
-                    return Err(fincore::FinError::msg(format!(
-                        "科目 {code} {} 要求核算部门，请先填写资产卡片的「使用部门」",
-                        acct.name
-                    ))
-                    .into());
+                if !dept.trim().is_empty() {
+                    e.aux.dept = Some(dept.to_string());
                 }
-                e.aux.dept = Some(dept.to_string());
             }
             other => {
                 return Err(fincore::FinError::msg(format!(
@@ -1215,6 +1213,58 @@ mod tests {
             voucher_id: None,
             memo: String::new(),
         }
+    }
+
+    /// 默认科目表给费用科目挂了部门维度（`chart::apply_extras`），而部门是**可选**
+    /// 维度 —— 卡片没填「使用部门」时必须照样能计提，否则默认账套的固资模块直接用不了
+    /// （E2E 就是这么挂的：`本期已计提记录 0 条`，接口 400）。
+    #[test]
+    fn dep_accrual_does_not_require_dept() {
+        use crate::{accounts, auxs};
+        let db = tmpdb("dep_nodept");
+
+        let mut acct = accounts::get(&db, "660201").expect("660201 存在").unwrap();
+        acct.aux = fincore::AuxMask::NONE.with(AuxKind::Dept);
+        accounts::update(&db, &acct).unwrap();
+        auxs::insert(
+            &db,
+            &fincore::AuxEntity::new(AuxKind::Dept, "D01", "生产部"),
+        )
+        .unwrap();
+
+        let mut card = asset("GD9001", "12000", 12);
+        card.expense_account = "660201".into();
+        let id = insert(&db, &card).unwrap();
+
+        // ① 卡片没填使用部门：照常计提，分录不带部门
+        let p1 = Period::new(2026, 1).unwrap();
+        let res = depreciate_period(&db, p1, "t").expect("没填使用部门也应能计提");
+        assert_eq!(res.count, 1);
+        let v = crate::vouchers::get(&db, res.voucher_id.unwrap())
+            .unwrap()
+            .unwrap();
+        let e = v
+            .entries
+            .iter()
+            .find(|e| e.account_code == "660201")
+            .expect("借方费用分录");
+        assert!(e.aux.dept.is_none(), "没填部门就不该编一个出来：{e:?}");
+
+        // ② 填了使用部门：照旧带上（不能因为放宽 ① 就把 ② 弄丢）
+        let mut card = get(&db, id).unwrap().unwrap();
+        card.dept = "D01".into();
+        update(&db, &card).unwrap();
+        let p2 = Period::new(2026, 2).unwrap();
+        let res = depreciate_period(&db, p2, "t").expect("填了部门也应能计提");
+        let v = crate::vouchers::get(&db, res.voucher_id.unwrap())
+            .unwrap()
+            .unwrap();
+        let e = v
+            .entries
+            .iter()
+            .find(|e| e.account_code == "660201")
+            .expect("借方费用分录");
+        assert_eq!(e.aux.dept.as_deref(), Some("D01"));
     }
 
     #[test]
