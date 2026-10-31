@@ -182,6 +182,43 @@ impl FinBookApp {
                     views.data_changed(crate::state::DataKind::User);
                 }
             }
+            ConfirmAction::DeleteConsignDoc(id) => {
+                if !ctx.can(Perm::OrderOps) {
+                    ctx.error(format!("没有「{}」权限", Perm::OrderOps.label()));
+                    return;
+                }
+                // 单据不占期间结账，删错了只能重新登记——所以走统一确认框
+                let r = findb::consign::doc_delete(ctx.db(), id);
+                if ctx.handle(r).is_some() {
+                    ctx.log("客供料", "删除单据", &format!("单据 #{id}"));
+                    ctx.info("已删除客供料单据");
+                    views.consign.invalidate();
+                }
+            }
+            ConfirmAction::DeletePriceRule(id) => {
+                if !ctx.can(Perm::PriceEdit) {
+                    ctx.error(format!("没有「{}」权限", Perm::PriceEdit.label()));
+                    return;
+                }
+                let r = findb::processfee::rule_delete(ctx.db(), id);
+                if ctx.handle(r).is_some() {
+                    ctx.log("加工费", "删除规则", &format!("规则 #{id}"));
+                    ctx.info("已删除规则");
+                    views.price_rules.invalidate();
+                }
+            }
+            ConfirmAction::DeletePieceRate(id) => {
+                if !ctx.can(Perm::ProductionOps) {
+                    ctx.error(format!("没有「{}」权限", Perm::ProductionOps.label()));
+                    return;
+                }
+                let r = findb::piecepay::rate_delete(ctx.db(), id);
+                if ctx.handle(r).is_some() {
+                    ctx.log("工资", "删除计件单价", &format!("单价 #{id}"));
+                    ctx.info("已删除计件单价");
+                    views.piece_pay.invalidate();
+                }
+            }
             ConfirmAction::CarryForward(p) => {
                 views.period_end.run_carry_forward(&mut ctx, p);
                 views.data_changed(crate::state::DataKind::Voucher);

@@ -32,6 +32,7 @@ pub mod options;
 pub mod overview;
 pub mod payroll;
 pub mod period_end;
+pub mod process;
 pub mod reports;
 pub mod scm_deep;
 pub mod security;
@@ -82,6 +83,9 @@ pub struct Views {
     pub budget_analysis: funds::BudgetAnalysisView,
     pub funds: funds::FundsView,
     pub cost: funds::CostView,
+    pub consign: process::ConsignView,
+    pub price_rules: process::PriceRulesView,
+    pub piece_pay: process::PiecePayView,
     pub dim_profit: dim_profit::DimProfitView,
     pub multi_column: advanced::MultiColumnView,
     pub summary_table: advanced::SummaryTableView,
@@ -137,6 +141,9 @@ impl Views {
         self.budget_analysis.invalidate();
         self.funds.invalidate();
         self.cost.invalidate();
+        self.consign.invalidate();
+        self.price_rules.invalidate();
+        self.piece_pay.invalidate();
         self.dim_profit.invalidate();
         self.multi_column.invalidate();
         self.summary_table.invalidate();
@@ -245,6 +252,9 @@ impl Views {
                 NavItem::BudgetAnalysis => self.budget_analysis.invalidate(),
                 NavItem::Funds => self.funds.invalidate(),
                 NavItem::Cost => self.cost.invalidate(),
+                NavItem::Consign => self.consign.enter(ctx),
+                NavItem::PriceRules => self.price_rules.enter(ctx),
+                NavItem::PiecePay => self.piece_pay.enter(ctx),
                 NavItem::DimProfit => self.dim_profit.enter(ctx),
                 NavItem::MultiColumn => self.multi_column.enter(ctx),
                 NavItem::SummaryTable => self.summary_table.enter(ctx),
@@ -305,6 +315,9 @@ impl Views {
             NavItem::BudgetAnalysis => self.budget_analysis.show(ctx, ui),
             NavItem::Funds => self.funds.show(ctx, ui),
             NavItem::Cost => self.cost.show(ctx, ui),
+            NavItem::Consign => self.consign.show(ctx, ui),
+            NavItem::PriceRules => self.price_rules.show(ctx, ui),
+            NavItem::PiecePay => self.piece_pay.show(ctx, ui),
             NavItem::DimProfit => self.dim_profit.show(ctx, ui),
             NavItem::MultiColumn => self.multi_column.show(ctx, ui),
             NavItem::SummaryTable => self.summary_table.show(ctx, ui),

@@ -1152,12 +1152,21 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "piecepay::tests::计件工资按期间汇总到人"],
   },
   {
-    // 回填重复加钱：应发已经不低于计件额也照样再算一遍，跑两次发两份。
+    // 回填重复加钱：应发已经不低于计件额也照样再算一遍，跑两次发两份；
+    // 底薪场景更糟——会把 500 的应发压到计件的 100。
+    // v1.8.64 起这段判据搬进了 findb::piecepay::fill_one（网页与桌面共用），
+    // 变异随之改锚到这里，否则改了半天界面层，数据层还照旧能重复加钱。
     name: "㊳ 计件回填不判已有应发（重复加钱）",
-    file: "crates/finweb/src/handlers/piecepay.rs",
-    from: '        if gross >= p.amount {',
-    to: '        if false {',
-    cmd: ["test", "-p", "finweb", "--test", "api", "--", "piece_work_fills_payroll"],
+    file: "crates/findb/src/piecepay.rs",
+    from: '    if gross >= p.amount {',
+    to: '    if false {',
+    cmd: [
+      "test",
+      "-p",
+      "findb",
+      "--lib",
+      "piecepay::tests::计件回填保留比计件额高的应发",
+    ],
   },
 ];
 

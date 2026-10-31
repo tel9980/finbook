@@ -15,7 +15,7 @@
 //! 匹配不到的行**照旧列出来**（`matched=false`、金额 0），让人看得见
 //! 「这几道工序没有单价」，而不是静默丢掉——丢掉的工时就是少发的工资。
 
-use fincore::{FinError, Money};
+use fincore::{FinError, Money, Period};
 use std::collections::HashMap;
 
 use crate::{Db, DbResult};
@@ -289,8 +289,8 @@ pub fn compute(db: &Db, period: i32) -> DbResult<Vec<PiecePay>> {
                 bucket.len() - 1
             }
         };
-        bucket[i].qty = bucket[i].qty + log.qty;
-        bucket[i].amount = bucket[i].amount + amount;
+        bucket[i].qty += log.qty;
+        bucket[i].amount += amount;
         bucket[i].lines.push(line);
     }
     bucket.sort_by(|a, b| a.employee.cmp(&b.employee));
@@ -305,6 +305,86 @@ pub fn amount_of(db: &Db, period: i32, employee: &str) -> DbResult<Money> {
         .find(|p| p.employee == who)
         .map(|p| p.amount)
         .unwrap_or(Money::ZERO))
+}
+
+/// 一次回填的结果（一个人）
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PieceFill {
+    pub employee: String,
+    pub qty: Money,
+    /// 本期的计件金额
+    pub piece: Money,
+    /// 回填前的应发
+    pub before: Money,
+    /// 回填后的应发
+    pub after: Money,
+}
+
+/// 把一个人的计件额回填进工资表
+///
+/// 口径只有一条：**应发低于计件额时才抬到计件额**。工资表上的应发可能是
+/// 「底薪 + 计件」或者手工调过的数，无条件覆盖会把底薪抹掉；而不覆盖又会让
+/// 纯计件的工人漏发。所以只向上补，返回 `None` 表示不用动。
+///
+/// 抬应发之后必须重算社保与个税（走 `business::payroll_calc`），并且要过
+/// `payroll_upsert` 的结账闸门——已结账月份不许再改工资表。
+pub fn fill_one(db: &Db, period: Period, p: &PiecePay) -> DbResult<Option<PieceFill>> {
+    let old = crate::business::payroll_get(db, period, &p.employee)?;
+    let (dept, gross, social, housing, deduction, additional, social_co, housing_co, memo) =
+        match &old {
+            Some(o) => (
+                o.dept.clone(),
+                o.gross,
+                o.social,
+                o.housing,
+                o.deduction,
+                o.additional,
+                o.social_co,
+                o.housing_co,
+                o.memo.clone(),
+            ),
+            None => (
+                String::new(),
+                Money::ZERO,
+                Money::ZERO,
+                Money::ZERO,
+                Money::ZERO,
+                Money::ZERO,
+                Money::ZERO,
+                Money::ZERO,
+                String::new(),
+            ),
+        };
+    if gross >= p.amount {
+        return Ok(None);
+    }
+    let memo = if memo.trim().is_empty() {
+        format!("计件 {} 件 / {}", p.qty, p.amount)
+    } else {
+        format!("{}｜计件 {}", memo, p.amount)
+    };
+    let row = crate::business::payroll_calc(
+        db,
+        period,
+        &p.employee,
+        &dept,
+        p.amount,
+        social,
+        housing,
+        deduction,
+        additional,
+        social_co,
+        housing_co,
+        &memo,
+    )?;
+    crate::business::payroll_upsert(db, &row)?;
+    Ok(Some(PieceFill {
+        employee: p.employee.clone(),
+        qty: p.qty,
+        piece: p.amount,
+        before: gross,
+        after: row.gross,
+    }))
 }
 
 #[cfg(test)]
@@ -432,5 +512,78 @@ mod tests {
         assert_eq!(pays[0].qty, m("150"), "数量照旧全算");
         assert!(!pays[0].lines[1].matched);
         assert_eq!(pays[0].lines[1].rate, Money::ZERO);
+    }
+    #[test]
+    fn 计件回填只向上补并重算个税() {
+        let db = crate::tests::mem();
+        let mut r = PieceRate {
+            item_code: "MB03".to_string(),
+            op_name: "氧化".to_string(),
+            rate: m("1.5"),
+            ..Default::default()
+        };
+        rate_save(&db, &mut r).unwrap();
+        log_add(&db, &log(901, "MB03", "氧化", "李四", 202611, "100")).unwrap();
+
+        let p = Period::from_ymm(202611);
+        let pays = compute(&db, 202611).unwrap();
+        assert_eq!(pays.len(), 1);
+        assert_eq!(pays[0].amount, m("150"));
+
+        let f = fill_one(&db, p, &pays[0])
+            .unwrap()
+            .expect("应发 0 < 150，要回填");
+        assert_eq!(f.before, Money::ZERO);
+        assert_eq!(f.after, m("150"));
+        let row = crate::business::payroll_get(&db, p, "李四")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.gross, m("150"));
+        // 个税按 150 重算：低于起征点，应交 0
+        assert_eq!(row.tax, Money::ZERO);
+        assert!(row.net == m("150"));
+
+        // 再回填一次：应发已不低于计件额，不动（否则会重复加钱）
+        assert!(fill_one(&db, p, &pays[0]).unwrap().is_none());
+    }
+
+    #[test]
+    fn 计件回填保留比计件额高的应发() {
+        let db = crate::tests::mem();
+        let mut r = PieceRate {
+            item_code: "MB04".to_string(),
+            op_name: "包装".to_string(),
+            rate: m("2"),
+            ..Default::default()
+        };
+        rate_save(&db, &mut r).unwrap();
+        log_add(&db, &log(902, "MB04", "包装", "王五", 202611, "50")).unwrap();
+
+        let p = Period::from_ymm(202611);
+        // 底薪 500 已经在工资表里
+        let seed = crate::business::payroll_calc(
+            &db,
+            p,
+            "王五",
+            "",
+            m("500"),
+            Money::ZERO,
+            Money::ZERO,
+            Money::ZERO,
+            Money::ZERO,
+            Money::ZERO,
+            Money::ZERO,
+            "底薪",
+        )
+        .unwrap();
+        crate::business::payroll_upsert(&db, &seed).unwrap();
+
+        let pays = compute(&db, 202611).unwrap();
+        assert_eq!(pays[0].amount, m("100"));
+        assert!(fill_one(&db, p, &pays[0]).unwrap().is_none());
+        let row = crate::business::payroll_get(&db, p, "王五")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.gross, m("500"), "不能把底薪压到计件额");
     }
 }

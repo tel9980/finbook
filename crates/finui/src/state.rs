@@ -62,6 +62,12 @@ pub enum NavItem {
     BudgetAnalysis,
     /// 成本核算（计价方式配置、期末结价）
     Cost,
+    /// 客供料台账（受托加工：客户来料只记数量）
+    Consign,
+    /// 加工费规则（面积/件计价、最低收费、加急费）
+    PriceRules,
+    /// 计件工资（工序报工完工量 × 计件单价）
+    PiecePay,
     /// 自定义报表
     CustomReport,
     /// 多栏账
@@ -127,6 +133,9 @@ impl NavItem {
             NavItem::Funds => "资金管理".to_string(),
             NavItem::BudgetAnalysis => "预算分析".to_string(),
             NavItem::Cost => "成本核算".to_string(),
+            NavItem::Consign => "客供料台账".to_string(),
+            NavItem::PriceRules => "加工费规则".to_string(),
+            NavItem::PiecePay => "计件工资".to_string(),
             NavItem::CustomReport => "自定义报表".to_string(),
             NavItem::MultiColumn => "多栏账".to_string(),
             NavItem::SummaryTable => "摘要汇总表".to_string(),
@@ -210,7 +219,10 @@ impl NavItem {
             | NavItem::ScmDeep
             | NavItem::Payroll
             | NavItem::Claims
-            | NavItem::Manufacturing => "业务",
+            | NavItem::Manufacturing
+            | NavItem::Consign
+            | NavItem::PriceRules
+            | NavItem::PiecePay => "业务",
             NavItem::Approval | NavItem::Archive => "系统",
             NavItem::Budget
             | NavItem::BudgetAlerts
@@ -317,6 +329,9 @@ impl NavItem {
             NavItem::DimProfit,
             NavItem::Funds,
             NavItem::Cost,
+            NavItem::Consign,
+            NavItem::PriceRules,
+            NavItem::PiecePay,
             NavItem::Users,
             NavItem::Security,
             NavItem::Options,
@@ -368,6 +383,12 @@ pub enum ConfirmAction {
     DeleteAux(i64),
     /// 删除期初行
     DeleteBegin(i64),
+    /// 删除客供料单据
+    DeleteConsignDoc(i64),
+    /// 删除加工费规则
+    DeletePriceRule(i64),
+    /// 删除计件单价
+    DeletePieceRate(i64),
     /// 期末结转损益
     CarryForward(Period),
     /// 期末结账

@@ -111,84 +111,43 @@ pub(super) async fn piece_fill(
         if !p.amount.is_positive() {
             continue;
         }
+        // 数据范围先拦：不在范围内的人不该被这双手改写工资表
         if !doc_in_scope(&user, &p.employee) {
             skipped.push(json!({ "employee": p.employee, "reason": "不在数据范围内" }));
             continue;
         }
-        let old = business::payroll_get(db, period, &p.employee)?;
-        let (dept, gross, social, housing, deduction, additional, social_co, housing_co, memo) =
-            match &old {
-                Some(o) => (
-                    o.dept.clone(),
-                    o.gross,
-                    o.social,
-                    o.housing,
-                    o.deduction,
-                    o.additional,
-                    o.social_co,
-                    o.housing_co,
-                    o.memo.clone(),
-                ),
-                None => (
-                    String::new(),
-                    Money::ZERO,
-                    Money::ZERO,
-                    Money::ZERO,
-                    Money::ZERO,
-                    Money::ZERO,
-                    Money::ZERO,
-                    Money::ZERO,
-                    String::new(),
-                ),
-            };
+        let dept = business::payroll_get(db, period, &p.employee)?
+            .map(|o| o.dept)
+            .unwrap_or_default();
         if !user.user.data_scope.allows_dept(&dept) {
             skipped.push(json!({ "employee": p.employee, "reason": "部门不在数据范围内" }));
             continue;
         }
-        if gross >= p.amount {
-            // 工资表上已经比计件额高（比如底薪 + 计件），不往下调
-            skipped.push(json!({ "employee": p.employee, "reason": "应发已不低于计件额" }));
-            continue;
+        // 算钱与写库都留在 findb：Web 与桌面端共用一份，别在界面层重写一遍
+        match findb::piecepay::fill_one(db, period, &p)? {
+            Some(f) => {
+                db.log(
+                    user.username(),
+                    "工资",
+                    "计件回填",
+                    &format!(
+                        "{} {} 应发 {} → {}",
+                        period.label(),
+                        f.employee,
+                        f.before,
+                        f.after
+                    ),
+                )?;
+                filled.push(json!({
+                    "employee": f.employee,
+                    "qty": f.qty,
+                    "piece": f.piece,
+                    "before": f.before,
+                    "after": f.after,
+                }));
+            }
+            None => skipped.push(json!({ "employee": p.employee, "reason": "应发已不低于计件额" })),
         }
-        let memo = if memo.trim().is_empty() {
-            format!("计件 {} 件 / {}", p.qty, p.amount)
-        } else {
-            format!("{}｜计件 {}", memo, p.amount)
-        };
-        let new_row = business::payroll_calc(
-            db,
-            period,
-            &p.employee,
-            &dept,
-            p.amount,
-            social,
-            housing,
-            deduction,
-            additional,
-            social_co,
-            housing_co,
-            &memo,
-        )?;
-        business::payroll_upsert(db, &new_row)?;
-        db.log(
-            user.username(),
-            "工资",
-            "计件回填",
-            &format!(
-                "{} {} 应发 {} → {}",
-                period.label(),
-                p.employee,
-                gross,
-                new_row.gross
-            ),
-        )?;
-        filled.push(json!({
-            "employee": p.employee,
-            "qty": p.qty,
-            "piece": p.amount,
-            "before": gross,
-            "after": new_row.gross,
-        }));
     }
     Ok(Json(
         json!({ "period": period_to_str(period), "filled": filled, "skipped": skipped }),
