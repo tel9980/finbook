@@ -217,9 +217,10 @@ pub struct AuxPreset {
 /// **只预置「任何公司都成立」的条目**，见 `all_preset_aux` 的注释。
 pub fn preset_aux(kind: AuxKind) -> Vec<AuxPreset> {
     match kind {
-        // 6601 销售费用 / 6602 管理费用 / 6603 财务费用 三个科目的
-        // aux 都是 Dept，validate_entry 又要求「必须填写」——
-        // 没有部门档案就一行费用都记不了。这三个部门任何公司都有。
+        // 6601 销售费用 / 6602 管理费用 / 6603 财务费用 这三个科目的末级
+        // 默认都挂 Dept（部门是**可选**维度，不填按「未分配」计）。
+        // 预置三个任何公司都有的部门，用户点一下就能按部门看费用，
+        // 不用先去档案里一个个建。
         AuxKind::Dept => vec![
             AuxPreset {
                 kind: AuxKind::Dept,

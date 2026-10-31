@@ -245,8 +245,21 @@ fn apply_extras(a: &mut Account) {
             a.has_qty = true;
             a.unit = Some("个".to_string());
         }
-        "5001" | "5101" => a.aux = AuxMask::NONE.with(AuxKind::Dept),
-        "6601" | "6602" | "6603" => a.aux = AuxMask::NONE.with(AuxKind::Dept),
+        "5001" | "500101" | "500102" | "500103" | "500104" => {
+            a.aux = AuxMask::NONE.with(AuxKind::Dept)
+        }
+        "5101" | "510101" | "510102" | "510103" | "510104" | "510105" => {
+            a.aux = AuxMask::NONE.with(AuxKind::Dept)
+        }
+        "6601" | "660101" | "660102" | "660103" | "660104" | "660105" | "660106" | "660107"
+        | "660108" | "660109" => a.aux = AuxMask::NONE.with(AuxKind::Dept),
+        "6602" | "660201" | "660202" | "660203" | "660204" | "660205" | "660206" | "660207"
+        | "660208" | "660209" | "660210" | "660211" | "660212" => {
+            a.aux = AuxMask::NONE.with(AuxKind::Dept)
+        }
+        "6603" | "660301" | "660302" | "660303" | "660304" | "660305" => {
+            a.aux = AuxMask::NONE.with(AuxKind::Dept)
+        }
         _ => {}
     }
     a.cash_flow_item = default_cash_flow_item(code);
@@ -393,6 +406,35 @@ mod tests {
         for parent in ["1002", "6001", "6601", "6602", "6603", "4104", "5001"] {
             assert!(!c.is_leaf(parent), "{parent} 应为非末级科目");
         }
+    }
+
+    /// 部门核算必须**开箱可用**：默认科目表里得有挂了部门的末级科目。
+    ///
+    /// 曾经 `apply_extras` 把 Dept 挂在 5001/5101/6601/6602/6603 这些**上级**科目上，
+    /// 而 `default_accounts()` 随后把非末级科目的 aux 一律清零——两下一凑，
+    /// 全是上级科目的那几条配置全成了死代码，默认表里挂部门的末级科目 0 个。
+    /// 用户想用部门核算必须手工给每个末级科目打开，部门数据范围、部门损益、
+    /// 结转保维度这几条路也就一直没被真实数据走到。
+    #[test]
+    fn dept_aux_lands_on_leaf_accounts() {
+        let c = default_chart();
+        let leaves: Vec<&str> = c
+            .all()
+            .iter()
+            .filter(|a| c.is_leaf(&a.code) && a.aux.contains(AuxKind::Dept))
+            .map(|a| a.code.as_str())
+            .collect();
+        for need in ["510101", "660101", "660201", "660301"] {
+            assert!(
+                leaves.contains(&need),
+                "末级科目 {need} 应挂部门核算，实际挂部门的末级科目：{leaves:?}"
+            );
+        }
+        // 上级科目不该再挂（挂了也没用，还会误导下一个读代码的人）
+        assert!(
+            !c.get("6602").unwrap().aux.contains(AuxKind::Dept),
+            "非末级科目 6602 不该挂辅助核算"
+        );
     }
 
     #[test]

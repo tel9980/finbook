@@ -456,7 +456,8 @@ mod tests {
         Money::parse(s).unwrap()
     }
 
-    /// 对方科目（不核算任何辅助维度）。不能用内置 600101——它核算部门，会被校验拦下。
+    /// 对方科目（不核算任何辅助维度）。不直接用内置 600101：测试要的是一个
+    /// 干净的科目，账套若给 600101 挂了部门/项目，凭证里就得多带维度。
     fn ensure_counter(db: &Db) {
         use fincore::account::{Account, AcctCategory};
         if crate::accounts::get(db, "600199").unwrap().is_none() {

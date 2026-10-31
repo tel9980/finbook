@@ -186,8 +186,23 @@ pub fn validate_entry(code: &str, e: &crate::voucher::Entry, ctx: &ValidateCtx, 
         iss.push(format!("第 {line} 行摘要不能为空"));
     }
 
-    // 辅助核算必填
+    // 辅助核算必填（**部门除外**，理由见下）
     for k in acct.aux.list() {
+        // 部门是「可选维度」，不强制填写：
+        //
+        // ① 小微公司普遍不分部门，强制填等于「没有部门档案就一行费用都记不了」；
+        // ② 系统自动生成的凭证（成本分摊、制造费用结转、财务费用计提、跌价准备）
+        //    拿不到「人选部门」这个信息，强制填会把它们全挡在保存之外——实测给
+        //    660201 挂了部门后，landed cost 分摊直接报「第 2 行科目 660201
+        //    核算部门，必须填写部门」，整条链路断掉；
+        // ③ 缺部门时的口径明确是「全公司」：报表合计包含这条分录，部门数据范围
+        //    也不因它挡人（`DataScope::allows_dept("")` 恒真，`can_see_voucher`
+        //    对没有部门标签的分录放行）。
+        //
+        // 填了就能按部门出利润表／做部门费用分析，不填就是全公司口径。
+        if k == AuxKind::Dept {
+            continue;
+        }
         if e.aux.get(k).map(|s| s.trim().is_empty()).unwrap_or(true) {
             iss.push(format!(
                 "第 {line} 行科目 {} 核算{}，必须填写{}",
@@ -416,6 +431,37 @@ mod tests {
         v.entries[0].account_code = "1122".into();
         let iss = validate_voucher(&v, &ctx);
         assert!(iss.iter().any(|s| s.contains("客户")));
+    }
+
+    /// 部门是「可选维度」：不填不该拦人，其它维度照旧必填。
+    ///
+    /// 强制填部门会把两类分录全部挡死：小微公司压根没有部门档案；系统自动生成的
+    /// 凭证（成本分摊、制造费用结转、财务费用计提）拿不到「人选部门」。实测给
+    /// 660201 挂了部门后，landed cost 分摊直接报「必须填写部门」，整条链路断掉。
+    /// 没填部门的分录按「全公司／未分配」处理（见 `dim_profit` 的未分配行）。
+    #[test]
+    fn dept_aux_is_optional() {
+        let mut c = chart();
+        let mut exp = Account::new("660201", "工资", AcctCategory::Expense);
+        exp.aux = AuxMask::NONE.with(AuxKind::Dept);
+        c.insert(exp);
+
+        let o = opts();
+        let ctx = ValidateCtx::new(&c, &o, None);
+        let mut v = base_voucher();
+        v.entries[0].account_code = "660201".into();
+        v.entries[0].summary = "工资".into();
+        let iss = validate_voucher(&v, &ctx);
+        assert!(
+            !iss.iter().any(|s| s.contains("部门")),
+            "部门不该被当成必填：{iss:?}"
+        );
+
+        // 其它维度仍然必填（客户没填要报）
+        let mut v = base_voucher();
+        v.entries[0].account_code = "1122".into();
+        let iss = validate_voucher(&v, &ctx);
+        assert!(iss.iter().any(|s| s.contains("客户")), "{iss:?}");
     }
 
     #[test]

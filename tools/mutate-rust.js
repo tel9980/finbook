@@ -1001,6 +1001,32 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "opening_book::template_tests::balances_sheet_excludes_generated_ar_and_ap_but_keeps_the_rest"],
   },
 
+  // ㉞ 部门核算（v1.8.61）：三条都是「不报错但静悄悄不对」的形态。
+  {
+    // 结转取数退回「按科目聚合」：结果就是挂了部门的损益/成本科目生成一张
+    // 不带部门、存不进去的结转凭证，而报表上看不出任何异常。
+    name: "㉞ 结转损益丢失部门维度",
+    file: "crates/findb/src/balances.rs",
+    from: "                self.aux_breakdown(&a.code)\n            };",
+    to: "                vec![self.for_account(&a.code, None)]\n            };",
+    cmd: ["test", "-p", "findb", "--lib", "balances::drill_tests::carry_forward_keeps_dept_dimension"],
+  },
+  {
+    // 部门退回「必填」：系统自动生成的凭证（成本分摊、费用计提）会全部存不进去。
+    name: "㉞ 部门被当成必填维度",
+    file: "crates/fincore/src/engine/validate.rs",
+    from: "        if k == AuxKind::Dept {\n            continue;\n        }\n",
+    to: "",
+    cmd: ["test", "-p", "fincore", "--lib", "engine::validate::tests::dept_aux_is_optional"],
+  },
+  {
+    // 部门只挂上级科目：default_accounts 会把非末级的 aux 清零，等于一条都没开。
+    name: "㉞ 部门只挂在上级科目上",
+    file: "crates/fincore/src/chart.rs",
+    from: '        "5101" | "510101" | "510102" | "510103" | "510104" | "510105" => {',
+    to: '        "5101" => {',
+    cmd: ["test", "-p", "fincore", "--lib", "chart::tests::dept_aux_lands_on_leaf_accounts"],
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

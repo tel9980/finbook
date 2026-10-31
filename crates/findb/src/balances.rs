@@ -684,13 +684,32 @@ impl BalanceSnapshot {
             if !in_scope || !chart.is_leaf(&a.code) {
                 continue;
             }
-            let r = self.for_account(&a.code, None);
-            if r.is_empty_row() {
-                continue;
+            // 挂了辅助核算的科目必须**按辅助维度逐行**取数。
+            //
+            // 原来一律 `for_account(&a.code, None)`：它把不同部门（客户／项目）的
+            // 分录聚成一条 `aux` 为空的行，而科目本身要求填维度，于是
+            // `generate_carry_forward` 照抄这条空 aux 生成的结转凭证根本存不进去——
+            // 「第 1 行科目 510101 核算部门，必须填写部门」。用户点「一键结转」只看到
+            // 一句莫名其妙的校验错，整个期间的结账就此卡死。
+            //
+            // 顺带：`for_account(code, Some(&aux))` 也解决不了——它只把 aux 当过滤条件，
+            // 返回行的 aux 仍是空的（要带维度的行只能用 aux_breakdown）。
+            //
+            // 逐维度出行的另一个理由见 `period_end.rs`：「保留辅助核算维度，这样可以
+            // 按部门 / 项目出利润表」。一行一个部门，正是那种利润表的前提。
+            let rows = if a.aux == fincore::AuxMask::NONE {
+                vec![self.for_account(&a.code, None)]
+            } else {
+                self.aux_breakdown(&a.code)
+            };
+            for r in rows {
+                if r.is_empty_row() {
+                    continue;
+                }
+                let mut r = r;
+                r.account_name = a.name.clone();
+                out.push(r);
             }
-            let mut r = r;
-            r.account_name = a.name.clone();
-            out.push(r);
         }
         out
     }
@@ -2636,6 +2655,84 @@ mod drill_tests {
             Money::parse("85000").unwrap(),
             "净利润应为 85,000"
         );
+    }
+
+    /// 挂了部门的损益／成本科目，结转必须**逐部门出行**并带上部门。
+    ///
+    /// 原来 `carry_forward_rows` 一律 `for_account(code, None)`：它把不同部门的分录
+    /// 聚成一条 `aux` 为空的行，`generate_carry_forward` 照抄这条空 aux 生成的结转
+    /// 凭证保存时直接被校验挡下——「第 1 行科目 510101 核算部门，必须填写部门」。
+    /// 用户点「一键结转」只看到一句莫名其妙的校验错，整个期间的结账就此卡死。
+    ///
+    /// 顺带钉住另一个坑：`for_account(code, Some(&aux))` **不能**用来带维度——
+    /// 它只把 aux 当过滤条件，返回行的 aux 仍是空的（要带维度的行只能用
+    /// `aux_breakdown`）。
+    #[test]
+    fn carry_forward_keeps_dept_dimension() {
+        use crate::{accounts, auxs, vouchers};
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let date = p.last_day();
+
+        // 给末级成本科目 510101 打开部门核算，并建两个部门档案
+        let mut a = accounts::get(&db, "510101").unwrap().expect("510101 存在");
+        a.aux = fincore::AuxMask::NONE.with(AuxKind::Dept);
+        accounts::update(&db, &a).unwrap();
+        for (code, name) in [("D01", "生产部"), ("D02", "销售部")] {
+            auxs::insert(&db, &fincore::AuxEntity::new(AuxKind::Dept, code, name)).unwrap();
+        }
+
+        // 两个部门各记一笔制造费用：D01 100、D02 200
+        let mut v = fincore::Voucher::new(p, date, "记", 1);
+        for (line, dept, amt) in [(1, "D01", "100"), (2, "D02", "200")] {
+            let mut e = Entry::new(line, "510101", "工资");
+            e.debit = Money::parse(amt).unwrap();
+            e.aux.dept = Some(dept.to_string());
+            v.entries.push(e);
+        }
+        let mut e = Entry::new(3, "1001", "工资");
+        e.credit = Money::parse("300").unwrap();
+        v.entries.push(e);
+        let id = vouchers::save(&db, &mut v).unwrap();
+        vouchers::post(&db, id, "t").unwrap();
+
+        let chart = accounts::chart(&db).unwrap();
+        let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p)).unwrap();
+        let rows = snap.carry_forward_rows(&chart);
+        let mut depts: Vec<(String, Money)> = rows
+            .iter()
+            .filter(|r| r.account_code == "510101")
+            .map(|r| {
+                (
+                    r.aux.dept.clone().unwrap_or_default(),
+                    (r.debit - r.credit).round2(),
+                )
+            })
+            .collect();
+        depts.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            depts,
+            vec![
+                ("D01".to_string(), Money::parse("100").unwrap()),
+                ("D02".to_string(), Money::parse("200").unwrap()),
+            ],
+            "挂部门的成本科目必须逐部门出行，且金额不能串：{rows:#?}"
+        );
+
+        // 生成的结转凭证要带上部门，而且要真的能存进去（保存时会按科目校验部门）
+        let cv =
+            fincore::engine::generate_carry_forward(p, date, "转", 1, &rows, &chart, "4103", "t")
+                .unwrap();
+        let carried: Vec<String> = cv
+            .entries
+            .iter()
+            .filter(|e| e.account_code == "510101")
+            .map(|e| e.aux.dept.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(carried, vec!["D01", "D02"], "结转分录必须保留部门维度");
+        let mut cv = cv;
+        vouchers::save(&db, &mut cv)
+            .expect("结转凭证必须能保存（曾经在这里被「必须填写部门」拒绝）");
     }
 
     /// `profit_loss_net` 含直接费用性质的成本类，但排除 5001 生产成本（会与存货重复计算）。
