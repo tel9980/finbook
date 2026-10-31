@@ -454,12 +454,15 @@ async fn create_book_with_key(state: &Arc<WebState>, sid: &str, key: &str) -> St
 mod assets;
 mod auth;
 mod books;
+mod consign;
 mod export;
 mod funds;
 mod hr;
 mod inventory;
 mod misc;
+mod piecepay;
 mod platform;
+mod processfee;
 mod prod;
 mod reports;
 mod sales;

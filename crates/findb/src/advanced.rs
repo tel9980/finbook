@@ -317,6 +317,43 @@ pub fn prod_op_report(db: &Db, op_id: i64, qty: Money, hours: Money) -> DbResult
             status
         ],
     )?;
+    // 顺带记一条报工流水（`prod_op` 只有累计值、没有期间，算不出「本月做了多少」）。
+    // 计件工资按期间汇总就靠这张表（见 crate::piecepay）；责任人取工序上填的工人。
+    let today = chrono::Local::now().date_naive();
+    let info = tx.query_row(
+        "SELECT o.po_id, COALESCE(p.no,''), COALESCE(p.item_code,''), COALESCE(p.item_name,''),
+                o.op_name, o.worker
+         FROM prod_op o LEFT JOIN production_order p ON p.id = o.po_id
+         WHERE o.id = ?1",
+        rusqlite::params![op_id],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        },
+    )?;
+    tx.execute(
+        "INSERT INTO prod_op_log(op_id,po_id,po_no,item_code,item_name,op_name,worker,period,date,qty,hours)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        rusqlite::params![
+            op_id,
+            info.0,
+            info.1,
+            info.2,
+            info.3,
+            info.4,
+            info.5,
+            Period::from_date(today).ymm(),
+            today.format("%Y-%m-%d").to_string(),
+            crate::exact_param(qty),
+            crate::exact_param(hours)
+        ],
+    )?;
     tx.commit()?;
     Ok(())
 }

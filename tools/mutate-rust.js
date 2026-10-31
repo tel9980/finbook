@@ -1091,6 +1091,74 @@ const MUT = [
     to: "        let _ = &user.user.data_scope.depts;",
     cmd: ["test", "-p", "finweb", "--test", "api", "--", "dim_profit_web_by_dept"],
   },
+  // v1.8.63：受托加工的现场三件事（客供料台账 / 加工费规则 / 计件工资）。
+  // 这一批的失效形态是「单子照样存进去、金额照样算出来，只是不该放行的放行了」：
+  // 超交不拦、编辑时把自己算两遍、退料当来料、最低收费不兜底、加急漏固定费、
+  // 规则匹配取到最差的那条、计件不按期间、回填重复加钱。
+  {
+    // 超交不拦：来料 100、交货 60 之后还能再交 50，结存变负也没人管。
+    name: "㊳ 客供料交货不校验结存（可以超交）",
+    file: "crates/findb/src/consign.rs",
+    from: '            if l.qty > have {',
+    to: '            if false && l.qty > have {',
+    cmd: ["test", "-p", "findb", "--lib", "consign::tests::交货超过现存数量要报错"],
+  },
+  {
+    // 编辑不排除自身：把本单已占用的数量又算一遍，改大数量时会被自己拦住。
+    name: "㊳ 客供料编辑单据不排除自身占用",
+    file: "crates/findb/src/consign.rs",
+    from: '            let have = available(db, &customer, l.item.trim(), batch, d.id)?;',
+    to: '            let have = available(db, &customer, l.item.trim(), batch, 0)?;',
+    cmd: ["test", "-p", "findb", "--lib", "consign::tests::编辑单据要排除自身占用"],
+  },
+  {
+    // 退料当来料：只有 out 算减，return/loss 会被记成加，结存越退越多。
+    name: "㊳ 客供料退料/损耗算成加数（结存越退越多）",
+    file: "crates/findb/src/consign.rs",
+    from: '    if kind == "in" {',
+    to: '    if kind != "out" {',
+    cmd: ["test", "-p", "findb", "--lib", "consign::tests::来料交货退料损耗的结存与对账单"],
+  },
+  {
+    // 最低收费不兜底：0.5 ㎡ × 18 = 9 元直接报 9，加工费还不够开一次槽。
+    name: "㊳ 加工费最低收费不兜底",
+    file: "crates/findb/src/processfee.rs",
+    from: '    let floor_extra = if rule.min_charge > base {\n        rule.min_charge - base\n    } else {\n        Money::ZERO\n    };',
+    to: '    let floor_extra = Money::ZERO;',
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::面积计价_最低收费_加急费"],
+  },
+  {
+    // 加急漏固定费：只剩按比例的加价，20 元的开机等待费凭空消失。
+    name: "㊳ 加工费加急只按比例、漏固定费",
+    file: "crates/findb/src/processfee.rs",
+    from: '        (rule.rush_fee + pct).round2()',
+    to: '        pct.round2()',
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::面积计价_最低收费_加急费"],
+  },
+  {
+    // 规则匹配取最差：物料+客户的专属规则被通配规则顶掉，报价按错单价算。
+    name: "㊳ 加工费规则匹配取到最差的那条",
+    file: "crates/findb/src/processfee.rs",
+    from: '            Some((r0, _)) => rank < *r0,',
+    to: '            Some((r0, _)) => rank > *r0,',
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::规则匹配优先级与停用"],
+  },
+  {
+    // 计件不按期间：上个月的报工也算进本月，工资会重复发。
+    name: "㊳ 计件工资不按期间过滤报工流水",
+    file: "crates/findb/src/piecepay.rs",
+    from: '         FROM prod_op_log WHERE period=?1 ORDER BY worker,id",',
+    to: '         FROM prod_op_log WHERE ?1=?1 ORDER BY worker,id",',
+    cmd: ["test", "-p", "findb", "--lib", "piecepay::tests::计件工资按期间汇总到人"],
+  },
+  {
+    // 回填重复加钱：应发已经不低于计件额也照样再算一遍，跑两次发两份。
+    name: "㊳ 计件回填不判已有应发（重复加钱）",
+    file: "crates/finweb/src/handlers/piecepay.rs",
+    from: '        if gross >= p.amount {',
+    to: '        if false {',
+    cmd: ["test", "-p", "finweb", "--test", "api", "--", "piece_work_fills_payroll"],
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

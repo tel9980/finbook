@@ -388,6 +388,57 @@ pub(super) async fn get_prod_ops(
     Ok(Json(serde_json::json!({ "po_id": id, "ops": ops })))
 }
 
+#[derive(Deserialize)]
+pub(super) struct OpDispatchReq {
+    pub op_id: i64,
+    #[serde(default)]
+    pub worker: String,
+}
+
+/// 按工艺路线补建工序清单（订单下达后才维护好工艺路线时用）
+pub(super) async fn init_prod_ops(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::ProductionOps)?;
+    let db = &user.db;
+    let order = findb::manufacturing::get_prod_order(&db, id)?
+        .ok_or_else(|| AppError::NotFound(format!("生产订单 {id} 不存在")))?;
+    let n = advanced::prod_op_init_from_routing(&db, id, &order.item_code)?;
+    if n == 0 {
+        return Err(AppError::bad_request(format!(
+            "存货 {} 还没有工艺路线，先在「工艺路线」里维护",
+            order.item_code
+        )));
+    }
+    db.log(
+        user.username(),
+        "生产",
+        "生成工序",
+        &format!("{} 生成 {n} 道工序", order.no),
+    )?;
+    Ok(Json(serde_json::json!({ "ok": true, "count": n })))
+}
+
+/// 派工：把工序指派给某个工人（计件工资按工序上的工人汇总）
+pub(super) async fn dispatch_prod_op(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<OpDispatchReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::ProductionOps)?;
+    let db = &user.db;
+    advanced::prod_op_dispatch(&db, req.op_id, req.worker.trim())?;
+    db.log(
+        user.username(),
+        "生产",
+        "派工",
+        &format!("工序 {} → {}", req.op_id, req.worker.trim()),
+    )?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 pub(super) async fn report_prod_op(
     State(_state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -507,13 +558,24 @@ pub(super) async fn create_prod_ep(
     };
     order.no = findb::scm::prod_next_no(&db, period)?;
     let id = findb::scm::prod_save(&db, &mut order)?;
+    // 该存货配了工艺路线就顺手把工序清单建出来（没配就留空，
+    // 之后可以在「工艺路线」里维护完再调 /api/prod/:id/ops/init 补建）
+    let ops = advanced::prod_op_init_from_routing(&db, id, code).unwrap_or(0);
     db.log(
         user.username(),
         "生产",
         "下达生产订单",
-        &format!("{} {} ×{}", order.no, code, qty.fmt_qty()),
+        &format!(
+            "{} {} ×{}（工序 {} 道）",
+            order.no,
+            code,
+            qty.fmt_qty(),
+            ops
+        ),
     )?;
-    Ok(Json(json!({ "ok": true, "id": id, "no": order.no })))
+    Ok(Json(
+        json!({ "ok": true, "id": id, "no": order.no, "ops": ops }),
+    ))
 }
 
 /// 下达生产订单：草稿 → 已下达。**这是生产订单的审批动作**。

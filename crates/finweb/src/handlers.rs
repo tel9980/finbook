@@ -45,12 +45,15 @@ pub(crate) use tower_http::compression::CompressionLayer;
 pub(crate) mod assets;
 pub(crate) mod auth;
 pub(crate) mod books;
+pub(crate) mod consign;
 pub(crate) mod export;
 pub(crate) mod funds;
 pub(crate) mod hr;
 pub(crate) mod inventory;
 pub(crate) mod misc;
+pub(crate) mod piecepay;
 pub(crate) mod platform;
+pub(crate) mod processfee;
 pub(crate) mod procure;
 pub(crate) mod prod;
 pub(crate) mod reports;
@@ -61,12 +64,15 @@ pub(crate) mod voucher;
 use self::assets::*;
 use self::auth::*;
 use self::books::*;
+use self::consign::*;
 use self::export::*;
 use self::funds::*;
 use self::hr::*;
 use self::inventory::*;
 use self::misc::*;
+use self::piecepay::*;
 use self::platform::*;
+use self::processfee::*;
 use self::procure::*;
 use self::prod::*;
 use self::reports::*;
@@ -453,6 +459,26 @@ pub fn router(state: Arc<WebState>) -> Router {
         // 仓库主数据（v30）
         .route("/api/warehouses", get(list_warehouses).post(save_warehouse))
         .route("/api/warehouses/:code", delete(delete_warehouse))
+        .route("/api/consign/docs", get(list_consign).post(save_consign))
+        .route(
+            "/api/consign/docs/:id",
+            get(get_consign).delete(delete_consign),
+        )
+        .route("/api/consign/balances", get(consign_balances))
+        .route("/api/consign/statement", get(consign_statement))
+        .route(
+            "/api/price-rules",
+            get(list_price_rules).post(save_price_rule),
+        )
+        .route("/api/price-rules/quote", get(quote_fee))
+        .route("/api/price-rules/:id", delete(delete_price_rule))
+        .route(
+            "/api/piece-rates",
+            get(list_piece_rates).post(save_piece_rate),
+        )
+        .route("/api/piece-rates/:id", delete(delete_piece_rate))
+        .route("/api/payroll/piece", get(piece_sheet))
+        .route("/api/payroll/piece-fill", post(piece_fill))
         .route(
             "/api/inventory/transfer",
             get(get_transfer_report).post(do_transfer),
@@ -522,6 +548,8 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/prod/:id/changes", get(list_prod_changes))
         .route("/api/prod/:id/qc", get(list_prod_qc).post(prod_qc_ep))
         .route("/api/prod/:id/ops", get(get_prod_ops))
+        .route("/api/prod/op/dispatch", post(dispatch_prod_op))
+        .route("/api/prod/:id/ops/init", post(init_prod_ops))
         .route("/api/prod/op/report", post(report_prod_op))
         .route("/api/prod/op/finish", post(finish_prod_op))
         .route("/api/prod/:id/start", post(prod_start_ep))

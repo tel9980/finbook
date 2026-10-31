@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 38;
+pub const SCHEMA_VERSION: i64 = 39;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1551,6 +1551,77 @@ CREATE TABLE IF NOT EXISTS item_cost_method (
     method        TEXT NOT NULL DEFAULT 'moving_average', -- moving_average/fifo/specific/standard/month_average
     standard_cost TEXT NOT NULL DEFAULT '0'
 );
+
+-- 客供料台账（受托加工的客户来料：只记数量，不进存货、不出凭证）
+CREATE TABLE IF NOT EXISTS consign_doc (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    no          TEXT NOT NULL,                       -- 单号 LR/JH/TL/SH + 期间 + 序号
+    period      INTEGER NOT NULL,
+    date        TEXT NOT NULL,
+    customer    TEXT NOT NULL,                       -- 客户档案 code
+    kind        TEXT NOT NULL,                       -- in 来料 / out 交货 / return 退料 / loss 损耗核销
+    memo        TEXT NOT NULL DEFAULT '',
+    created_by  TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT '',
+    UNIQUE(no)
+);
+CREATE INDEX IF NOT EXISTS idx_consign_doc_cust ON consign_doc(customer);
+CREATE INDEX IF NOT EXISTS idx_consign_doc_period ON consign_doc(period);
+
+CREATE TABLE IF NOT EXISTS consign_line (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id      INTEGER NOT NULL,
+    item        TEXT NOT NULL,                       -- 物料 code（客户料号也行，只要前后一致）
+    item_name   TEXT NOT NULL DEFAULT '',
+    unit        TEXT NOT NULL DEFAULT '',             -- ㎡/件/kg 自由文本
+    qty         TEXT NOT NULL DEFAULT '0',            -- Decimal 文本，绝不写 SUM()
+    batch_no    TEXT NOT NULL DEFAULT '',             -- 批次号（空 = 不分批次）
+    memo        TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_consign_line_doc ON consign_line(doc_id);
+CREATE INDEX IF NOT EXISTS idx_consign_line_item ON consign_line(item);
+
+-- 加工费计价规则（按面积/件计价 + 最低收费 + 加急费）
+CREATE TABLE IF NOT EXISTS price_rule (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL,
+    item_code     TEXT NOT NULL DEFAULT '',          -- 空 = 任意物料
+    customer_code TEXT NOT NULL DEFAULT '',          -- 空 = 任意客户
+    unit          TEXT NOT NULL DEFAULT '件',
+    unit_price    TEXT NOT NULL DEFAULT '0',
+    min_charge    TEXT NOT NULL DEFAULT '0',         -- 最低收费，0 = 不设
+    rush_fee      TEXT NOT NULL DEFAULT '0',         -- 加急固定加价
+    rush_rate     TEXT NOT NULL DEFAULT '0',         -- 加急加价率（%）
+    disabled      INTEGER NOT NULL DEFAULT 0,
+    memo          TEXT NOT NULL DEFAULT ''
+);
+
+-- 计件单价（工序报工的完工量 × 单价）
+CREATE TABLE IF NOT EXISTS piece_rate (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_code   TEXT NOT NULL DEFAULT '',            -- 空 = 任意物料
+    op_name     TEXT NOT NULL DEFAULT '',            -- 空 = 任意工序
+    rate        TEXT NOT NULL DEFAULT '0',
+    disabled    INTEGER NOT NULL DEFAULT 0,
+    memo        TEXT NOT NULL DEFAULT ''
+);
+
+-- 报工流水：prod_op 只有累计值、没有期间，按期间算计件工资要靠这张表
+CREATE TABLE IF NOT EXISTS prod_op_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    op_id       INTEGER NOT NULL,
+    po_id       INTEGER NOT NULL DEFAULT 0,
+    po_no       TEXT NOT NULL DEFAULT '',
+    item_code   TEXT NOT NULL DEFAULT '',
+    item_name   TEXT NOT NULL DEFAULT '',
+    op_name     TEXT NOT NULL DEFAULT '',
+    worker      TEXT NOT NULL DEFAULT '',
+    period      INTEGER NOT NULL,
+    date        TEXT NOT NULL DEFAULT '',
+    qty         TEXT NOT NULL DEFAULT '0',
+    hours       TEXT NOT NULL DEFAULT '0'
+);
+CREATE INDEX IF NOT EXISTS idx_prod_op_log_period ON prod_op_log(period, worker);
 
 "#;
 

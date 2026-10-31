@@ -1333,11 +1333,14 @@ const NAV_ITEMS = [
   { id: "mps", label: "MPS 排产", perm: "production_ops", production: true, group: "生产制造" },
   { id: "routing", label: "工艺路线", perm: "production_ops", production: true, group: "生产制造" },
   { id: "work-report", label: "工序报工", perm: "production_ops", production: true, group: "生产制造" },
+  { id: "consign", label: "客供料台账", perm: "order_ops", production: true, group: "生产制造" },
+  { id: "piece-pay", label: "计件工资", perm: "production_ops", production: true, group: "生产制造" },
   { id: "funds", label: "资金管理", perm: "fin_report", group: "资金" },
   { id: "budget-versions", label: "预算版本", perm: "fin_report", group: "管理会计" },
   { id: "budget-alerts", label: "预算预警", perm: "fin_report", group: "管理会计" },
   { id: "budget-analysis", label: "预算分析", perm: "fin_report", group: "管理会计" },
   { id: "cost", label: "成本核算", perm: "fin_report", group: "管理会计" },
+  { id: "price-rules", label: "加工费规则", perm: "price_view", group: "销售" },
   { id: "po-doc", label: "采购单据", perm: "order_ops", group: "采购" },
   { id: "po-reconcile", label: "采购对账", perm: "report", group: "采购" },
   { id: "po-estimate", label: "采购暂估", perm: "order_ops", group: "采购" },
@@ -1395,6 +1398,9 @@ const VIEWS = {
   "compare": viewCompare,
   "daily": viewDaily,
   "dim-profit": viewDimProfit,
+  "consign": viewConsign,
+  "piece-pay": viewPiecePay,
+  "price-rules": viewPriceRules,
   "period-end": viewPeriodEnd,
   "assets": viewAssets,
   "bank": viewBank,
@@ -13099,6 +13105,313 @@ function openClaimEditor(main, claim, period) {
 // - /me 成功：已进入某账套，直接进应用
 // - /me 失败但 /books 成功：已登录平台但未选账套 → 账套选择页
 // - 都失败：显示登录页
+// ===========================================================================
+// 客供料台账（受托加工：客户来料只记数量，不进存货、不出凭证）
+// ===========================================================================
+async function viewConsign(main) {
+  main.innerHTML = `<h2>客供料台账</h2>
+    <div class="toolbar">
+      <label>客户 <input id="cs-cust" style="width:120px" placeholder="留空 = 全部" /></label>
+      <button class="btn primary sm" id="cs-load">查询单据</button>
+      <button class="btn ghost sm" id="cs-bal">查结存</button>
+      <button class="btn ghost sm" id="cs-stmt">客户对账单</button>
+      ${can("order_ops") ? `<button class="btn primary sm" id="cs-new">登记单据</button>` : ""}
+    </div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">单据</h3><div id="cs-docs" class="muted">加载中…</div></div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">结存（客户 + 物料 + 批次）</h3><div id="cs-bals" class="muted">点「查结存」查看</div></div>
+    <div class="muted" style="font-size:12px">客户来料不进自己的存货、不产生金额、不出凭证；交货 / 退料 / 损耗都扣减结存，超交会被拦下</div>`;
+
+  const cust = () => $("#cs-cust", main).value.trim();
+  const qs = () => (cust() ? `?customer=${encodeURIComponent(cust())}` : "");
+  let kinds = [];
+  let docs = [];
+  const kindOpts = (sel) =>
+    kinds.map((k) => `<option value="${esc(k.code)}" ${k.code === sel ? "selected" : ""}>${esc(k.label)}</option>`).join("");
+
+  const loadDocs = async () => {
+    try {
+      const r = await api(`/consign/docs${qs()}`);
+      kinds = r.kinds || [];
+      docs = r.docs || [];
+      $("#cs-docs", main).innerHTML = docs.length
+        ? `<table class="grid"><thead><tr><th>单号</th><th>日期</th><th>客户</th><th>类型</th><th>行数</th><th>合计数量</th><th>备注</th><th></th></tr></thead><tbody>${docs.map((d) => {
+            const total = (d.lines || []).reduce((s, l) => s + (parseFloat(String(l.qty).replace(/,/g, "")) || 0), 0);
+            return `<tr><td>${esc(d.no)}</td><td>${esc(d.date)}</td><td>${esc(d.customer)}</td>
+              <td><span class="tag">${esc(d.kind_label || d.kind)}</span></td>
+              <td class="num">${(d.lines || []).length}</td><td class="num">${fmt(total)}</td>
+              <td>${esc(d.memo || "")}</td>
+              <td class="row-actions">${can("order_ops") ? `<button class="btn ghost sm" data-cs-del="${d.id}">删</button>` : ""}</td></tr>`;
+          }).join("")}</tbody></table>`
+        : `<div class="muted">暂无客供料单据</div>`;
+      $all("[data-cs-del]", main).forEach((b) => (b.onclick = async () => {
+        if (!(await confirmDialog(`删除客供料单 ${b.dataset.csDel}？删掉后结存会跟着变。`, true))) return;
+        try { await api(`/consign/docs/${b.dataset.csDel}`, { method: "DELETE" }); toast("已删除", "ok"); loadDocs(); }
+        catch (e) { toast(e.message, "err"); }
+      }));
+    } catch (e) { $("#cs-docs", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+  };
+
+  const loadBal = async () => {
+    try {
+      const r = await api(`/consign/balances${qs()}`);
+      const rows = r.rows || [];
+      $("#cs-bals", main).innerHTML = rows.length
+        ? `<table class="grid"><thead><tr><th>客户</th><th>物料</th><th>名称</th><th>批次</th><th>单位</th><th>结存数量</th></tr></thead><tbody>${rows.map((x) => `<tr>
+            <td>${esc(x.customer)}</td><td>${esc(x.item)}</td><td>${esc(x.item_name || "")}</td>
+            <td>${esc(x.batch_no || "—")}</td><td>${esc(x.unit || "")}</td><td class="num">${fmt(x.qty)}</td></tr>`).join("")}</tbody></table>`
+        : `<div class="muted">没有结存</div>`;
+    } catch (e) { $("#cs-bals", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+  };
+
+  const openEditor = () => {
+    let rows = [{ item: "", item_name: "", unit: "件", qty: "", batch_no: "" }];
+    const m = modal(`<h3>登记客供料单据</h3>
+      <div class="field"><label>客户 *</label><input id="cs-customer" value="${esc(cust())}" /></div>
+      <div class="field"><label>单据类型 *</label><select id="cs-kind">${kindOpts("in")}</select></div>
+      <div class="field"><label>日期 *</label><input id="cs-date" type="date" value="${esc(state.today || "")}" /></div>
+      <div class="field"><label>备注</label><input id="cs-memo" /></div>
+      <div id="cs-lines"></div>
+      <div class="foot"><button class="btn ghost sm" id="cs-add">加一行</button><button class="btn primary" id="cs-save">保存</button><button class="btn ghost" id="cs-cancel">取消</button></div>`, true);
+    const drawLines = () => {
+      $("#cs-lines", m).innerHTML = `<table class="grid"><thead><tr><th>物料 *</th><th>名称</th><th>单位</th><th>数量 *</th><th>批次</th><th></th></tr></thead><tbody>${rows.map((l, i) => `<tr>
+        <td><input data-f="item" data-i="${i}" value="${esc(l.item)}" style="width:110px" /></td>
+        <td><input data-f="item_name" data-i="${i}" value="${esc(l.item_name)}" style="width:110px" /></td>
+        <td><input data-f="unit" data-i="${i}" value="${esc(l.unit)}" style="width:60px" /></td>
+        <td><input data-f="qty" data-i="${i}" value="${esc(l.qty)}" style="width:80px" /></td>
+        <td><input data-f="batch_no" data-i="${i}" value="${esc(l.batch_no)}" style="width:80px" /></td>
+        <td>${rows.length > 1 ? `<button class="btn danger sm" data-i="${i}" data-del="1">删</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
+      $all("[data-f]", m).forEach((el) => (el.oninput = () => { rows[+el.dataset.i][el.dataset.f] = el.value; }));
+      $all("[data-del]", m).forEach((b) => (b.onclick = () => { rows.splice(+b.dataset.i, 1); drawLines(); }));
+    };
+    drawLines();
+    $("#cs-add", m).onclick = () => { rows.push({ item: "", item_name: "", unit: "件", qty: "", batch_no: "" }); drawLines(); };
+    $("#cs-cancel", m).onclick = closeModal;
+    $("#cs-save", m).onclick = async () => {
+      const body = {
+        customer: $("#cs-customer", m).value.trim(),
+        kind: $("#cs-kind", m).value,
+        date: $("#cs-date", m).value.trim(),
+        memo: $("#cs-memo", m).value.trim(),
+        lines: rows.filter((l) => l.item.trim() || l.qty.trim()),
+      };
+      if (!body.customer || !body.date) { toast("客户与日期必填", "err"); return; }
+      if (!body.lines.length) { toast("至少要一行", "err"); return; }
+      try {
+        await api("/consign/docs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        toast("已保存", "ok"); closeModal(); loadDocs(); loadBal();
+      } catch (e) { toast(e.message, "err"); }
+    };
+  };
+
+  const openStatement = () => {
+    const m = modal(`<h3>客户对账单</h3>
+      <div class="field"><label>客户 *</label><input id="cs-st-cust" value="${esc(cust())}" /></div>
+      <div class="field"><label>起 <input id="cs-from" style="width:110px" placeholder="2026-01" value="${esc(state.current || "")}" /></label>
+        <label style="margin-left:8px">止 <input id="cs-to" style="width:110px" placeholder="2026-01" value="${esc(state.current || "")}" /></label></div>
+      <div id="cs-st-out" class="muted">点「出对账单」</div>
+      <div class="foot"><button class="btn primary" id="cs-st-run">出对账单</button><button class="btn ghost" id="cs-st-close">关闭</button></div>`, true);
+    $("#cs-st-close", m).onclick = closeModal;
+    $("#cs-st-run", m).onclick = async () => {
+      const c = $("#cs-st-cust", m).value.trim();
+      if (!c) { toast("对账单必须指定客户", "err"); return; }
+      try {
+        const r = await api(`/consign/statement?customer=${encodeURIComponent(c)}&from=${encodeURIComponent($("#cs-from", m).value.trim())}&to=${encodeURIComponent($("#cs-to", m).value.trim())}`);
+        const rows = r.rows || [];
+        $("#cs-st-out", m).innerHTML = rows.length
+          ? `<table class="grid"><thead><tr><th>物料</th><th>名称</th><th>批次</th><th>单位</th><th>期初</th><th>来料</th><th>交货</th><th>退料</th><th>损耗</th><th>期末</th></tr></thead><tbody>${rows.map((x) => `<tr>
+              <td>${esc(x.item)}</td><td>${esc(x.item_name || "")}</td><td>${esc(x.batch_no || "—")}</td><td>${esc(x.unit || "")}</td>
+              <td class="num">${fmt(x.begin)}</td><td class="num">${fmt(x.inbound)}</td><td class="num">${fmt(x.delivered)}</td>
+              <td class="num">${fmt(x.returned)}</td><td class="num">${fmt(x.loss)}</td><td class="num">${fmt(x.end)}</td></tr>`).join("")}</tbody></table>`
+          : `<div class="muted">该区间没有客供料发生额</div>`;
+      } catch (e) { toast(e.message, "err"); }
+    };
+  };
+
+  $("#cs-load", main).onclick = loadDocs;
+  $("#cs-bal", main).onclick = loadBal;
+  $("#cs-stmt", main).onclick = openStatement;
+  if ($("#cs-new", main)) $("#cs-new").onclick = openEditor;
+  loadDocs();
+}
+
+// ===========================================================================
+// 加工费规则（按面积/件计价 + 最低收费 + 加急费）
+// ===========================================================================
+async function viewPriceRules(main) {
+  main.innerHTML = `<h2>加工费规则</h2>
+    <div class="toolbar">
+      <button class="btn ghost sm" id="pr-reload">刷新</button>
+      ${can("price_edit") ? `<button class="btn primary sm" id="pr-new">新增规则</button>` : ""}
+      <span class="muted" style="font-size:12px">匹配顺序：物料+客户 > 只限物料 > 只限客户 > 通配；不足最低收费补到最低收费，加急另加固定费 + 按比例加价</span>
+    </div>
+    <div class="panel"><div id="pr-list" class="muted">加载中…</div></div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">试算报价</h3>
+      <div class="toolbar">
+        <label>物料 <input id="pr-q-item" style="width:110px" /></label>
+        <label>客户 <input id="pr-q-cust" style="width:110px" /></label>
+        <label>数量 <input id="pr-q-qty" style="width:80px" value="1" /></label>
+        <label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="pr-q-rush" /> 加急</label>
+        <button class="btn primary sm" id="pr-q-run">试算</button>
+      </div>
+      <div id="pr-q-out" class="muted">填好物料/数量后试算</div>
+    </div>`;
+  let rules = [];
+  const load = async () => {
+    try {
+      const r = await api("/price-rules");
+      rules = r.rules || [];
+      $("#pr-list", main).innerHTML = rules.length
+        ? `<table class="grid"><thead><tr><th>名称</th><th>物料</th><th>客户</th><th>单位</th><th>单价</th><th>最低收费</th><th>加急</th><th>状态</th><th></th></tr></thead><tbody>${rules.map((x) => `<tr>
+            <td>${esc(x.name)}</td><td>${esc(x.item_code || "任意")}</td><td>${esc(x.customer_code || "任意")}</td>
+            <td>${esc(x.unit)}</td><td class="num">${fmt(x.unit_price)}</td><td class="num">${fmt(x.min_charge)}</td>
+            <td>${fmt(x.rush_fee)} + ${fmt(x.rush_rate)}%</td>
+            <td>${x.disabled ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>'}</td>
+            <td class="row-actions">${can("price_edit") ? `<button class="btn ghost sm" data-pr-edit="${x.id}">编辑</button><button class="btn danger sm" data-pr-del="${x.id}">删</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+        : `<div class="muted">还没有加工费规则</div>`;
+      $all("[data-pr-edit]", main).forEach((b) => (b.onclick = () => openEditor(rules.find((x) => String(x.id) === b.dataset.prEdit))));
+      $all("[data-pr-del]", main).forEach((b) => (b.onclick = async () => {
+        if (!(await confirmDialog("删除这条加工费规则？", true))) return;
+        try { await api(`/price-rules/${b.dataset.prDel}`, { method: "DELETE" }); toast("已删除", "ok"); load(); }
+        catch (e) { toast(e.message, "err"); }
+      }));
+    } catch (e) { $("#pr-list", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+  };
+  const openEditor = (r) => {
+    const c = r || { id: 0, name: "", item_code: "", customer_code: "", unit: "件", unit_price: "0", min_charge: "0", rush_fee: "0", rush_rate: "0", disabled: false, memo: "" };
+    const m = modal(`<h3>${r ? "编辑" : "新增"}加工费规则</h3>
+      <div class="field"><label>名称 *</label><input id="pr-name" value="${esc(c.name)}" /></div>
+      <div class="field"><label>物料（留空=任意）</label><input id="pr-item" value="${esc(c.item_code)}" /></div>
+      <div class="field"><label>客户（留空=任意）</label><input id="pr-cust" value="${esc(c.customer_code)}" /></div>
+      <div class="field"><label>计价单位</label><input id="pr-unit" value="${esc(c.unit)}" placeholder="㎡ / 件 / kg" /></div>
+      <div class="field"><label>单价 *</label><input id="pr-price" value="${esc(c.unit_price)}" /></div>
+      <div class="field"><label>最低收费</label><input id="pr-min" value="${esc(c.min_charge)}" /></div>
+      <div class="field"><label>加急固定费</label><input id="pr-rfee" value="${esc(c.rush_fee)}" /></div>
+      <div class="field"><label>加急加价率 %</label><input id="pr-rrate" value="${esc(c.rush_rate)}" /></div>
+      <div class="field"><label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="pr-dis" ${c.disabled ? "checked" : ""}/> 停用</label></div>
+      <div class="field"><label>备注</label><input id="pr-memo" value="${esc(c.memo || "")}" /></div>
+      <div class="foot"><button class="btn primary" id="pr-save">保存</button><button class="btn ghost" id="pr-cancel">取消</button></div>`);
+    $("#pr-cancel", m).onclick = closeModal;
+    $("#pr-save", m).onclick = async () => {
+      const body = {
+        id: c.id || 0,
+        name: $("#pr-name", m).value.trim(),
+        item_code: $("#pr-item", m).value.trim(),
+        customer_code: $("#pr-cust", m).value.trim(),
+        unit: $("#pr-unit", m).value.trim(),
+        unit_price: $("#pr-price", m).value.trim(),
+        min_charge: $("#pr-min", m).value.trim(),
+        rush_fee: $("#pr-rfee", m).value.trim(),
+        rush_rate: $("#pr-rrate", m).value.trim(),
+        disabled: $("#pr-dis", m).checked,
+        memo: $("#pr-memo", m).value.trim(),
+      };
+      if (!body.name) { toast("名称必填", "err"); return; }
+      try {
+        await api("/price-rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        toast("已保存", "ok"); closeModal(); load();
+      } catch (e) { toast(e.message, "err"); }
+    };
+  };
+  $("#pr-reload", main).onclick = load;
+  if ($("#pr-new", main)) $("#pr-new").onclick = () => openEditor(null);
+  $("#pr-q-run", main).onclick = async () => {
+    const qty = $("#pr-q-qty", main).value.trim();
+    const rush = $("#pr-q-rush", main).checked ? "1" : "0";
+    try {
+      const r = await api(`/price-rules/quote?item=${encodeURIComponent($("#pr-q-item", main).value.trim())}&customer=${encodeURIComponent($("#pr-q-cust", main).value.trim())}&qty=${encodeURIComponent(qty)}&rush=${rush}`);
+      const q = r.quote;
+      $("#pr-q-out", main).innerHTML = `<table class="grid"><tbody>
+        <tr><td>规则</td><td>${esc(q.rule_name)}</td></tr>
+        <tr><td>数量 × 单价</td><td class="num">${fmt(q.qty)} ${esc(q.unit)} × ${fmt(q.unit_price)} = ${fmt(q.base)}</td></tr>
+        <tr><td>最低收费补差</td><td class="num">${fmt(q.floor_extra)}（起步 ${fmt(q.min_charge)}）</td></tr>
+        <tr><td>加急加价</td><td class="num">${fmt(q.rush_extra)}（固定 ${fmt(q.rush_fee)} + ${fmt(q.rush_rate)}%）</td></tr>
+        <tr><td><b>合计</b></td><td class="num"><b>${fmt(q.total)}</b></td></tr></tbody></table>`;
+    } catch (e) { $("#pr-q-out", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+  };
+  load();
+}
+
+// ===========================================================================
+// 计件工资（工序报工完工量 × 计件单价，按期间汇总后回填工资表）
+// ===========================================================================
+async function viewPiecePay(main) {
+  main.innerHTML = `<h2>计件工资</h2>
+    <div class="toolbar">
+      <label>期间 <input id="pp-period" style="width:110px" placeholder="2026-11" value="${esc(state.current || "")}" /></label>
+      <button class="btn primary sm" id="pp-run">算计件</button>
+      ${can("voucher_new") ? `<button class="btn primary sm" id="pp-fill">回填工资表</button>` : ""}
+      <button class="btn ghost sm" id="pp-print">打印预览</button>
+      <span class="muted" style="font-size:12px">数量来自工序报工流水（须先在「工序报工」里派工并报工）；回填只把应发提到不低于计件额，不重复累加</span>
+    </div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">本期计件</h3><div id="pp-out" class="muted">点「算计件」</div></div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">计件单价</h3>
+      <div class="toolbar">${can("production_ops") ? `<button class="btn primary sm" id="pp-new">新增单价</button>` : ""}</div>
+      <div id="pp-rates" class="muted">加载中…</div></div>`;
+  let rates = [];
+  const period = () => $("#pp-period", main).value.trim();
+  const loadRates = async () => {
+    try {
+      const r = await api("/piece-rates");
+      rates = r.rates || [];
+      $("#pp-rates", main).innerHTML = rates.length
+        ? `<table class="grid"><thead><tr><th>物料</th><th>工序</th><th>单价</th><th>状态</th><th></th></tr></thead><tbody>${rates.map((x) => `<tr>
+            <td>${esc(x.item_code || "任意")}</td><td>${esc(x.op_name || "任意")}</td><td class="num">${fmt(x.rate)}</td>
+            <td>${x.disabled ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>'}</td>
+            <td class="row-actions">${can("production_ops") ? `<button class="btn danger sm" data-pp-del="${x.id}">删</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+        : `<div class="muted">还没有计件单价</div>`;
+      $all("[data-pp-del]", main).forEach((b) => (b.onclick = async () => {
+        if (!(await confirmDialog("删除这条计件单价？已发生的人工不会自动重算，重算后再回填即可。", true))) return;
+        try { await api(`/piece-rates/${b.dataset.ppDel}`, { method: "DELETE" }); toast("已删除", "ok"); loadRates(); }
+        catch (e) { toast(e.message, "err"); }
+      }));
+    } catch (e) { $("#pp-rates", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+  };
+  const run = async () => {
+    try {
+      const r = await api(`/payroll/piece?period=${encodeURIComponent(period())}`);
+      const rows = r.rows || [];
+      $("#pp-out", main).innerHTML = rows.length
+        ? `<table class="grid"><thead><tr><th>员工</th><th>数量</th><th>计件金额</th><th>明细</th></tr></thead><tbody>${rows.map((p) => `<tr>
+            <td>${esc(p.employee)}</td><td class="num">${fmt(p.qty)}</td><td class="num">${fmt(p.amount)}</td>
+            <td class="muted" style="font-size:12px">${(p.lines || []).map((l) => `${esc(l.item_code)}/${esc(l.op_name)} ${fmt(l.qty)}×${fmt(l.rate)}${l.matched ? "" : "（无单价）"}`).join("；")}</td></tr>`).join("")}
+          </tbody><tfoot><tr><td><b>合计</b></td><td></td><td class="num"><b>${fmt(r.total)}</b></td><td></td></tr></tfoot></table>`
+        : `<div class="muted">本期没有报工流水（先派工、再报工）</div>`;
+    } catch (e) { $("#pp-out", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+  };
+  $("#pp-run", main).onclick = run;
+  $("#pp-print", main).onclick = () => { const el = $("#pp-out", main).querySelector("table"); if (!el) { toast("先算出数据再打印", "err"); return; } printPreview("计件工资", el); };
+  if ($("#pp-new", main)) $("#pp-new", main).onclick = () => {
+    const m = modal(`<h3>新增计件单价</h3>
+      <div class="field"><label>物料（留空=任意）</label><input id="ppr-item" /></div>
+      <div class="field"><label>工序（留空=任意）</label><input id="ppr-op" placeholder="氧化 / 包装" /></div>
+      <div class="field"><label>单价 *</label><input id="ppr-rate" value="0" /></div>
+      <div class="field"><label>备注</label><input id="ppr-memo" /></div>
+      <div class="foot"><button class="btn primary" id="ppr-save">保存</button><button class="btn ghost" id="ppr-cancel">取消</button></div>`);
+    $("#ppr-cancel", m).onclick = closeModal;
+    $("#ppr-save", m).onclick = async () => {
+      try {
+        await api("/piece-rates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+          item_code: $("#ppr-item", m).value.trim(), op_name: $("#ppr-op", m).value.trim(),
+          rate: $("#ppr-rate", m).value.trim(), memo: $("#ppr-memo", m).value.trim(),
+        }) });
+        toast("已保存", "ok"); closeModal(); loadRates();
+      } catch (e) { toast(e.message, "err"); }
+    };
+  };
+  if ($("#pp-fill", main)) $("#pp-fill", main).onclick = async () => {
+    if (!(await confirmDialog(`把 ${period()} 的计件金额回填进工资表（应发取「不低于计件额」）？`, false))) return;
+    try {
+      const r = await api(`/payroll/piece-fill?period=${encodeURIComponent(period())}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      const f = r.filled || [];
+      const s = r.skipped || [];
+      toast(f.length ? `已回填 ${f.length} 人，跳过 ${s.length} 人` : `没有需要回填的人（跳过 ${s.length}）`, f.length ? "ok" : "warn");
+      run();
+    } catch (e) { toast(e.message, "err"); }
+  };
+  loadRates();
+  run();
+}
+
 (async function boot() {
   try {
     const me = await api("/me");
