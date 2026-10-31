@@ -12,7 +12,7 @@ use super::*;
 /// 读权限与库存报表同级：ATP 由现货、在途、已占用三项算出，实质是库存视图。
 /// 三个分量一并返回而不是只给结果——只看到一个 ATP 数字，被算错了也不知道错在哪。
 pub(super) async fn get_atp(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -337,7 +337,7 @@ pub(super) async fn get_overview(
 // ---------------------------------------------------------------------------
 
 pub(super) async fn list_accounts(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<Vec<fincore::Account>>, AppError> {
     user.require(Perm::Report)?;
@@ -347,7 +347,7 @@ pub(super) async fn list_accounts(
 
 /// 补齐内置科目表（旧账套补入新版本新增的科目，仅管理员）
 pub(super) async fn fill_default_accounts(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if !user.user.is_admin() {
@@ -899,7 +899,7 @@ pub(super) async fn import_run(
 }
 
 pub(super) async fn export_vouchers(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
@@ -1240,7 +1240,7 @@ pub(super) async fn export_dunning_xlsx(
     cols.push(crate::xlsxout::ColFmt::Int);
     cols.push(crate::xlsxout::ColFmt::Text);
     cols.push(crate::xlsxout::ColFmt::Text);
-    let mut sheet = crate::xlsxout::Sheet::titled(
+    let sheet = crate::xlsxout::Sheet::titled(
         type_label,
         &format!("{} {}", type_label, period.label()),
         &format!(
@@ -1316,7 +1316,7 @@ pub(super) async fn export_dunning_xlsx(
 
 // ---------------- 会计科目 ----------------
 pub(super) async fn create_account(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<AccountReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1342,7 +1342,7 @@ pub(super) async fn create_account(
 }
 
 pub(super) async fn update_account(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<AccountReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1365,7 +1365,7 @@ pub(super) async fn update_account(
 }
 
 pub(super) async fn delete_account(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(code): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1385,7 +1385,7 @@ pub(super) async fn delete_account(
 
 // ---------------- 凭证模板 ----------------
 pub(super) async fn list_templates(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<Vec<template::Template>>, AppError> {
     user.require(Perm::VoucherNew)?;
@@ -1394,7 +1394,7 @@ pub(super) async fn list_templates(
 }
 
 pub(super) async fn create_template(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(t): Json<template::Template>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1452,7 +1452,7 @@ pub(super) async fn generate_template(
 }
 
 pub(super) async fn due_templates(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<template::Template>>, AppError> {
@@ -1467,7 +1467,7 @@ pub(super) async fn due_templates(
 
 // ---------------- 辅助核算档案 ----------------
 pub(super) async fn list_aux(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<AuxEntity>>, AppError> {
@@ -1497,7 +1497,7 @@ pub(super) async fn list_aux(
 }
 
 pub(super) async fn create_aux(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(e): Json<AuxEntity>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1538,7 +1538,7 @@ pub(super) async fn get_aux_presets(
 
 /// 一键预置常用档案（跳过已存在，不覆盖）
 pub(super) async fn preset_aux(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(q): Json<KindReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1555,7 +1555,7 @@ pub(super) async fn preset_aux(
 }
 
 pub(super) async fn update_aux(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(e): Json<AuxEntity>,
@@ -1570,7 +1570,7 @@ pub(super) async fn update_aux(
 }
 
 pub(super) async fn delete_aux(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1685,7 +1685,7 @@ pub(super) async fn export_begin_xlsx(user: CurrentUser) -> Result<Response, App
 
 /// 计划任务列表
 pub(super) async fn list_export_schedules(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Export)?;
@@ -1695,7 +1695,7 @@ pub(super) async fn list_export_schedules(
 
 /// 新增/修改计划任务
 pub(super) async fn save_export_schedule(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<ExportScheduleReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1728,7 +1728,7 @@ pub(super) async fn save_export_schedule(
 
 /// 删除计划任务
 pub(super) async fn delete_export_schedule(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1744,7 +1744,7 @@ pub(super) async fn delete_export_schedule(
 /// 解析逻辑复用 `fincore::batch::auxiliary`，与桌面端**同一份代码**：两端解析结果
 /// 必须一致，否则用户会发现「桌面上能粘的，网页上粘不了」。
 pub(super) async fn parse_aux_batch(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<AuxBatchParseReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1777,7 +1777,7 @@ pub(super) async fn parse_aux_batch(
 
 /// 导入前端确认过的那些行
 pub(super) async fn import_aux_batch(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<AuxBatchImportReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {

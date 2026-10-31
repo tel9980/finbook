@@ -6,7 +6,7 @@
 //! 这件事谁都不会发现，直到申报时进项凭空少一截。
 
 use egui::{RichText, Ui};
-use fincore::{Money, Perm};
+use fincore::Money;
 use findb::invoices::{Invoice, InvoiceQuery};
 use rust_decimal::Decimal;
 

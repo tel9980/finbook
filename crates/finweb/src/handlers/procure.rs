@@ -13,7 +13,7 @@ use super::*;
 /// 而登记暂估的金额还要用户手敲（敲错也没人拦）。这个端点把三笔数摆出来，
 /// 让界面能显示「可暂估 / 已暂估 / 未暂估」，并可一键带出金额。
 pub(super) async fn estimate_status(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -31,7 +31,7 @@ pub(super) async fn estimate_status(
 }
 
 pub(super) async fn settle_estimate(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     body: axum::body::Bytes,
@@ -110,7 +110,7 @@ pub(super) async fn set_quota(
 }
 
 pub(super) async fn approve_purchase_req(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -292,7 +292,7 @@ pub(super) async fn add_po_payment(
 }
 
 pub(super) async fn get_price_history(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -533,7 +533,7 @@ pub(super) async fn save_po(
 }
 
 pub(super) async fn transition_po(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<OrderTransitionReq>,
@@ -570,7 +570,7 @@ pub(super) async fn transition_po(
 }
 
 pub(super) async fn delete_po(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -604,7 +604,7 @@ pub(super) async fn push_req_po(
 
 /// 最近采购价历史（按日期倒序）：采购订单编辑器「单价留空自动带出」数据源
 pub(super) async fn price_history_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -659,7 +659,7 @@ pub(super) async fn add_estimate(
 }
 
 pub(super) async fn list_estimates(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -694,7 +694,7 @@ pub(super) async fn list_purchase_req(
 }
 
 pub(super) async fn save_purchase_req(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(mut req): Json<findb::procurement::PurchaseReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {

@@ -9,7 +9,6 @@
 
 mod common;
 
-use axum::body::Body;
 use axum::http::StatusCode;
 use common::*;
 use std::sync::Arc;

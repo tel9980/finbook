@@ -10,7 +10,7 @@ use crate::xlsxout::ColFmt;
 
 /// 往来期初明细列表（账龄页管理区块；合计 ar/ap 分列）
 pub(super) async fn list_arap_opening(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -42,7 +42,7 @@ pub(super) async fn list_arap_opening(
 
 /// 删除往来期初明细（导错可删；会计权）
 pub(super) async fn delete_arap_opening(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -240,7 +240,7 @@ pub(super) async fn get_customer_trade(
 
 /// 客户催款记录：催款单 + 往来对账单。只读展示，状态由各自模块决定。
 pub(super) async fn get_customer_dunning(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(code): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -311,7 +311,7 @@ pub(super) async fn auto_settle_endpoint(
 }
 
 pub(super) async fn manual_settle_endpoint(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<SettleRunReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -369,7 +369,7 @@ pub(super) async fn manual_settle_endpoint(
 /// 通用往来互抵：跨往来单位 / 跨科目（代收代付、三方抵账）。
 /// 自动生成一张过渡凭证把两边接上，再各自核销。
 pub(super) async fn cross_settle_endpoint(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<SettleCrossReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -409,7 +409,7 @@ pub(super) async fn cross_settle_endpoint(
 }
 
 pub(super) async fn list_offsets(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
@@ -419,7 +419,7 @@ pub(super) async fn list_offsets(
 
 /// 新增往来对冲单：只落草稿单据；凭证与两端 FIFO 核销在「审核」时生成
 pub(super) async fn create_offset(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<OffsetCreateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -460,7 +460,7 @@ pub(super) async fn create_offset(
 /// 审核往来对冲单：生成凭证（借 应付 / 贷 应收）+ 两端 FIFO 核销。
 /// 判据同资金单据（`require_fund_doc_gate`：VoucherAudit 或 VoucherPost）
 pub(super) async fn audit_offset(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -478,7 +478,7 @@ pub(super) async fn audit_offset(
 
 /// 撤销审核：删除未记账凭证（含核销清理）→ 单据回草稿（判据与审核一致）
 pub(super) async fn unaudit_offset(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -495,7 +495,7 @@ pub(super) async fn unaudit_offset(
 }
 
 pub(super) async fn delete_offset(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -507,7 +507,7 @@ pub(super) async fn delete_offset(
 }
 
 pub(super) async fn list_settle_records(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -531,7 +531,7 @@ pub(super) async fn list_settle_records(
 }
 
 pub(super) async fn unsettle_endpoint(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<UnsettleReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -786,7 +786,7 @@ pub(super) async fn export_settle_aging_xlsx(
 
 /// 催款单状态流转：draft → sent/settled/cancelled；sent → settled/cancelled
 pub(super) async fn dunning_status_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<DunningStatusReq>,
@@ -811,7 +811,7 @@ pub(super) async fn dunning_status_ep(
 /// 以前催款单只能导出 Excel：一张表，客户收到不知道这是一封函。这页把它渲染成有
 /// 抬头、有致语、有落款、有合计的文书；纸张方向/边距/字号/落款开关仍读账套参数。
 pub(super) async fn print_dunning(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Query(q): Query<HashMap<String, String>>,
@@ -827,7 +827,7 @@ pub(super) async fn print_dunning(
 }
 
 pub(super) async fn list_begin(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<Vec<BeginRow>>, AppError> {
     user.require(Perm::Opening)?;
@@ -841,7 +841,7 @@ pub(super) async fn list_begin(
 }
 
 pub(super) async fn save_begin(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BeginSaveReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -976,7 +976,7 @@ pub(super) async fn bad_debt_provision_endpoint(
 
 /// 对账单列表（可按 kind=ar|ap 过滤）
 pub(super) async fn list_statements(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -991,7 +991,7 @@ pub(super) async fn list_statements(
 
 /// 生成对账单（服务端算期初/本期发生/期末并快照，不信前端金额）
 pub(super) async fn create_statement(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<StatementReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1027,7 +1027,7 @@ pub(super) async fn create_statement(
 
 /// 对账单状态流转：发出 / 客户回签确认 / 作废
 pub(super) async fn statement_status_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<StatementStatusReq>,
@@ -1062,7 +1062,7 @@ pub(super) async fn statement_status_ep(
 
 /// 催款单/对账函列表（可按 kind=ar|ap 过滤）
 pub(super) async fn list_dunnings(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1074,7 +1074,7 @@ pub(super) async fn list_dunnings(
 
 /// 生成催款单：按客商快照未核销分录 + 往来期初（服务端计算，无欠款拒绝）
 pub(super) async fn create_dunning(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<DunningReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1118,7 +1118,7 @@ pub(super) async fn create_dunning(
 
 /// 期初批量粘贴：解析（预览）
 pub(super) async fn parse_begin_batch(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BeginBatchParseReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1181,7 +1181,7 @@ pub(super) async fn parse_begin_batch(
 /// 走和「保存」一样的校验路径（`upsert_begin` + 越权检查），而不是直接写 ——
 /// 批量导入的量更大，但它并不比手工一行行填更特殊，特殊的是**一次能错几百行**。
 pub(super) async fn import_begin_batch(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BeginBatchImportReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {

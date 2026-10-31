@@ -7,6 +7,10 @@
 // 本文件里的函数必须保持**纯函数**：不引用 api.rs 的任何私有项。
 // 若某个助手需要 api.rs 的私有状态，说明该测试不该独立成文件。
 
+// 每个测试二进制都 `mod common;` 一次，但各自只用到其中一部分助手；没用到的
+// 会在别的二进制里被用到，所以按模块关掉 dead_code，不逐项加注解。
+#![allow(dead_code)]
+
 /// 建临时平台身份库 + 预置账套 + 完整 WebState，返回 (state, books_dir, dir_guard)
 use std::path::PathBuf;
 use std::sync::Arc;

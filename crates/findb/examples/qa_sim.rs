@@ -8,7 +8,7 @@
 
 use chrono::NaiveDate;
 use fincore::chart::default_accounts;
-use fincore::report::{self, AmountKind};
+use fincore::report::{self};
 use fincore::user::{DataScope, Role, User};
 use fincore::{AuxEntity, AuxKind, BookOptions, Entry, Money, Period, Voucher};
 use findb::balances::{BalanceQuery, BalanceSnapshot, LedgerQuery};
@@ -49,6 +49,7 @@ impl Chk {
         }
     }
     /// 已知问题：照样打印实算结果，但不计入失败。
+    #[allow(dead_code)]
     ///
     /// 目前**没有**已知问题（v1.8.61 把部门口径定案后全部转正）。留着这个出口是因为
     /// 体检脚本的价值就在「把还没定论的事摆出来而不是让它变绿」：写新检查时如果发现
@@ -132,7 +133,7 @@ fn main() {
     // 部门核算：默认科目表里**没有**挂部门的末级科目（Dept 只挂在 5001/5101/6601/
     // 6602/6603 这几个上级科目上，而上级不能记账），所以像真实用户那样，手动给
     // 两个末级科目打开部门辅助核算。
-    let mut no_dept_leaf = 0;
+    let no_dept_leaf;
     {
         let all = findb::accounts::list(&db).unwrap();
         let is_leaf = |code: &str| {

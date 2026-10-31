@@ -6,9 +6,8 @@
 //! 让用户自己决定要不要分、怎么分。
 
 use egui::{RichText, Ui};
-use fincore::account::{AcctCategory, AuxKind};
+use fincore::account::AuxKind;
 use fincore::{Money, Period};
-use findb::balances::{BalanceQuery, BalanceSnapshot};
 use findb::mgmt::{self, DimProfit};
 
 use crate::state::AppCtx;
@@ -89,14 +88,16 @@ impl DimProfitView {
         self.key = key;
         self.dirty = false;
 
-        match mgmt::dim_profit(ctx.db(), p, self.dim) {
-            Ok(mut rows) => {
+        match mgmt::dim_profit_report(ctx.db(), p, self.dim) {
+            Ok(report) => {
+                let mut rows = report.rows;
                 match self.sort_by {
                     SortBy::Profit => rows.sort_by_key(|a| std::cmp::Reverse(a.profit)),
                     SortBy::Revenue => rows.sort_by_key(|a| std::cmp::Reverse(a.revenue)),
                 }
-                // 数据层只归集"挂了维度"的分录，剩余部分在这里补成「未分配」行
-                if let Some(u) = unallocated(ctx, p, &rows) {
+                // 数据层把"挂了维度"的分录归集成行，剩下的差额就是「未分配」行
+                // （合计 − 各行，出自同一张快照，所以合计一定对得上）
+                if let Some(u) = report.unallocated {
                     rows.push(u);
                 }
                 self.rows = rows;
@@ -291,61 +292,4 @@ impl DimProfitView {
             }
         });
     }
-}
-
-/// 把"没有挂任何维度值"的损益金额汇总成一行
-///
-/// 口径必须与 `mgmt::dim_profit` 完全一致（同样的科目前缀归类、同样的借贷符号），
-/// 否则合计行会对不上——所以这里照抄了它的归类规则。
-fn unallocated(ctx: &AppCtx<'_>, p: Period, allocated: &[DimProfit]) -> Option<DimProfit> {
-    let snap =
-        BalanceSnapshot::load(ctx.db(), &BalanceQuery::period(p).with_leaf_only(true)).ok()?;
-    let chart = ctx.chart();
-
-    let mut rev = Money::ZERO;
-    let mut cost = Money::ZERO;
-    let mut tax = Money::ZERO;
-    let mut exp = Money::ZERO;
-    for a in chart.all() {
-        if !a.category.is_profit_loss() || !chart.is_leaf(&a.code) {
-            continue;
-        }
-        let r = snap.for_account(&a.code, None);
-        let signed = r.debit - r.credit;
-        if signed.is_zero() {
-            continue;
-        }
-        // 损益科目：收入类贷方为正，成本费用类借方为正
-        let amount = if a.category == AcctCategory::Income {
-            -signed
-        } else {
-            signed
-        };
-        match a.code.as_str() {
-            c if c.starts_with("6001") || c.starts_with("6051") || c.starts_with("6301") => {
-                rev += amount
-            }
-            c if c.starts_with("6401") || c.starts_with("6402") => cost += amount,
-            c if c.starts_with("6403") || c.starts_with("6801") => tax += amount,
-            _ => exp += amount,
-        }
-    }
-    for d in allocated {
-        rev -= d.revenue;
-        cost -= d.cost;
-        tax -= d.tax;
-        exp -= d.expense;
-    }
-    if rev.is_zero() && cost.is_zero() && tax.is_zero() && exp.is_zero() {
-        return None;
-    }
-    Some(DimProfit {
-        key: String::new(),
-        name: "未分配（公共费用未分摊）".to_string(),
-        revenue: rev,
-        cost,
-        expense: exp,
-        tax,
-        profit: rev - cost - exp - tax,
-    })
 }

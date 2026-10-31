@@ -15,12 +15,7 @@ use std::collections::BTreeMap;
 
 use fincore::account::Account;
 use fincore::account::BookOptions;
-use fincore::money::Money;
 use fincore::{AuxEntity, AuxKind};
-
-fn m(s: &str) -> Money {
-    Money::parse(s).unwrap()
-}
 
 fn seed_aux(db: &findb::Db) {
     let customers = [

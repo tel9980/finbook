@@ -9,7 +9,7 @@ use super::*;
 
 /// 删除预算行
 pub(super) async fn delete_budget_row(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -127,7 +127,7 @@ pub(super) async fn period_wizard(
 }
 
 pub(super) async fn period_precheck(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(ymm): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -153,7 +153,7 @@ pub(super) async fn period_precheck(
 
 /// 年末结转：把「本年利润」余额转入「利润分配—未分配利润」
 pub(super) async fn period_year_end(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(ymm): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -199,7 +199,7 @@ pub(super) async fn period_year_end(
 
 /// 期末结账：有未处理问题时返回 400 + 问题清单
 pub(super) async fn period_close(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(ymm): Path<i32>,
     Json(req): Json<ClosePeriodReq>,
@@ -216,7 +216,7 @@ pub(super) async fn period_close(
 
 /// 反结账
 pub(super) async fn period_unclose(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(ymm): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -601,7 +601,7 @@ pub(super) async fn get_budget_alerts(
 }
 
 pub(super) async fn copy_budget_version(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BCopyReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -633,7 +633,7 @@ pub(super) async fn list_notes(
 }
 
 pub(super) async fn save_note(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<NoteReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -654,7 +654,7 @@ pub(super) async fn save_note(
 }
 
 pub(super) async fn delete_note(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -762,6 +762,88 @@ pub(super) async fn get_income_statement(
     Ok(Json(
         json!({ "from": period_to_str(from), "to": period_to_str(to), "table": table_json(&t) }),
     ))
+}
+
+/// 可分析的维度：与桌面端「多维损益」一致（现金流量与银行账户不是损益分析维度）
+const DIM_PROFIT_DIMS: &[fincore::account::AuxKind] = &[
+    fincore::account::AuxKind::Customer,
+    fincore::account::AuxKind::Supplier,
+    fincore::account::AuxKind::Dept,
+    fincore::account::AuxKind::Employee,
+    fincore::account::AuxKind::Project,
+    fincore::account::AuxKind::Item,
+];
+
+/// 多维损益：按辅助核算维度（客户/供应商/部门/职员/项目/存货）看利润
+///
+/// 桌面端一直有这张表，Web 端没有（v1.8.61 的「没动」里记着这条），这里补上。
+/// 取数与桌面端共用 `findb::mgmt::dim_profit_report`，所以两边的口径不可能再分叉。
+///
+/// 数据范围：只对**部门**维度生效 —— 部门会计看不到别部门那一行，被藏起来的
+/// 数并进「未分配（含未授权部门）」，合计仍等于公司口径（利润表上本来就看得到）。
+pub(super) async fn get_dim_profit(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::FinReport)?;
+    let db = &user.db;
+    let period = period_param(q.get("period"), current_period(&state, &user))?;
+    let dim_txt = q
+        .get("dim")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let dim = if dim_txt.is_empty() {
+        fincore::account::AuxKind::Dept
+    } else {
+        fincore::account::AuxKind::from_code(&dim_txt).ok_or_else(|| {
+            AppError::bad_request(format!(
+                "不认识的维度：{dim_txt}（可用 dept/project/customer/supplier/employee/item）"
+            ))
+        })?
+    };
+    if !DIM_PROFIT_DIMS.contains(&dim) {
+        return Err(AppError::bad_request(format!(
+            "{} 不是损益分析维度",
+            dim.label()
+        )));
+    }
+
+    let mut report = findb::mgmt::dim_profit_report(db, period, dim)?;
+    if dim == fincore::account::AuxKind::Dept {
+        report.narrow_to_depts(&user.user.data_scope.depts);
+    }
+    let total_profit = report.total.profit;
+    let line = |d: &findb::mgmt::DimProfit| {
+        // 利润率按合计利润算，合计为 0 时给空串（与桌面端一样不显示无意义的 0.00%）
+        let rate = if total_profit.is_zero() {
+            String::new()
+        } else {
+            (d.profit * fincore::Money::from_i64(100))
+                .checked_div(total_profit)
+                .map(|m| m.round2().fmt_money())
+                .unwrap_or_default()
+        };
+        json!({
+            "key": d.key,
+            "name": d.name,
+            "revenue": d.revenue.fmt_money(),
+            "cost": d.cost.fmt_money(),
+            "expense": d.expense.fmt_money(),
+            "tax": d.tax.fmt_money(),
+            "profit": d.profit.fmt_money(),
+            "profit_rate": rate,
+        })
+    };
+    Ok(Json(json!({
+        "period": period_to_str(period),
+        "dim": dim.code(),
+        "dim_label": dim.label(),
+        "dims": DIM_PROFIT_DIMS.iter().map(|d| json!({"code": d.code(), "label": d.label()})).collect::<Vec<_>>(),
+        "rows": report.rows.iter().map(line).collect::<Vec<_>>(),
+        "unallocated": report.unallocated.as_ref().map(line),
+        "total": line(&report.total),
+    })))
 }
 
 pub(super) async fn get_cash_flow(
@@ -935,7 +1017,7 @@ pub(super) async fn list_budget_rows(
 
 /// 新增/修改预算行（按 期间+科目+部门+版本 upsert；版本 = 当前激活版本）
 pub(super) async fn save_budget_row(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BudgetRowReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -981,7 +1063,7 @@ pub(super) async fn save_budget_row(
 
 /// 结转损益：生成一张把损益类科目净额转入「本年利润」的凭证
 pub(super) async fn period_carry_forward(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(ymm): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1103,7 +1185,7 @@ pub(super) async fn export_trial_balance_pdf(
 }
 
 pub(super) async fn list_custom_reports(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     user.require(Perm::FinReport)?;
@@ -1116,7 +1198,7 @@ pub(super) async fn list_custom_reports(
 }
 
 pub(super) async fn save_custom_report(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<CustomReportReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1160,7 +1242,7 @@ pub(super) async fn save_custom_report(
 }
 
 pub(super) async fn delete_custom_report(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1174,7 +1256,7 @@ pub(super) async fn delete_custom_report(
 // ---- 预算版本 ----
 
 pub(super) async fn list_budget_versions(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
@@ -1190,7 +1272,7 @@ pub(super) async fn list_budget_versions(
 // 与其余业务写路由保持一致。不要用 Perm::Report 把关：Report 是只读权限，
 // 且每个角色（含只读 Viewer）都自带它，等于对只读账号开放了写入。
 pub(super) async fn save_budget_version(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BVersionReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1210,7 +1292,7 @@ pub(super) async fn save_budget_version(
 }
 
 pub(super) async fn delete_budget_version(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1221,7 +1303,7 @@ pub(super) async fn delete_budget_version(
 }
 
 pub(super) async fn activate_budget_version(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(key): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1265,7 +1347,7 @@ pub(super) async fn print_income_statement(
 }
 
 pub(super) async fn update_template(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(t): Json<template::Template>,
@@ -1280,7 +1362,7 @@ pub(super) async fn update_template(
 }
 
 pub(super) async fn delete_template(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {

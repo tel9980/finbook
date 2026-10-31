@@ -1905,7 +1905,7 @@ mod tests {
     #[test]
     fn dunning_items_carry_overdue_days_from_pay_days() {
         let db = tmpdb("dunning_overdue");
-        let p = Period::new(2026, 10).unwrap();
+        let _p = Period::new(2026, 10).unwrap();
 
         // 客户 C01：账期 30 天
         let mut c = fincore::AuxEntity::new(fincore::AuxKind::Customer, "C01", "客户甲");

@@ -1321,6 +1321,7 @@ const NAV_ITEMS = [
   { id: "equity", label: "权益变动表", perm: "fin_report", group: "账簿报表" },
   { id: "compare", label: "报表对比", perm: "fin_report", group: "账簿报表" },
   { id: "daily", label: "科目日报表", perm: "fin_report", group: "账簿报表" },
+  { id: "dim-profit", label: "多维损益", perm: "fin_report", group: "账簿报表" },
   { id: "notes", label: "报表附注", perm: "fin_report", group: "账簿报表" },
   { id: "custom-reports", label: "自定义报表", perm: "fin_report", group: "账簿报表" },
   { id: "period-end", label: "期末处理", perm: "period_close", group: "期末" },
@@ -1393,6 +1394,7 @@ const VIEWS = {
   "equity": viewEquity,
   "compare": viewCompare,
   "daily": viewDaily,
+  "dim-profit": viewDimProfit,
   "period-end": viewPeriodEnd,
   "assets": viewAssets,
   "bank": viewBank,
@@ -6370,6 +6372,59 @@ async function viewSummaryTable(main) {
 // ===========================================================================
 // 财务指标
 // ===========================================================================
+// 多维损益：按辅助核算维度（部门 / 项目 / 客户…）看利润
+//
+// 桌面端一直有这张表，Web 端到 v1.8.62 才补上。取数在后端
+// `findb::mgmt::dim_profit_report`，与桌面端是同一个函数，口径不会分叉。
+// 只做「直接归属」：分录挂了哪个部门就算哪个部门，没挂的进「未分配」——
+// 分摊率每家公司都不一样，编一个出来只会把账算歪。
+async function viewDimProfit(main) {
+  const DIMS = [
+    { code: "dept", label: "部门" },
+    { code: "project", label: "项目" },
+    { code: "customer", label: "客户" },
+    { code: "supplier", label: "供应商" },
+    { code: "employee", label: "职员" },
+    { code: "item", label: "存货" },
+  ];
+  main.innerHTML = `<h2>多维损益</h2>
+    <div class="toolbar">
+      <label>期间 <input id="dp-period" value="${esc(state.current)}" style="width:90px" /></label>
+      <label>维度 <select id="dp-dim">${DIMS.map((d) => `<option value="${d.code}">${d.label}</option>`).join("")}</select></label>
+      <button class="btn primary" id="dp-run">查询</button>
+      <button class="btn ghost sm" id="dp-print">打印预览</button>
+    </div>
+    <div class="muted" style="margin:6px 0">只做「直接归属」：分录上挂了哪个维度就算哪个维度的，没挂的汇总成「未分配」行，不编分摊率。</div>
+    <div id="dp-result" class="muted">选择期间与维度后点击查询。</div>`;
+  $("#dp-print").addEventListener("click", () => {
+    const el = $("#dp-result").querySelector("table");
+    if (!el) return toast("先查询出数据再打印", "err");
+    printPreview("多维损益", el);
+  });
+  const cell = (v) => `<td class="r">${esc(v ?? "")}</td>`;
+  const run = async () => {
+    const p = $("#dp-period").value.trim();
+    const dim = $("#dp-dim").value;
+    try {
+      const r = await api(`/reports/dim-profit?period=${encodeURIComponent(p)}&dim=${encodeURIComponent(dim)}`);
+      const rows = r.rows || [];
+      const lines = rows.slice();
+      if (r.unallocated) lines.push({ ...r.unallocated, unassigned: true });
+      const head = `<thead><tr><th>${esc(r.dim_label || "维度")}</th><th>名称</th>
+        <th class="r">收入</th><th class="r">成本</th><th class="r">费用</th><th class="r">税金</th><th class="r">利润</th><th class="r">利润率</th></tr></thead>`;
+      const body = lines.length
+        ? lines.map((x) => `<tr${x.unassigned ? ' class="muted"' : ""}><td>${x.unassigned ? "—" : esc(x.key)}</td><td>${esc(x.name)}</td>${cell(x.revenue)}${cell(x.cost)}${cell(x.expense)}${cell(x.tax)}${cell(x.profit)}${cell(x.profit_rate ? x.profit_rate + "%" : "")}</tr>`).join("")
+        : `<tr><td colspan="8" class="muted">这一期没有损益发生额。</td></tr>`;
+      const t = r.total || {};
+      const foot = `<tfoot><tr><th colspan="2">合计</th><th class="r">${esc(t.revenue)}</th><th class="r">${esc(t.cost)}</th><th class="r">${esc(t.expense)}</th><th class="r">${esc(t.tax)}</th><th class="r">${esc(t.profit)}</th><th class="r">${esc(t.profit_rate ? t.profit_rate + "%" : "")}</th></tr></tfoot>`;
+      $("#dp-result").innerHTML = `<table class="grid">${head}<tbody>${body}</tbody>${foot}</table>`;
+    } catch (e) { toast(e.message, "err"); }
+  };
+  $("#dp-run").addEventListener("click", run);
+  $("#dp-dim").addEventListener("change", run);
+  run();
+}
+
 async function viewRatios(main) {
   main.innerHTML = `<h2>财务指标分析</h2>
     <div class="toolbar">

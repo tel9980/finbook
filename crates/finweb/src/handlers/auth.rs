@@ -414,7 +414,7 @@ pub(super) async fn post_change_password(
 // ---------------------------------------------------------------------------
 
 pub(super) async fn list_users(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<Vec<PublicUser>>, AppError> {
     user.require(Perm::UserManage)?;
@@ -621,7 +621,7 @@ pub(super) async fn reset_user_device(
 }
 
 pub(super) async fn unlock_user(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(username): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {

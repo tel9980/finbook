@@ -1079,7 +1079,6 @@ pub fn collect_report_trends(
     if scope.own_voucher_only {
         params.push(Box::new(user.username.clone()));
         conds.push(format!("v.prepared_by = ?{}", param_idx));
-        param_idx += 1;
     }
 
     let where_clause = conds.join(" AND ");

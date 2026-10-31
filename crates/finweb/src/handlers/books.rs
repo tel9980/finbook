@@ -466,7 +466,7 @@ pub(super) async fn delete_book(
 // ---------------------------------------------------------------------------
 
 pub(super) async fn get_options(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<fincore::BookOptions>, AppError> {
     let db = &user.db;
@@ -485,7 +485,7 @@ pub(super) async fn get_options(
 }
 
 pub(super) async fn put_options(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(opts): Json<fincore::BookOptions>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -514,7 +514,7 @@ pub(super) async fn put_options(
 /// 一段要手动粘进编辑器的文本可靠。整个 `BookOptions` 原样出去，没有删减——
 /// 少导出一个字段，导入后就会静默回到默认值。
 pub(super) async fn export_options(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Response, AppError> {
     user.require(Perm::SysOption)?;
@@ -545,7 +545,7 @@ pub(super) async fn export_options(
 /// 结构项（编码级长 / 启用期间）与当前账套不同就整体拒绝，一个字段都不改 ——
 /// 见 `BookOptions::adopt_config`。
 pub(super) async fn import_options(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(incoming): Json<fincore::BookOptions>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -565,7 +565,7 @@ pub(super) async fn import_options(
 /// 企业名称、编码级长、启用期间、默认科目、审核/出纳开关都不动 ——
 /// 它们与已经记过的账绑在一起，见 `BookOptions::reset_preferences`。
 pub(super) async fn reset_options(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
@@ -578,7 +578,7 @@ pub(super) async fn reset_options(
 
 /// 单据链：`?kind=req|po|so&id=` —— 上游源单（doc_link）+ 下游/执行单据（到货付款/发货收款）
 pub(super) async fn get_doc_links(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -600,7 +600,7 @@ pub(super) async fn get_doc_links(
 
 // ---------------- 操作日志 ----------------
 pub(super) async fn list_logs(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<fincore::user::AuditLog>>, AppError> {
@@ -1035,7 +1035,7 @@ pub(super) async fn import_book(
     let mut filename = String::new();
     let mut want_name = String::new();
     let mut data: Option<Vec<u8>> = None;
-    while let Some(mut field) = multipart
+    while let Some(field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::bad_request(format!("上传解析失败：{e}")))?

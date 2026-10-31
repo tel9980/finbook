@@ -312,7 +312,7 @@ pub fn sched_run(db: &Db, id: i64, dir: &std::path::Path) -> DbResult<String> {
 /// `kind` = "ar" 或 "ap"；`period` 用于按日期过滤。
 /// 返回 (文件名, Excel 二进制数据)。
 pub fn build_dunning_excel(db: &Db, kind: &str, period: Period) -> DbResult<(String, Vec<u8>)> {
-    use rust_xlsxwriter::{Format, Workbook, XlsxAlign, XlsxBorder, XlsxColor, XlsxError};
+    use rust_xlsxwriter::{Format, Workbook, XlsxAlign, XlsxBorder, XlsxColor};
 
     if kind != "ar" && kind != "ap" {
         return Err(fincore::FinError::msg("kind 必须是 ar 或 ap").into());

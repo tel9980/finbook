@@ -9,7 +9,7 @@ use super::*;
 
 /// 收付款单套打 HTML：`ids` 缺省 = 全部（可配 `period` 过滤）
 pub(super) async fn print_receipt_form(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
@@ -45,7 +45,7 @@ pub(super) async fn print_receipt_form(
 }
 
 pub(super) async fn list_bills(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -58,7 +58,7 @@ pub(super) async fn list_bills(
 }
 
 pub(super) async fn save_bill(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BillReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -100,7 +100,7 @@ pub(super) async fn save_bill(
 }
 
 pub(super) async fn bill_transition(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<BillTransitionReq>,
@@ -127,7 +127,7 @@ pub(super) async fn bill_transition(
 }
 
 pub(super) async fn delete_bill(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -139,7 +139,7 @@ pub(super) async fn delete_bill(
 }
 
 pub(super) async fn list_loans(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -152,7 +152,7 @@ pub(super) async fn list_loans(
 }
 
 pub(super) async fn save_loan(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<LoanReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -195,7 +195,7 @@ pub(super) async fn save_loan(
 
 /// 结清融资（body 可选指定结清日期；findb 同事务自动生成还本凭证）
 pub(super) async fn loan_settle(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     body: axum::body::Bytes,
@@ -229,7 +229,7 @@ pub(super) async fn loan_settle(
 
 /// 票据补出台账凭证（流转已自动生成；本端点用于存量台账回填）
 pub(super) async fn bill_voucher(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -247,7 +247,7 @@ pub(super) async fn bill_voucher(
 
 /// 融资台账凭证（存续=到账凭证；已结清=还本凭证回填）
 pub(super) async fn loan_voucher(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -264,7 +264,7 @@ pub(super) async fn loan_voucher(
 }
 
 pub(super) async fn delete_cash_count(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -277,7 +277,7 @@ pub(super) async fn delete_cash_count(
 
 /// 接班确认（交班人不能自我确认）
 pub(super) async fn confirm_cash_shift(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -290,7 +290,7 @@ pub(super) async fn confirm_cash_shift(
 
 /// 取消交班单（仅待确认状态）
 pub(super) async fn cancel_cash_shift(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -302,7 +302,7 @@ pub(super) async fn cancel_cash_shift(
 }
 
 pub(super) async fn list_checks(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
@@ -312,7 +312,7 @@ pub(super) async fn list_checks(
 
 /// 支票登记簿新增/修改（备查簿，不入账）
 pub(super) async fn save_check(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<CheckReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -356,7 +356,7 @@ pub(super) async fn save_check(
 }
 
 pub(super) async fn check_status(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<serde_json::Value>,
@@ -375,7 +375,7 @@ pub(super) async fn check_status(
 }
 
 pub(super) async fn delete_check(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -387,7 +387,7 @@ pub(super) async fn delete_check(
 }
 
 pub(super) async fn list_advances(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
@@ -397,7 +397,7 @@ pub(super) async fn list_advances(
 
 /// 新增/修改借支单（建单即 approved；支付/核销走独立端点）
 pub(super) async fn save_advance(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<AdvanceReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -453,7 +453,7 @@ pub(super) async fn save_advance(
 
 /// 支付借支（body 可选 {date}，默认今天）；同事务生成支付凭证
 pub(super) async fn pay_advance(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     body: axum::body::Bytes,
@@ -476,7 +476,7 @@ pub(super) async fn pay_advance(
 
 /// 核销借支（body: {expense_account, expense_amount, date?}）；同事务生成核销凭证
 pub(super) async fn settle_advance(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     body: axum::body::Bytes,
@@ -516,7 +516,7 @@ pub(super) async fn settle_advance(
 }
 
 pub(super) async fn delete_advance(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -528,7 +528,7 @@ pub(super) async fn delete_advance(
 }
 
 pub(super) async fn delete_receipt(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -543,7 +543,7 @@ pub(super) async fn delete_receipt(
 /// **VoucherAudit 或 VoucherPost**（见 `require_fund_doc_gate`）——出纳录单，
 /// 有记账权的人把关；两者都没有时（出纳想审自己提的单）仍然拦住。
 pub(super) async fn audit_receipt(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -582,7 +582,7 @@ pub(super) async fn audit_receipt(
 
 /// 撤销审核：删除未记账凭证（含核销配对清理）→ 单据回草稿
 pub(super) async fn unaudit_receipt(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -601,7 +601,7 @@ pub(super) async fn unaudit_receipt(
 /// 审核资金调拨单：生成凭证（借 转入 / 贷 转出）。审核权同收付款单
 /// （`require_fund_doc_gate`：VoucherAudit 或 VoucherPost）
 pub(super) async fn audit_transfer(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -619,7 +619,7 @@ pub(super) async fn audit_transfer(
 
 /// 撤销审核：删除未记账凭证 → 单据回草稿（判据与审核一致）
 pub(super) async fn unaudit_transfer(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -636,7 +636,7 @@ pub(super) async fn unaudit_transfer(
 }
 
 pub(super) async fn delete_transfer(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -648,7 +648,7 @@ pub(super) async fn delete_transfer(
 }
 
 pub(super) async fn delete_loan(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -681,7 +681,7 @@ pub(super) async fn get_funds_budget(
 
 /// 资金日报（按日）：?date=YYYY-MM-DD（默认今天）→ 上日结余/本日收支/日末结存
 pub(super) async fn get_funds_daily_date(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -734,7 +734,7 @@ pub(super) async fn get_funds_forecast(
 /// 生成的凭证一律草稿：还要过审核、要过出纳签字（资金科目必然命中）才能记账。
 /// **不自动记账** —— 拿银行流水直接记账等于把出纳签字这一关自动掉。
 pub(super) async fn gen_bank_vouchers(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BankAutoReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -800,7 +800,7 @@ pub(super) async fn get_bank(
 }
 
 pub(super) async fn import_bank(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BankImportReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -822,7 +822,7 @@ pub(super) async fn import_bank(
 }
 
 pub(super) async fn auto_match_bank(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BankAutoReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -850,7 +850,7 @@ pub(super) async fn auto_match_bank(
 }
 
 pub(super) async fn link_bank(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BankLinkReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -867,7 +867,7 @@ pub(super) async fn link_bank(
 }
 
 pub(super) async fn unlink_bank(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BankStmtIdReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -884,7 +884,7 @@ pub(super) async fn unlink_bank(
 }
 
 pub(super) async fn clear_bank(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BankAutoReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -906,7 +906,7 @@ pub(super) async fn clear_bank(
 }
 
 pub(super) async fn list_cash_counts(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
@@ -918,7 +918,7 @@ pub(super) async fn list_cash_counts(
 
 /// 新增/修改现金盘点：账面余额与差异由服务端按资金日报（按日）口径重算
 pub(super) async fn save_cash_count(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<CashCountReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -972,7 +972,7 @@ pub(super) async fn save_cash_count(
 
 /// 盘盈盘亏差异生成凭证
 pub(super) async fn cash_count_voucher(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -990,7 +990,7 @@ pub(super) async fn cash_count_voucher(
 
 /// 交接班列表（只读，财务报表权限）
 pub(super) async fn list_cash_shifts(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1007,7 +1007,7 @@ pub(super) async fn list_cash_shifts(
 
 /// 新建交班单：快照当日现金/银行结存、在库票据、未日清账户（服务端计算）
 pub(super) async fn create_cash_shift(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<CashShiftReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1047,7 +1047,7 @@ pub(super) async fn create_cash_shift(
 
 /// 日清日期查询：?account=&from=YYYY-MM-DD&to=YYYY-MM-DD（缺省 today~today）
 pub(super) async fn list_day_clear(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1076,7 +1076,7 @@ pub(super) async fn list_day_clear(
 
 /// 日清标记 / 取消
 pub(super) async fn set_day_clear(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<DayClearReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1104,7 +1104,7 @@ pub(super) async fn set_day_clear(
 }
 
 pub(super) async fn list_receipts(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
@@ -1114,7 +1114,7 @@ pub(super) async fn list_receipts(
 
 /// 新增收付款单：同事务生成资金凭证 + FIFO 自动核销（对标金蝶收款单/付款单）
 pub(super) async fn create_receipt(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<ReceiptCreateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1164,7 +1164,7 @@ pub(super) async fn create_receipt(
 }
 
 pub(super) async fn list_transfers(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
@@ -1176,7 +1176,7 @@ pub(super) async fn list_transfers(
 
 /// 新增资金调拨单：只落草稿单据；凭证在「审核」时生成（对标金蝶录单 → 审核）
 pub(super) async fn create_transfer(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<TransferCreateReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {

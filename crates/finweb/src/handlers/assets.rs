@@ -53,7 +53,7 @@ pub(super) async fn list_assets(
 }
 
 pub(super) async fn create_asset(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<AssetReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -74,7 +74,7 @@ pub(super) async fn create_asset(
 }
 
 pub(super) async fn update_asset(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<AssetReq>,
@@ -116,7 +116,7 @@ pub(super) async fn update_asset(
 }
 
 pub(super) async fn delete_asset(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -134,7 +134,7 @@ pub(super) async fn delete_asset(
 }
 
 pub(super) async fn list_asset_deps(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -157,7 +157,7 @@ pub(super) async fn list_asset_deps(
 
 /// 资产卡片变更历史（对标金蝶固定资产变动历史）
 pub(super) async fn list_asset_changes(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -273,7 +273,7 @@ pub(super) async fn save_asset_count(
 
 /// 资产盘点过账：盘亏（found=false）标记为停用
 pub(super) async fn post_asset_count(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -291,7 +291,7 @@ pub(super) async fn post_asset_count(
 
 /// 资产盘点单列表（含明细）
 pub(super) async fn list_asset_counts(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
@@ -300,7 +300,7 @@ pub(super) async fn list_asset_counts(
 }
 
 pub(super) async fn dispose_asset(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<AssetDisposeReq>,
@@ -328,7 +328,7 @@ pub(super) async fn dispose_asset(
 }
 
 pub(super) async fn depreciate_assets(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<PeriodReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -346,7 +346,7 @@ pub(super) async fn depreciate_assets(
 }
 
 pub(super) async fn delete_asset_deps_period(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<PeriodReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {

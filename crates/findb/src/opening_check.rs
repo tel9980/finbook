@@ -68,11 +68,14 @@ fn fmt(m: Money) -> String {
     m.fmt_plain()
 }
 
-/// 科目编码前缀是否落在往来科目上。
+/// 科目编码前缀是否落在往来科目上（只有测试用：产品路径走 `ar_prefix`/`ap_prefix`，
+/// 因为账套参数里的往来科目可能被改过）。
+#[cfg(test)]
 fn is_ar(code: &str) -> bool {
     code.starts_with("1122")
 }
 
+#[cfg(test)]
 fn is_ap(code: &str) -> bool {
     code.starts_with("2202")
 }

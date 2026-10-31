@@ -581,68 +581,217 @@ pub struct DimProfit {
     pub profit: Money,
 }
 
-/// 按辅助核算维度出损益表
+/// 损益科目落在四栏里的哪一栏
+///
+/// 归类只认科目前缀：6001/6051/6301 收入，6401/6402 成本，6403/6801 税金及附加与所得税，
+/// 剩下的都算费用。桌面端、Web 端、导出都走这一个函数 —— 之前这套前缀规则在
+/// `dim_profit` 和界面的「未分配」计算里各写了一遍，改一处就会两边对不上。
+#[derive(Clone, Copy)]
+enum PlBucket {
+    Revenue,
+    Cost,
+    Tax,
+    Expense,
+}
+
+fn bucket_of(code: &str) -> PlBucket {
+    match code {
+        c if c.starts_with("6001") || c.starts_with("6051") || c.starts_with("6301") => {
+            PlBucket::Revenue
+        }
+        c if c.starts_with("6401") || c.starts_with("6402") => PlBucket::Cost,
+        c if c.starts_with("6403") || c.starts_with("6801") => PlBucket::Tax,
+        _ => PlBucket::Expense,
+    }
+}
+
+impl DimProfit {
+    fn zero(key: String, name: String) -> Self {
+        Self {
+            key,
+            name,
+            revenue: Money::ZERO,
+            cost: Money::ZERO,
+            expense: Money::ZERO,
+            tax: Money::ZERO,
+            profit: Money::ZERO,
+        }
+    }
+    fn add(&mut self, b: PlBucket, amount: Money) {
+        match b {
+            PlBucket::Revenue => self.revenue += amount,
+            PlBucket::Cost => self.cost += amount,
+            PlBucket::Tax => self.tax += amount,
+            PlBucket::Expense => self.expense += amount,
+        }
+    }
+    /// 减去另一行（算「未分配 = 合计 − 已分配」用）
+    fn minus(&mut self, o: &DimProfit) {
+        self.revenue -= o.revenue;
+        self.cost -= o.cost;
+        self.expense -= o.expense;
+        self.tax -= o.tax;
+    }
+    fn settle(mut self) -> Self {
+        self.profit = self.revenue - self.cost - self.expense - self.tax;
+        self
+    }
+    fn is_blank(&self) -> bool {
+        self.revenue.is_zero()
+            && self.cost.is_zero()
+            && self.expense.is_zero()
+            && self.tax.is_zero()
+    }
+}
+
+/// 多维损益的完整结果：明细行 + 「未分配」行 + 合计
+///
+/// `unallocated` / `total` 与 `rows` 出自**同一张余额快照**，所以
+/// `total == Σ rows + unallocated` 恒成立（有单测钉着）。
+#[derive(Clone, Debug)]
+pub struct DimProfitReport {
+    pub dim: AuxKind,
+    /// 挂了该维度的行，按利润从大到小
+    pub rows: Vec<DimProfit>,
+    /// 没挂该维度（或挂了别的维度）的剩余部分；全为 0 时是 `None`
+    pub unallocated: Option<DimProfit>,
+    /// 公司口径合计（各行相加，含未分配）
+    pub total: DimProfit,
+}
+
+/// 按辅助核算维度出损益表（含「未分配」行与合计）
 ///
 /// 分摊规则很公司特化，这里只做**直接归属**：分录上带了某部门/项目就算它的，
 /// 共同费用不摊——宁可显示"未分配"，也不要编一个假的分摊率出来。
-pub fn dim_profit(db: &Db, period: Period, dim: AuxKind) -> DbResult<Vec<DimProfit>> {
-    // 利润表口径：剔除结转损益凭证（结完账损益科目借贷相抵，不剔全是 0）
+///
+/// 口径要点：剔除结转损益凭证（结完账损益科目借贷相抵，不剔全是 0）；
+/// 「未分配」= 科目级合计 − 各维度行之和，不再单独扫一遍账 ——
+/// 之前界面那边单独扫的时候漏了剔除结转，一结转完这行就消失（v1.8.62 修）。
+pub fn dim_profit_report(db: &Db, period: Period, dim: AuxKind) -> DbResult<DimProfitReport> {
     let mut q = BalanceQuery::period(period)
         .with_leaf_only(true)
         .with_exclude_carry(true);
     q.aux = None;
     let snap = BalanceSnapshot::load(db, &q)?;
-    let chart = crate::accounts::chart(db)?;
     let names = crate::auxs::full_name_map(db)?;
+    let chart = crate::accounts::chart(db)?;
 
     let mut map: std::collections::BTreeMap<String, DimProfit> = std::collections::BTreeMap::new();
+    let mut total = DimProfit::zero(String::new(), "合计".to_string());
+    // 只认末级科目：快照会把子科目金额上卷到父科目，父科目再来一遍就是双份
     for a in crate::accounts::list(db)?
         .iter()
-        .filter(|a| a.category.is_profit_loss())
+        .filter(|a| a.category.is_profit_loss() && chart.is_leaf(&a.code))
     {
+        let bucket = bucket_of(&a.code);
+        let income = a.category == fincore::account::AcctCategory::Income;
+        // 收入类贷方为正，成本费用类借方为正
+        let signed_of = |debit: Money, credit: Money| {
+            let signed = debit - credit;
+            if income {
+                -signed
+            } else {
+                signed
+            }
+        };
+
+        // 公司口径合计：科目级总额（所有维度之和）
+        let r = snap.for_account(&a.code, None);
+        total.add(bucket, signed_of(r.debit, r.credit));
+
+        // 维度明细：只认直接归属
         for row in snap.aux_breakdown(&a.code) {
             let Some(v) = row.aux.get(dim) else {
                 continue;
             };
-            let signed = row.debit - row.credit;
-            if signed.is_zero() {
+            let amount = signed_of(row.debit, row.credit);
+            if amount.is_zero() {
                 continue;
             }
-            let e = map.entry(v.clone()).or_insert_with(|| DimProfit {
-                key: v.clone(),
-                name: names
-                    .get(&format!("{}:{}", dim.code(), v))
-                    .cloned()
-                    .unwrap_or_else(|| v.clone()),
-                revenue: Money::ZERO,
-                cost: Money::ZERO,
-                expense: Money::ZERO,
-                tax: Money::ZERO,
-                profit: Money::ZERO,
-            });
-            // 损益科目：收入类贷方为正，成本费用类借方为正
-            let amount = if a.category == fincore::account::AcctCategory::Income {
-                -signed
-            } else {
-                signed
-            };
-            match a.code.as_str() {
-                c if c.starts_with("6001") || c.starts_with("6051") || c.starts_with("6301") => {
-                    e.revenue += amount
-                }
-                c if c.starts_with("6401") || c.starts_with("6402") => e.cost += amount,
-                c if c.starts_with("6403") || c.starts_with("6801") => e.tax += amount,
-                _ => e.expense += amount,
-            }
+            map.entry(v.clone())
+                .or_insert_with(|| {
+                    DimProfit::zero(
+                        v.clone(),
+                        names
+                            .get(&format!("{}:{}", dim.code(), v))
+                            .cloned()
+                            .unwrap_or_else(|| v.clone()),
+                    )
+                })
+                .add(bucket, amount);
         }
     }
-    let mut out: Vec<DimProfit> = map.into_values().collect();
-    for d in out.iter_mut() {
-        d.profit = d.revenue - d.cost - d.expense - d.tax;
+
+    let mut rows: Vec<DimProfit> = map.into_values().map(|d| d.settle()).collect();
+    rows.sort_by_key(|l| std::cmp::Reverse(l.profit));
+
+    let mut un = DimProfit::zero(String::new(), "未分配（公共费用未分摊）".to_string());
+    un.revenue = total.revenue;
+    un.cost = total.cost;
+    un.expense = total.expense;
+    un.tax = total.tax;
+    for d in &rows {
+        un.minus(d);
     }
-    out.sort_by_key(|l| std::cmp::Reverse(l.profit));
-    let _ = chart;
-    Ok(out)
+    let unallocated = if un.is_blank() {
+        None
+    } else {
+        Some(un.settle())
+    };
+
+    Ok(DimProfitReport {
+        dim,
+        rows,
+        unallocated,
+        total: total.settle(),
+    })
+}
+
+impl DimProfitReport {
+    /// 按数据范围收窄部门行：只留授权部门，其余部门的数并进「未分配」
+    ///
+    /// 为什么并进去而不是丢掉：合计（公司口径）是利润表上人人都看得到的数，
+    /// 丢掉别的部门行会让「合计 ≠ 各行之和」，用户只会以为报表算错了。
+    /// 并进「未分配」既不漏数、也不把别部门的明细抖出来，行名会标明这一点。
+    /// 只对部门维度有意义（其余维度没有数据范围这一说）。
+    pub fn narrow_to_depts(&mut self, depts: &[String]) {
+        let allow: std::collections::BTreeSet<&str> = depts
+            .iter()
+            .map(|d| d.trim())
+            .filter(|d| !d.is_empty())
+            .collect();
+        if allow.is_empty() {
+            return;
+        }
+        let before = self.rows.len();
+        self.rows.retain(|r| allow.contains(r.key.as_str()));
+        if self.rows.len() == before {
+            return;
+        }
+        // 未分配必须重新按「合计 − 留下的行」算，不能拿旧的未分配去减：
+        // 旧未分配里只有"没挂部门"的那部分，被藏起来的部门行不在里面。
+        let mut un = DimProfit::zero(String::new(), String::new());
+        un.revenue = self.total.revenue;
+        un.cost = self.total.cost;
+        un.expense = self.total.expense;
+        un.tax = self.total.tax;
+        for r in &self.rows {
+            un.minus(r);
+        }
+        if un.is_blank() {
+            self.unallocated = None;
+        } else {
+            un.name = "未分配（含未授权部门）".to_string();
+            self.unallocated = Some(un.settle());
+        }
+    }
+}
+
+/// 按辅助核算维度出损益表（只要明细行）
+///
+/// 保留旧签名给已有调用方；新代码用 [`dim_profit_report`]，它连「未分配」和合计一起给。
+pub fn dim_profit(db: &Db, period: Period, dim: AuxKind) -> DbResult<Vec<DimProfit>> {
+    Ok(dim_profit_report(db, period, dim)?.rows)
 }
 
 // ===========================================================================
@@ -940,6 +1089,127 @@ mod tests {
         let id = crate::vouchers::save(db, &mut v).unwrap();
         crate::vouchers::post(db, id, "p").unwrap();
         id
+    }
+
+    /// 多维损益：明细 + 未分配 + 合计出自同一张快照，且结转之后「未分配」行不能消失
+    ///
+    /// 这条钉的是 v1.8.62 修的一个真 bug：界面那边原先自己扫一遍余额补「未分配」行，
+    /// 扫的时候没剔除结转损益凭证 —— 只要这一期结转过，损益科目借贷相抵，
+    /// 整个「未分配」行就凭空消失（合计行还挂着数，看起来像报表本身不准）。
+    #[test]
+    fn dim_profit_report_keeps_unallocated_after_carry() {
+        use crate::{accounts, auxs, vouchers};
+        let db = tmpdb("dimprofit");
+        let p = Period::new(2026, 1).unwrap();
+        let date = p.last_day();
+
+        let mut a = accounts::get(&db, "660201").unwrap().expect("660201 存在");
+        a.aux = fincore::AuxMask::NONE.with(AuxKind::Dept);
+        accounts::update(&db, &a).unwrap();
+        for (code, name) in [("D01", "生产部"), ("D02", "销售部")] {
+            auxs::insert(&db, &fincore::AuxEntity::new(AuxKind::Dept, code, name)).unwrap();
+        }
+
+        // 收入 1000（不挂部门 → 归入未分配），费用：D01 100、D02 200、无部门 300
+        let mut v = fincore::Voucher::new(p, date, "记", 1);
+        let mut e = Entry::new(1, "1001", "收到货款");
+        e.debit = m("1000");
+        v.entries.push(e);
+        let mut e = Entry::new(2, "600101", "收入");
+        e.credit = m("1000");
+        v.entries.push(e);
+        let mut v = v;
+        let id = vouchers::save(&db, &mut v).unwrap();
+        vouchers::post(&db, id, "t").unwrap();
+        for (no, dept, amt) in [
+            (2, Some("D01"), "100"),
+            (3, Some("D02"), "200"),
+            (4, None, "300"),
+        ] {
+            let mut v = fincore::Voucher::new(p, date, "记", no);
+            let mut e = Entry::new(1, "660201", "费用");
+            e.debit = m(amt);
+            e.aux.dept = dept.map(|d| d.to_string());
+            v.entries.push(e);
+            let mut e = Entry::new(2, "1001", "付款");
+            e.credit = m(amt);
+            v.entries.push(e);
+            let mut v = v;
+            let id = vouchers::save(&db, &mut v).unwrap();
+            vouchers::post(&db, id, "t").unwrap();
+        }
+
+        let before = dim_profit_report(&db, p, AuxKind::Dept).unwrap();
+        let keys: Vec<&str> = before.rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["D01", "D02"],
+            "两行按利润降序：{:#?}",
+            before.rows
+        );
+        assert_eq!(before.rows[0].expense, m("100"));
+        assert_eq!(before.rows[1].expense, m("200"));
+        let un = before.unallocated.as_ref().expect("有未分配");
+        assert_eq!(un.revenue, m("1000"));
+        assert_eq!(un.expense, m("300"), "没挂部门的 300 归未分配");
+        assert_eq!(before.total.revenue, m("1000"));
+        assert_eq!(before.total.expense, m("600"));
+
+        // 结转损益（真走产品路径：carry_forward_rows → generate_carry_forward → save）
+        let chart = accounts::chart(&db).unwrap();
+        let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(p)).unwrap();
+        let rows = snap.carry_forward_rows(&chart);
+        let mut cv =
+            fincore::engine::generate_carry_forward(p, date, "转", 1, &rows, &chart, "4103", "t")
+                .unwrap();
+        let cid = vouchers::save(&db, &mut cv).unwrap();
+        vouchers::post(&db, cid, "t").unwrap();
+
+        let after = dim_profit_report(&db, p, AuxKind::Dept).unwrap();
+        assert_eq!(
+            after.rows.len(),
+            2,
+            "结转凭证不能把部门行打散：{:#?}",
+            after.rows
+        );
+        let un = after
+            .unallocated
+            .as_ref()
+            .expect("结转之后『未分配』行还得在（bug：结转凭证把损益科目抵平了）");
+        assert_eq!(un.revenue, m("1000"));
+        assert_eq!(un.expense, m("300"));
+
+        // 恒等式：合计 == 各行之和 + 未分配
+        let mut r = Money::ZERO;
+        let mut c = Money::ZERO;
+        let mut e = Money::ZERO;
+        let mut t = Money::ZERO;
+        for d in after.rows.iter().chain(after.unallocated.iter()) {
+            r += d.revenue;
+            c += d.cost;
+            e += d.expense;
+            t += d.tax;
+        }
+        assert_eq!(
+            (r, c, e, t),
+            (
+                after.total.revenue,
+                after.total.cost,
+                after.total.expense,
+                after.total.tax
+            )
+        );
+
+        // 数据范围收窄：只给 D01 的会计看，D02 的数并进「未分配」，合计不变、仍然对得上
+        let mut scoped = after.clone();
+        scoped.narrow_to_depts(&["D01".to_string()]);
+        let keys: Vec<&str> = scoped.rows.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, vec!["D01"]);
+        let un = scoped.unallocated.as_ref().expect("还剩未分配");
+        assert_eq!(un.name, "未分配（含未授权部门）");
+        assert_eq!(un.revenue, m("1000"));
+        assert_eq!(un.expense, m("500"), "300 无标签 + 200 的 D02 并进来了");
+        assert_eq!(scoped.total.expense, after.total.expense);
     }
 
     #[test]

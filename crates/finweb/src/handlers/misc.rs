@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) async fn download_attachment(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
@@ -41,7 +41,7 @@ pub(super) async fn download_attachment(
 }
 
 pub(super) async fn delete_attachment(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {

@@ -247,7 +247,7 @@ pub(super) async fn generate_payroll(
 }
 
 pub(super) async fn delete_payroll(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -464,7 +464,7 @@ pub(super) async fn create_claim(
 }
 
 pub(super) async fn update_claim(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(r): Json<ClaimInput>,
@@ -502,7 +502,7 @@ pub(super) async fn update_claim(
 }
 
 pub(super) async fn delete_claim(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -523,7 +523,7 @@ pub(super) async fn delete_claim(
 }
 
 pub(super) async fn claim_transition(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(r): Json<ClaimTransitionReq>,
@@ -567,7 +567,7 @@ pub(super) async fn claim_transition(
 }
 
 pub(super) async fn claim_voucher(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(r): Json<ClaimVoucherReq>,

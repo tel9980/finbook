@@ -8,7 +8,7 @@
 use super::*;
 
 pub(super) async fn post_landed_cost(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -31,7 +31,7 @@ pub(super) async fn post_landed_cost(
 /// 刻意只返回**已收到货**的行：没收到的货没有附加成本可摊，摊上去就是给一份
 /// 不存在的存货加成本。运费到了货还没到是常事，所以这个限制必须在取数层就做。
 pub(super) async fn landed_cost_from_po(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -58,7 +58,7 @@ pub(super) async fn landed_cost_from_po(
 }
 
 pub(super) async fn items_master(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
@@ -70,7 +70,7 @@ pub(super) async fn items_master(
 
 /// 单条出入库流水（差异分析点行看构成明细）
 pub(super) async fn get_stock_move(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -146,7 +146,7 @@ pub(super) async fn serial_out_endpoint(
 }
 
 pub(super) async fn get_unit(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -158,7 +158,7 @@ pub(super) async fn get_unit(
 }
 
 pub(super) async fn set_unit(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<UnitReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -239,7 +239,7 @@ pub(super) async fn disassemble_endpoint(
 }
 
 pub(super) async fn get_warehouse_stock(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -257,7 +257,7 @@ pub(super) async fn get_warehouse_stock(
 
 /// 仓库档案列表（读：Report；默认仓在前）
 pub(super) async fn list_warehouses(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
@@ -267,7 +267,7 @@ pub(super) async fn list_warehouses(
 
 /// 新增/修改仓库（写：Warehouse；设默认仓自动清其它默认标记）
 pub(super) async fn save_warehouse(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(w): Json<findb::warehouse::Warehouse>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -285,7 +285,7 @@ pub(super) async fn save_warehouse(
 
 /// 删除仓库：默认仓不可删、被流水/盘点引用不可删
 pub(super) async fn delete_warehouse(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(code): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -297,7 +297,7 @@ pub(super) async fn delete_warehouse(
 }
 
 pub(super) async fn get_routing(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(item): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -308,7 +308,7 @@ pub(super) async fn get_routing(
 }
 
 pub(super) async fn post_routing(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(item): Path<String>,
     Json(req): Json<Vec<RoutingOpDto>>,
@@ -335,7 +335,7 @@ pub(super) async fn post_routing(
 }
 
 pub(super) async fn delete_routing(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(item): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -348,7 +348,7 @@ pub(super) async fn delete_routing(
 // ---- MRP ----
 
 pub(super) async fn get_mrp_latest(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
@@ -383,7 +383,7 @@ pub(super) async fn run_mrp(
 
 /// MRP 采购建议下推请购单（草稿，幂等）
 pub(super) async fn mrp_to_req_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -438,7 +438,7 @@ pub(super) async fn form_convert_ep(
 
 /// 质检单：合格留库；不合格**自动按订单单价退货**（负到货 + 负采购入库同事务）
 pub(super) async fn qc_order_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<QcReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -493,7 +493,7 @@ pub(super) async fn qc_order_ep(
 
 /// 低于安全库存（item_plan 安全量 vs 现有库存）
 pub(super) async fn below_safety_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
@@ -557,7 +557,7 @@ pub(super) async fn run_mps(
 
 /// MPS 最近一次结果
 pub(super) async fn get_mps_latest(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
@@ -616,7 +616,7 @@ pub(super) async fn rough_mps(
 
 /// BOM 查询（报工页「维护BOM」回显）
 pub(super) async fn get_bom_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -641,7 +641,7 @@ pub(super) async fn get_bom_ep(
 
 /// BOM 保存（覆盖当前版本；领料与 MRP 均按 BOM 展开）
 pub(super) async fn save_bom_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BomReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -701,7 +701,7 @@ pub(super) async fn list_archives(
 }
 
 pub(super) async fn create_archive(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<ArchiveReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -728,7 +728,7 @@ pub(super) async fn create_archive(
 }
 
 pub(super) async fn get_archive(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -740,7 +740,7 @@ pub(super) async fn get_archive(
 }
 
 pub(super) async fn verify_archive(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -756,7 +756,7 @@ pub(super) async fn verify_archive(
 
 /// 盘点单列表（含明细：账面快照 vs 实盘）
 pub(super) async fn list_counts(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
@@ -815,7 +815,7 @@ pub(super) async fn create_count(
 
 /// 应用盘点单：生成其他入库/出库流水 + 盘盈盘亏凭证（金额=差异×标准价）
 pub(super) async fn apply_count(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -843,7 +843,7 @@ pub(super) async fn apply_count(
 }
 
 pub(super) async fn delete_count(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -916,7 +916,7 @@ pub(super) async fn batch_cost(
 
 /// 批次列表（含余额；?item= 过滤）
 pub(super) async fn list_batches(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -930,7 +930,7 @@ pub(super) async fn list_batches(
 
 /// FEFO 推荐（近效期先出）
 pub(super) async fn fefo_batches(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<FefoReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -951,7 +951,7 @@ pub(super) async fn fefo_batches(
 
 /// 临期批次（默认30天窗口）
 pub(super) async fn expiring_batches_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -967,7 +967,7 @@ pub(super) async fn expiring_batches_ep(
 }
 
 pub(super) async fn delete_location(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -980,7 +980,7 @@ pub(super) async fn delete_location(
 
 /// 存货计划参数读取（编辑器回显）：安全库存 / 前置期 / 批量
 pub(super) async fn get_item_plan(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1007,7 +1007,7 @@ pub(super) async fn get_item_plan(
 
 /// 存货计划参数保存（补齐「低库存预警 ↔ 设置入口」断链——迁移/建档配套）
 pub(super) async fn save_item_plan(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<ItemPlanReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1152,7 +1152,7 @@ pub(super) async fn serial_in_endpoint(
 }
 
 pub(super) async fn list_serial(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1254,7 +1254,7 @@ pub(super) async fn do_transfer(
 }
 
 pub(super) async fn list_locations(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
@@ -1263,7 +1263,7 @@ pub(super) async fn list_locations(
 }
 
 pub(super) async fn save_location(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<LocationReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {

@@ -24,7 +24,7 @@ pub(super) async fn next_voucher_no(
 }
 
 pub(super) async fn list_vouchers(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Vec<VoucherListItem>>, AppError> {
@@ -58,7 +58,7 @@ pub(super) async fn list_vouchers(
 /// 参数非法一律 400（`page=abc` 不能静默当第 1 页——那会让调用方拿到
 /// 「看起来正常但其实是首页」的数据，漏拉很难发现）。
 pub(super) async fn list_vouchers_page(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<VoucherPage>, AppError> {
@@ -109,7 +109,7 @@ pub(super) async fn list_vouchers_page(
 }
 
 pub(super) async fn get_voucher(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<VoucherDetail>, AppError> {
@@ -341,7 +341,7 @@ pub(super) async fn save_voucher(
 
 /// 凭证作废 / 恢复（已结账期间拒绝；作废后不参与账簿汇总，可恢复）
 pub(super) async fn voucher_void(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<VoidReq>,
@@ -368,7 +368,7 @@ pub(super) async fn voucher_void(
 /// 作废只是把一张凭证移出账外，更正还会**生成**一张进入流程的新凭证。
 /// 单独的权限点会让「谁能改历史账」变成配置问题，先复用既有口径。
 pub(super) async fn voucher_amend(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<AmendReq>,
@@ -388,7 +388,7 @@ pub(super) async fn voucher_amend(
 }
 
 pub(super) async fn voucher_post(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -416,7 +416,7 @@ pub(super) async fn voucher_post(
 
 /// 审核（未记账 → 已审核）
 pub(super) async fn voucher_audit(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -438,7 +438,7 @@ pub(super) async fn voucher_audit(
 
 /// 反审核（已审核 → 未记账）
 pub(super) async fn voucher_unaudit(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -457,7 +457,7 @@ pub(super) async fn voucher_unaudit(
 
 /// 出纳签字（未记账凭证记录签字人；require_cashier 账套作为现金/银行凭证记账前置）
 pub(super) async fn voucher_sign(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -479,7 +479,7 @@ pub(super) async fn voucher_sign(
 
 /// 取消出纳签字
 pub(super) async fn voucher_unsign(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -500,7 +500,7 @@ pub(super) async fn voucher_unsign(
 }
 
 pub(super) async fn voucher_batch_post(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<BatchPostReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -526,7 +526,7 @@ pub(super) async fn voucher_batch_post(
 }
 
 pub(super) async fn voucher_unpost(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -600,7 +600,7 @@ pub(super) async fn voucher_renumber(
 }
 
 pub(super) async fn voucher_delete(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -877,7 +877,7 @@ pub(super) async fn print_ledger_form(
 }
 
 pub(super) async fn list_voucher_attachments(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
@@ -920,7 +920,7 @@ pub(super) async fn upload_voucher_attachment(
     // 体大小已由路由层的 DefaultBodyLimit（12 MB）兜底。
     let mut name = String::new();
     let mut data: Option<Vec<u8>> = None;
-    while let Some(mut field) = multipart
+    while let Some(field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::bad_request(format!("上传解析失败：{e}")))?

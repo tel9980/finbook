@@ -537,7 +537,7 @@ mod tests {
     }
 
     use super::*;
-    use fincore::account::{AcctCategory, Direction};
+    use fincore::account::AcctCategory;
 
     fn acct(code: &str, name: &str, cat: AcctCategory) -> Account {
         Account::new(code, name, cat)
@@ -898,11 +898,11 @@ pub fn cash_flow_compare_sheet(
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut emphasis: Vec<usize> = Vec::new();
 
-    let mut push_block = |rows: &mut Vec<Vec<String>>,
-                          emphasis: &mut Vec<usize>,
-                          title: &str,
-                          a: &[fincore::report::cashflow::CashFlowLine],
-                          b: &[fincore::report::cashflow::CashFlowLine]| {
+    let push_block = |rows: &mut Vec<Vec<String>>,
+                      emphasis: &mut Vec<usize>,
+                      title: &str,
+                      a: &[fincore::report::cashflow::CashFlowLine],
+                      b: &[fincore::report::cashflow::CashFlowLine]| {
         rows.push(vec![
             title.to_string(),
             String::new(),
@@ -940,11 +940,11 @@ pub fn cash_flow_compare_sheet(
         }
     };
 
-    let mut totals = |rows: &mut Vec<Vec<String>>,
-                      emphasis: &mut Vec<usize>,
-                      label: &str,
-                      a: &Money,
-                      b: &Money| {
+    let totals = |rows: &mut Vec<Vec<String>>,
+                  emphasis: &mut Vec<usize>,
+                  label: &str,
+                  a: &Money,
+                  b: &Money| {
         rows.push(vec![
             label.to_string(),
             a.fmt_plain(),

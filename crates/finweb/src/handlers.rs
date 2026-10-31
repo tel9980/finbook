@@ -29,7 +29,7 @@ pub(crate) use findb::{auxs, business, template};
 pub(crate) use serde::Deserialize;
 pub(crate) use serde_json::json;
 pub(crate) use tracing::error;
-pub(crate) use zip::write::{FileOptionExtension, FileOptions};
+pub(crate) use zip::write::FileOptions;
 pub(crate) use zip::{CompressionMethod, ZipWriter};
 
 pub(crate) use crate::dto::*;
@@ -402,6 +402,7 @@ pub fn router(state: Arc<WebState>) -> Router {
             get(export_balance_sheet_xlsx),
         )
         .route("/api/reports/income-statement", get(get_income_statement))
+        .route("/api/reports/dim-profit", get(get_dim_profit))
         .route(
             "/api/reports/income-statement/print",
             get(print_income_statement),

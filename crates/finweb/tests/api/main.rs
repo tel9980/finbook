@@ -32,43 +32,6 @@ fn post_json(uri: &str, body: serde_json::Value) -> Request<Body> {
 }
 
 /// 从登录响应的 set-cookie 里取出 `finbook_sid=xxx` 段
-fn sid_from(resp: &axum::http::Response<Body>) -> String {
-    let cookie = resp
-        .headers()
-        .get(header::SET_COOKIE)
-        .expect("登录应返回 set-cookie")
-        .to_str()
-        .unwrap();
-    cookie.split(';').next().unwrap().to_string()
-}
-
-async fn login_with_device(
-    state: &Arc<WebState>,
-    username: &str,
-    password: &str,
-    device_id: &str,
-) -> (StatusCode, String) {
-    let resp = handlers::router(state.clone())
-        .oneshot(post_json(
-            "/api/login",
-            serde_json::json!({
-                "username": username,
-                "password": password,
-                "device_id": device_id,
-                "device_name": "测试机",
-            }),
-        ))
-        .await
-        .unwrap();
-    let status = resp.status();
-    let sid = if status.is_success() {
-        sid_from(&resp)
-    } else {
-        String::new()
-    };
-    (status, sid)
-}
-
 /// 带 Bearer 密钥的 GET 请求（开放 API 用；secret 传空串表示不带 Authorization）
 fn bearer_get(uri: &str, secret: &str) -> Request<Body> {
     let mut b = Request::builder().method("GET").uri(uri);
@@ -86,17 +49,6 @@ fn bearer_get_for_book(uri: &str, secret: &str, book_key: &str) -> Request<Body>
         .header(header::AUTHORIZATION, format!("Bearer {secret}"))
         .header("x-book-key", book_key)
         .body(Body::empty())
-        .unwrap()
-}
-
-/// 带 sid 的 PUT JSON 请求
-fn authed_put(uri: &str, sid: &str, body: serde_json::Value) -> Request<Body> {
-    Request::builder()
-        .method("PUT")
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::COOKIE, sid)
-        .body(Body::from(body.to_string()))
         .unwrap()
 }
 

@@ -8,7 +8,7 @@
 use super::*;
 
 pub(super) async fn list_invoices(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<InvoiceListQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -49,7 +49,7 @@ pub(super) async fn list_invoices(
 }
 
 pub(super) async fn invoice_summary(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
@@ -69,7 +69,7 @@ pub(super) async fn invoice_summary(
 
 /// 下推开票：采购订单 → 进项发票（金额=订单整单，状态=待认证），记录单据勾稽
 pub(super) async fn invoice_from_po(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<InvoiceFromPo>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -87,7 +87,7 @@ pub(super) async fn invoice_from_po(
 
 /// 下推开票：销售订单 → 销项发票（金额=订单整单，状态=待认证），记录单据勾稽
 pub(super) async fn invoice_from_so(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<InvoiceFromSo>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -104,7 +104,7 @@ pub(super) async fn invoice_from_so(
 }
 
 pub(super) async fn create_invoice(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<InvoiceReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -116,7 +116,7 @@ pub(super) async fn create_invoice(
 }
 
 pub(super) async fn invoice_set_status(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<InvoiceStatusReq>,
@@ -306,7 +306,7 @@ pub(super) async fn list_quotation(
 }
 
 pub(super) async fn save_quotation(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(mut req): Json<findb::sales::Quotation>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -323,7 +323,7 @@ pub(super) async fn save_quotation(
 }
 
 pub(super) async fn approve_quotation(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -574,7 +574,7 @@ pub(super) async fn print_so_form(
 
 /// 报价单转销售订单（approved → converted）：生成草稿订单，税率 0 可在订单中再调整
 pub(super) async fn convert_quotation(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -624,7 +624,7 @@ pub(super) async fn list_so(
 
 /// 发货通知（订单确认后）：仓库备货指令，出库后自动完成最早一条待发通知
 pub(super) async fn create_notice(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<NoticeReq>,
@@ -650,7 +650,7 @@ pub(super) async fn create_notice(
 
 /// 待发/历史发货通知列表
 pub(super) async fn list_notices(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
@@ -773,7 +773,7 @@ pub(super) async fn save_so(
 }
 
 pub(super) async fn transition_so(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<OrderTransitionReq>,
@@ -806,7 +806,7 @@ pub(super) async fn transition_so(
 }
 
 pub(super) async fn delete_so(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -910,7 +910,7 @@ pub(super) async fn get_notices(
 }
 
 pub(super) async fn update_invoice(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<InvoiceReq>,
@@ -939,7 +939,7 @@ pub(super) async fn update_invoice(
 }
 
 pub(super) async fn delete_invoice(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -956,7 +956,7 @@ pub(super) async fn delete_invoice(
 }
 
 pub(super) async fn get_tax_options(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
@@ -965,7 +965,7 @@ pub(super) async fn get_tax_options(
 }
 
 pub(super) async fn save_tax_options(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<findb::taxdecl::TaxOptions>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1006,7 +1006,7 @@ pub(super) async fn save_tax_options(
 }
 
 pub(super) async fn get_change_log(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {

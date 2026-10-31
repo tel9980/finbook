@@ -1053,6 +1053,44 @@ const MUT = [
     to: '        "5101" => {',
     cmd: ["test", "-p", "fincore", "--lib", "chart::tests::dept_aux_lands_on_leaf_accounts"],
   },
+  // v1.8.62：多维损益搬上 Web。三条都是「数字看着正常、口径已经错了」的形态：
+  // 未分配行消失、收入翻倍、部门会计看到别部门。
+  {
+    // 不剔除结转损益凭证：结转过的一期，未分配行会算成 0 而消失。
+    name: "㊲ 多维损益不剔除结转损益凭证",
+    file: "crates/findb/src/mgmt.rs",
+    from: "        .with_exclude_carry(true)",
+    to: "        .with_exclude_carry(false)",
+    cmd: [
+      "test",
+      "-p",
+      "findb",
+      "--lib",
+      "mgmt::tests::dim_profit_report_keeps_unallocated_after_carry",
+    ],
+  },
+  {
+    // 父科目也参与聚合：快照已把子科目上卷到父科目，再来一遍就是双份。
+    name: "㊲ 多维损益把父科目也算一遍（收入翻倍）",
+    file: "crates/findb/src/mgmt.rs",
+    from: "        .filter(|a| a.category.is_profit_loss() && chart.is_leaf(&a.code))",
+    to: "        .filter(|a| a.category.is_profit_loss())",
+    cmd: [
+      "test",
+      "-p",
+      "findb",
+      "--lib",
+      "mgmt::tests::dim_profit_report_keeps_unallocated_after_carry",
+    ],
+  },
+  {
+    // 不按部门数据范围收窄：部门会计能看到别的部门那一行。
+    name: "㊲ 多维损益不吃部门数据范围",
+    file: "crates/finweb/src/handlers/reports.rs",
+    from: "        report.narrow_to_depts(&user.user.data_scope.depts);",
+    to: "        let _ = &user.user.data_scope.depts;",
+    cmd: ["test", "-p", "finweb", "--test", "api", "--", "dim_profit_web_by_dept"],
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

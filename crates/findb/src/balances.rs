@@ -444,10 +444,10 @@ impl BalanceSnapshot {
 
         let chart = accounts::chart(db).ok();
         // ── 前缀预聚合：按科目编码层级累加（自身 + 全部下级）
-        /// 科目编码是层级前缀（`1002` ⊃ `100201` ⊃ `10020101`）。
-        /// 做法：先把所有 (code, aux) 的直接值按 code 分组求和（忽略 aux 维度），
-        /// 再按 code 降序遍历，把每个 code 的值加到它的父 code 上。
-        /// 这样每个 code 最终存的是"自身 + 所有下级"的合计。
+        // 科目编码是层级前缀（`1002` ⊃ `100201` ⊃ `10020101`）。
+        // 做法：先把所有 (code, aux) 的直接值按 code 分组求和（忽略 aux 维度），
+        // 再按 code 降序遍历，把每个 code 的值加到它的父 code 上。
+        // 这样每个 code 最终存的是"自身 + 所有下级"的合计。
         let mut by_code: BTreeMap<String, BalanceRow> = BTreeMap::new();
 
         // 1) 先聚合同一 code 的所有 aux 维度 → 该 code 的直接值
@@ -466,8 +466,8 @@ impl BalanceSnapshot {
         }
 
         // 2) 按 code 降序遍历（子级先于父级），累加到父级
-        /// BTreeMap 的 keys() 是升序；`rev()` 变成降序。
-        /// 因为科目编码是前缀关系（父 < 子），降序保证先处理子级。
+        // BTreeMap 的 keys() 是升序；`rev()` 变成降序。
+        // 因为科目编码是前缀关系（父 < 子），降序保证先处理子级。
         let codes: Vec<String> = by_code.keys().cloned().collect();
         for code in codes.into_iter().rev() {
             // 找父 code：当前 code 的最长真前缀，且该前缀存在于 by_code 中
@@ -645,7 +645,7 @@ impl BalanceSnapshot {
                                                    // 数量账：by_code 不存 qty，需从 rows 聚合（仅在需要 qty 时）
                 if self.qtys.iter().any(|((c, _), _)| c.starts_with(code)) {
                     let mut qr = QtyRow::default();
-                    for ((c, ak), q) in &self.qtys {
+                    for ((c, _ak), q) in &self.qtys {
                         if c.starts_with(code) {
                             qr.begin += q.begin;
                             qr.in_qty += q.in_qty;

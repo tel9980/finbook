@@ -923,3 +923,180 @@ async fn web_print_and_pdf_endpoints() {
         .unwrap_or("");
     assert!(ct.contains("application/pdf"), "应返回 PDF：{ct}");
 }
+
+/// Web 端补上的「多维损益」：按部门归集、保留「未分配」行、合计对得上
+///
+/// 口径取自 `findb::mgmt::dim_profit_report`（与桌面端同一个函数）：
+/// 收入类贷方为正、成本费用类借方为正，没挂部门的分录进「未分配」。
+#[tokio::test]
+async fn dim_profit_web_by_dept() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 四张凭证：收入 1000（不挂部门）、费用 D01 100、D02 200、不挂部门 300
+    let vouchers: Vec<(i32, &str, &str, &str, &str, Option<&str>)> = vec![
+        (1, "1001", "1000", "600101", "1000", None),
+        (2, "660201", "100", "1001", "100", Some("D01")),
+        (3, "660201", "200", "1001", "200", Some("D02")),
+        (4, "660201", "300", "1001", "300", None),
+    ];
+    for (no, debit_code, debit, credit_code, credit, dept) in vouchers {
+        let mut e1 = serde_json::json!({
+            "line": 1, "account_code": debit_code, "summary": "多维损益",
+            "debit": debit, "credit": "0"
+        });
+        let mut e2 = serde_json::json!({
+            "line": 2, "account_code": credit_code, "summary": "多维损益",
+            "debit": "0", "credit": credit
+        });
+        if let Some(d) = dept {
+            e1["aux"] = serde_json::json!({ "dept": d });
+            e2["aux"] = serde_json::json!({ "dept": d });
+        }
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/vouchers",
+                &sid,
+                serde_json::json!({
+                    "id": 0, "period": 202601, "date": "2026-01-15", "word": "记",
+                    "no": no, "attachments": 0, "memo": "多维损益",
+                    "entries": [e1, e2]
+                }),
+            ))
+            .await
+            .unwrap();
+        let status = resp.status();
+        let body = body_string(resp).await;
+        assert_eq!(status, StatusCode::OK, "第 {no} 张应保存成功：{body}");
+        let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+            .as_i64()
+            .expect("保存应返回 id");
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                &format!("/api/vouchers/{id}/post"),
+                &sid,
+                serde_json::json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_ok(resp, "应记账成功").await;
+    }
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/reports/dim-profit?period=202601&dim=dept",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "多维损益应 200");
+    let got: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = got["rows"].as_array().expect("rows 数组");
+    let keys: Vec<&str> = rows.iter().filter_map(|r| r["key"].as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["D01", "D02"],
+        "按利润降序（-100 在 -200 前）：{got}"
+    );
+    let d01 = rows.iter().find(|r| r["key"] == "D01").unwrap();
+    let d02 = rows.iter().find(|r| r["key"] == "D02").unwrap();
+    assert_eq!(d01["expense"], "100.00");
+    assert_eq!(d02["expense"], "200.00");
+
+    let un = &got["unallocated"];
+    assert_eq!(un["revenue"], "1,000.00", "不挂部门的收入归未分配：{got}");
+    assert_eq!(un["expense"], "300.00");
+    assert_eq!(got["total"]["revenue"], "1,000.00");
+    assert_eq!(got["total"]["expense"], "600.00");
+    assert_eq!(got["total"]["profit"], "400.00");
+    assert_eq!(got["dim"], "dept");
+    assert_eq!(got["dim_label"], "部门");
+    assert!(
+        got["dims"].as_array().unwrap().len() >= 6,
+        "维度清单要够用户切换：{got}"
+    );
+
+    // 部门数据范围：只给 D01 的会计看 —— 别部门那一行不许出现，但合计仍要对得上
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/platform/users",
+            &sid,
+            serde_json::json!({
+                "username": "dpscoped", "display_name": "部门会计", "password": "Dep@123456"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "开通平台账号");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/users",
+            &sid,
+            serde_json::json!({
+                "username": "dpscoped", "display_name": "部门会计", "password": "Dep@123456",
+                "role": "accountant", "must_change_pwd": false
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "拉进账套");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_put(
+            "/api/users/dpscoped",
+            &sid,
+            serde_json::json!({ "data_scope": { "depts": ["D01"] } }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "设部门范围");
+    let (st, sid0) = login(&state, "dpscoped", "Dep@123456").await;
+    assert_eq!(st, StatusCode::OK, "首登");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/change-password",
+            &sid0,
+            serde_json::json!({ "old": "Dep@123456", "new": "Dep!23456" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "首登改密");
+    let (st, sid2) = login(&state, "dpscoped", "Dep!23456").await;
+    assert_eq!(st, StatusCode::OK, "改密后重登");
+    assert_eq!(select_book(&state, &sid2, "b1").await, StatusCode::OK);
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/reports/dim-profit?period=202601&dim=dept",
+            &sid2,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let scoped: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let skeys: Vec<&str> = scoped["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|r| r["key"].as_str())
+        .collect();
+    assert_eq!(skeys, vec!["D01"], "别的部门那一行不该出现：{scoped}");
+    let sun = &scoped["unallocated"];
+    assert!(
+        sun["name"].as_str().unwrap_or("").contains("未授权部门"),
+        "被藏起来的部门要并进未分配并说明：{scoped}"
+    );
+    assert_eq!(sun["expense"], "500.00", "300 无标签 + 200 的 D02");
+    assert_eq!(sun["revenue"], "1,000.00");
+    assert_eq!(scoped["total"]["expense"], "600.00", "合计仍是公司口径");
+    assert_eq!(scoped["total"]["profit"], "400.00");
+
+    // 不是损益维度 → 400，不静默返回空表
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/reports/dim-profit?period=202601&dim=cashflow",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}

@@ -84,7 +84,6 @@ pub fn cash_flow_html(
     can_edit: bool,
     prev: Option<&fincore::report::cashflow::CashFlowStatement>,
 ) -> String {
-    use fincore::report::cashflow::CashFlowStatement;
     let extra = prev.is_some();
     let ncols = if extra { 6 } else { 4 };
 

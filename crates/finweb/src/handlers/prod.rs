@@ -104,7 +104,7 @@ pub(super) async fn cost_forecast_ep(
 
 /// 制造费用分摊：按基准试算/应用（写入 CostType::Overhead 归集）
 pub(super) async fn cost_overhead_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<OverheadReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -170,7 +170,7 @@ pub(super) async fn get_cost_variance(
 
 /// 流程列表（含节点/连线）。查看=Report；保存/发布/删除=SysOption（账套配置权）。
 pub(super) async fn list_workflows(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
@@ -181,7 +181,7 @@ pub(super) async fn list_workflows(
 /// 预置流程模板清单（不返回 nodes/edges 全文，前端只要元信息做选择卡片；
 /// 真正的图在 apply 之后随流程一起返回）
 pub(super) async fn list_wf_templates(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
@@ -221,7 +221,7 @@ pub(super) async fn list_wf_templates(
 /// 落的是草稿而非直接发布：模板是行业惯例，不是这家企业的授权制度；而且
 /// 已有单据在流转时改流程会让在途实例指向不存在的节点。
 pub(super) async fn apply_wf_template(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<WfTemplateApplyReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -238,7 +238,7 @@ pub(super) async fn apply_wf_template(
 }
 
 pub(super) async fn save_workflow(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(f): Json<findb::workflow::WfFlowInput>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -260,7 +260,7 @@ pub(super) async fn save_workflow(
 }
 
 pub(super) async fn publish_workflow(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -272,7 +272,7 @@ pub(super) async fn publish_workflow(
 }
 
 pub(super) async fn unpublish_workflow(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -284,7 +284,7 @@ pub(super) async fn unpublish_workflow(
 }
 
 pub(super) async fn delete_workflow(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -297,7 +297,7 @@ pub(super) async fn delete_workflow(
 
 /// 运行实例（当前节点/状态/轨迹），供「工作流」页回放
 pub(super) async fn list_wf_instances(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
@@ -378,7 +378,7 @@ pub(super) async fn list_prod_orders(
 }
 
 pub(super) async fn get_prod_ops(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -389,7 +389,7 @@ pub(super) async fn get_prod_ops(
 }
 
 pub(super) async fn report_prod_op(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<OpReportReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -405,7 +405,7 @@ pub(super) async fn report_prod_op(
 }
 
 pub(super) async fn finish_prod_op(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<OpFinishReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -418,7 +418,7 @@ pub(super) async fn finish_prod_op(
 /// 委外加工费确认：借 500102 生产成本-直接人工 / 贷 应付科目（供应商辅助）；
 /// 金额并入该订单人工要素，完工时随 140501 结转（委外=生产的变体，全链复用）。
 pub(super) async fn outsource_fee_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<OutsourceFeeReq>,
@@ -439,7 +439,7 @@ pub(super) async fn outsource_fee_ep(
 
 /// 细排：批量写回计划开工/完工日（仅未完工订单可排）
 pub(super) async fn schedule_prod(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<ScheduleReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -524,7 +524,7 @@ pub(super) async fn create_prod_ep(
 ///
 /// 老路径不动：`create_prod_ep` 仍直接建 `Released`，避免既有调用方行为变化。
 pub(super) async fn prod_release_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -549,7 +549,7 @@ pub(super) async fn prod_release_ep(
 
 /// 开工：已下达 → 生产中（完工入库的前置状态；条件更新防并发）
 pub(super) async fn prod_start_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -562,7 +562,7 @@ pub(super) async fn prod_start_ep(
 
 /// 生产订单变更（草稿/已下达）：数量不得低于已完工；逐字段留痕
 pub(super) async fn update_prod_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<ProdUpdateReq>,
@@ -592,7 +592,7 @@ pub(super) async fn update_prod_ep(
 
 /// 生产订单取消（仅草稿/已下达）
 pub(super) async fn cancel_prod_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -608,7 +608,7 @@ pub(super) async fn cancel_prod_ep(
 
 /// 生产订单变更历史
 pub(super) async fn list_prod_changes(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -628,7 +628,7 @@ pub(super) async fn list_prod_changes(
 
 /// 工序检验（仅生产中订单；不合格必选处置；报废同步扣减计划量）
 pub(super) async fn prod_qc_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<ProdQcReq>,
@@ -672,7 +672,7 @@ pub(super) async fn prod_qc_ep(
 
 /// 工序检验记录
 pub(super) async fn list_prod_qc(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -687,7 +687,7 @@ pub(super) async fn list_prod_qc(
 /// 出领料凭证（借 500101 生产成本-直接材料 / 贷各物料科目，数量核算）。
 /// 凭证期间随订单；仅 已下达/生产中 可领。
 pub(super) async fn prod_issue_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<ProdActReq>,
@@ -735,7 +735,7 @@ pub(super) async fn prod_issue_ep(
 /// 完工结转凭证（借 140501 库存商品数量核算 / 贷 500101~03 各要素，只出非零）。
 /// 仅生产中订单可完工（条件更新防重复完工）。
 pub(super) async fn prod_complete_ep(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<ProdActReq>,
@@ -784,7 +784,7 @@ pub(super) async fn prod_complete_ep(
 // ---- 审批流 ----
 
 pub(super) async fn list_approvals(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
@@ -794,7 +794,7 @@ pub(super) async fn list_approvals(
 }
 
 pub(super) async fn list_approval_todo(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
@@ -804,7 +804,7 @@ pub(super) async fn list_approval_todo(
 }
 
 pub(super) async fn get_approval(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -816,7 +816,7 @@ pub(super) async fn get_approval(
 }
 
 pub(super) async fn start_approval(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<ApprovalStartReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -834,7 +834,7 @@ pub(super) async fn start_approval(
 }
 
 pub(super) async fn act_approval(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
     Json(req): Json<ApprovalActReq>,
@@ -846,7 +846,7 @@ pub(super) async fn act_approval(
 }
 
 pub(super) async fn cancel_approval(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -857,7 +857,7 @@ pub(super) async fn cancel_approval(
 }
 
 pub(super) async fn clear_cost_method(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(item): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -869,7 +869,7 @@ pub(super) async fn clear_cost_method(
 
 /// 单据的流程实例状态（流程条 / 列表行徽标）：仅工作流四类业务
 pub(super) async fn get_wf_instance_for(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -976,7 +976,7 @@ pub(super) async fn sales_cost_ep(
 }
 
 pub(super) async fn list_cost_configs(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
@@ -986,7 +986,7 @@ pub(super) async fn list_cost_configs(
 }
 
 pub(super) async fn save_cost_method(
-    State(state): State<Arc<WebState>>,
+    State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Json(req): Json<CostMethodReq>,
 ) -> Result<Json<serde_json::Value>, AppError> {
