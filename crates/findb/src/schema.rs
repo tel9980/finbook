@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 41;
+pub const SCHEMA_VERSION: i64 = 42;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -637,6 +637,7 @@ CREATE TABLE IF NOT EXISTS production_order (
     supplier_name   TEXT NOT NULL DEFAULT '',
     plan_start      TEXT NOT NULL DEFAULT '',   -- 细排计划开工日（链6）
     plan_end        TEXT NOT NULL DEFAULT '',   -- 细排计划完工日（链6）
+    routing_version TEXT NOT NULL DEFAULT '',   -- v42: 按哪一版工艺排产（'' = 默认版本）
     created_at      TEXT NOT NULL DEFAULT '',
     updated_at      TEXT NOT NULL DEFAULT ''
 );
@@ -1769,6 +1770,17 @@ const MIGRATE_V41: &[(&str, &str, &str)] = &[
     ("prod_op_log", "routing_version", "TEXT NOT NULL DEFAULT ''"),
 ];
 
+/// V42：生产订单记下「按哪一版工艺排产」。
+///
+/// 同一物料可以有多版工艺（见 MIGRATE_V41 的计件单价分版本）。在建单那一刻
+/// 选了哪一版，工序清单就按哪一版生成、报工流水的版本也跟着定下来。不记这一列，
+/// 事后重生成工序只能退回默认版本，报工记的版本就与当初排产的那一版对不上。
+const MIGRATE_V42: &[(&str, &str, &str)] = &[(
+    "production_order",
+    "routing_version",
+    "TEXT NOT NULL DEFAULT ''",
+)];
+
 /// v5 → v6：供应链深化（采购订单 / 销售订单 / BOM / 生产订单）
 const MIGRATE_V6: &[(&str, &str, &str)] = &[
     // 采购订单表
@@ -2298,6 +2310,8 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_generic(conn, MIGRATE_V38)?;
             // v41：计件单价分工艺版本（piece_rate.version / prod_op_log.routing_version）
             migrate_generic(conn, MIGRATE_V41)?;
+            // v42：生产订单记下按哪一版工艺排产
+            migrate_generic(conn, MIGRATE_V42)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：
@@ -2548,7 +2562,11 @@ mod tests {
         };
 
         // 造出「缺了 MIGRATE_V35 / V41 全部列」的存量账套
-        for (table, col, _) in MIGRATE_V35.iter().chain(MIGRATE_V41.iter()) {
+        for (table, col, _) in MIGRATE_V35
+            .iter()
+            .chain(MIGRATE_V41.iter())
+            .chain(MIGRATE_V42.iter())
+        {
             // DROP COLUMN 不允许还有索引指着该列，先摘掉相关索引
             for idx in indexes_of(&conn, table) {
                 if index_columns(&conn, &idx)
@@ -2575,7 +2593,11 @@ mod tests {
 
         init(&conn).expect("缺列的旧账套升级必须成功");
 
-        for (table, col, _) in MIGRATE_V35.iter().chain(MIGRATE_V41.iter()) {
+        for (table, col, _) in MIGRATE_V35
+            .iter()
+            .chain(MIGRATE_V41.iter())
+            .chain(MIGRATE_V42.iter())
+        {
             assert!(
                 column_exists(&conn, table, col).unwrap(),
                 "升级后必须补齐 {table}.{col}"

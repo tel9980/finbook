@@ -276,3 +276,159 @@ async fn piece_rate_matches_routing_version() {
         2.0
     );
 }
+
+/// 下单时选了哪一版工艺，订单就要记下来：工序按这一版生成、报工按这一版算钱。
+///
+/// 这条用例挡的是「订单不记版本」这个退化：工序仍能生成（默认版本或第一个版本），
+/// 但订单上没版本，事后重生成工序会退回默认版本，报工记的版本就与当初排产的对不上，
+/// 计件工资按错价算而界面上看不出任何异常。
+#[tokio::test]
+async fn prod_order_records_routing_version() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let (_ymm, plabel) = today_period();
+
+    // 两版工艺：V1 / V2 各一道「氧化」
+    for ver in ["V1", "V2"] {
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/routing/140501",
+                &sid,
+                serde_json::json!([{
+                    "seq": 1,
+                    "version": ver,
+                    "op_code": "OX",
+                    "op_name": "氧化",
+                    "work_center": "",
+                    "std_hours": "0.5",
+                    "rate": "0",
+                    "qc_required": false,
+                }]),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "建 {ver} 版工艺路线");
+    }
+
+    // 版本列表（下拉数据源）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/routing/140501/versions", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let versions: Vec<String> = v["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap_or("").to_string())
+        .collect();
+    assert_eq!(versions, vec!["V1".to_string(), "V2".to_string()], "{v}");
+
+    // 按指定版本取工序也要能取（界面里切版本看工序用）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/routing/140501?version=V2", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["ops"].as_array().unwrap().len(), 1, "按 V2 取工序：{v}");
+
+    // 下单并指定按 V2 排产（注意 V1 也存在：不记版本就会退回第一个版本 V1，
+    // 后面计件金额会变成 100 而不是 200，这个测试才守得住）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/prod",
+            &sid,
+            serde_json::json!({ "item_code": "140501", "qty": "100", "date": "", "version": "V2" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "下达生产订单");
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        v["version"].as_str().unwrap_or(""),
+        "V2",
+        "响应带回版本：{v}"
+    );
+    assert_eq!(v["ops"].as_i64().unwrap_or(0), 1, "按 V2 生成 1 道工序");
+    let pid = v["id"].as_i64().unwrap();
+
+    // 订单列表里也记着版本（重生成工序要按它来）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/prod", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let order = v["orders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["id"].as_i64() == Some(pid))
+        .expect("订单在列表里")
+        .clone();
+    assert_eq!(
+        order["routing_version"].as_str().unwrap_or(""),
+        "V2",
+        "订单必须记下按哪一版排产：{v}"
+    );
+
+    // 报工 100 件：工序是 V1 版的，按 V1 的 1 元算 = 100（不是 V2 的 2 元）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(&format!("/api/prod/{pid}/ops"), &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let op_id = v["ops"][0]["id"].as_i64().unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/prod/op/dispatch",
+            &sid,
+            serde_json::json!({ "op_id": op_id, "worker": "李四" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "派工");
+    for (ver, rate) in [("V1", "1"), ("V2", "2")] {
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/piece-rates",
+                &sid,
+                serde_json::json!({
+                    "version": ver, "item_code": "140501", "op_name": "氧化", "rate": rate
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "建 {ver} 版计价单价");
+    }
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/prod/op/report",
+            &sid,
+            serde_json::json!({ "op_id": op_id, "qty": "100", "hours": "2" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "报工");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/payroll/piece?period={plabel}"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let row = v["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["employee"].as_str() == Some("李四"))
+        .expect("李四的计件行")
+        .clone();
+    assert_eq!(
+        money_num(row["amount"].as_str().unwrap()),
+        200.0,
+        "按 V2 的 2 元算，不是 V1 的 1 元：{v}"
+    );
+    assert_eq!(row["lines"][0]["version"].as_str().unwrap_or(""), "V2");
+}

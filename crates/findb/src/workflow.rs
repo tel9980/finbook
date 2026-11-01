@@ -1788,6 +1788,7 @@ mod tests {
             supplier_name: String::new(),
             plan_start: String::new(),
             plan_end: String::new(),
+            routing_version: String::new(),
         };
         let moid = crate::scm::prod_save(&db, &mut mo).unwrap();
 
@@ -2093,6 +2094,7 @@ mod tests {
                 supplier_name: String::new(),
                 plan_start: String::new(),
                 plan_end: String::new(),
+                routing_version: String::new(),
             };
             crate::scm::prod_save(&db, &mut mo).unwrap_or_else(|e| panic!("{no} 保存失败：{e}"))
         };

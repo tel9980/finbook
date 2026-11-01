@@ -1021,6 +1021,7 @@ pub fn mps_convert_to_order(
         supplier_name: String::new(),
         plan_start: String::new(),
         plan_end: String::new(),
+        routing_version: String::new(),
     };
     if order.item_name.is_empty() {
         order.item_name = order.item_code.clone();
@@ -3482,6 +3483,7 @@ mod tests {
             supplier_name: String::new(),
             plan_start: String::new(),
             plan_end: String::new(),
+            routing_version: String::new(),
         };
         order.no = crate::scm::prod_next_no(&db, p).unwrap();
         let po_id = crate::scm::prod_save(&db, &mut order).unwrap();
@@ -3699,6 +3701,7 @@ mod tests {
             supplier_name: String::new(),
             plan_start: String::new(),
             plan_end: String::new(),
+            routing_version: String::new(),
         };
         order.no = crate::scm::prod_next_no(&db, p).unwrap();
         let po_id = crate::scm::prod_save(&db, &mut order).unwrap();

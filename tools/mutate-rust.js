@@ -1305,6 +1305,47 @@ const MUT = [
     ],
   },
 
+  {
+    // 下单不记版本：订单上永远空，事后重生成工序只能退回默认版本。
+    name: "㊷ 生产订单不记工艺版本",
+    file: "crates/finweb/src/handlers/prod.rs",
+    from: "        routing_version: req.version.trim().to_string(),",
+    to: "        routing_version: String::new(),",
+    cmd: [
+      "test",
+      "-p",
+      "finweb",
+      "--test",
+      "api",
+      "--",
+      "prod_order_records_routing_version",
+    ],
+  },
+  {
+    // 生成工序不吃订单版本：选了 V1 也按默认版本建，报工版本随之错位。
+    name: "㊷ 生成工序不吃订单版本",
+    file: "crates/finweb/src/handlers/prod.rs",
+    from: "    let ops = advanced::prod_op_init_from_routing_version(&db, id, code, &order.routing_version)\n        .unwrap_or(0);",
+    to: "    let ops = advanced::prod_op_init_from_routing(&db, id, code).unwrap_or(0);",
+    cmd: [
+      "test",
+      "-p",
+      "finweb",
+      "--test",
+      "api",
+      "--",
+      "prod_order_records_routing_version",
+    ],
+  },
+  {
+    // 存库漏写这一列：读回来永远是空。
+    name: "㊷ 生产订单存库漏写版本",
+    file: "crates/findb/src/scm.rs",
+    from: "                order.plan_start, order.plan_end, order.routing_version,",
+    to: "                order.plan_start, order.plan_end, String::new(),",
+    cmd: ["test", "-p", "findb", "--lib", "scm::tests::prod_order_keeps_routing_version"],
+  },
+
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

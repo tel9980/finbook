@@ -6832,6 +6832,45 @@ async function viewBudgetVersions(main) {
   load();
 }
 
+// 新建生产订单：选存货后带出该存货的工艺版本，按选中的版本生成工序。
+// 版本不只是备注——报工流水会记下它，计件单价按版本算钱（见 findb::piecepay）。
+function openProdOrderEditor(reload) {
+  const mask = modal(`<h3>新建生产订单</h3>
+    <div class="field"><label>产品编码 *</label><input id="pno-item" placeholder="如 140501" /></div>
+    <div class="field"><label>数量 *</label><input id="pno-qty" value="1" /></div>
+    <div class="field"><label>日期</label><input type="date" id="pno-date" value="${today()}" /></div>
+    <div class="field"><label>工艺版本</label><select id="pno-ver" style="min-width:200px"><option value="">默认版本</option></select></div>
+    <p class="muted" style="font-size:12px;margin:6px 0 0">填了产品编码会自动带出该产品的工艺版本；选哪一版，工序清单就按哪一版生成，报工与计件单价也按这一版算。没有工艺路线时订单照建，工序留空。</p>
+    <div class="foot"><button class="btn primary" id="pno-save">创建</button><button class="btn ghost" id="pno-cancel">取消</button></div>`);
+  $("#pno-cancel", mask).onclick = closeModal;
+  const loadVersions = async () => {
+    const item = $("#pno-item", mask).value.trim();
+    if (!item) return;
+    try {
+      const r = await api(`/routing/${encodeURIComponent(item)}/versions`);
+      const vs = r.versions || [];
+      $("#pno-ver", mask).innerHTML = `<option value="">默认版本</option>` + vs.filter((v) => v).map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    } catch (e) { /* 没维护工艺路线很正常，保持默认版本 */ }
+  };
+  $("#pno-item", mask).onchange = loadVersions;
+  $("#pno-item", mask).onblur = loadVersions;
+  $("#pno-save", mask).onclick = async () => {
+    const item = $("#pno-item", mask).value.trim();
+    const qty = $("#pno-qty", mask).value.trim();
+    if (!item || !qty) { toast("产品编码与数量必填", "err"); return; }
+    try {
+      const r = await postJson("/prod", {
+        item_code: item, qty, date: $("#pno-date", mask).value,
+        version: $("#pno-ver", mask).value,
+      });
+      const v = r.version ? ` @${r.version}` : "";
+      toast(`已创建生产订单 ${r.no}${v}（工序 ${r.ops || 0} 道）`, "ok");
+      closeModal();
+      reload && reload();
+    } catch (e) { toast(e.message, "err"); }
+  };
+}
+
 // 新建委外订单（委外=生产的变体：BOM/领料/开工/完工全复用生产链，加工费独立确认）
 function openOutsourceEditor(reload) {
   const mask = modal(`<h3>新建委外订单</h3>
@@ -6938,6 +6977,7 @@ async function viewWorkReport(main) {
       <button class="btn" id="wr-issue">领料出库</button>
       <label>完工数量 <input id="wr-cq" style="width:70px" value="0" /></label>
       <button class="btn" id="wr-complete">完工入库</button>
+      <button class="btn ghost sm" id="wr-new">新建生产订单</button>
       <button class="btn ghost sm" id="wr-out">新建委外</button>
       <button class="btn ghost sm" id="wr-fee">确认加工费</button>
     </div>
@@ -6947,7 +6987,8 @@ async function viewWorkReport(main) {
     const r = await api("/prod");
     orders = r.orders || [];
   } catch (e) { toast(e.message, "err"); }
-  $("#wr-po").innerHTML = orders.map((o) => `<option value="${o.id}">${o.order_kind === "outsourcing" ? "【委外】" : ""}${esc(o.no)} · ${esc(o.item_name)}（${o.status}）</option>`).join("") || `<option value="">当前期间无生产订单</option>`;
+  const verTag = (o) => (o.routing_version ? ` @${esc(o.routing_version)}` : "");
+  $("#wr-po").innerHTML = orders.map((o) => `<option value="${o.id}">${o.order_kind === "outsourcing" ? "【委外】" : ""}${esc(o.no)} · ${esc(o.item_name)}${verTag(o)}（${o.status}）</option>`).join("") || `<option value="">当前期间无生产订单</option>`;
   // 工厂链动作：下达（MRP 页）→ 开工 → 领料出库 → 完工入库（BOM 在「维护BOM」编辑）
   const selOrder = () => orders.find((o) => String(o.id) === $("#wr-po").value);
   const syncCq = () => {
@@ -6957,6 +6998,7 @@ async function viewWorkReport(main) {
   $("#wr-po").onchange = syncCq;
   syncCq();
   const reloadView = () => rerenderView("work-report", main);
+  $("#wr-new").onclick = () => openProdOrderEditor(reloadView);
   $("#wr-start").onclick = async () => {
     const o = selOrder();
     if (!o) { toast("请先选择生产订单", "err"); return; }

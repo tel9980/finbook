@@ -794,11 +794,13 @@ impl ManufacturingView {
         match advanced::prod_op_list(ctx.db(), self.po_id) {
             Ok(ops) => {
                 if ops.is_empty() {
-                    // 首次加载：尝试按工艺路线生成工序清单
-                    match advanced::prod_op_init_from_routing(
+                    // 首次加载：尝试按工艺路线生成工序清单（按订单记下的工艺版本，
+                    // 选过 V2 的订单不能退回默认版本，否则报工版本与计件单价对不上）
+                    match advanced::prod_op_init_from_routing_version(
                         ctx.db(),
                         self.po_id,
                         &order.item_code,
+                        &order.routing_version,
                     ) {
                         Ok(n) if n > 0 => {
                             self.prod_ops =

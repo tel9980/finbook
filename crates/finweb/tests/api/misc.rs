@@ -1502,6 +1502,7 @@ async fn atp_endpoint_splits_dated_incoming_and_honours_date_param() {
                     "2026-01-10".into()
                 },
                 plan_end: plan_end.into(),
+                routing_version: String::new(),
             };
             let id = findb::scm::prod_save(&db, &mut o).unwrap();
             if !plan_end.is_empty() {

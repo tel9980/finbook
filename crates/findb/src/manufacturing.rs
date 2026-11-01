@@ -1157,7 +1157,7 @@ pub fn outsource_fee(
 pub fn get_prod_order(db: &Db, po_id: i64) -> DbResult<Option<ProductionOrder>> {
     let row = db.conn()
         .query_row(
-            "SELECT id, no, period, date, item_code, item_name, planned_qty, completed_qty, status, work_center, so_id, prepared_by, memo, order_kind, supplier_code, supplier_name, plan_start, plan_end
+            "SELECT id, no, period, date, item_code, item_name, planned_qty, completed_qty, status, work_center, so_id, prepared_by, memo, order_kind, supplier_code, supplier_name, plan_start, plan_end, routing_version
              FROM production_order WHERE id=?",
             [po_id],
             |r| Ok(ProductionOrder {
@@ -1179,6 +1179,7 @@ pub fn get_prod_order(db: &Db, po_id: i64) -> DbResult<Option<ProductionOrder>> 
                 supplier_name: r.get(15)?,
                 plan_start: r.get(16)?,
                 plan_end: r.get(17)?,
+                routing_version: r.get(18)?,
             }),
         );
     match row {
@@ -1497,6 +1498,7 @@ mod tests {
             supplier_name: String::new(),
             plan_start: String::new(),
             plan_end: String::new(),
+            routing_version: String::new(),
         };
 
         // 领料结转：借 500101=60 / 贷 140301=60

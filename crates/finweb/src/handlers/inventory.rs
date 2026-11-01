@@ -300,11 +300,34 @@ pub(super) async fn get_routing(
     State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(item): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    let ops = advanced::routing_list(&db, &item)?;
-    Ok(Json(serde_json::json!({ "item_code": item, "ops": ops })))
+    // ?version=V2 看指定版本；不传看默认版本（'' 那版）
+    let version = q
+        .get("version")
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default();
+    let ops = advanced::routing_list_version(&db, &item, &version)?;
+    let versions = advanced::routing_versions(&db, &item)?;
+    Ok(Json(
+        serde_json::json!({ "item_code": item, "version": version, "ops": ops, "versions": versions }),
+    ))
+}
+
+/// 该物料有哪些工艺版本（下单时给下拉用；只有一个版本或没有版本时是空数组/单串）
+pub(super) async fn get_routing_versions(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(item): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::ProductionOps)?;
+    let db = &user.db;
+    let versions = advanced::routing_versions(&db, &item)?;
+    Ok(Json(
+        serde_json::json!({ "item_code": item, "versions": versions }),
+    ))
 }
 
 pub(super) async fn post_routing(

@@ -373,6 +373,11 @@ pub struct ProductionOrder {
     pub plan_start: String,
     /// 细排计划完工日
     pub plan_end: String,
+    /// 按哪一版工艺排产（空 = 默认版本）
+    ///
+    /// 建单时选了哪一版，工序清单就按哪一版生成；报工流水据此记下版本，
+    /// 计件单价才能按版本算钱（见 `piecepay`）。
+    pub routing_version: String,
 }
 
 // ===========================================================================
@@ -898,6 +903,7 @@ pub fn prod_from_so(
         supplier_name: String::new(),
         plan_start: String::new(),
         plan_end: String::new(),
+        routing_version: String::new(),
     };
     let id = prod_save(db, &mut order)?;
     crate::docflow::link_add(db, "so", so_id, "prod", id, "销售订单下推生产订单")?;
@@ -2201,6 +2207,7 @@ mod tests {
             supplier_name: String::new(),
             plan_start: String::new(),
             plan_end: String::new(),
+            routing_version: String::new(),
         };
         let id = prod_save(db, &mut o).unwrap();
         if status != ProdStatus::Released {
@@ -2212,6 +2219,33 @@ mod tests {
                 .unwrap();
         }
         id
+    }
+
+    /// 生产订单要记住「按哪一版工艺排产」：存进去、取出来、列表里都还在。
+    ///
+    /// 不记这一列时，工序仍能生成（默认版本或第一个版本），界面上看不出异常；
+    /// 但事后重生成工序只能退回默认版本，报工流水的版本与计件单价就对不上，
+    /// 工资算错而没人能发现。
+    #[test]
+    fn prod_order_keeps_routing_version() {
+        let db = mem();
+        let p = Period::from_ymm(202601);
+        let d = NaiveDate::from_ymd_opt(2026, 1, 8).unwrap();
+        let id = mk_prod(&db, p, d, "10", ProdStatus::Released);
+        // 建单时没版本
+        assert_eq!(prod_get(&db, id).unwrap().unwrap().routing_version, "");
+        // 选了 V2 排产
+        let mut o = prod_get(&db, id).unwrap().unwrap();
+        o.routing_version = "V2".into();
+        prod_save(&db, &mut o).unwrap();
+        assert_eq!(
+            prod_get(&db, id).unwrap().unwrap().routing_version,
+            "V2",
+            "取单张要带出版本"
+        );
+        let listed = prod_list(&db, p, None).unwrap();
+        let one = listed.iter().find(|x| x.id == id).unwrap();
+        assert_eq!(one.routing_version, "V2", "列表也要带出版本");
     }
 
     #[test]
@@ -2594,7 +2628,8 @@ pub fn prod_save(db: &Db, order: &mut ProductionOrder) -> DbResult<i64> {
         tx.execute(
             "UPDATE production_order SET period=?, date=?, item_code=?, item_name=?,
              planned_qty=?, completed_qty=?, status=?, work_center=?, so_id=?, prepared_by=?, memo=?,
-             order_kind=?, supplier_code=?, supplier_name=?, plan_start=?, plan_end=?, updated_at=?
+             order_kind=?, supplier_code=?, supplier_name=?, plan_start=?, plan_end=?,
+             routing_version=?, updated_at=?
              WHERE id=?",
             rusqlite::params![
                 order.period.ymm(), order.date, order.item_code, order.item_name,
@@ -2602,7 +2637,7 @@ pub fn prod_save(db: &Db, order: &mut ProductionOrder) -> DbResult<i64> {
                 order.status.code(),
                 order.work_center, order.so_id, order.prepared_by, order.memo,
                 order.order_kind, order.supplier_code, order.supplier_name,
-                order.plan_start, order.plan_end,
+                order.plan_start, order.plan_end, order.routing_version,
                 now, order.id
             ],
         )?;
@@ -2611,8 +2646,9 @@ pub fn prod_save(db: &Db, order: &mut ProductionOrder) -> DbResult<i64> {
         tx.execute(
             "INSERT INTO production_order(period, no, date, item_code, item_name,
              planned_qty, completed_qty, status, work_center, so_id, prepared_by, memo,
-             order_kind, supplier_code, supplier_name, plan_start, plan_end, created_at, updated_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?18)",
+             order_kind, supplier_code, supplier_name, plan_start, plan_end, routing_version,
+             created_at, updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?19)",
             rusqlite::params![
                 order.period.ymm(),
                 order.no,
@@ -2631,6 +2667,7 @@ pub fn prod_save(db: &Db, order: &mut ProductionOrder) -> DbResult<i64> {
                 order.supplier_name,
                 order.plan_start,
                 order.plan_end,
+                order.routing_version,
                 now
             ],
         )?;
@@ -2667,7 +2704,7 @@ pub fn prod_get(db: &Db, id: i64) -> DbResult<Option<ProductionOrder>> {
     let mut stmt = db.conn().prepare(
         "SELECT id, no, period, date, item_code, item_name, planned_qty, completed_qty,
          status, work_center, so_id, prepared_by, memo, order_kind, supplier_code, supplier_name,
-         plan_start, plan_end
+         plan_start, plan_end, routing_version
          FROM production_order WHERE id=?1",
     )?;
     let mut rows = stmt.query([id])?;
@@ -2693,6 +2730,7 @@ pub fn prod_get(db: &Db, id: i64) -> DbResult<Option<ProductionOrder>> {
         supplier_name: r.get(15)?,
         plan_start: r.get(16)?,
         plan_end: r.get(17)?,
+        routing_version: r.get(18)?,
     }))
 }
 
@@ -2704,12 +2742,12 @@ pub fn prod_list(
     let sql = if let Some(_s) = status {
         "SELECT id, no, period, date, item_code, item_name, planned_qty, completed_qty,
              status, work_center, so_id, prepared_by, memo, order_kind, supplier_code, supplier_name,
-             plan_start, plan_end
+             plan_start, plan_end, routing_version
              FROM production_order WHERE period=? AND status=? ORDER BY date DESC, id DESC".to_string()
     } else {
         "SELECT id, no, period, date, item_code, item_name, planned_qty, completed_qty,
              status, work_center, so_id, prepared_by, memo, order_kind, supplier_code, supplier_name,
-             plan_start, plan_end
+             plan_start, plan_end, routing_version
              FROM production_order WHERE period=? ORDER BY date DESC, id DESC".to_string()
     };
 
@@ -2735,6 +2773,7 @@ pub fn prod_list(
                 supplier_name: r.get(15)?,
                 plan_start: r.get(16)?,
                 plan_end: r.get(17)?,
+                routing_version: r.get(18)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?
@@ -2759,6 +2798,7 @@ pub fn prod_list(
                 supplier_name: r.get(15)?,
                 plan_start: r.get(16)?,
                 plan_end: r.get(17)?,
+                routing_version: r.get(18)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?
@@ -2834,6 +2874,7 @@ mod prod_tests {
             supplier_name: String::new(),
             plan_start: String::new(),
             plan_end: String::new(),
+            routing_version: String::new(),
         };
         order.no = prod_next_no(&db, p).unwrap();
         let id = prod_save(&db, &mut order).unwrap();

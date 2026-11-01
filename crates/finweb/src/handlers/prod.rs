@@ -369,6 +369,7 @@ pub(super) async fn list_prod_orders(
                 "supplier_name": o.supplier_name,
                 "plan_start": o.plan_start,
                 "plan_end": o.plan_end,
+                "routing_version": o.routing_version,
             })
         })
         .collect();
@@ -561,12 +562,16 @@ pub(super) async fn create_prod_ep(
         supplier_name: req.supplier_name.trim().to_string(),
         plan_start: String::new(),
         plan_end: String::new(),
+        routing_version: req.version.trim().to_string(),
     };
     order.no = findb::scm::prod_next_no(&db, period)?;
     let id = findb::scm::prod_save(&db, &mut order)?;
     // 该存货配了工艺路线就顺手把工序清单建出来（没配就留空，
-    // 之后可以在「工艺路线」里维护完再调 /api/prod/:id/ops/init 补建）
-    let ops = advanced::prod_op_init_from_routing(&db, id, code).unwrap_or(0);
+    // 之后可以在「工艺路线」里维护完再调 /api/prod/:id/ops/init 补建）。
+    // 按订单记下的版本建：下单时选了 V2，工序就该是 V2 那几道，
+    // 报工流水才会带上 V2，计件单价也才按 V2 算。
+    let ops = advanced::prod_op_init_from_routing_version(&db, id, code, &order.routing_version)
+        .unwrap_or(0);
     db.log(
         user.username(),
         "生产",
@@ -580,7 +585,7 @@ pub(super) async fn create_prod_ep(
         ),
     )?;
     Ok(Json(
-        json!({ "ok": true, "id": id, "no": order.no, "ops": ops }),
+        json!({ "ok": true, "id": id, "no": order.no, "ops": ops, "version": order.routing_version }),
     ))
 }
 
@@ -1166,6 +1171,9 @@ pub(super) struct ProdCreateReq {
     supplier_code: String,
     #[serde(default)]
     supplier_name: String,
+    /// 按哪一版工艺排产（留空 = 默认版本；都没有则用第一个版本）
+    #[serde(default)]
+    version: String,
 }
 
 #[derive(Deserialize)]

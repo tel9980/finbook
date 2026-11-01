@@ -549,6 +549,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         )
         // 工艺路线 / 报工 / MRP
         .route("/api/routing/:item", get(get_routing).post(post_routing))
+        .route("/api/routing/:item/versions", get(get_routing_versions))
         .route("/api/routing/:item/delete", post(delete_routing))
         .route("/api/prod", get(list_prod_orders).post(create_prod_ep))
         // 销售订单下推生产订单：产销在数据上连起来
