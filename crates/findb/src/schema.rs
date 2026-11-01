@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 40;
+pub const SCHEMA_VERSION: i64 = 41;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1599,6 +1599,7 @@ CREATE TABLE IF NOT EXISTS price_rule (
 -- 计件单价（工序报工的完工量 × 单价）
 CREATE TABLE IF NOT EXISTS piece_rate (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    version     TEXT NOT NULL DEFAULT '',   -- v41: 工艺版本（'' = 不限版本）
     item_code   TEXT NOT NULL DEFAULT '',            -- 空 = 任意物料
     op_name     TEXT NOT NULL DEFAULT '',            -- 空 = 任意工序
     rate        TEXT NOT NULL DEFAULT '0',
@@ -1616,6 +1617,7 @@ CREATE TABLE IF NOT EXISTS prod_op_log (
     item_name   TEXT NOT NULL DEFAULT '',
     op_name     TEXT NOT NULL DEFAULT '',
     worker      TEXT NOT NULL DEFAULT '',
+    routing_version TEXT NOT NULL DEFAULT '',  -- v41: 报工时这道工序所在的工艺版本
     period      INTEGER NOT NULL,
     date        TEXT NOT NULL DEFAULT '',
     qty         TEXT NOT NULL DEFAULT '0',
@@ -1753,6 +1755,18 @@ const MIGRATE_V37: &[(&str, &str, &str)] = &[
 const MIGRATE_V38: &[(&str, &str, &str)] = &[
     ("receipt_doc", "cross_party", "TEXT NOT NULL DEFAULT ''"),
     ("receipt_doc", "cross_amount", "TEXT NOT NULL DEFAULT '0'"),
+];
+
+/// V41：计件单价分工艺版本。
+///
+/// `piece_rate` 原来只有「物料 + 工序名」，工艺改版（同物料同工序换了单价）以后，
+/// 老订单的报工与新版报工会按同一条单价算 —— 要么多算要么少算。加了 `version`
+/// 之后规则可以钉到具体版本，留空仍是「不限版本」。
+///
+/// `prod_op_log` 同步记下报工那一刻的工艺版本，否则事后无法判断这条流水该按哪版单价算。
+const MIGRATE_V41: &[(&str, &str, &str)] = &[
+    ("piece_rate", "version", "TEXT NOT NULL DEFAULT ''"),
+    ("prod_op_log", "routing_version", "TEXT NOT NULL DEFAULT ''"),
 ];
 
 /// v5 → v6：供应链深化（采购订单 / 销售订单 / BOM / 生产订单）
@@ -2282,6 +2296,8 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_generic(conn, MIGRATE_V37)?;
             // v38：补 cross_party/cross_amount 列到 receipt_doc（跨方对冲）
             migrate_generic(conn, MIGRATE_V38)?;
+            // v41：计件单价分工艺版本（piece_rate.version / prod_op_log.routing_version）
+            migrate_generic(conn, MIGRATE_V41)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：
@@ -2531,8 +2547,8 @@ mod tests {
                 .collect()
         };
 
-        // 造出「缺了 MIGRATE_V35 全部列」的存量账套
-        for (table, col, _) in MIGRATE_V35 {
+        // 造出「缺了 MIGRATE_V35 / V41 全部列」的存量账套
+        for (table, col, _) in MIGRATE_V35.iter().chain(MIGRATE_V41.iter()) {
             // DROP COLUMN 不允许还有索引指着该列，先摘掉相关索引
             for idx in indexes_of(&conn, table) {
                 if index_columns(&conn, &idx)
@@ -2559,7 +2575,7 @@ mod tests {
 
         init(&conn).expect("缺列的旧账套升级必须成功");
 
-        for (table, col, _) in MIGRATE_V35 {
+        for (table, col, _) in MIGRATE_V35.iter().chain(MIGRATE_V41.iter()) {
             assert!(
                 column_exists(&conn, table, col).unwrap(),
                 "升级后必须补齐 {table}.{col}"

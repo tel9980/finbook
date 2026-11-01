@@ -13379,8 +13379,8 @@ async function viewPiecePay(main) {
       const r = await api("/piece-rates");
       rates = r.rates || [];
       $("#pp-rates", main).innerHTML = rates.length
-        ? `<table class="grid"><thead><tr><th>物料</th><th>工序</th><th>单价</th><th>状态</th><th></th></tr></thead><tbody>${rates.map((x) => `<tr>
-            <td>${esc(x.item_code || "任意")}</td><td>${esc(x.op_name || "任意")}</td><td class="num">${fmt(x.rate)}</td>
+        ? `<table class="grid"><thead><tr><th>版本</th><th>物料</th><th>工序</th><th>单价</th><th>状态</th><th></th></tr></thead><tbody>${rates.map((x) => `<tr>
+            <td>${esc(x.version || "不限")}</td><td>${esc(x.item_code || "任意")}</td><td>${esc(x.op_name || "任意")}</td><td class="num">${fmt(x.rate)}</td>
             <td>${x.disabled ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>'}</td>
             <td class="row-actions">${can("production_ops") ? `<button class="btn danger sm" data-pp-del="${x.id}">删</button>` : ""}</td></tr>`).join("")}</tbody></table>`
         : `<div class="muted">还没有计件单价</div>`;
@@ -13398,7 +13398,7 @@ async function viewPiecePay(main) {
       $("#pp-out", main).innerHTML = rows.length
         ? `<table class="grid"><thead><tr><th>员工</th><th>数量</th><th>计件金额</th><th>明细</th></tr></thead><tbody>${rows.map((p) => `<tr>
             <td>${esc(p.employee)}</td><td class="num">${fmt(p.qty)}</td><td class="num">${fmt(p.amount)}</td>
-            <td class="muted" style="font-size:12px">${(p.lines || []).map((l) => `${esc(l.item_code)}/${esc(l.op_name)} ${fmt(l.qty)}×${fmt(l.rate)}${l.matched ? "" : "（无单价）"}`).join("；")}</td></tr>`).join("")}
+            <td class="muted" style="font-size:12px">${(p.lines || []).map((l) => `${esc(l.item_code)}/${esc(l.op_name)}${l.version ? "@" + esc(l.version) : ""} ${fmt(l.qty)}×${fmt(l.rate)}${l.matched ? "" : "（无单价）"}`).join("；")}</td></tr>`).join("")}
           </tbody><tfoot><tr><td><b>合计</b></td><td></td><td class="num"><b>${fmt(r.total)}</b></td><td></td></tr></tfoot></table>`
         : `<div class="muted">本期没有报工流水（先派工、再报工）</div>`;
     } catch (e) { $("#pp-out", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
@@ -13407,6 +13407,7 @@ async function viewPiecePay(main) {
   $("#pp-print", main).onclick = () => { const el = $("#pp-out", main).querySelector("table"); if (!el) { toast("先算出数据再打印", "err"); return; } printPreview("计件工资", el); };
   if ($("#pp-new", main)) $("#pp-new", main).onclick = () => {
     const m = modal(`<h3>新增计件单价</h3>
+      <div class="field"><label>工艺版本（留空=不限）</label><input id="ppr-ver" placeholder="V1 / V2" /></div>
       <div class="field"><label>物料（留空=任意）</label><input id="ppr-item" /></div>
       <div class="field"><label>工序（留空=任意）</label><input id="ppr-op" placeholder="氧化 / 包装" /></div>
       <div class="field"><label>单价 *</label><input id="ppr-rate" value="0" /></div>
@@ -13416,6 +13417,7 @@ async function viewPiecePay(main) {
     $("#ppr-save", m).onclick = async () => {
       try {
         await api("/piece-rates", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+          version: $("#ppr-ver", m).value.trim(),
           item_code: $("#ppr-item", m).value.trim(), op_name: $("#ppr-op", m).value.trim(),
           rate: $("#ppr-rate", m).value.trim(), memo: $("#ppr-memo", m).value.trim(),
         }) });

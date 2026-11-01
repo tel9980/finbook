@@ -11,7 +11,8 @@
 //! 2. **算金额**：按期间把流水汇总到人，乘 [`PieceRate`] 里的计件单价，
 //!    得到每个人本期的计件工资，供工资表「一键取计件」把应发提上去。
 //!
-//! 单价匹配（[`rate_match`]）：物料+工序 > 只限物料 > 只限工序 > 通配。
+//! 单价匹配（[`rate_match`]）：物料+工序 > 只限物料 > 只限工序 > 通配；
+//! 同一档里「钉住了工艺版本」的优先于「不限版本」（`version` 留空 = 不限）。
 //! 匹配不到的行**照旧列出来**（`matched=false`、金额 0），让人看得见
 //! 「这几道工序没有单价」，而不是静默丢掉——丢掉的工时就是少发的工资。
 
@@ -24,6 +25,8 @@ use crate::{Db, DbResult};
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PieceRate {
     pub id: i64,
+    /// 工艺版本（空 = 不限版本；钉住版本后只对 `routing.version` 相同的工序生效）
+    pub version: String,
     /// 物料档案 code（空 = 适用任意物料）
     pub item_code: String,
     /// 工序名（空 = 适用任意工序）
@@ -37,6 +40,7 @@ impl Default for PieceRate {
     fn default() -> Self {
         Self {
             id: 0,
+            version: String::new(),
             item_code: String::new(),
             op_name: String::new(),
             rate: Money::ZERO,
@@ -57,6 +61,8 @@ pub struct PieceLog {
     pub item_name: String,
     pub op_name: String,
     pub worker: String,
+    /// 报工那一刻这道工序的工艺版本（空 = 该工序没有挂工艺路线/版本）
+    pub routing_version: String,
     /// 期间 ymm（202611）
     pub period: i32,
     pub date: String,
@@ -71,6 +77,8 @@ pub struct PieceLine {
     pub item_code: String,
     pub item_name: String,
     pub op_name: String,
+    /// 这条流水报工时的工艺版本（用来解释「为什么按这条单价算」）
+    pub version: String,
     pub qty: Money,
     pub rate: Money,
     pub amount: Money,
@@ -87,16 +95,17 @@ pub struct PiecePay {
     pub lines: Vec<PieceLine>,
 }
 
-const RATE_COLS: &str = "id,item_code,op_name,rate,disabled,memo";
+const RATE_COLS: &str = "id,version,item_code,op_name,rate,disabled,memo";
 
 fn map_rate(r: &rusqlite::Row) -> rusqlite::Result<PieceRate> {
     Ok(PieceRate {
         id: r.get(0)?,
-        item_code: r.get(1)?,
-        op_name: r.get(2)?,
-        rate: crate::read_money(r, 3)?,
-        disabled: r.get::<_, i64>(4)? != 0,
-        memo: r.get(5)?,
+        version: r.get(1)?,
+        item_code: r.get(2)?,
+        op_name: r.get(3)?,
+        rate: crate::read_money(r, 4)?,
+        disabled: r.get::<_, i64>(5)? != 0,
+        memo: r.get(6)?,
     })
 }
 
@@ -119,14 +128,16 @@ pub fn rate_save(db: &Db, r: &mut PieceRate) -> DbResult<i64> {
     let tx = db.write_tx()?;
     let id = if r.id > 0 {
         let n = tx.execute(
-            "UPDATE piece_rate SET item_code=?2,op_name=?3,rate=?4,disabled=?5,memo=?6 WHERE id=?1",
+            "UPDATE piece_rate SET version=?7,item_code=?2,op_name=?3,rate=?4,disabled=?5,memo=?6
+             WHERE id=?1",
             rusqlite::params![
                 r.id,
                 r.item_code.trim(),
                 r.op_name.trim(),
                 crate::money_param(r.rate),
                 r.disabled as i64,
-                r.memo
+                r.memo,
+                r.version.trim()
             ],
         )?;
         if n == 0 {
@@ -135,8 +146,10 @@ pub fn rate_save(db: &Db, r: &mut PieceRate) -> DbResult<i64> {
         r.id
     } else {
         tx.execute(
-            "INSERT INTO piece_rate(item_code,op_name,rate,disabled,memo) VALUES(?1,?2,?3,?4,?5)",
+            "INSERT INTO piece_rate(version,item_code,op_name,rate,disabled,memo)
+             VALUES(?1,?2,?3,?4,?5,?6)",
             rusqlite::params![
+                r.version.trim(),
                 r.item_code.trim(),
                 r.op_name.trim(),
                 crate::money_param(r.rate),
@@ -163,14 +176,30 @@ pub fn rate_delete(db: &Db, id: i64) -> DbResult<()> {
 }
 
 /// 按 (物料, 工序) 匹配单价：物料+工序 > 只限物料 > 只限工序 > 通配
-pub fn rate_match<'a>(rates: &'a [PieceRate], item: &str, op: &str) -> Option<&'a PieceRate> {
+pub fn rate_match<'a>(
+    rates: &'a [PieceRate],
+    item: &str,
+    op: &str,
+    version: &str,
+) -> Option<&'a PieceRate> {
     let item = item.trim();
     let op = op.trim();
-    let mut best: Option<(u8, &PieceRate)> = None;
+    let version = version.trim();
+    let mut best: Option<((u8, u8), &PieceRate)> = None;
     for r in rates {
         if r.disabled {
             continue;
         }
+        // 版本：留空表示「不限版本」，能兜住所有版本；钉住版本的就只对同一版本生效
+        // （报工流水上的版本为空时，钉住版本的规则不适用 —— 说清是哪一版才能按它算钱）
+        let ver = r.version.trim();
+        let ver_rank = if ver.is_empty() {
+            1u8
+        } else if ver == version {
+            0
+        } else {
+            continue;
+        };
         let hit_item = !r.item_code.is_empty() && r.item_code == item;
         let hit_op = !r.op_name.is_empty() && r.op_name == op;
         let rank = if hit_item && hit_op {
@@ -184,12 +213,14 @@ pub fn rate_match<'a>(rates: &'a [PieceRate], item: &str, op: &str) -> Option<&'
         } else {
             continue;
         };
+        // 先比「物料/工序」的具体程度，再比「版本钉得准不准」
+        let key = (rank, ver_rank);
         let take = match &best {
             None => true,
-            Some((r0, _)) => rank < *r0,
+            Some((k, _)) => key < *k,
         };
         if take {
-            best = Some((rank, r));
+            best = Some((key, r));
         }
     }
     best.map(|(_, r)| r)
@@ -202,8 +233,9 @@ pub fn log_add(db: &Db, log: &PieceLog) -> DbResult<i64> {
     }
     let tx = db.write_tx()?;
     tx.execute(
-        "INSERT INTO prod_op_log(op_id,po_id,po_no,item_code,item_name,op_name,worker,period,date,qty,hours)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        "INSERT INTO prod_op_log(op_id,po_id,po_no,item_code,item_name,op_name,worker,
+                                 routing_version,period,date,qty,hours)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         rusqlite::params![
             log.op_id,
             log.po_id,
@@ -212,6 +244,7 @@ pub fn log_add(db: &Db, log: &PieceLog) -> DbResult<i64> {
             log.item_name.trim(),
             log.op_name.trim(),
             log.worker.trim(),
+            log.routing_version.trim(),
             log.period,
             log.date.trim(),
             crate::exact_param(log.qty),
@@ -226,7 +259,8 @@ pub fn log_add(db: &Db, log: &PieceLog) -> DbResult<i64> {
 /// 某期间的报工流水（按人、按 id 排序）
 pub fn log_list(db: &Db, period: i32) -> DbResult<Vec<PieceLog>> {
     let mut st = db.conn().prepare(
-        "SELECT id,op_id,po_id,po_no,item_code,item_name,op_name,worker,period,date,qty,hours
+        "SELECT id,op_id,po_id,po_no,item_code,item_name,op_name,worker,routing_version,
+                period,date,qty,hours
          FROM prod_op_log WHERE period=?1 ORDER BY worker,id",
     )?;
     let rows = st
@@ -240,10 +274,11 @@ pub fn log_list(db: &Db, period: i32) -> DbResult<Vec<PieceLog>> {
                 item_name: r.get(5)?,
                 op_name: r.get(6)?,
                 worker: r.get(7)?,
-                period: r.get(8)?,
-                date: r.get(9)?,
-                qty: crate::read_money(r, 10)?,
-                hours: crate::read_money(r, 11)?,
+                routing_version: r.get(8)?,
+                period: r.get(9)?,
+                date: r.get(10)?,
+                qty: crate::read_money(r, 11)?,
+                hours: crate::read_money(r, 12)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -263,7 +298,7 @@ pub fn compute(db: &Db, period: i32) -> DbResult<Vec<PiecePay>> {
         if worker.is_empty() {
             continue;
         }
-        let rate = rate_match(&rates, &log.item_code, &log.op_name);
+        let rate = rate_match(&rates, &log.item_code, &log.op_name, &log.routing_version);
         let unit = rate.map(|r| r.rate).unwrap_or(Money::ZERO);
         let amount = (log.qty * unit).round2();
         let line = PieceLine {
@@ -271,6 +306,7 @@ pub fn compute(db: &Db, period: i32) -> DbResult<Vec<PiecePay>> {
             item_code: log.item_code.clone(),
             item_name: log.item_name.clone(),
             op_name: log.op_name.clone(),
+            version: log.routing_version.clone(),
             qty: log.qty,
             rate: unit,
             amount,
@@ -407,6 +443,7 @@ mod tests {
             item_name: "铝件".to_string(),
             op_name: op.to_string(),
             worker: worker.to_string(),
+            routing_version: String::new(),
             period,
             date: "2026-11-05".to_string(),
             qty: m(qty),
@@ -480,16 +517,78 @@ mod tests {
         rate_save(&db, &mut both).unwrap();
 
         let rates = rate_list(&db).unwrap();
-        assert_eq!(rate_match(&rates, "MB01", "氧化").unwrap().rate, m("3"));
-        assert_eq!(rate_match(&rates, "MB01", "包装").unwrap().rate, m("2"));
-        assert_eq!(rate_match(&rates, "MB02", "氧化").unwrap().rate, m("1"));
-        assert!(rate_match(&rates, "MB02", "包装").is_none());
+        assert_eq!(rate_match(&rates, "MB01", "氧化", "").unwrap().rate, m("3"));
+        assert_eq!(rate_match(&rates, "MB01", "包装", "").unwrap().rate, m("2"));
+        assert_eq!(rate_match(&rates, "MB02", "氧化", "").unwrap().rate, m("1"));
+        assert!(rate_match(&rates, "MB02", "包装", "").is_none());
 
         // 停用以后退到下一档
         both.disabled = true;
         rate_save(&db, &mut both).unwrap();
         let rates = rate_list(&db).unwrap();
-        assert_eq!(rate_match(&rates, "MB01", "氧化").unwrap().rate, m("2"));
+        assert_eq!(rate_match(&rates, "MB01", "氧化", "").unwrap().rate, m("2"));
+    }
+
+    #[test]
+    fn 计件单价按工艺版本匹配() {
+        let db = crate::tests::mem();
+        // 老版本单价 1.0、新版本 1.5，另有一条不限版本 0.9 兜底
+        let mut v1 = PieceRate {
+            version: "V1".to_string(),
+            item_code: "MB01".to_string(),
+            op_name: "氧化".to_string(),
+            rate: m("1"),
+            ..Default::default()
+        };
+        let mut v2 = PieceRate {
+            version: "V2".to_string(),
+            item_code: "MB01".to_string(),
+            op_name: "氧化".to_string(),
+            rate: m("1.5"),
+            ..Default::default()
+        };
+        let mut any = PieceRate {
+            item_code: "MB01".to_string(),
+            op_name: "氧化".to_string(),
+            rate: m("0.9"),
+            ..Default::default()
+        };
+        rate_save(&db, &mut v1).unwrap();
+        rate_save(&db, &mut v2).unwrap();
+        rate_save(&db, &mut any).unwrap();
+        let rates = rate_list(&db).unwrap();
+
+        // 钉住版本的那条优先：同物料同工序，V1 报工按 1.0、V2 报工按 1.5
+        assert_eq!(
+            rate_match(&rates, "MB01", "氧化", "V1").unwrap().rate,
+            m("1")
+        );
+        assert_eq!(
+            rate_match(&rates, "MB01", "氧化", "V2").unwrap().rate,
+            m("1.5")
+        );
+        // 没钉住版本的规则兜住别的版本
+        assert_eq!(
+            rate_match(&rates, "MB01", "氧化", "V3").unwrap().rate,
+            m("0.9")
+        );
+        // 报工流水没带版本时，钉住版本的规则不适用（说清哪一版才按它算钱）
+        assert_eq!(
+            rate_match(&rates, "MB01", "氧化", "").unwrap().rate,
+            m("0.9")
+        );
+
+        // 走完整链路：同一道工序，两次报工分属两个版本，各按各的单价算
+        let mut log_v1 = log(1, "MB01", "氧化", "张三", 202611, "100");
+        log_v1.routing_version = "V1".to_string();
+        log_add(&db, &log_v1).unwrap();
+        let mut log_v2 = log(2, "MB01", "氧化", "张三", 202611, "100");
+        log_v2.routing_version = "V2".to_string();
+        log_add(&db, &log_v2).unwrap();
+        let pays = compute(&db, 202611).unwrap();
+        assert_eq!(pays[0].amount, m("250"), "100×1.0 + 100×1.5");
+        assert_eq!(pays[0].lines[0].version, "V1");
+        assert_eq!(pays[0].lines[1].version, "V2");
     }
 
     #[test]

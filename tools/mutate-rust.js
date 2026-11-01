@@ -1256,6 +1256,55 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "fixture::tests::档案编号必填且有条流水不能删"],
   },
 
+  {
+    // 单价不看工艺版本 = 工艺改版后老订单按新价算（或多算或少算）。
+    name: "㊶ 计件单价不看工艺版本",
+    file: "crates/findb/src/piecepay.rs",
+    from: "        let ver = r.version.trim();\n        let ver_rank = if ver.is_empty() {\n            1u8\n        } else if ver == version {\n            0\n        } else {\n            continue;\n        };",
+    to: "        let ver_rank = 0u8;\n        let _ = version;",
+    cmd: ["test", "-p", "findb", "--lib", "piecepay::tests::计件单价按工艺版本匹配"],
+  },
+  {
+    // 不分先后 = 「不限版本」的兜底价压过钉住版本的专用价。
+    name: "㊶ 计件单价版本不分先后",
+    file: "crates/findb/src/piecepay.rs",
+    from: "        let ver_rank = if ver.is_empty() {\n            1u8\n        } else if ver == version {\n            0\n        } else {\n            continue;\n        };",
+    to: "        let ver_rank = if ver.is_empty() {\n            0u8\n        } else if ver == version {\n            1\n        } else {\n            continue;\n        };",
+    cmd: ["test", "-p", "findb", "--lib", "piecepay::tests::计件单价按工艺版本匹配"],
+  },
+  {
+    // 报工流水不记版本，钉住版本的单价就永远匹配不上。
+    name: "㊶ 报工流水不记工艺版本",
+    file: "crates/findb/src/advanced.rs",
+    from: "                o.op_name, o.worker, COALESCE(rt.version,'')",
+    to: "                o.op_name, o.worker, ''",
+    cmd: [
+      "test",
+      "-p",
+      "finweb",
+      "--test",
+      "api",
+      "--",
+      "piece_rate_matches_routing_version",
+    ],
+  },
+  {
+    // 只有非默认版本工艺的小厂，会变成「没有工艺路线」调不出工序。
+    name: "㊶ 没有默认版本就不生成工序",
+    file: "crates/findb/src/advanced.rs",
+    from: "            match routing_versions(db, item_code)?.first().cloned() {",
+    to: "            match None::<String> {",
+    cmd: [
+      "test",
+      "-p",
+      "finweb",
+      "--test",
+      "api",
+      "--",
+      "piece_rate_matches_routing_version",
+    ],
+  },
+
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

@@ -400,12 +400,18 @@ pub(super) async fn init_prod_ops(
     State(_state): State<Arc<WebState>>,
     user: CurrentUser,
     Path(id): Path<i64>,
+    Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
     let order = findb::manufacturing::get_prod_order(&db, id)?
         .ok_or_else(|| AppError::NotFound(format!("生产订单 {id} 不存在")))?;
-    let n = advanced::prod_op_init_from_routing(&db, id, &order.item_code)?;
+    // ?version=V2 可以指定工艺版本；不传就用默认版本（没有默认版本时退到第一个版本）
+    let version = q
+        .get("version")
+        .map(|v| v.trim().to_string())
+        .unwrap_or_default();
+    let n = advanced::prod_op_init_from_routing_version(&db, id, &order.item_code, &version)?;
     if n == 0 {
         return Err(AppError::bad_request(format!(
             "存货 {} 还没有工艺路线，先在「工艺路线」里维护",

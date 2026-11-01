@@ -962,6 +962,7 @@ impl PriceRulesView {
 #[derive(Clone, Default)]
 pub struct RateBuf {
     pub id: i64,
+    pub version: String,
     pub item_code: String,
     pub op_name: String,
     pub rate: String,
@@ -973,6 +974,7 @@ impl RateBuf {
     fn from_rate(r: &PieceRate) -> Self {
         Self {
             id: r.id,
+            version: r.version.clone(),
             item_code: r.item_code.clone(),
             op_name: r.op_name.clone(),
             rate: r.rate.fmt_qty(),
@@ -984,6 +986,7 @@ impl RateBuf {
     fn to_rate(&self) -> PieceRate {
         PieceRate {
             id: self.id,
+            version: self.version.trim().to_string(),
             item_code: self.item_code.trim().to_string(),
             op_name: self.op_name.trim().to_string(),
             rate: widgets::parse_money(&self.rate),
@@ -1188,6 +1191,7 @@ impl PiecePayView {
                     widgets::TCol::new("生产单", 130.0),
                     widgets::TCol::new("物料", 100.0),
                     widgets::TCol::new("工序", 100.0),
+                    widgets::TCol::new("版本", 60.0),
                     widgets::TCol::new("数量", 90.0).right(),
                     widgets::TCol::new("单价", 80.0).right(),
                     widgets::TCol::new("金额", 100.0).right(),
@@ -1206,8 +1210,16 @@ impl PiecePayView {
                             },
                         ),
                         2 => txt(ui, &l.op_name),
-                        3 => txt(ui, l.qty.fmt_qty()),
-                        4 => txt(
+                        3 => txt(
+                            ui,
+                            if l.version.is_empty() {
+                                "—".to_string()
+                            } else {
+                                l.version.clone()
+                            },
+                        ),
+                        4 => txt(ui, l.qty.fmt_qty()),
+                        5 => txt(
                             ui,
                             if l.matched {
                                 l.rate.fmt_qty()
@@ -1215,7 +1227,7 @@ impl PiecePayView {
                                 "（无单价）".to_string()
                             },
                         ),
-                        5 => widgets::amount_label(ui, l.amount),
+                        6 => widgets::amount_label(ui, l.amount),
                         _ => {}
                     }
                 });
@@ -1245,6 +1257,7 @@ impl PiecePayView {
             );
         } else {
             let cols = [
+                widgets::TCol::new("版本", 60.0),
                 widgets::TCol::new("物料", 110.0),
                 widgets::TCol::new("工序", 110.0),
                 widgets::TCol::new("单价", 90.0).right(),
@@ -1258,13 +1271,21 @@ impl PiecePayView {
                 match c {
                     0 => txt(
                         ui,
+                        if r.version.is_empty() {
+                            "不限".to_string()
+                        } else {
+                            r.version.clone()
+                        },
+                    ),
+                    1 => txt(
+                        ui,
                         if r.item_code.is_empty() {
                             "任意".to_string()
                         } else {
                             r.item_code.clone()
                         },
                     ),
-                    1 => txt(
+                    2 => txt(
                         ui,
                         if r.op_name.is_empty() {
                             "任意".to_string()
@@ -1272,8 +1293,8 @@ impl PiecePayView {
                             r.op_name.clone()
                         },
                     ),
-                    2 => txt(ui, r.rate.fmt_qty()),
-                    3 => txt(
+                    3 => txt(ui, r.rate.fmt_qty()),
+                    4 => txt(
                         ui,
                         if r.disabled {
                             RichText::new("停用").weak()
@@ -1281,7 +1302,7 @@ impl PiecePayView {
                             RichText::new("启用").strong()
                         },
                     ),
-                    4 => txt(
+                    5 => txt(
                         ui,
                         if r.memo.is_empty() {
                             "—".to_string()
@@ -1289,7 +1310,7 @@ impl PiecePayView {
                             r.memo.clone()
                         },
                     ),
-                    5 => {
+                    6 => {
                         ui.horizontal(|ui| {
                             if ui
                                 .add_enabled(editable, egui::Button::new("编辑"))
@@ -1323,6 +1344,8 @@ impl PiecePayView {
             );
         }
         ui.horizontal(|ui| {
+            txt(ui, "版本");
+            widgets::text_input(ui, &mut self.ed.version, 80.0, "留空=不限");
             txt(ui, "物料");
             widgets::text_input(ui, &mut self.ed.item_code, 100.0, "留空=任意");
             txt(ui, "工序");
@@ -1350,7 +1373,17 @@ impl PiecePayView {
                 ctx.log(
                     "工资",
                     "保存计件单价",
-                    &format!("{} {} @ {}", r.item_code, r.op_name, r.rate),
+                    &format!(
+                        "{} {} {} @ {}",
+                        if r.version.is_empty() {
+                            "不限版本"
+                        } else {
+                            &r.version
+                        },
+                        r.item_code,
+                        r.op_name,
+                        r.rate
+                    ),
                 );
                 ctx.info("已保存计件单价");
                 self.ed = RateBuf::from_rate(&r);

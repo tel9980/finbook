@@ -10,6 +10,9 @@ pub struct PieceRateReq {
     pub item_code: String,
     #[serde(default)]
     pub op_name: String,
+    /// 工艺版本（留空 = 不限版本）
+    #[serde(default)]
+    pub version: String,
     pub rate: String,
     #[serde(default)]
     pub disabled: bool,
@@ -37,6 +40,7 @@ pub(super) async fn save_piece_rate(
     let db = &user.db;
     let mut r = findb::piecepay::PieceRate {
         id: req.id,
+        version: req.version.trim().to_string(),
         item_code: req.item_code.trim().to_string(),
         op_name: req.op_name.trim().to_string(),
         rate: parse_money_checked(&req.rate)?,
@@ -48,7 +52,17 @@ pub(super) async fn save_piece_rate(
         user.username(),
         "生产",
         "计件单价",
-        &format!("{} / {} = {}", r.item_code, r.op_name, r.rate),
+        &format!(
+            "{} {} / {} = {}",
+            if r.version.is_empty() {
+                "不限版本"
+            } else {
+                &r.version
+            },
+            r.item_code,
+            r.op_name,
+            r.rate
+        ),
     )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }

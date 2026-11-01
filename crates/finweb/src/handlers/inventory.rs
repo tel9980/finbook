@@ -315,12 +315,15 @@ pub(super) async fn post_routing(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    let mut ops: Vec<advanced::RoutingOp> = Vec::with_capacity(req.len());
+    // 按版本分组保存：`routing` 的唯一键是 (物料, 版本, 序号)，`routing_save_version`
+    // 删的也是「这一版」的工序 —— 一次请求里混着多版会把别的版本删掉。
+    let mut groups: Vec<(String, Vec<advanced::RoutingOp>)> = Vec::new();
     for d in req {
-        ops.push(advanced::RoutingOp {
+        let version = d.version.trim().to_string();
+        let op = advanced::RoutingOp {
             id: 0,
             item_code: item.clone(),
-            version: String::new(),
+            version: version.clone(),
             seq: d.seq,
             op_code: d.op_code,
             op_name: d.op_name,
@@ -328,10 +331,20 @@ pub(super) async fn post_routing(
             std_hours: parse_money_checked(&d.std_hours)?,
             rate: parse_money_checked(&d.rate)?,
             qc_required: d.qc_required,
-        });
+        };
+        match groups.iter_mut().find(|(v, _)| *v == version) {
+            Some((_, list)) => list.push(op),
+            None => groups.push((version, vec![op])),
+        }
     }
-    advanced::routing_save(&db, &item, &ops)?;
-    Ok(Json(serde_json::json!({ "ok": true, "count": ops.len() })))
+    let mut count = 0usize;
+    for (version, ops) in &groups {
+        advanced::routing_save_version(&db, &item, version, ops)?;
+        count += ops.len();
+    }
+    Ok(Json(
+        serde_json::json!({ "ok": true, "count": count, "versions": groups.iter().map(|(v, _)| v.clone()).collect::<Vec<_>>() }),
+    ))
 }
 
 pub(super) async fn delete_routing(
@@ -1385,6 +1398,9 @@ pub(super) struct AssembleReq {
 pub(super) struct RoutingOpDto {
     #[serde(default)]
     pub seq: i32,
+    /// 工艺版本（留空 = 无版本；同一物料可以有多版工艺）
+    #[serde(default)]
+    pub version: String,
     pub op_code: String,
     pub op_name: String,
     #[serde(default)]

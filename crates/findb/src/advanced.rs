@@ -240,7 +240,33 @@ const PO_COLS: &str = "id,po_id,routing_id,op_name,work_center,worker,qty_done,h
 
 /// 生产订单开工时按工艺路线生成工序清单
 pub fn prod_op_init_from_routing(db: &Db, po_id: i64, item_code: &str) -> DbResult<usize> {
-    let ops = routing_list(db, item_code)?;
+    prod_op_init_from_routing_version(db, po_id, item_code, "")
+}
+
+/// 按指定工艺版本生成工序（`version` 为空 = 默认版本）。
+///
+/// 没有默认版本时退到该物料的**第一个**工艺版本：只有一个版本的小厂不该因为
+/// 「版本号不是空串」就调不出工序（报工流水的 `routing_version` 也就记不下来，
+/// 钉住版本的计件单价永远匹配不上）。
+pub fn prod_op_init_from_routing_version(
+    db: &Db,
+    po_id: i64,
+    item_code: &str,
+    version: &str,
+) -> DbResult<usize> {
+    let ops = if version.is_empty() {
+        let plain = routing_list_version(db, item_code, "")?;
+        if plain.is_empty() {
+            match routing_versions(db, item_code)?.first().cloned() {
+                Some(v) => routing_list_version(db, item_code, &v)?,
+                None => Vec::new(),
+            }
+        } else {
+            plain
+        }
+    } else {
+        routing_list_version(db, item_code, version)?
+    };
     if ops.is_empty() {
         return Ok(0);
     }
@@ -322,8 +348,10 @@ pub fn prod_op_report(db: &Db, op_id: i64, qty: Money, hours: Money) -> DbResult
     let today = chrono::Local::now().date_naive();
     let info = tx.query_row(
         "SELECT o.po_id, COALESCE(p.no,''), COALESCE(p.item_code,''), COALESCE(p.item_name,''),
-                o.op_name, o.worker
-         FROM prod_op o LEFT JOIN production_order p ON p.id = o.po_id
+                o.op_name, o.worker, COALESCE(rt.version,'')
+         FROM prod_op o
+         LEFT JOIN production_order p ON p.id = o.po_id
+         LEFT JOIN routing rt ON rt.id = o.routing_id
          WHERE o.id = ?1",
         rusqlite::params![op_id],
         |r| {
@@ -334,12 +362,14 @@ pub fn prod_op_report(db: &Db, op_id: i64, qty: Money, hours: Money) -> DbResult
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
                 r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
             ))
         },
     )?;
     tx.execute(
-        "INSERT INTO prod_op_log(op_id,po_id,po_no,item_code,item_name,op_name,worker,period,date,qty,hours)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        "INSERT INTO prod_op_log(op_id,po_id,po_no,item_code,item_name,op_name,worker,
+                                 routing_version,period,date,qty,hours)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         rusqlite::params![
             op_id,
             info.0,
@@ -348,6 +378,7 @@ pub fn prod_op_report(db: &Db, op_id: i64, qty: Money, hours: Money) -> DbResult
             info.3,
             info.4,
             info.5,
+            info.6,
             Period::from_date(today).ymm(),
             today.format("%Y-%m-%d").to_string(),
             crate::exact_param(qty),

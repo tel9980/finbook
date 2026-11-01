@@ -157,3 +157,122 @@ async fn piece_work_fills_payroll() {
     );
     let _ = ymm;
 }
+
+/// 工艺改版以后，单价要跟着版本走：同一道工序在两个版本上是两个价。
+#[tokio::test]
+async fn piece_rate_matches_routing_version() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let (ymm, plabel) = today_period();
+    let _ = ymm;
+
+    // 工艺路线：140501 的 V2 版，一道「氧化」工序（没有默认版本）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/routing/140501",
+            &sid,
+            serde_json::json!([{
+                "seq": 1,
+                "version": "V2",
+                "op_code": "OX",
+                "op_name": "氧化",
+                "work_center": "",
+                "std_hours": "0.5",
+                "rate": "0",
+                "qc_required": false,
+            }]),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "建 V2 版工艺路线");
+
+    // 下达生产订单：没有默认版本时退到第一个版本，仍要生成工序
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/prod",
+            &sid,
+            serde_json::json!({ "item_code": "140501", "qty": "100", "date": "" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "下达生产订单");
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        v["ops"].as_i64().unwrap_or(0),
+        1,
+        "按 V2 版工艺生成 1 道工序"
+    );
+    let pid = v["id"].as_i64().unwrap();
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(&format!("/api/prod/{pid}/ops"), &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let op_id = v["ops"][0]["id"].as_i64().unwrap();
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/prod/op/dispatch",
+            &sid,
+            serde_json::json!({ "op_id": op_id, "worker": "张三" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "派工");
+
+    // 两条单价：V1 是 1 元、V2 是 2 元
+    for (ver, rate) in [("V1", "1"), ("V2", "2")] {
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/piece-rates",
+                &sid,
+                serde_json::json!({
+                    "version": ver, "item_code": "140501", "op_name": "氧化", "rate": rate
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "建 {ver} 版计价单价");
+    }
+    // 列表里能看见版本
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/piece-rates", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let versions: Vec<String> = v["rates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["version"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert!(versions.contains(&"V1".to_string()) && versions.contains(&"V2".to_string()));
+
+    // 报工 100 件：这道工序是 V2 版的，按 2 元算 = 200
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/prod/op/report",
+            &sid,
+            serde_json::json!({ "op_id": op_id, "qty": "100", "hours": "2" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "报工");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/payroll/piece?period={plabel}"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(money_num(rows[0]["amount"].as_str().unwrap()), 200.0, "{v}");
+    assert_eq!(rows[0]["lines"][0]["version"].as_str().unwrap(), "V2");
+    assert_eq!(
+        money_num(rows[0]["lines"][0]["rate"].as_str().unwrap()),
+        2.0
+    );
+}
