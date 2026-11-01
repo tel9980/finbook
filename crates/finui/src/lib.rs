@@ -207,6 +207,30 @@ impl FinBookApp {
                     views.price_rules.invalidate();
                 }
             }
+            ConfirmAction::DeleteToolItem(code) => {
+                if !ctx.can(Perm::ProductionOps) {
+                    ctx.error(format!("没有「{}」权限", Perm::ProductionOps.label()));
+                    return;
+                }
+                let r = findb::fixture::item_delete(ctx.db(), &code);
+                if ctx.handle(r).is_some() {
+                    ctx.log("挂具", "删除档案", &code);
+                    ctx.info("已删除挂具档案");
+                    views.tool_ledger.invalidate();
+                }
+            }
+            ConfirmAction::DeleteToolMove(id) => {
+                if !ctx.can(Perm::ProductionOps) {
+                    ctx.error(format!("没有「{}」权限", Perm::ProductionOps.label()));
+                    return;
+                }
+                let r = findb::fixture::move_delete(ctx.db(), id);
+                if ctx.handle(r).is_some() {
+                    ctx.log("挂具", "删除流水", &format!("#{id}"));
+                    ctx.info("已删除收发记录");
+                    views.tool_ledger.invalidate();
+                }
+            }
             ConfirmAction::DeletePieceRate(id) => {
                 if !ctx.can(Perm::ProductionOps) {
                     ctx.error(format!("没有「{}」权限", Perm::ProductionOps.label()));

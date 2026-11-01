@@ -23,6 +23,7 @@ pub mod consign;
 pub mod customers;
 pub mod docflow;
 pub mod exports;
+pub mod fixture;
 pub mod funds;
 pub mod imports;
 pub mod inventory2;

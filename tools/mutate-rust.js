@@ -1211,6 +1211,51 @@ const MUT = [
       "piecepay::tests::计件回填保留比计件额高的应发",
     ],
   },
+  {
+    // 挂具台账只管数量，领用超过在库就会变成负库存，账上就开始骗人。
+    name: "㊵ 挂具领用不校验在库",
+    file: "crates/findb/src/fixture.rs",
+    from: '        "issue" if m.qty.cents() > bal.in_stock.cents() => {',
+    to: '        "issue" if false => {',
+    cmd: ["test", "-p", "findb", "--lib", "fixture::tests::领用超过在库要报错"],
+  },
+  {
+    name: "㊵ 挂具归还不校验在用",
+    file: "crates/findb/src/fixture.rs",
+    from: '        "back" if m.qty.cents() > bal.in_use.cents() => {',
+    to: '        "back" if false => {',
+    cmd: ["test", "-p", "findb", "--lib", "fixture::tests::归还未领用的挂具要报错"],
+  },
+  {
+    name: "㊵ 报废不校验在库（允许从在用扣）",
+    file: "crates/findb/src/fixture.rs",
+    from: '        "scrap" if m.qty.cents() > bal.in_stock.cents() => {',
+    to: '        "scrap" if false => {',
+    cmd: [
+      "test",
+      "-p",
+      "findb",
+      "--lib",
+      "fixture::tests::报废数量超过在库要提示先归还",
+    ],
+  },
+  {
+    // life_times=0 表示不限次数；把这下限判断去掉，所有挂具都会被判「该换新」。
+    name: "㊵ 挂具不限次数也判该换新",
+    file: "crates/findb/src/fixture.rs",
+    from: "        self.life_times > 0 && self.used_times >= self.life_times",
+    to: "        self.used_times >= self.life_times",
+    cmd: ["test", "-p", "findb", "--lib", "fixture::tests::使用次数用完要提示换新"],
+  },
+  {
+    // 删掉档案就无从重算结存：有流水必须拦住。
+    name: "㊵ 挂具有流水也能删档案",
+    file: "crates/findb/src/fixture.rs",
+    from: "    if n > 0 {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "fixture::tests::档案编号必填且有条流水不能删"],
+  },
+
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

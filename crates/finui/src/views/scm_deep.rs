@@ -5,7 +5,7 @@
 use egui::{RichText, Ui};
 use fincore::{AuxKind, Money, Period, Perm};
 use findb::scm2::{self, PoEstimate, PoRecon, SoRecon};
-use findb::{auxs, business, scm};
+use findb::{auxs, business, processfee, scm};
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -93,6 +93,8 @@ pub struct ScmDeepView {
     pub quo_item_name: String,
     pub quo_qty: String,
     pub quo_price: String,
+    /// 加急：只有配了加急费的规则才有意义（报价时一并算进去）
+    pub quo_rush: bool,
     pub quo_memo: String,
     // 采购/销售单据流水录入（到货/发货/付款/收款/退货）
     pub doc_po_id: String,
@@ -143,6 +145,7 @@ impl Default for ScmDeepView {
             quo_item_name: String::new(),
             quo_qty: String::new(),
             quo_price: String::new(),
+            quo_rush: false,
             quo_memo: String::new(),
             doc_po_id: String::new(),
             doc_so_id: String::new(),
@@ -455,6 +458,14 @@ impl ScmDeepView {
                 widgets::money_input(ui, &mut self.quo_qty, 80.0);
                 ui.label("单价");
                 widgets::money_input(ui, &mut self.quo_price, 90.0);
+                ui.checkbox(&mut self.quo_rush, "加急");
+                if ui
+                    .button("按规则报价")
+                    .on_hover_text("按「加工费规则」算价：面积×单价 → 不足最低收费兜底 → 加急另加")
+                    .clicked()
+                {
+                    self.do_quote(ctx);
+                }
                 ui.label("备注");
                 ui.add_sized(
                     [140.0, 22.0],
@@ -513,6 +524,44 @@ impl ScmDeepView {
                 }
                 Err(e) => ctx.error(e.to_string()),
             }
+        }
+    }
+
+    /// 按加工费规则把单价算出来填进单价框。
+    ///
+    /// 计价口径全在 `findb::processfee`（基础价 → 最低收费兜底 → 加急），
+    /// 界面不算数：同一套规则在网页和桌面各算一遍，早晚差一分钱。
+    /// 单价填的是「合计 ÷ 数量」，这样报价单金额（数量 × 单价）刚好等于规则算出的合计；
+    /// 低于最低收费时这个单价会高于规则单价——那正是「最低收费」的意思。
+    fn do_quote(&mut self, ctx: &mut AppCtx<'_>) {
+        self.err.clear();
+        let item = self.quo_item.trim().to_string();
+        let cust = self.quo_customer.trim().to_string();
+        let qty = Money::parse_or_zero(&self.quo_qty);
+        if item.is_empty() {
+            self.err = "先选存货（物料）".to_string();
+            return;
+        }
+        if !qty.is_positive() {
+            self.err = "先填计价数量（面积/件数）".to_string();
+            return;
+        }
+        match processfee::quote_by(ctx.db(), &item, &cust, qty, self.quo_rush) {
+            Ok(q) => {
+                let unit = q.total.checked_div(qty).unwrap_or(Money::ZERO);
+                self.quo_price = unit.fmt_exact();
+                ctx.info(format!(
+                    "规则「{}」：{} × {} = 基础价 {}，最低收费补差 {}，加急 {}，合计 {}",
+                    q.rule_name,
+                    q.qty.fmt_qty(),
+                    q.unit_price.fmt_qty(),
+                    q.base.fmt_money(),
+                    q.floor_extra.fmt_money(),
+                    q.rush_extra.fmt_money(),
+                    q.total.fmt_money()
+                ));
+            }
+            Err(e) => self.err = e.to_string(),
         }
     }
 

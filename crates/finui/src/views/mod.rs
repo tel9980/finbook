@@ -86,6 +86,7 @@ pub struct Views {
     pub consign: process::ConsignView,
     pub price_rules: process::PriceRulesView,
     pub piece_pay: process::PiecePayView,
+    pub tool_ledger: process::ToolLedgerView,
     pub dim_profit: dim_profit::DimProfitView,
     pub multi_column: advanced::MultiColumnView,
     pub summary_table: advanced::SummaryTableView,
@@ -144,6 +145,7 @@ impl Views {
         self.consign.invalidate();
         self.price_rules.invalidate();
         self.piece_pay.invalidate();
+        self.tool_ledger.invalidate();
         self.dim_profit.invalidate();
         self.multi_column.invalidate();
         self.summary_table.invalidate();
@@ -255,6 +257,7 @@ impl Views {
                 NavItem::Consign => self.consign.enter(ctx),
                 NavItem::PriceRules => self.price_rules.enter(ctx),
                 NavItem::PiecePay => self.piece_pay.enter(ctx),
+                NavItem::ToolLedger => self.tool_ledger.enter(ctx),
                 NavItem::DimProfit => self.dim_profit.enter(ctx),
                 NavItem::MultiColumn => self.multi_column.enter(ctx),
                 NavItem::SummaryTable => self.summary_table.enter(ctx),
@@ -318,6 +321,7 @@ impl Views {
             NavItem::Consign => self.consign.show(ctx, ui),
             NavItem::PriceRules => self.price_rules.show(ctx, ui),
             NavItem::PiecePay => self.piece_pay.show(ctx, ui),
+            NavItem::ToolLedger => self.tool_ledger.show(ctx, ui),
             NavItem::DimProfit => self.dim_profit.show(ctx, ui),
             NavItem::MultiColumn => self.multi_column.show(ctx, ui),
             NavItem::SummaryTable => self.summary_table.show(ctx, ui),

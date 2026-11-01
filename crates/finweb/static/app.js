@@ -1335,6 +1335,7 @@ const NAV_ITEMS = [
   { id: "work-report", label: "工序报工", perm: "production_ops", production: true, group: "生产制造" },
   { id: "consign", label: "客供料台账", perm: "order_ops", production: true, group: "生产制造" },
   { id: "piece-pay", label: "计件工资", perm: "production_ops", production: true, group: "生产制造" },
+  { id: "tool-ledger", label: "挂具台账", perm: "production_ops", production: true, group: "生产制造" },
   { id: "funds", label: "资金管理", perm: "fin_report", group: "资金" },
   { id: "budget-versions", label: "预算版本", perm: "fin_report", group: "管理会计" },
   { id: "budget-alerts", label: "预算预警", perm: "fin_report", group: "管理会计" },
@@ -1399,6 +1400,7 @@ const VIEWS = {
   "daily": viewDaily,
   "dim-profit": viewDimProfit,
   "consign": viewConsign,
+  "tool-ledger": viewToolLedger,
   "piece-pay": viewPiecePay,
   "price-rules": viewPriceRules,
   "period-end": viewPeriodEnd,
@@ -13433,6 +13435,153 @@ async function viewPiecePay(main) {
   };
   loadRates();
   run();
+}
+
+// ===========================================================================
+// 挂具台账（氧化厂的挂具 / 挂篮 / 夹具：只记数量与使用次数，不进存货、不出凭证）
+// ===========================================================================
+async function viewToolLedger(main) {
+  main.innerHTML = `<h2>挂具台账</h2>
+    <div class="toolbar">
+      <label>挂具 <input id="tl-item" style="width:120px" placeholder="编号，留空 = 全部" /></label>
+      <button class="btn primary sm" id="tl-reload">查询</button>
+      ${can("production_ops") ? `<button class="btn primary sm" id="tl-new-move">登记收发</button>
+      <button class="btn ghost sm" id="tl-new-item">新增档案</button>` : ""}
+      <button class="btn ghost sm" id="tl-print">打印</button>
+    </div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">该换新了（额定次数已用完）</h3><div id="tl-warn" class="muted">加载中…</div></div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">结存（在库 / 在车间 / 累计报废 / 使用次数）</h3><div id="tl-table" class="muted">加载中…</div></div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">收发流水</h3><div id="tl-moves" class="muted">加载中…</div></div>
+    <div class="muted" style="font-size:12px">领用 = 出库进车间；归还 = 回库并记使用次数（按套数折算，可改）；报废只从在库扣 —— 坏挂具先「归还」入库再报废</div>`;
+
+  let kinds = [];
+  let items = [];
+  const code = () => $("#tl-item", main).value.trim();
+  const kindOpts = (sel) =>
+    kinds.map((k) => `<option value="${esc(k.code)}" ${k.code === sel ? "selected" : ""}>${esc(k.label)}</option>`).join("");
+  const itemOpts = () =>
+    items.map((i) => `<option value="${esc(i.code)}">${esc(i.code)} ${esc(i.name || "")}</option>`).join("");
+
+  const loadBal = async () => {
+    try {
+      const r = await api("/tools");
+      items = r.items || [];
+      kinds = r.kinds || [];
+      const rows = r.rows || [];
+      const warn = rows.filter((x) => x.life_times > 0 && (x.used_times || 0) >= x.life_times);
+      $("#tl-warn", main).innerHTML = warn.length
+        ? `<table class="grid"><thead><tr><th>挂具</th><th>名称</th><th>规格</th><th>已用次数</th><th>额次数</th><th>在库</th></tr></thead><tbody>${warn.map((x) => `<tr>
+            <td>${esc(x.tool_code)}</td><td>${esc(x.name || "")}</td><td>${esc(x.spec || "")}</td>
+            <td class="num">${x.used_times || 0}</td><td class="num">${x.life_times}</td><td class="num">${fmt(x.in_stock)}</td></tr>`).join("")}</tbody></table>`
+        : `<div class="muted">没有需要换新的挂具</div>`;
+      $("#tl-table", main).innerHTML = rows.length
+        ? `<table class="grid"><thead><tr><th>挂具</th><th>名称</th><th>规格</th><th>单位</th><th>在库</th><th>在车间</th><th>累计报废</th><th>使用次数</th><th>额定</th><th>状态</th><th></th></tr></thead><tbody>${rows.map((x) => {
+            const over = x.life_times > 0 && (x.used_times || 0) >= x.life_times;
+            const life = x.life_times > 0 ? String(x.life_times) : "不限";
+            return `<tr><td>${esc(x.tool_code)}</td><td>${esc(x.name || "")}</td><td>${esc(x.spec || "")}</td>
+              <td>${esc(x.unit || "")}</td><td class="num">${fmt(x.in_stock)}</td><td class="num">${fmt(x.in_use)}</td>
+              <td class="num">${fmt(x.scraped)}</td><td class="num">${x.used_times || 0}</td><td class="num">${life}</td>
+              <td>${x.disabled ? `<span class="tag">停用</span>` : over ? `<span class="tag" style="color:var(--warn)">该换新</span>` : ""}</td>
+              <td class="row-actions">${can("production_ops") ? `<button class="btn ghost sm" data-tl-del="${esc(x.tool_code)}">删档</button>` : ""}</td></tr>`;
+          }).join("")}</tbody></table>`
+        : `<div class="muted">还没有挂具档案，先「新增档案」</div>`;
+      $all("[data-tl-del]", main).forEach((b) => (b.onclick = async () => {
+        const c = b.dataset.tlDel;
+        if (!(await confirmDialog(`删除挂具档案 ${c}？有收发记录的会被拦下。`, true))) return;
+        try { await api(`/tools/items/${encodeURIComponent(c)}`, { method: "DELETE" }); toast("已删除", "ok"); loadBal(); }
+        catch (e) { toast(e.message, "err"); }
+      }));
+    } catch (e) { $("#tl-table", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+  };
+
+  const loadMoves = async () => {
+    try {
+      const r = await api(`/tools/moves${code() ? `?tool=${encodeURIComponent(code())}` : ""}`);
+      kinds = r.kinds || kinds;
+      const rows = r.moves || [];
+      $("#tl-moves", main).innerHTML = rows.length
+        ? `<table class="grid"><thead><tr><th>单号</th><th>日期</th><th>类型</th><th>挂具</th><th>客户</th><th>数量</th><th>次数</th><th>备注</th><th></th></tr></thead><tbody>${rows.map((x) => `<tr>
+            <td>${esc(x.no)}</td><td>${esc(x.date)}</td><td><span class="tag">${esc(x.kind_label || x.kind)}</span></td>
+            <td>${esc(x.tool_code)}</td><td>${esc(x.customer || "—")}</td><td class="num">${fmt(x.qty)}</td>
+            <td class="num">${x.times || 0}</td><td>${esc(x.memo || "")}</td>
+            <td class="row-actions">${can("production_ops") ? `<button class="btn ghost sm" data-tl-mdel="${x.id}">删</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+        : `<div class="muted">没有收发记录</div>`;
+      $all("[data-tl-mdel]", main).forEach((b) => (b.onclick = async () => {
+        if (!(await confirmDialog("删除这条收发记录？结存会跟着变。", true))) return;
+        try { await api(`/tools/moves/${b.dataset.tlMdel}`, { method: "DELETE" }); toast("已删除", "ok"); loadBal(); loadMoves(); }
+        catch (e) { toast(e.message, "err"); }
+      }));
+    } catch (e) { $("#tl-moves", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+  };
+
+  const openMove = () => {
+    const m = modal(`<h3>登记挂具收发</h3>
+      <div class="field"><label>挂具 *</label><select id="tlm-code">${itemOpts()}</select></div>
+      <div class="field"><label>类型 *</label><select id="tlm-kind">${kindOpts("issue")}</select></div>
+      <div class="field"><label>日期 *</label><input id="tlm-date" type="date" value="${esc(state.today || "")}" /></div>
+      <div class="field"><label>客户（专用挂具才填）</label><input id="tlm-cust" /></div>
+      <div class="field"><label>数量 *</label><input id="tlm-qty" style="width:100px" /></div>
+      <div class="field"><label>使用次数（归还留空按套数算）</label><input id="tlm-times" style="width:100px" /></div>
+      <div class="field"><label>备注</label><input id="tlm-memo" /></div>
+      <div class="foot"><button class="btn primary" id="tlm-save">保存</button><button class="btn ghost" id="tlm-cancel">取消</button></div>`);
+    $("#tlm-cancel", m).onclick = closeModal;
+    $("#tlm-save", m).onclick = async () => {
+      const body = {
+        tool_code: $("#tlm-code", m).value,
+        kind: $("#tlm-kind", m).value,
+        date: $("#tlm-date", m).value.trim(),
+        customer: $("#tlm-cust", m).value.trim(),
+        qty: $("#tlm-qty", m).value.trim(),
+        times: parseInt($("#tlm-times", m).value.trim() || "0", 10) || 0,
+        memo: $("#tlm-memo", m).value.trim(),
+      };
+      if (!body.tool_code) { toast("先建挂具档案", "err"); return; }
+      if (!body.qty) { toast("数量必填", "err"); return; }
+      try {
+        const r = await api("/tools/moves", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        toast(`已保存 ${r.move.no}：在库 ${fmt(r.balance.in_stock)}，在车间 ${fmt(r.balance.in_use)}`, "ok");
+        closeModal(); loadBal(); loadMoves();
+      } catch (e) { toast(e.message, "err"); }
+    };
+  };
+
+  const openItem = () => {
+    const m = modal(`<h3>新增挂具档案</h3>
+      <div class="field"><label>编号 *</label><input id="tli-code" placeholder="如 GJ-001" /></div>
+      <div class="field"><label>名称</label><input id="tli-name" /></div>
+      <div class="field"><label>类型</label><input id="tli-kind" value="挂具" /></div>
+      <div class="field"><label>规格</label><input id="tli-spec" placeholder="如 600×400" /></div>
+      <div class="field"><label>单位</label><input id="tli-unit" value="套" style="width:80px" /></div>
+      <div class="field"><label>额定使用次数（0 = 不限）</label><input id="tli-life" value="0" style="width:100px" /></div>
+      <div class="field"><label>备注</label><input id="tli-memo" /></div>
+      <div class="foot"><button class="btn primary" id="tli-save">保存</button><button class="btn ghost" id="tli-cancel">取消</button></div>`);
+    $("#tli-cancel", m).onclick = closeModal;
+    $("#tli-save", m).onclick = async () => {
+      const body = {
+        code: $("#tli-code", m).value.trim(),
+        name: $("#tli-name", m).value.trim(),
+        tool_kind: $("#tli-kind", m).value.trim(),
+        spec: $("#tli-spec", m).value.trim(),
+        unit: $("#tli-unit", m).value.trim(),
+        life_times: parseInt($("#tli-life", m).value.trim() || "0", 10) || 0,
+        memo: $("#tli-memo", m).value.trim(),
+      };
+      if (!body.code) { toast("编号必填", "err"); return; }
+      try {
+        await api("/tools/items", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        toast("已保存", "ok"); closeModal(); loadBal();
+      } catch (e) { toast(e.message, "err"); }
+    };
+  };
+
+  $("#tl-reload", main).onclick = () => { loadBal(); loadMoves(); };
+  $("#tl-print", main).onclick = () => printPreview("挂具台账", main);
+  const bNew = $("#tl-new-move", main);
+  if (bNew) bNew.onclick = openMove;
+  const bItem = $("#tl-new-item", main);
+  if (bItem) bItem.onclick = openItem;
+  await loadBal();
+  await loadMoves();
 }
 
 (async function boot() {

@@ -47,6 +47,7 @@ pub(crate) mod auth;
 pub(crate) mod books;
 pub(crate) mod consign;
 pub(crate) mod export;
+pub(crate) mod fixture;
 pub(crate) mod funds;
 pub(crate) mod hr;
 pub(crate) mod inventory;
@@ -66,6 +67,7 @@ use self::auth::*;
 use self::books::*;
 use self::consign::*;
 use self::export::*;
+use self::fixture::*;
 use self::funds::*;
 use self::hr::*;
 use self::inventory::*;
@@ -477,6 +479,16 @@ pub fn router(state: Arc<WebState>) -> Router {
             get(list_piece_rates).post(save_piece_rate),
         )
         .route("/api/piece-rates/:id", delete(delete_piece_rate))
+        // 挂具台账（v1.8.66）
+        .route("/api/tools", get(list_tools))
+        .route("/api/tools/items", post(save_tool))
+        .route("/api/tools/items/:code", delete(delete_tool))
+        .route(
+            "/api/tools/moves",
+            get(list_tool_moves).post(save_tool_move),
+        )
+        .route("/api/tools/moves/:id", delete(delete_tool_move))
+        .route("/api/tools/need-replace", get(tools_need_replace))
         .route("/api/payroll/piece", get(piece_sheet))
         .route("/api/payroll/piece-fill", post(piece_fill))
         .route(

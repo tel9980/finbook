@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 39;
+pub const SCHEMA_VERSION: i64 = 40;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1622,6 +1622,38 @@ CREATE TABLE IF NOT EXISTS prod_op_log (
     hours       TEXT NOT NULL DEFAULT '0'
 );
 CREATE INDEX IF NOT EXISTS idx_prod_op_log_period ON prod_op_log(period, worker);
+
+-- 挂具/工装台账（氧化厂的挂具：只记数量与使用次数，不进存货、不出凭证）
+CREATE TABLE IF NOT EXISTS tool_item (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    code        TEXT NOT NULL,                       -- 挂具编号（档案主键）
+    name        TEXT NOT NULL DEFAULT '',
+    tool_kind   TEXT NOT NULL DEFAULT '挂具',        -- 挂具/挂篮/夹具（自由文本，行业说法不一样）
+    spec        TEXT NOT NULL DEFAULT '',            -- 规格（适配工件尺寸）
+    unit        TEXT NOT NULL DEFAULT '套',
+    life_times  INTEGER NOT NULL DEFAULT 0,          -- 额定使用次数，0=不限
+    disabled    INTEGER NOT NULL DEFAULT 0,
+    memo        TEXT NOT NULL DEFAULT '',
+    UNIQUE(code)
+);
+
+CREATE TABLE IF NOT EXISTS tool_move (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    no          TEXT NOT NULL,                       -- 单号 GJ-{G/L/H/B}-期间-序号
+    period      INTEGER NOT NULL,
+    date        TEXT NOT NULL,
+    tool_code   TEXT NOT NULL,
+    customer    TEXT NOT NULL DEFAULT '',            -- 客户专用挂具（可空=通用）
+    kind        TEXT NOT NULL,                       -- buy 购置 / issue 领用 / back 归还 / scrap 报废
+    qty         TEXT NOT NULL DEFAULT '0',
+    times       INTEGER NOT NULL DEFAULT 0,          -- 本次归还折合使用次数（寿命累计用）
+    memo        TEXT NOT NULL DEFAULT '',
+    created_by  TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT '',
+    UNIQUE(no)
+);
+CREATE INDEX IF NOT EXISTS idx_tool_move_code ON tool_move(tool_code);
+CREATE INDEX IF NOT EXISTS idx_tool_move_period ON tool_move(period);
 
 "#;
 

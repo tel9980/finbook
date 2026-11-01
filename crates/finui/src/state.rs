@@ -68,6 +68,7 @@ pub enum NavItem {
     PriceRules,
     /// 计件工资（工序报工完工量 × 计件单价）
     PiecePay,
+    ToolLedger,
     /// 自定义报表
     CustomReport,
     /// 多栏账
@@ -136,6 +137,7 @@ impl NavItem {
             NavItem::Consign => "客供料台账".to_string(),
             NavItem::PriceRules => "加工费规则".to_string(),
             NavItem::PiecePay => "计件工资".to_string(),
+            NavItem::ToolLedger => "挂具台账".to_string(),
             NavItem::CustomReport => "自定义报表".to_string(),
             NavItem::MultiColumn => "多栏账".to_string(),
             NavItem::SummaryTable => "摘要汇总表".to_string(),
@@ -222,7 +224,8 @@ impl NavItem {
             | NavItem::Manufacturing
             | NavItem::Consign
             | NavItem::PriceRules
-            | NavItem::PiecePay => "业务",
+            | NavItem::PiecePay
+            | NavItem::ToolLedger => "业务",
             NavItem::Approval | NavItem::Archive => "系统",
             NavItem::Budget
             | NavItem::BudgetAlerts
@@ -275,6 +278,7 @@ impl NavItem {
             NavItem::Backup => Some(Perm::Backup),
             NavItem::Logs => Some(Perm::AuditLog),
             NavItem::Ledger | NavItem::BalanceTable | NavItem::Reports => Some(Perm::Report),
+            NavItem::ToolLedger => Some(Perm::ProductionOps),
             _ => None,
         }
     }
@@ -332,6 +336,7 @@ impl NavItem {
             NavItem::Consign,
             NavItem::PriceRules,
             NavItem::PiecePay,
+            NavItem::ToolLedger,
             NavItem::Users,
             NavItem::Security,
             NavItem::Options,
@@ -389,6 +394,10 @@ pub enum ConfirmAction {
     DeletePriceRule(i64),
     /// 删除计件单价
     DeletePieceRate(i64),
+    /// 删除挂具档案
+    DeleteToolItem(String),
+    /// 删除挂具收发记录
+    DeleteToolMove(i64),
     /// 期末结转损益
     CarryForward(Period),
     /// 期末结账

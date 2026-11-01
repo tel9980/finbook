@@ -10,6 +10,7 @@ use chrono::NaiveDate;
 use egui::{RichText, Ui};
 use fincore::{Money, Period, Perm};
 use findb::consign::{self, ConsignBalance, ConsignDoc, ConsignStatementRow};
+use findb::fixture::{self, ToolBalance, ToolItem, ToolMove};
 use findb::piecepay::{self, PiecePay, PieceRate};
 use findb::processfee::{self, FeeQuote, PriceRule};
 
@@ -1413,5 +1414,476 @@ impl PiecePayView {
         }
         let _ = who;
         self.dirty = true;
+    }
+}
+
+// ===========================================================================
+// ④ 挂具台账
+// ===========================================================================
+
+pub struct ToolLedgerView {
+    /// 挂具编号过滤（空 = 全部）
+    pub filter: String,
+    pub items: Vec<ToolItem>,
+    pub rows: Vec<ToolBalance>,
+    pub moves: Vec<ToolMove>,
+    pub err: String,
+    pub dirty: bool,
+    key: String,
+    // 新增档案
+    pub item_open: bool,
+    pub ni_code: String,
+    pub ni_name: String,
+    pub ni_kind: String,
+    pub ni_spec: String,
+    pub ni_unit: String,
+    pub ni_life: String,
+    pub ni_memo: String,
+    // 登记收发
+    pub move_open: bool,
+    pub nm_code: String,
+    pub nm_kind: String,
+    pub nm_date: String,
+    pub nm_cust: String,
+    pub nm_qty: String,
+    pub nm_times: String,
+    pub nm_memo: String,
+}
+
+impl Default for ToolLedgerView {
+    fn default() -> Self {
+        Self {
+            filter: String::new(),
+            items: Vec::new(),
+            rows: Vec::new(),
+            moves: Vec::new(),
+            err: String::new(),
+            dirty: true,
+            key: String::new(),
+            item_open: false,
+            ni_code: String::new(),
+            ni_name: String::new(),
+            ni_kind: "挂具".to_string(),
+            ni_spec: String::new(),
+            ni_unit: "套".to_string(),
+            ni_life: "0".to_string(),
+            ni_memo: String::new(),
+            move_open: false,
+            nm_code: String::new(),
+            nm_kind: "issue".to_string(),
+            nm_date: String::new(),
+            nm_cust: String::new(),
+            nm_qty: String::new(),
+            nm_times: String::new(),
+            nm_memo: String::new(),
+        }
+    }
+}
+
+impl ToolLedgerView {
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    pub fn enter(&mut self, _ctx: &mut AppCtx<'_>) {
+        if self.nm_date.is_empty() {
+            self.nm_date = chrono::Local::now()
+                .date_naive()
+                .format("%Y-%m-%d")
+                .to_string();
+        }
+        self.dirty = true;
+    }
+
+    fn reload(&mut self, ctx: &mut AppCtx<'_>) {
+        let filter = self.filter.trim().to_string();
+        let key = format!("tool|{filter}");
+        if !self.dirty && self.key == key {
+            return;
+        }
+        self.key = key;
+        self.dirty = false;
+        match fixture::item_list(ctx.db()) {
+            Ok(v) => self.items = v,
+            Err(e) => {
+                self.items.clear();
+                self.err = e.to_string();
+            }
+        }
+        match fixture::balances(ctx.db()) {
+            Ok(v) => self.rows = v,
+            Err(e) => {
+                self.rows.clear();
+                self.err = e.to_string();
+            }
+        }
+        let f = if filter.is_empty() {
+            None
+        } else {
+            Some(filter.as_str())
+        };
+        match fixture::moves(ctx.db(), f, None) {
+            Ok(v) => self.moves = v,
+            Err(e) => {
+                self.moves.clear();
+                self.err = e.to_string();
+            }
+        }
+    }
+
+    pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        self.reload(ctx);
+
+        widgets::page_header(ui, "挂具台账", |ui| {
+            txt(
+                ui,
+                RichText::new("挂具只记数量与使用次数：不进存货、不出凭证；报废只从在库扣").weak(),
+            );
+        });
+
+        let mut want_item = false;
+        let mut want_move = false;
+        let over = self.rows.iter().filter(|b| b.needs_replace()).count();
+        widgets::toolbar(ui, |ui| {
+            txt(ui, "挂具");
+            if widgets::text_input(ui, &mut self.filter, 130.0, "编号，留空 = 全部").changed()
+            {
+                self.dirty = true;
+            }
+            if ui.button("刷新").clicked() {
+                self.dirty = true;
+            }
+            ui.separator();
+            if ui
+                .add_enabled(ctx.can(Perm::ProductionOps), egui::Button::new("登记收发"))
+                .clicked()
+            {
+                want_move = true;
+            }
+            if ui
+                .add_enabled(ctx.can(Perm::ProductionOps), egui::Button::new("新增档案"))
+                .clicked()
+            {
+                want_item = true;
+            }
+            if over > 0 {
+                ui.separator();
+                txt(
+                    ui,
+                    RichText::new(format!("{over} 个挂具该换新了")).color(palette::WARN),
+                );
+            }
+        });
+        if want_move {
+            if self.items.is_empty() {
+                txt(ui, RichText::new("先建挂具档案").color(palette::WARN));
+            } else {
+                self.nm_code = self.items[0].code.clone();
+                self.move_open = true;
+            }
+        }
+        if want_item {
+            self.item_open = true;
+        }
+        if !self.err.is_empty() {
+            let msg = self.err.clone();
+            ui.colored_label(palette::CREDIT, msg);
+        }
+
+        // ---------------- 结存 ----------------
+        let cols = [
+            widgets::TCol::new("挂具", 90.0),
+            widgets::TCol::new("名称", 130.0),
+            widgets::TCol::new("规格", 90.0),
+            widgets::TCol::new("单位", 50.0).fixed(),
+            widgets::TCol::new("在库", 70.0).right(),
+            widgets::TCol::new("在车间", 70.0).right(),
+            widgets::TCol::new("累计报废", 80.0).right(),
+            widgets::TCol::new("使用次数", 80.0).right(),
+            widgets::TCol::new("额定", 60.0).right(),
+            widgets::TCol::new("状态", 80.0).fixed(),
+            widgets::TCol::new("", 60.0).fixed(),
+        ];
+        let rows = self.rows.clone();
+        if rows.is_empty() {
+            widgets::empty_hint(ui, "还没有挂具档案，先「新增档案」");
+        }
+        let mut del: Option<String> = None;
+        widgets::grid(ui, "tool_bal", &cols, rows.len(), 24.0, |i, c, ui| {
+            let b = &rows[i];
+            match c {
+                0 => txt(ui, RichText::new(&b.tool_code).monospace()),
+                1 => txt(ui, &b.name),
+                2 => txt(ui, &b.spec),
+                3 => txt(ui, &b.unit),
+                4 => widgets::amount_label(ui, b.in_stock),
+                5 => widgets::amount_label(ui, b.in_use),
+                6 => widgets::amount_label(ui, b.scraped),
+                7 => txt(ui, (b.used_times).to_string()),
+                8 => txt(
+                    ui,
+                    if b.life_times > 0 {
+                        b.life_times.to_string()
+                    } else {
+                        "不限".to_string()
+                    },
+                ),
+                9 => {
+                    if b.disabled {
+                        txt(ui, RichText::new("停用").weak());
+                    } else if b.needs_replace() {
+                        txt(ui, RichText::new("该换新").color(palette::WARN));
+                    } else {
+                        txt(ui, "");
+                    }
+                }
+                10 => {
+                    let hit = ui
+                        .add_enabled(
+                            ctx.can(Perm::ProductionOps),
+                            egui::Button::new("删档").small(),
+                        )
+                        .clicked();
+                    if hit {
+                        del = Some(b.tool_code.clone());
+                    }
+                }
+                _ => {}
+            }
+        });
+        if let Some(code) = del {
+            let msg = format!("确定删除挂具 {code} 的档案？有收发记录的会被拦下（停用更安全）。");
+            ctx.confirm("删除挂具档案", &msg, ConfirmAction::DeleteToolItem(code));
+        }
+
+        // ---------------- 流水 ----------------
+        ui.separator();
+        txt(ui, RichText::new("收发流水").strong());
+        let mcols = [
+            widgets::TCol::new("单号", 130.0),
+            widgets::TCol::new("日期", 90.0),
+            widgets::TCol::new("类型", 60.0).fixed(),
+            widgets::TCol::new("挂具", 90.0),
+            widgets::TCol::new("客户", 90.0),
+            widgets::TCol::new("数量", 80.0).right(),
+            widgets::TCol::new("次数", 60.0).right(),
+            widgets::TCol::new("备注", 140.0),
+            widgets::TCol::new("", 60.0).fixed(),
+        ];
+        let mvs = self.moves.clone();
+        if mvs.is_empty() {
+            widgets::empty_hint(ui, "还没有收发记录");
+        }
+        let mut mdel: Option<i64> = None;
+        widgets::grid(ui, "tool_move", &mcols, mvs.len(), 24.0, |i, c, ui| {
+            let m = &mvs[i];
+            match c {
+                0 => txt(ui, RichText::new(&m.no).monospace()),
+                1 => txt(ui, m.date.format("%Y-%m-%d").to_string()),
+                2 => txt(ui, m.kind_label()),
+                3 => txt(ui, &m.tool_code),
+                4 => txt(
+                    ui,
+                    if m.customer.is_empty() {
+                        "—".to_string()
+                    } else {
+                        m.customer.clone()
+                    },
+                ),
+                5 => widgets::amount_label(ui, m.qty),
+                6 => txt(ui, m.times.to_string()),
+                7 => txt(ui, &m.memo),
+                8 => {
+                    let hit = ui
+                        .add_enabled(
+                            ctx.can(Perm::ProductionOps),
+                            egui::Button::new("删").small(),
+                        )
+                        .clicked();
+                    if hit {
+                        mdel = Some(m.id);
+                    }
+                }
+                _ => {}
+            }
+        });
+        if let Some(id) = mdel {
+            ctx.confirm(
+                "删除收发记录",
+                "确定删除这条收发记录？结存会跟着重算。",
+                ConfirmAction::DeleteToolMove(id),
+            );
+        }
+
+        self.show_item_window(ctx, ui);
+        self.show_move_window(ctx, ui);
+    }
+
+    fn show_item_window(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        if !self.item_open {
+            return;
+        }
+        let mut open = self.item_open;
+        egui::Window::new("新增挂具档案")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                egui::Grid::new("tool_item_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 6.0])
+                    .show(ui, |ui| {
+                        txt(ui, "编号 *");
+                        widgets::text_input(ui, &mut self.ni_code, 140.0, "如 GJ-001");
+                        ui.end_row();
+                        txt(ui, "名称");
+                        widgets::text_input(ui, &mut self.ni_name, 200.0, "");
+                        ui.end_row();
+                        txt(ui, "类型");
+                        widgets::text_input(ui, &mut self.ni_kind, 120.0, "挂具/挂篮/夹具");
+                        ui.end_row();
+                        txt(ui, "规格");
+                        widgets::text_input(ui, &mut self.ni_spec, 140.0, "如 600×400");
+                        ui.end_row();
+                        txt(ui, "单位");
+                        widgets::text_input(ui, &mut self.ni_unit, 80.0, "套");
+                        ui.end_row();
+                        txt(ui, "额定次数");
+                        widgets::text_input(ui, &mut self.ni_life, 80.0, "0 = 不限");
+                        ui.end_row();
+                        txt(ui, "备注");
+                        widgets::text_input(ui, &mut self.ni_memo, 200.0, "");
+                        ui.end_row();
+                    });
+                ui.horizontal(|ui| {
+                    if ui.button("保存").clicked() {
+                        self.save_item(ctx);
+                    }
+                    if ui.button("关闭").clicked() {
+                        self.item_open = false;
+                    }
+                });
+            });
+        if !open {
+            self.item_open = false;
+        }
+    }
+
+    fn save_item(&mut self, ctx: &mut AppCtx<'_>) {
+        let mut it = ToolItem {
+            code: self.ni_code.trim().to_string(),
+            name: self.ni_name.trim().to_string(),
+            tool_kind: self.ni_kind.trim().to_string(),
+            spec: self.ni_spec.trim().to_string(),
+            unit: self.ni_unit.trim().to_string(),
+            life_times: self.ni_life.trim().parse::<i64>().unwrap_or(0),
+            disabled: false,
+            memo: self.ni_memo.trim().to_string(),
+            ..Default::default()
+        };
+        match fixture::item_save(ctx.db(), &mut it) {
+            Ok(_) => {
+                ctx.log("挂具", "保存档案", &it.code);
+                ctx.info("已保存挂具档案");
+                self.item_open = false;
+                self.ni_code.clear();
+                self.ni_name.clear();
+                self.ni_spec.clear();
+                self.ni_memo.clear();
+                self.dirty = true;
+            }
+            Err(e) => self.err = e.to_string(),
+        }
+    }
+
+    fn show_move_window(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        if !self.move_open {
+            return;
+        }
+        let mut open = self.move_open;
+        let codes: Vec<String> = self.items.iter().map(|i| i.code.clone()).collect();
+        egui::Window::new("登记挂具收发")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                egui::Grid::new("tool_move_grid")
+                    .num_columns(2)
+                    .spacing([8.0, 6.0])
+                    .show(ui, |ui| {
+                        txt(ui, "挂具 *");
+                        egui::ComboBox::from_id_salt("tool_mv_code")
+                            .selected_text(self.nm_code.clone())
+                            .show_ui(ui, |ui| {
+                                for c in &codes {
+                                    ui.selectable_value(&mut self.nm_code, c.clone(), c);
+                                }
+                            });
+                        ui.end_row();
+                        txt(ui, "类型 *");
+                        egui::ComboBox::from_id_salt("tool_mv_kind")
+                            .selected_text(fixture::kind_label(&self.nm_kind).to_string())
+                            .show_ui(ui, |ui| {
+                                for (k, l) in fixture::KINDS {
+                                    ui.selectable_value(&mut self.nm_kind, (*k).to_string(), *l);
+                                }
+                            });
+                        ui.end_row();
+                        txt(ui, "日期 *");
+                        widgets::text_input(ui, &mut self.nm_date, 100.0, "YYYY-MM-DD");
+                        ui.end_row();
+                        txt(ui, "客户");
+                        widgets::text_input(ui, &mut self.nm_cust, 120.0, "专用挂具才填");
+                        ui.end_row();
+                        txt(ui, "数量 *");
+                        widgets::money_input(ui, &mut self.nm_qty, 100.0);
+                        ui.end_row();
+                        txt(ui, "使用次数");
+                        widgets::text_input(ui, &mut self.nm_times, 80.0, "归还留空按套数");
+                        ui.end_row();
+                        txt(ui, "备注");
+                        widgets::text_input(ui, &mut self.nm_memo, 200.0, "");
+                        ui.end_row();
+                    });
+                ui.horizontal(|ui| {
+                    if ui.button("保存").clicked() {
+                        self.save_move(ctx);
+                    }
+                    if ui.button("关闭").clicked() {
+                        self.move_open = false;
+                    }
+                });
+            });
+        if !open {
+            self.move_open = false;
+        }
+    }
+
+    fn save_move(&mut self, ctx: &mut AppCtx<'_>) {
+        let date = match NaiveDate::parse_from_str(self.nm_date.trim(), "%Y-%m-%d") {
+            Ok(d) => d,
+            Err(_) => {
+                self.err = "日期格式应为 YYYY-MM-DD".to_string();
+                return;
+            }
+        };
+        let mut m = ToolMove::new(self.nm_code.trim(), self.nm_kind.trim(), date);
+        m.customer = self.nm_cust.trim().to_string();
+        m.qty = widgets::parse_money(&self.nm_qty);
+        m.times = self.nm_times.trim().parse::<i64>().unwrap_or(0);
+        m.memo = self.nm_memo.trim().to_string();
+        let who = ctx.user().display_name.clone();
+        match fixture::move_save(ctx.db(), &mut m, &who) {
+            Ok(_) => {
+                ctx.log("挂具", "收发", &format!("{} {}", m.no, m.tool_code));
+                ctx.info(format!("已保存 {}", m.no));
+                self.move_open = false;
+                self.nm_qty.clear();
+                self.nm_times.clear();
+                self.nm_memo.clear();
+                self.dirty = true;
+            }
+            Err(e) => self.err = e.to_string(),
+        }
     }
 }

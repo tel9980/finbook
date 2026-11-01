@@ -456,6 +456,7 @@ mod auth;
 mod books;
 mod consign;
 mod export;
+mod fixture;
 mod funds;
 mod hr;
 mod inventory;
