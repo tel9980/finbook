@@ -158,6 +158,8 @@ pub(super) async fn save_payroll(
     }
     let db = &user.db;
     let period = query_period(&state, &user, &q);
+    // 改动已有工资行之前先过闸：已结账、或本月工资凭证已生成，都不许改
+    business::payroll_guard_editable(&db, period)?;
     let p = business::payroll_calc(
         &db,
         period,

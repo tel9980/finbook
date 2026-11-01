@@ -1024,6 +1024,39 @@ pub fn payroll_delete(db: &Db, id: i64) -> DbResult<()> {
     Ok(())
 }
 
+/// 工资表还能不能改：已结账的期间、已经生成过工资凭证（计提/社保/发放）的期间都不许改。
+///
+/// 为什么要在改之前拦：工资凭证是按**当时**的应发、社保金额入账的，
+/// 改完工资表金额就和那张凭证对不上，而 `voucher_id` 还链着它——
+/// 界面上看着像是一致的，对账时才发现差钱。删除单个工资行早就有这道闸
+/// （`payroll_delete`），但整行改金额、整批生成、计件回填这三条路原来都是敞开的。
+pub fn payroll_guard_editable(db: &Db, period: Period) -> DbResult<()> {
+    if let Some(upto) = crate::periods::closed_upto_of(db.conn())? {
+        if period <= upto {
+            return Err(fincore::FinError::state(format!(
+                "{} 及以前期间已结账，工资表不能再改",
+                upto.label()
+            ))
+            .into());
+        }
+    }
+    let linked: i64 = db.conn().query_row(
+        "SELECT COUNT(*) FROM payroll
+         WHERE period=?1
+           AND (voucher_id IS NOT NULL OR social_voucher_id IS NOT NULL OR paid_voucher_id IS NOT NULL)",
+        rusqlite::params![period.ymm()],
+        |r| r.get(0),
+    )?;
+    if linked > 0 {
+        return Err(fincore::FinError::state(format!(
+            "{} 的工资凭证已生成（{linked} 行已链接凭证），要改工资请先删除/反记账相关凭证",
+            period.label()
+        ))
+        .into());
+    }
+    Ok(())
+}
+
 /// 按主键取一条工资行（web 删除前校验凭证占用用）
 pub fn payroll_get_by_id(db: &Db, id: i64) -> DbResult<Option<Payroll>> {
     db.conn()
@@ -1145,6 +1178,8 @@ pub fn payroll_generate(
     )],
     // (employee, dept, gross, social, housing, deduction, additional, social_co, housing_co)
 ) -> DbResult<usize> {
+    // 整批重算会覆盖已有金额，所以先过同一道闸（结账 / 已生成工资凭证）
+    payroll_guard_editable(db, period)?;
     // 整批同事务：中途失败整体回滚，避免"工资表生成了一半"
     let tx = db.write_tx()?;
     let mut n = 0;
@@ -2107,6 +2142,61 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(p5.tax, m("520"));
+    }
+
+    /// 工资表的三条改动路径（单行保存、整批生成、计件回填）在「已结账」和
+    /// 「本月工资凭证已生成」这两种情况下都必须停下——凭证是按旧金额入的账。
+    #[test]
+    fn 工资表在生成凭证后与结账后都不许改() {
+        let mk = |gross: &str| {
+            vec![(
+                "E01".to_string(),
+                "D01".to_string(),
+                m(gross),
+                m("0"),
+                m("0"),
+                m("0"),
+                m("0"),
+                m("0"),
+                m("0"),
+            )]
+        };
+        let db = tmpdb("payguard");
+        let p = Period::new(2026, 1).unwrap();
+        payroll_generate(&db, p, &mk("10000")).unwrap();
+        // 还没生成凭证、也没结账：随便改
+        payroll_guard_editable(&db, p).unwrap();
+        payroll_generate(&db, p, &mk("12000")).unwrap();
+
+        // 生成计提凭证之后，整批重算必须被拦下
+        payroll_accrue_voucher(
+            &db,
+            p,
+            d(2026, 1, 31),
+            "660201",
+            "221101",
+            "221103",
+            "221104",
+            "u",
+        )
+        .unwrap()
+        .unwrap();
+        let e = payroll_generate(&db, p, &mk("15000")).unwrap_err();
+        assert!(e.to_string().contains("工资凭证已生成"), "{e}");
+        // 金额没被改掉
+        assert_eq!(
+            payroll_get(&db, p, "E01").unwrap().unwrap().gross,
+            m("12000")
+        );
+        // 别的月份不受影响
+        payroll_guard_editable(&db, Period::new(2026, 2).unwrap()).unwrap();
+
+        // 结账之后（没凭证的月份也一样）不许改
+        let db2 = tmpdb("payguard2");
+        payroll_generate(&db2, p, &mk("8000")).unwrap();
+        crate::periods::close(&db2, p, "u", false).unwrap();
+        let e2 = payroll_guard_editable(&db2, p).unwrap_err();
+        assert!(e2.to_string().contains("已结账"), "{e2}");
     }
 
     #[test]

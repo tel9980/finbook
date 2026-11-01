@@ -471,3 +471,131 @@ async fn payroll_voucher_status_tracking() {
         "重复生成发放凭证应被拦"
     );
 }
+
+/// 工资表能改的前提只有一条：这个月的工资凭证还没生成、期间也没结账。
+/// 三条改动路径（单行保存 / 整批生成 / 计件回填）现在都过同一道闸，
+/// 所以哪一条都不能绕过去把金额改掉——凭证是按旧金额入的账。
+#[tokio::test]
+async fn payroll_edits_blocked_after_voucher_and_close() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    let pay = |gross: &str| {
+        serde_json::json!({
+            "employee": "E001", "dept": "销售部", "gross": gross,
+            "social": "0", "housing": "0", "deduction": "0",
+            "additional": "0", "social_co": "0", "housing_co": "0", "memo": ""
+        })
+    };
+
+    // 建职员 + 录一条工资
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/aux",
+            &sid,
+            serde_json::json!({
+                "id": 0, "kind": "employee", "code": "E001", "name": "张三",
+                "parent_code": null, "disabled": false, "props": {}, "memo": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/payroll?period=202601",
+            &sid,
+            pay("10000"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "还没生成凭证，应能录工资");
+
+    // 生成计提凭证之后：改金额、整批生成都要被拦
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/payroll/accrue?period=202601",
+            &sid,
+            serde_json::json!({
+                "date": "2026-01-31", "expense": "660201", "wage_payable": "221101",
+                "social_payable": "221103", "housing_payable": "221104"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "计提凭证应成功");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/payroll?period=202601",
+            &sid,
+            pay("12000"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "已生成工资凭证后不许改"
+    );
+    let s = body_string(resp).await;
+    assert!(s.contains("工资凭证已生成"), "报错要说清是哪条闸：{s}");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/payroll/generate?period=202601",
+            &sid,
+            serde_json::json!({ "rows": [{ "employee": "E001", "dept": "销售部",
+                "gross": "12000", "social": "0", "housing": "0", "deduction": "0",
+                "additional": "0", "social_co": "0", "housing_co": "0" }] }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "已生成工资凭证后整批重算也要被拦"
+    );
+
+    // 结账之后（另一本账，没有工资凭证）：同样不许改
+    let (state2, _bd2, _dir2) = test_state();
+    let sid2 = boss_in_b1(&state2).await;
+    let resp = handlers::router(state2.clone())
+        .oneshot(authed_post(
+            "/api/payroll?period=202601",
+            &sid2,
+            pay("8000"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = handlers::router(state2.clone())
+        .oneshot(authed_post(
+            "/api/periods/202601/close",
+            &sid2,
+            serde_json::json!({ "require_carry": false }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "结账应成功：{}",
+        body_string(resp).await
+    );
+    let resp = handlers::router(state2.clone())
+        .oneshot(authed_post(
+            "/api/payroll?period=202601",
+            &sid2,
+            pay("9000"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "已结账期间不许改工资"
+    );
+    let s = body_string(resp).await;
+    assert!(s.contains("已结账"), "报错要说清是结账闸：{s}");
+}

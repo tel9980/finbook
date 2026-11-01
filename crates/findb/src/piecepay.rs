@@ -326,9 +326,11 @@ pub struct PieceFill {
 /// 「底薪 + 计件」或者手工调过的数，无条件覆盖会把底薪抹掉；而不覆盖又会让
 /// 纯计件的工人漏发。所以只向上补，返回 `None` 表示不用动。
 ///
-/// 抬应发之后必须重算社保与个税（走 `business::payroll_calc`），并且要过
-/// `payroll_upsert` 的结账闸门——已结账月份不许再改工资表。
+/// 抬应发之后必须重算社保与个税（走 `business::payroll_calc`），并且先过
+/// `business::payroll_guard_editable` 那道闸：已结账、或本月工资凭证已经生成，
+/// 都不许再改——凭证是按旧金额入的账，改了就对不上。
 pub fn fill_one(db: &Db, period: Period, p: &PiecePay) -> DbResult<Option<PieceFill>> {
+    crate::business::payroll_guard_editable(db, period)?;
     let old = crate::business::payroll_get(db, period, &p.employee)?;
     let (dept, gross, social, housing, deduction, additional, social_co, housing_co, memo) =
         match &old {
@@ -545,6 +547,63 @@ mod tests {
 
         // 再回填一次：应发已不低于计件额，不动（否则会重复加钱）
         assert!(fill_one(&db, p, &pays[0]).unwrap().is_none());
+    }
+
+    /// 工资凭证一旦按旧金额入了账，回填就不许再动这张表——否则凭证与工资表对不上，
+    /// 而 voucher_id 还链着那张凭证，看着像是一致的。桌面/网页两条路都走 fill_one，
+    /// 所以闸放在这里就够。
+    #[test]
+    fn 计件回填不改已生成工资凭证的月份() {
+        let db = crate::tests::mem();
+        let mut r = PieceRate {
+            item_code: "MB04".to_string(),
+            op_name: "氧化".to_string(),
+            rate: m("2"),
+            ..Default::default()
+        };
+        rate_save(&db, &mut r).unwrap();
+        log_add(&db, &log(951, "MB04", "氧化", "赵六", 202611, "100")).unwrap();
+        let p = Period::from_ymm(202611);
+        let pays = compute(&db, 202611).unwrap();
+        assert_eq!(pays[0].amount, m("200"));
+
+        // 先有一条底薪工资行，再按它生成计提凭证
+        let pr = crate::business::payroll_calc(
+            &db,
+            p,
+            "赵六",
+            "D01",
+            m("3000"),
+            Money::ZERO,
+            Money::ZERO,
+            Money::ZERO,
+            Money::ZERO,
+            m("600"),
+            Money::ZERO,
+            "",
+        )
+        .unwrap();
+        crate::business::payroll_upsert(&db, &pr).unwrap();
+        crate::business::payroll_accrue_voucher(
+            &db,
+            p,
+            chrono::NaiveDate::from_ymd_opt(2026, 11, 30).unwrap(),
+            "660201",
+            "221101",
+            "221103",
+            "221104",
+            "u",
+        )
+        .unwrap()
+        .unwrap();
+
+        let e = fill_one(&db, p, &pays[0]).unwrap_err();
+        assert!(e.to_string().contains("工资凭证已生成"), "{e}");
+        // 工资表金额没被改
+        let row = crate::business::payroll_get(&db, p, "赵六")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.gross, m("3000"));
     }
 
     #[test]

@@ -9583,6 +9583,7 @@ async function viewSoDoc(main) {
       <label>存货 <input id="sd-item" style="width:130px" /></label>
       <label>数量 <input id="sd-qty" style="width:70px" /></label>
       <label>单价 <input id="sd-price" style="width:80px" /></label>
+      <button class="btn ghost sm" id="sd-quote" title="按「加工费规则」算价：面积×单价，不足最低收费兜底，加急另加">按规则报价</button>
       <button class="btn primary" id="sd-save">保存报价单</button>
     </div>
     <div class="toolbar">
@@ -9662,6 +9663,28 @@ async function viewSoDoc(main) {
   $("#so-new").onclick = () => openOrderEditor("so", main, null);
   $("#sn-reload").addEventListener("click", snLoad);
   snLoad();
+  // 加工费规则一键报价：计价口径在 findb::processfee（面积×单价 → 最低收费兜底 → 加急），
+  // 界面只负责把结果填进单价框，不自己算——同一套规则在网页、桌面各算一遍早晚差一分钱。
+  // 单价填「合计 / 数量」（保留 4 位），这样报价单金额正好等于规则算出来的合计；
+  // 低于最低收费时，这个单价会高于规则单价，这是有意的（那正是「最低收费」的意思）。
+  $("#sd-quote").addEventListener("click", async () => {
+    const item = $("#sd-item").value.trim();
+    const cust = $("#sd-cust").value.trim();
+    const qty = $("#sd-qty").value.trim();
+    if (!item) { toast("先填存货（物料）编码", "err"); return; }
+    const n = Number(qty || "0");
+    if (!(n > 0)) { toast("先填计价数量（面积/件数）", "err"); return; }
+    try {
+      const qs = new URLSearchParams({ item, qty, rush: $("#sd-rush") && $("#sd-rush").checked ? "1" : "0" });
+      if (cust) qs.set("customer", cust);
+      const r = await api(`/price-rules/quote?${qs.toString()}`);
+      const q = r.quote || r;
+      const num = (v) => Number(String(v == null ? 0 : v).replace(/,/g, ""));
+      const unit = (num(q.total) / n).toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+      $("#sd-price").value = unit;
+      toast(`规则「${q.rule_name || "按规则"}」：${fmt(q.qty)} × ${fmt(q.unit_price)} = 基础价 ${fmt(q.base)}，最低收费补差 ${fmt(q.floor_extra)}，加急 ${fmt(q.rush_extra)}，合计 ${fmt(q.total)}`, "ok");
+    } catch (e) { toast(e.message, "err"); }
+  });
   $("#sd-save").addEventListener("click", async () => {
     try {
       await postJson("/sales/quote", { id: 0, period: ymm(state.current || ""), date: today(), customer_code: $("#sd-cust").value.trim(), customer_name: $("#sd-cust").value.trim(), item_code: $("#sd-item").value.trim(), item_name: $("#sd-item").value.trim(), qty: $("#sd-qty").value.trim() || "0", unit_price: $("#sd-price").value.trim() || "0", status: "draft", prepared_by: "", memo: "" });

@@ -1152,6 +1152,49 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "piecepay::tests::计件工资按期间汇总到人"],
   },
   {
+    // 工资凭证是按旧金额入账的，改完工资表金额就对不上；这道闸放空了，
+    // 界面上还挂着 voucher_id，看着像一致。
+    name: "㊴ 工资表不检查是否已生成工资凭证",
+    file: "crates/findb/src/business.rs",
+    from: "    if linked > 0 {",
+    to: "    if false {",
+    cmd: [
+      "test",
+      "-p",
+      "findb",
+      "--lib",
+      "工资表在生成凭证后与结账后都不许改",
+    ],
+  },
+  {
+    // 结账闸：已结账月份连凭证都不许录，工资表自然更不许改。
+    name: "㊴ 工资表不检查期间是否已结账",
+    file: "crates/findb/src/business.rs",
+    from: "        if period <= upto {\n            return Err(fincore::FinError::state(format!(\n                \"{} 及以前期间已结账，工资表不能再改\",",
+    to: "        if false {\n            return Err(fincore::FinError::state(format!(\n                \"{} 及以前期间已结账，工资表不能再改\",",
+    cmd: [
+      "test",
+      "-p",
+      "findb",
+      "--lib",
+      "工资表在生成凭证后与结账后都不许改",
+    ],
+  },
+  {
+    // 回填是第三条改工资的路，闸漏在这里，前面两条拦得再严也白搭。
+    name: "㊴ 计件回填绕过工资闸",
+    file: "crates/findb/src/piecepay.rs",
+    from: "    crate::business::payroll_guard_editable(db, period)?;",
+    to: "    let _ = period;",
+    cmd: [
+      "test",
+      "-p",
+      "findb",
+      "--lib",
+      "piecepay::tests::计件回填不改已生成工资凭证的月份",
+    ],
+  },
+  {
     // 回填重复加钱：应发已经不低于计件额也照样再算一遍，跑两次发两份；
     // 底薪场景更糟——会把 500 的应发压到计件的 100。
     // v1.8.64 起这段判据搬进了 findb::piecepay::fill_one（网页与桌面共用），

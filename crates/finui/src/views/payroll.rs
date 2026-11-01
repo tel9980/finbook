@@ -805,6 +805,11 @@ impl PayrollView {
                 return;
             }
         };
+        // 边界都在 findb：谁都不许改已结账、或已生成工资凭证那一个月的工资表
+        if let Err(e) = business::payroll_guard_editable(ctx.db(), p) {
+            self.err = e.to_string();
+            return;
+        }
         // 税额不让界面自己算：payroll_calc 会带上本年累计数，用累计预扣法算
         let r = business::payroll_calc(
             ctx.db(),
