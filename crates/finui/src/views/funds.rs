@@ -2324,18 +2324,39 @@ impl CostView {
             ui.add_sized(
                 [90.0, 22.0],
                 egui::TextEdit::singleline(&mut self.oh_amount),
-            );
+            )
+            .on_hover_text("留空 = 直接取制造费用科目（5101）本期借方发生额，不用去余额表抄数");
+            if ui
+                .button("取本期发生额")
+                .on_hover_text("把制造费用科目本期的借方发生额填进左边的金额框")
+                .clicked()
+            {
+                match findb::manufacturing::overhead_pool_from_account(ctx.db(), p, "5101") {
+                    Ok(amt) => {
+                        self.oh_amount = amt.fmt_plain();
+                        self.dirty = true;
+                    }
+                    Err(e) => ctx.error(e.to_string()),
+                }
+            }
             for (code, label) in [
                 ("cost", "按成本占比"),
                 ("labor", "按直接人工"),
                 ("qty", "按计划产量"),
+                ("hours", "按报工工时"),
             ] {
                 if ui.selectable_label(self.oh_base == code, label).clicked() {
                     self.oh_base = code.to_string();
                 }
             }
             if ui.button("分摊并落地").clicked() {
-                let amt = Money::parse_or_zero(&self.oh_amount);
+                // 金额留空就走科目发生额：抄成期末余额（结转后是 0）是这行的老毛病
+                let amt = if self.oh_amount.trim().is_empty() {
+                    findb::manufacturing::overhead_pool_from_account(ctx.db(), p, "5101")
+                        .unwrap_or(Money::ZERO)
+                } else {
+                    Money::parse_or_zero(&self.oh_amount)
+                };
                 let base = findb::manufacturing::OverheadBase::parse(&self.oh_base);
                 match findb::manufacturing::overhead_allocate_with(ctx.db(), p, amt, base, true) {
                     Ok(alloc) => {

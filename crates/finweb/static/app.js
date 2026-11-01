@@ -11327,8 +11327,8 @@ async function viewCost(main) {
         <button class="btn sm" id="mf-var">差异分析</button>
         <button class="btn sm" id="mf-fc">成本预测</button>
         <span class="grow"></span>
-        <label>分摊金额 <input id="mf-amt" style="width:90px" /></label>
-        <label>基准 <select id="mf-base"><option value="cost">按成本占比</option><option value="labor">按直接人工</option><option value="qty">按计划产量</option></select></label>
+        <label>分摊金额 <input id="mf-amt" style="width:90px" placeholder="留空=取5101本期" title="留空则直接取制造费用科目（5101）本期借方发生额" /></label>
+        <label>基准 <select id="mf-base"><option value="cost">按成本占比</option><option value="labor">按直接人工</option><option value="qty">按计划产量</option><option value="hours">按报工工时</option></select></label>
         <button class="btn ghost sm" id="mf-try">试算分摊</button>
         <button class="btn sm" id="mf-apply">应用分摊</button>
       </div>
@@ -11367,7 +11367,7 @@ async function viewCost(main) {
       try {
         const r = await postJson("/cost/overhead", { period: parseInt(per(), 10) || 0, amount: $("#mf-amt").value.trim(), base: $("#mf-base").value, apply });
         const rows = r.rows || [];
-        show(`<b>制造费用${apply ? "已应用" : "试算"}（${esc(r.base)}）</b><table class="grid" style="margin-top:6px"><thead><tr><th>订单</th><th class="num">分摊额</th></tr></thead><tbody>${rows.map((x) => `<tr><td>#${x.po_id}</td><td class="num">${fmt(x.amount)}</td></tr>`).join("")}</tbody></table>${apply ? "" : `<div class="muted" style="font-size:12px;margin-top:4px">试算未落库；点「应用分摊」写入归集</div>`}`);
+        show(`<b>制造费用${apply ? "已应用" : "试算"}（${esc(r.base)}，金额 ${fmt(r.amount)}）</b><table class="grid" style="margin-top:6px"><thead><tr><th>订单</th><th class="num">分摊额</th></tr></thead><tbody>${rows.map((x) => `<tr><td>#${x.po_id}</td><td class="num">${fmt(x.amount)}</td></tr>`).join("")}</tbody></table>${apply ? "" : `<div class="muted" style="font-size:12px;margin-top:4px">试算未落库；点「应用分摊」写入归集</div>`}`);
         if (apply) toast("已应用制造费用分摊", "ok");
       } catch (e) { errBox(e); }
     };

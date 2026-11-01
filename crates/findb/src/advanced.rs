@@ -348,7 +348,7 @@ pub fn prod_op_report(db: &Db, op_id: i64, qty: Money, hours: Money) -> DbResult
     let today = chrono::Local::now().date_naive();
     let info = tx.query_row(
         "SELECT o.po_id, COALESCE(p.no,''), COALESCE(p.item_code,''), COALESCE(p.item_name,''),
-                o.op_name, o.worker, COALESCE(rt.version,'')
+                o.op_name, o.worker, COALESCE(rt.version,''), COALESCE(p.period, 0)
          FROM prod_op o
          LEFT JOIN production_order p ON p.id = o.po_id
          LEFT JOIN routing rt ON rt.id = o.routing_id
@@ -363,6 +363,7 @@ pub fn prod_op_report(db: &Db, op_id: i64, qty: Money, hours: Money) -> DbResult
                 r.get::<_, String>(4)?,
                 r.get::<_, String>(5)?,
                 r.get::<_, String>(6)?,
+                r.get::<_, i32>(7)?,
             ))
         },
     )?;
@@ -379,7 +380,13 @@ pub fn prod_op_report(db: &Db, op_id: i64, qty: Money, hours: Money) -> DbResult
             info.4,
             info.5,
             info.6,
-            Period::from_date(today).ymm(),
+            // 期间跟**订单**走：报工是对那一批活做的，小厂常月末补报上月的工时。
+            // 取今天就会出现「订单在 202601、流水落在 202611」，工时分摊一分也分不到。
+            if info.7 > 0 {
+                info.7
+            } else {
+                Period::from_date(today).ymm()
+            },
             today.format("%Y-%m-%d").to_string(),
             crate::exact_param(qty),
             crate::exact_param(hours)

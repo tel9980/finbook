@@ -1346,6 +1346,47 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "scm::tests::prod_order_keeps_routing_version"],
   },
 
+  {
+    // 分子退化成「材料+人工」占比：界面还写着按工时，分出来的数其实是成本比例。
+    name: "㊸ 工时分摊按成本算分子",
+    file: "crates/findb/src/manufacturing.rs",
+    from: "            OverheadBase::Hours => w.hours,",
+    to: "            OverheadBase::Hours => w.material + w.labor,",
+    cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::overhead_by_hours"],
+  },
+  {
+    // 分母也退化成成本合计：分子分母一起错，比例看着"正常"，合计却对不上费用池。
+    name: "㊸ 工时分摊按成本算分母",
+    file: "crates/findb/src/manufacturing.rs",
+    from: "        OverheadBase::Hours => wip.iter().map(|w| w.hours).sum(),",
+    to: "        OverheadBase::Hours => wip.iter().map(|w| w.material + w.labor).sum(),",
+    cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::overhead_by_hours"],
+  },
+  {
+    // 没报工也照分：分母是 0，逐单份额全变 0，分摊"成功"但一分钱没分出去。
+    name: "㊸ 没有报工工时也照分",
+    file: "crates/findb/src/manufacturing.rs",
+    from: "    if base == OverheadBase::Hours && base_sum.is_zero() {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::overhead_by_hours"],
+  },
+  {
+    // 费用池取贷方：制造费用科目贷方是期末结转出去的那笔，取它等于把"转走的钱"再分一次。
+    name: "㊸ 费用池取贷方发生额",
+    file: "crates/findb/src/manufacturing.rs",
+    from: "    Ok(snap.for_account(account_code, None).debit)",
+    to: "    Ok(snap.for_account(account_code, None).credit)",
+    cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::overhead_pool"],
+  },
+  {
+    // 报工流水记成"今天所在期间"：账套期间与今天不一致时，工时分摊永远分不到。
+    name: "㊸ 报工流水不跟订单期间",
+    file: "crates/findb/src/advanced.rs",
+    from: "            if info.7 > 0 {\n                info.7\n            } else {\n                Period::from_date(today).ymm()\n            },",
+    to: "            Period::from_date(today).ymm(),",
+    cmd: ["test", "-p", "finweb", "--test", "api", "--", "overhead_by_hours_takes_pool_from_account"],
+  },
+
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

@@ -144,6 +144,8 @@ pub struct WipRow {
     pub no: String,
     pub item_name: String,
     pub qty: Money,
+    /// 本期报工工时（来自 `prod_op_log`）——按工时分摊制造费用的基数
+    pub hours: Money,
     pub material: Money,
     pub labor: Money,
     pub overhead: Money,
@@ -159,11 +161,13 @@ pub fn wip_cost(db: &Db, period: Period) -> DbResult<Vec<WipRow>> {
             continue;
         }
         let (m, l, oh) = get_prod_cost(db, o.id)?;
+        let hours = order_hours(db, o.id, period)?;
         out.push(WipRow {
             po_id: o.id,
             no: o.no,
             item_name: o.item_name,
             qty: o.planned_qty,
+            hours,
             material: m,
             labor: l,
             overhead: oh,
@@ -171,6 +175,36 @@ pub fn wip_cost(db: &Db, period: Period) -> DbResult<Vec<WipRow>> {
         });
     }
     Ok(out)
+}
+
+/// 某订单在某期间累计的报工工时（`prod_op_log.hours`）。
+///
+/// 工时分摊的全部依据就在这里：没有报工流水就没有工时，也就没有可分的依据 ——
+/// 此时不能悄悄按 0 摊（等于这笔费用凭空消失），必须让调用方知道。
+pub fn order_hours(db: &Db, po_id: i64, period: Period) -> DbResult<Money> {
+    let mut st = db
+        .conn()
+        .prepare("SELECT COALESCE(hours,'0') FROM prod_op_log WHERE po_id=?1 AND period=?2")?;
+    let rows = st.query_map(rusqlite::params![po_id, period.ymm()], |r| {
+        r.get::<_, String>(0)
+    })?;
+    let mut sum = Money::ZERO;
+    for h in rows {
+        sum += Money::parse_or_zero(&h?);
+    }
+    Ok(sum)
+}
+
+/// 制造费用池：取某科目（含下级）本期**借方发生额**。
+///
+/// 为什么取借方发生额、不取期末余额：制造费用（5101）期末要结转到生产成本，
+/// 结完账余额是 0 —— 按余额取会永远拿到 0，分摊看着执行了、其实一分没分。
+/// 结转那笔是「借 5001 / 贷 5101」，只进贷方，所以结转前后取到的借方发生额一致。
+pub fn overhead_pool_from_account(db: &Db, period: Period, account_code: &str) -> DbResult<Money> {
+    let mut q = crate::balances::BalanceQuery::period(period).with_exclude_carry(true);
+    q.aux = None;
+    let snap = crate::balances::BalanceSnapshot::load(db, &q)?;
+    Ok(snap.for_account(account_code, None).debit)
 }
 
 /// 制造费用分摊基准
@@ -183,6 +217,8 @@ pub enum OverheadBase {
     Labor,
     /// 按计划产量占比
     Qty,
+    /// 按报工工时占比（`prod_op_log.hours`，最贴近槽液/水电这类随时长走的费用）
+    Hours,
 }
 
 impl OverheadBase {
@@ -191,12 +227,14 @@ impl OverheadBase {
             OverheadBase::Cost => "按成本占比",
             OverheadBase::Labor => "按直接人工",
             OverheadBase::Qty => "按计划产量",
+            OverheadBase::Hours => "按报工工时",
         }
     }
     pub fn parse(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "labor" | "人工" => OverheadBase::Labor,
             "qty" | "产量" | "plan" => OverheadBase::Qty,
+            "hours" | "hour" | "工时" => OverheadBase::Hours,
             _ => OverheadBase::Cost,
         }
     }
@@ -207,6 +245,7 @@ fn overhead_base_sum(wip: &[WipRow], base: OverheadBase) -> Money {
         OverheadBase::Cost => wip.iter().map(|w| w.material + w.labor).sum(),
         OverheadBase::Labor => wip.iter().map(|w| w.labor).sum(),
         OverheadBase::Qty => wip.iter().map(|w| w.qty).sum(),
+        OverheadBase::Hours => wip.iter().map(|w| w.hours).sum(),
     }
 }
 
@@ -242,6 +281,13 @@ pub fn overhead_allocate_with(
     }
     let wip = wip_cost(db, period)?;
     let base_sum = overhead_base_sum(&wip, base);
+    // 按工时分摊时，一条报工流水都没有就等于没有依据。不能悄悄返回空 ——
+    // 调用方会以为「分摊执行了」，实际这笔费用一分没落到订单上。
+    if base == OverheadBase::Hours && base_sum.is_zero() {
+        return Err(DbError::Fin(FinError::msg(
+            "本期没有任何报工工时，按工时分不了：先做工序报工，或改用其他分摊基准",
+        )));
+    }
     if base_sum.is_zero() || amount.is_zero() {
         return Ok(Vec::new());
     }
@@ -253,6 +299,7 @@ pub fn overhead_allocate_with(
             OverheadBase::Cost => w.material + w.labor,
             OverheadBase::Labor => w.labor,
             OverheadBase::Qty => w.qty,
+            OverheadBase::Hours => w.hours,
         };
         let share = if i == n - 1 {
             amount - assigned // 尾差给最后一单
@@ -1577,5 +1624,114 @@ mod tests {
         // 第二次落地被拒绝（防重复归集）
         let err = overhead_allocate_with(&db, p, m("30"), OverheadBase::Cost, true).unwrap_err();
         assert!(err.to_string().contains("请勿重复分摊"), "实际错误：{err}");
+    }
+    /// 按报工工时分摊：两单工时 2 : 6，费用 800 → 200 / 600，尾差归最后一单。
+    #[test]
+    fn overhead_by_hours_splits_by_reported_hours() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        for (no, item) in [("SC2026010001", "成品A"), ("SC2026010002", "成品B")] {
+            db.conn()
+                .execute(
+                    "INSERT INTO production_order(period, no, date, item_code, item_name, planned_qty, completed_qty, status, work_center, prepared_by, memo, created_at, updated_at)
+                     VALUES(?1,?2,?3,?4,?5,'10','0','in_progress','WC01','u1','',?6,?6)",
+                    rusqlite::params![p.ymm(), no, "2026-01-05", item, item, now],
+                )
+                .unwrap();
+        }
+        // 报工流水：1 单 2 小时、2 单 6 小时；另一期间那条不该被算进来
+        for (po_id, hours, period) in [(1i64, "2", p), (2i64, "6", p), (1i64, "9", p.next())] {
+            db.conn()
+                .execute(
+                    "INSERT INTO prod_op_log(op_id,po_id,po_no,item_code,item_name,op_name,worker,period,date,qty,hours)
+                     VALUES(0,?1,'','140501','成品','氧化','张三',?2,'2026-01-05','10',?3)",
+                    rusqlite::params![po_id, period.ymm(), hours],
+                )
+                .unwrap();
+        }
+        assert_eq!(order_hours(&db, 1, p).unwrap(), m("2"));
+        assert_eq!(order_hours(&db, 2, p).unwrap(), m("6"));
+
+        let alloc = overhead_allocate_with(&db, p, m("800"), OverheadBase::Hours, true).unwrap();
+        // 顺序跟 prod_list 一致（日期倒序、id 倒序），所以 2 号单在前
+        assert_eq!(alloc, vec![(2, m("600")), (1, m("200"))], "按 2:6 分 800");
+        // 落地：两单各归集到 prod_cost(overhead)
+        assert_eq!(get_prod_cost(&db, 1).unwrap().2, m("200"));
+        assert_eq!(get_prod_cost(&db, 2).unwrap().2, m("600"));
+    }
+
+    /// 一单报工都没有时，按工时分摊必须报错，不能悄悄返回空。
+    #[test]
+    fn overhead_by_hours_refuses_when_no_report() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        db.conn()
+            .execute(
+                "INSERT INTO production_order(period, no, date, item_code, item_name, planned_qty, completed_qty, status, work_center, prepared_by, memo, created_at, updated_at)
+                 VALUES(?1,'SC2026010009','2026-01-05','140501','成品A','10','0','in_progress','WC01','u1','',?2,?2)",
+                rusqlite::params![p.ymm(), now],
+            )
+            .unwrap();
+        add_cost(&db, 1, CostType::Material, m("100"), "领料").unwrap();
+        let err = overhead_allocate_with(&db, p, m("800"), OverheadBase::Hours, false).unwrap_err();
+        assert!(err.to_string().contains("没有任何报工工时"), "实际：{err}");
+    }
+
+    /// 费用池取「本期借方发生额」：制造费用结转到生产成本后余额是 0，但池子不能变。
+    #[test]
+    fn overhead_pool_uses_period_debit_not_balance() {
+        use fincore::{Entry, Voucher};
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 20).unwrap();
+        // 发生水电费：借 510101 制造费用-水电 300 / 贷 1001 银行存款 300
+        let mut v = Voucher::new(p, d, "记", crate::vouchers::next_no(&db, p, "记").unwrap());
+        v.prepared_by = "u1".into();
+        v.push_entry(Entry {
+            debit: m("300"),
+            ..Entry::new(1, "510101", "水电费")
+        });
+        v.push_entry(Entry {
+            credit: m("300"),
+            ..Entry::new(2, "1001", "水电费")
+        });
+        v.renumber();
+        let vid = crate::vouchers::save(&db, &mut v).unwrap();
+        crate::vouchers::post(&db, vid, "u1").unwrap();
+        assert_eq!(
+            overhead_pool_from_account(&db, p, "5101").unwrap(),
+            m("300")
+        );
+
+        // 期末结转：借 500101 / 贷 510101 300 → 510101 余额归零
+        let mut c = Voucher::new(p, d, "转", crate::vouchers::next_no(&db, p, "转").unwrap());
+        c.prepared_by = "u1".into();
+        c.push_entry(Entry {
+            debit: m("300"),
+            ..Entry::new(1, "500101", "结转制造费用")
+        });
+        c.push_entry(Entry {
+            credit: m("300"),
+            ..Entry::new(2, "510101", "结转制造费用")
+        });
+        c.renumber();
+        let cid = crate::vouchers::save(&db, &mut c).unwrap();
+        crate::vouchers::post(&db, cid, "u1").unwrap();
+
+        let snap =
+            crate::balances::BalanceSnapshot::load(&db, &crate::balances::BalanceQuery::period(p))
+                .unwrap();
+        assert_eq!(
+            snap.for_account("5101", None).end(),
+            Money::ZERO,
+            "结转后余额为 0"
+        );
+        assert_eq!(
+            overhead_pool_from_account(&db, p, "5101").unwrap(),
+            m("300"),
+            "池子取借方发生额，结转前后都是 300"
+        );
     }
 }

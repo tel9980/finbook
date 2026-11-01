@@ -111,11 +111,24 @@ pub(super) async fn cost_overhead_ep(
     user.require(Perm::CostOps)?;
     let db = &user.db;
     let period = period_checked(req.period)?;
-    let amount = parse_money_checked(&req.amount)?;
-    if !amount.is_positive() {
-        return Err(AppError::bad_request("分摊金额必须大于 0"));
-    }
     let base = findb::manufacturing::OverheadBase::parse(&req.base);
+    // 金额留空 = 直接拿制造费用科目本期的借方发生额来分，
+    // 省掉「去余额表抄一个数再手敲进来」这一步（抄错、抄成期末余额都出过事）
+    let amount = if req.amount.trim().is_empty() {
+        let code = if req.from_account.trim().is_empty() {
+            "5101"
+        } else {
+            req.from_account.trim()
+        };
+        findb::manufacturing::overhead_pool_from_account(&db, period, code)?
+    } else {
+        parse_money_checked(&req.amount)?
+    };
+    if !amount.is_positive() {
+        return Err(AppError::bad_request(
+            "分摊金额必须大于 0（留空则按制造费用科目本期发生额，本期没有发生额可分）",
+        ));
+    }
     let rows = findb::manufacturing::overhead_allocate_with(&db, period, amount, base, req.apply)?;
     if req.apply {
         db.log(
@@ -138,6 +151,7 @@ pub(super) async fn cost_overhead_ep(
         "ok": true,
         "applied": req.apply,
         "base": base.label(),
+        "amount": amount.fmt_money(),
         "rows": items,
     })))
 }
@@ -1119,10 +1133,16 @@ pub(super) struct ProdFromSoReq {
 #[derive(Deserialize)]
 pub(super) struct OverheadReq {
     period: i32,
+    /// 分摊金额；留空表示「按 from_account 取本期发生额」
+    #[serde(default)]
     amount: String,
-    /// cost（默认，按已归集成本）/ labor（按直接人工）/ qty（按计划产量）
+    /// cost（默认，按已归集成本）/ labor（按直接人工）/ qty（按计划产量）/
+    /// hours（按报工工时 —— 槽液、水电这类随时长走的费用用它）
     #[serde(default)]
     base: String,
+    /// 金额留空时从这个科目（含下级）取本期借方发生额当费用池，默认 5101 制造费用
+    #[serde(default)]
+    from_account: String,
     /// true = 写入归集；false = 仅试算
     #[serde(default)]
     apply: bool,

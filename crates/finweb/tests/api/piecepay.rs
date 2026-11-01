@@ -2,16 +2,24 @@
 
 use super::*;
 
-fn today_period() -> (i32, String) {
-    let p = fincore::Period::from_date(chrono::Local::now().date_naive());
-    (p.ymm(), format!("{:04}-{:02}", p.year(), p.month()))
+/// 账套的当前期间（报工流水跟订单期间走，不再是"今天所在期间"）
+async fn book_period(state: &Arc<WebState>, sid: &str) -> (i32, String) {
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/prod", sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let pstr = v["period"].as_str().unwrap().to_string(); // "2026-01"
+    let y: i32 = pstr[..4].parse().unwrap();
+    let m: i32 = pstr[5..7].parse().unwrap();
+    (y * 100 + m, pstr)
 }
 
 #[tokio::test]
 async fn piece_work_fills_payroll() {
     let (state, _bd, _dir) = test_state();
     let sid = boss_in_b1(&state).await;
-    let (ymm, plabel) = today_period();
+    let (ymm, plabel) = book_period(&state, &sid).await;
 
     // 工艺路线：140501 一道「氧化」工序
     let resp = handlers::router(state.clone())
@@ -163,7 +171,7 @@ async fn piece_work_fills_payroll() {
 async fn piece_rate_matches_routing_version() {
     let (state, _bd, _dir) = test_state();
     let sid = boss_in_b1(&state).await;
-    let (ymm, plabel) = today_period();
+    let (ymm, plabel) = book_period(&state, &sid).await;
     let _ = ymm;
 
     // 工艺路线：140501 的 V2 版，一道「氧化」工序（没有默认版本）
@@ -286,7 +294,7 @@ async fn piece_rate_matches_routing_version() {
 async fn prod_order_records_routing_version() {
     let (state, _bd, _dir) = test_state();
     let sid = boss_in_b1(&state).await;
-    let (_ymm, plabel) = today_period();
+    let (_ymm, plabel) = book_period(&state, &sid).await;
 
     // 两版工艺：V1 / V2 各一道「氧化」
     for ver in ["V1", "V2"] {

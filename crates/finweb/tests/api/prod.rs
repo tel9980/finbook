@@ -453,3 +453,167 @@ async fn prod_schedule_rejects_end_before_start() {
     );
     assert!(b.contains("格式"), "要说清是日期格式问题：{b}");
 }
+
+/// 制造费用按「报工工时」分摊，金额直接取制造费用科目本期借方发生额。
+///
+/// 为什么这条用例值得写：车间真正想分的是槽液、水电这种"按开机时长走"的费用，
+/// 以前的基准只有成本/人工/计划产量，逼着人手工估一个比例；
+/// 而金额以前要先去余额表抄一个数再敲进来（抄成期末余额就是 0，分摊看着成功其实没分）。
+#[tokio::test]
+async fn overhead_by_hours_takes_pool_from_account() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    // 工艺路线 + 两张生产订单，分别报 2 小时 / 6 小时
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/routing/140501",
+            &sid,
+            serde_json::json!([{
+                "seq": 1, "op_code": "OX", "op_name": "氧化", "work_center": "",
+                "std_hours": "0.5", "rate": "0", "qc_required": false,
+            }]),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "建工艺路线");
+
+    let mut pids = Vec::new();
+    for _ in 0..2 {
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/prod",
+                &sid,
+                serde_json::json!({ "item_code": "140501", "qty": "10", "date": "" }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "下达生产订单");
+        pids.push(
+            serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+                .as_i64()
+                .unwrap(),
+        );
+    }
+
+    // 期间以订单为准（账套当前期间不一定是今天所在期间）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/prod", &sid))
+        .await
+        .unwrap();
+    let orders: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let pstr = orders["period"].as_str().unwrap().to_string(); // "2026-01"
+    let y: i32 = pstr[..4].parse().unwrap();
+    let mo: i32 = pstr[5..7].parse().unwrap();
+    let ymm = y * 100 + mo;
+    let d = format!("{y:04}-{mo:02}-15");
+
+    for (idx, (pid, hours)) in pids.iter().zip(["2", "6"]).enumerate() {
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_get(&format!("/api/prod/{pid}/ops"), &sid))
+            .await
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        let op_id = v["ops"][0]["id"].as_i64().unwrap();
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/prod/op/dispatch",
+                &sid,
+                serde_json::json!({ "op_id": op_id, "worker": if idx == 0 { "张三" } else { "李四" } }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "派工");
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/prod/op/report",
+                &sid,
+                serde_json::json!({ "op_id": op_id, "qty": "5", "hours": hours }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "报工 {hours} 小时");
+    }
+
+    // 一张制造费用凭证：借 510101（车间水电）300 / 贷 1001 300
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/vouchers",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": ymm, "date": d, "word": "记",
+                "no": 1, "attachments": 0, "memo": "车间水电",
+                "entries": [
+                    { "line": 1, "account_code": "510101", "summary": "车间水电", "debit": "300", "credit": "0" },
+                    { "line": 2, "account_code": "1001", "summary": "车间水电", "debit": "0", "credit": "300" }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "造制造费用凭证");
+    let vid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/vouchers/{vid}/post"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "记账");
+
+    // 金额留空 → 自动取 5101 本期借方发生额 300；按 2:6 分成 75 / 225
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/cost/overhead",
+            &sid,
+            serde_json::json!({ "period": ymm, "base": "hours", "amount": "", "apply": true }),
+        ))
+        .await
+        .unwrap();
+    let st = resp.status();
+    let txt = body_string(resp).await;
+    assert_eq!(st, StatusCode::OK, "按工时分摊：{txt}");
+    let v: serde_json::Value = serde_json::from_str(&txt).unwrap();
+    assert_eq!(v["base"], "按报工工时");
+    assert_eq!(v["amount"], "300.00", "金额取自制造费用科目本期发生额");
+    let got: Vec<(i64, f64)> = v["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["po_id"].as_i64().unwrap(),
+                r["amount"]
+                    .as_str()
+                    .unwrap()
+                    .replace(',', "")
+                    .parse()
+                    .unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(got.len(), 2, "两张在制单都分到");
+    let total: f64 = got.iter().map(|(_, a)| *a).sum();
+    assert!(
+        (total - 300.0).abs() < 0.005,
+        "分完合计要等于费用池：{got:?}"
+    );
+    let big = got.iter().max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+    assert!((big.1 - 225.0).abs() < 0.005, "6 小时那张应拿 225：{got:?}");
+    let small = got.iter().min_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+    assert!((small.1 - 75.0).abs() < 0.005, "2 小时那张应拿 75：{got:?}");
+
+    // 重复分摊要被拦下
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/cost/overhead",
+            &sid,
+            serde_json::json!({ "period": ymm, "base": "hours", "amount": "", "apply": true }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "重复分摊应被拒绝");
+}
