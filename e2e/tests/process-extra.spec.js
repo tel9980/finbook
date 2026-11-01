@@ -144,9 +144,11 @@ test("计件工资：报工流水 → 按人汇总 → 回填工资表（幂等�
   const report = await page.request.post("/api/prod/op/report", { data: { op_id: opId, qty: "100", hours: "2" } });
   expect(report.ok(), "报工：" + (await report.text())).toBe(true);
 
-  // 报工流水的期间取**当天**，不是账套当前期间——这里跟着当天的期间走
-  const now = new Date();
-  const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  // 报工流水的期间跟**订单**走（v1.8.69 起），不再是"今天所在期间"。
+  // 所以这里必须用账套当前期间，否则计件汇总查的是一个没有流水的期间。
+  const prodList = await (await page.request.get("/api/prod")).json();
+  const period = prodList.period;
+  expect(period, "账套当前期间：" + JSON.stringify(prodList)).toMatch(/^\d{4}-\d{2}$/);
 
   await page.click('.nav-item[data-view="piece-pay"]');
   await page.fill("#pp-period", period);
