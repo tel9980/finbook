@@ -138,10 +138,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - run: rustup toolchain install nightly --profile minimal
+      # 这里刻意钉住 nightly 的日期，不用「最新 nightly」：
+      # cargo-udeps 需要 nightly，而 nightly 是每天变的。2026-11-01 的 nightly 起
+      # 传递依赖 zbus 4.4.0 编译不过（error[E0391]: cycle detected when computing
+      # when `error::Error` needs async drop，zbus-4.4.0/src/error.rs），
+      # 与本仓库代码无关，却会把「未使用依赖」这条门禁变红。
+      # 升级日期前先在本地跑一次 `cargo +nightly-<日期> udeps --all-targets` 验证。
+      - run: rustup toolchain install nightly-2026-10-31 --profile minimal
       - uses: taiki-e/install-action@cargo-udeps
       - name: cargo udeps --all-targets
-        run: cargo +nightly udeps --all-targets
+        run: cargo +nightly-2026-10-31 udeps --all-targets
 
   # ── Docker 镜像烟雾测试（防止预取层空占位产物被打进镜像） ────────────
   docker:
