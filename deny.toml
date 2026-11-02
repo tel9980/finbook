@@ -55,4 +55,5 @@ ignore = [
     "RUSTSEC-2026-0367",   # zip SUID/SGID 位保留 — 仅创建 zip，不调用 extract
     "RUSTSEC-2026-0368",   # zip 符号链接路径穿越 — 仅创建 zip，不调用 extract
     "RUSTSEC-2026-0369",   # zip 权限通过符号链接应用 — 仅创建 zip，不调用 extract
+    "RUSTSEC-2026-0429",   # zip extract() 符号链接超大预分配 abort — 全仓无 extract() 调用，补丁需 zip>=9（上游锁死）
 ]

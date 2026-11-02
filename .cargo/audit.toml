@@ -27,4 +27,15 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+
+    # RUSTSEC-2026-0429 — zip「`ZipArchive::extract()` 遇到声明尺寸巨大的符号链接条目会
+    # 按声明尺寸 `Vec::with_capacity` 预分配，分配失败直接 abort 进程」（CVSS 7.5，DoS）。
+    # 与上面三条同一类：触发点是 `extract()`——
+    # 全仓 grep 无一处 `.extract(`，zip 只用于「读 .xlsx 的归档结构」（findb/imports.rs
+    # 的 check_zip_bomb：ZipArchive::new + by_index + size）与「生成备份包」，
+    # 从不把归档解压落盘，攻击面不可达。
+    # 补丁版本 zip >= 9.0.0；三个实例（0.6.6 / 2.4.2 / 8.6.0）分别由
+    # rust_xlsxwriter 0.15 / rust_xlsxwriter 0.80 / calamine 0.36 锁死，本地不可升。
+    # 解除条件：calamine / rust_xlsxwriter 跟到 zip 9 之后删除本条。
+    "RUSTSEC-2026-0429",
 ]
