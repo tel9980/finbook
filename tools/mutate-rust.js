@@ -1379,6 +1379,30 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::overhead_pool"],
   },
   {
+    // 挂订单不校验客户：交货量会记到别人头上。
+    name: "㊻ 交货单挂订单不校验客户",
+    file: "crates/findb/src/consign.rs",
+    from: "        if so.customer_code.trim() != customer {",
+    to: "        if false {",
+    cmd: ["test", "-p", "findb", "--lib", "consign::tests::挂别人的销售订单要报错"],
+  },
+  {
+    // 进度不扣已交：每单永远显示未交 = 订购量。
+    name: "㊻ 交货进度不扣已交",
+    file: "crates/findb/src/consign.rs",
+    from: "        row.delivered = got;",
+    to: "        row.delivered = Money::ZERO;",
+    cmd: ["test", "-p", "findb", "--lib", "consign::tests::交货单挂销售订单并算出交货进度"],
+  },
+  {
+    // 退料/来料也算交付：交付进度虚高，看着像快交完了。
+    name: "㊻ 退料来料都算成品交付",
+    file: "crates/findb/src/consign.rs",
+    from: "         WHERE d.customer = ?1 AND d.kind = 'out' AND d.so_id > 0",
+    to: "         WHERE d.customer = ?1 AND d.so_id > 0",
+    cmd: ["test", "-p", "findb", "--lib", "consign::tests::交货单挂销售订单并算出交货进度"],
+  },
+  {
     // 分析不按原因分组：所有单据并进一桶，等于没按原因汇总。
     name: "㊺ 返工分析不按原因分组（全并一桶）",
     file: "crates/findb/src/rework.rs",

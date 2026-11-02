@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 44;
+pub const SCHEMA_VERSION: i64 = 45;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1561,6 +1561,8 @@ CREATE TABLE IF NOT EXISTS consign_doc (
     date        TEXT NOT NULL,
     customer    TEXT NOT NULL,                       -- 客户档案 code
     kind        TEXT NOT NULL,                       -- in 来料 / out 交货 / return 退料 / loss 损耗核销
+    so_id       INTEGER NOT NULL DEFAULT 0,          -- v45: 交货单可挂销售订单（受托加工的活是哪一单）
+    so_no       TEXT NOT NULL DEFAULT '',            -- v45: 订单号快照，方便单据上直接看
     memo        TEXT NOT NULL DEFAULT '',
     created_by  TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT '',
@@ -1819,6 +1821,11 @@ const MIGRATE_V41: &[(&str, &str, &str)] = &[
 /// 选了哪一版，工序清单就按哪一版生成、报工流水的版本也跟着定下来。不记这一列，
 /// 事后重生成工序只能退回默认版本，报工记的版本就与当初排产的那一版对不上。
 /// v44：返工单补「原因分类」与「责任部门」，让返工成本能按原因/部门汇总
+const MIGRATE_V45: &[(&str, &str, &str)] = &[
+    ("consign_doc", "so_id", "INTEGER NOT NULL DEFAULT 0"),
+    ("consign_doc", "so_no", "TEXT NOT NULL DEFAULT ''"),
+];
+
 const MIGRATE_V44: &[(&str, &str, &str)] = &[
     ("rework_order", "reason_code", "TEXT NOT NULL DEFAULT ''"),
     ("rework_order", "dept", "TEXT NOT NULL DEFAULT ''"),
@@ -2362,6 +2369,7 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             // v42：生产订单记下按哪一版工艺排产
             migrate_generic(conn, MIGRATE_V42)?;
             migrate_generic(conn, MIGRATE_V44)?;
+            migrate_generic(conn, MIGRATE_V45)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：
@@ -2617,6 +2625,7 @@ mod tests {
             .chain(MIGRATE_V41.iter())
             .chain(MIGRATE_V42.iter())
             .chain(MIGRATE_V44.iter())
+            .chain(MIGRATE_V45.iter())
         {
             // DROP COLUMN 不允许还有索引指着该列，先摘掉相关索引
             for idx in indexes_of(&conn, table) {
@@ -2649,6 +2658,7 @@ mod tests {
             .chain(MIGRATE_V41.iter())
             .chain(MIGRATE_V42.iter())
             .chain(MIGRATE_V44.iter())
+            .chain(MIGRATE_V45.iter())
         {
             assert!(
                 column_exists(&conn, table, col).unwrap(),

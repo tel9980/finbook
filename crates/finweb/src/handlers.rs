@@ -470,6 +470,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         )
         .route("/api/consign/balances", get(consign_balances))
         .route("/api/consign/statement", get(consign_statement))
+        .route("/api/consign/so-progress", get(consign_so_progress))
         .route(
             "/api/price-rules",
             get(list_price_rules).post(save_price_rule),

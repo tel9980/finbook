@@ -25,6 +25,9 @@ pub struct ConsignDocReq {
     pub date: String,
     #[serde(default)]
     pub memo: String,
+    /// 挂的销售订单（0 = 不挂）
+    #[serde(default)]
+    pub so_id: i64,
     #[serde(default)]
     pub lines: Vec<ConsignLineReq>,
 }
@@ -65,6 +68,19 @@ pub(super) async fn get_consign(
     Ok(Json(json!({ "doc": doc, "kinds": kinds_json() })))
 }
 
+/// 某客户的销售订单交货进度（客供料交货单挂订单后，看每单还差多少没交回来）
+pub(super) async fn consign_so_progress(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let customer =
+        customer_param(&q).ok_or_else(|| AppError::bad_request("交货进度必须指定客户"))?;
+    let rows = findb::consign::so_progress(&user.db, customer)?;
+    Ok(Json(json!({ "customer": customer, "rows": rows })))
+}
+
 /// 新建/修改单据（交货类会校验现存数量）
 pub(super) async fn save_consign(
     State(_state): State<Arc<WebState>>,
@@ -78,6 +94,7 @@ pub(super) async fn save_consign(
     let mut doc = findb::consign::ConsignDoc::new(req.customer.trim(), req.kind.trim(), date);
     doc.id = req.id;
     doc.memo = req.memo;
+    doc.so_id = req.so_id;
     for (i, l) in req.lines.iter().enumerate() {
         doc.lines.push(findb::consign::ConsignLine {
             id: 0,

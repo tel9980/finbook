@@ -57,6 +57,12 @@ pub struct ConsignView {
     pub nb_kind: String,
     pub nb_date: String,
     pub nb_memo: String,
+    /// 挂的销售订单（0 = 不挂）
+    pub nb_so: i64,
+    /// 当期销售订单（下拉用）
+    pub orders: Vec<findb::scm::SalesOrder>,
+    /// 交货进度（按客户）
+    pub progress: Vec<consign::SoProgress>,
     pub nb_lines: Vec<LineBuf>,
     pub st_open: bool,
     pub st_customer: String,
@@ -80,6 +86,9 @@ impl Default for ConsignView {
             nb_kind: "in".to_string(),
             nb_date: String::new(),
             nb_memo: String::new(),
+            nb_so: 0,
+            orders: Vec::new(),
+            progress: Vec::new(),
             nb_lines: vec![LineBuf::default()],
             st_open: false,
             st_customer: String::new(),
@@ -133,6 +142,12 @@ impl ConsignView {
                 self.err = e.to_string();
             }
         }
+        self.progress = if cust.is_empty() {
+            Vec::new()
+        } else {
+            consign::so_progress(ctx.db(), &cust).unwrap_or_default()
+        };
+        self.orders = findb::scm::so_list(ctx.db(), ctx.period(), None).unwrap_or_default();
         match consign::balances(ctx.db(), filter) {
             Ok(v) => self.bals = v,
             Err(e) => {
@@ -198,9 +213,10 @@ impl ConsignView {
                 .show(ui, |ui| {
                     egui::Grid::new("consign_docs_grid")
                         .striped(true)
-                        .num_columns(6)
+                        .num_columns(7)
                         .show(ui, |ui| {
-                            for h in ["单号", "日期", "客户", "类型", "备注", ""] {
+                            for h in ["单号", "日期", "客户", "类型", "销售订单", "备注", ""]
+                            {
                                 txt(ui, RichText::new(h).strong());
                             }
                             ui.end_row();
@@ -209,6 +225,7 @@ impl ConsignView {
                                 txt(ui, d.date.format("%Y-%m-%d").to_string());
                                 txt(ui, &d.customer);
                                 txt(ui, d.kind_label());
+                                txt(ui, if d.so_no.is_empty() { "—" } else { &d.so_no });
                                 txt(ui, if d.memo.is_empty() { "—" } else { &d.memo });
                                 ui.horizontal(|ui| {
                                     if ui.button("明细").clicked() {
@@ -337,6 +354,62 @@ impl ConsignView {
             });
         }
 
+        // 交货进度（填了客户才查）
+        if !self.progress.is_empty() {
+            ui.add_space(8.0);
+            txt(ui, RichText::new("销售订单交货进度").strong());
+            let cols = [
+                widgets::TCol::new("订单号", 150.0),
+                widgets::TCol::new("物料", 120.0),
+                widgets::TCol::new("名称", 150.0),
+                widgets::TCol::new("订购", 100.0).right(),
+                widgets::TCol::new("已交", 100.0).right(),
+                widgets::TCol::new("未交", 100.0).right(),
+            ];
+            let rows = self.progress.clone();
+            widgets::grid(
+                ui,
+                "consign_so_progress",
+                &cols,
+                rows.len(),
+                22.0,
+                |i, c, ui| {
+                    let p = &rows[i];
+                    match c {
+                        0 => txt(ui, &p.so_no),
+                        1 => txt(ui, &p.item),
+                        2 => txt(
+                            ui,
+                            if p.item_name.is_empty() {
+                                "—".to_string()
+                            } else {
+                                p.item_name.clone()
+                            },
+                        ),
+                        3 => txt(ui, RichText::new(p.ordered.fmt_qty()).monospace()),
+                        4 => txt(ui, RichText::new(p.delivered.fmt_qty()).monospace()),
+                        5 => {
+                            if p.remain.is_positive() {
+                                ui.colored_label(
+                                    palette::CREDIT,
+                                    RichText::new(p.remain.fmt_qty()).monospace(),
+                                );
+                            } else {
+                                txt(ui, "—");
+                            }
+                        }
+                        _ => {}
+                    }
+                },
+            );
+            txt(
+                ui,
+                RichText::new("已交只算交货单；退料 / 损耗不抵成品交付")
+                    .weak()
+                    .small(),
+            );
+        }
+
         if self.new_open {
             self.show_new_window(ctx, ui);
         }
@@ -377,6 +450,41 @@ impl ConsignView {
                     self.nb_kind = kind;
                     txt(ui, "日期");
                     widgets::text_input(ui, &mut self.nb_date, 96.0, "2026-01-31");
+                });
+                ui.horizontal(|ui| {
+                    txt(ui, "销售订单");
+                    let sel = self
+                        .orders
+                        .iter()
+                        .find(|o| o.id == self.nb_so)
+                        .map(|o| format!("{} · {}", o.no, o.customer_code))
+                        .unwrap_or_else(|| "不挂订单".to_string());
+                    let mut pick = self.nb_so;
+                    egui::ComboBox::from_id_salt("consign_so")
+                        .selected_text(sel)
+                        .width(220.0)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut pick, 0, "不挂订单");
+                            for o in &self.orders {
+                                if !self.nb_customer.trim().is_empty()
+                                    && o.customer_code.trim() != self.nb_customer.trim()
+                                {
+                                    continue;
+                                }
+                                ui.selectable_value(
+                                    &mut pick,
+                                    o.id,
+                                    format!("{} · {}", o.no, o.customer_code),
+                                );
+                            }
+                        });
+                    self.nb_so = pick;
+                    txt(
+                        ui,
+                        RichText::new("挂了订单，交货进度能看每单还差多少")
+                            .weak()
+                            .small(),
+                    );
                 });
                 ui.horizontal(|ui| {
                     txt(ui, "备注");
@@ -441,6 +549,7 @@ impl ConsignView {
             }
         };
         let mut d = ConsignDoc::new(&self.nb_customer, &self.nb_kind, date);
+        d.so_id = self.nb_so;
         d.memo = self.nb_memo.trim().to_string();
         for l in &self.nb_lines {
             let blank = l.item.trim().is_empty()

@@ -72,6 +72,10 @@ pub struct ConsignDoc {
     pub customer: String,
     /// in / out / return / loss
     pub kind: String,
+    /// 挂的销售订单（0 = 不挂；受托加工的活是哪一单）
+    pub so_id: i64,
+    /// 订单号快照（so_id>0 时保存时回填，单据上直接能看）
+    pub so_no: String,
     pub memo: String,
     pub created_by: String,
     pub created_at: String,
@@ -89,6 +93,8 @@ impl ConsignDoc {
             date,
             customer: customer.trim().to_string(),
             kind: kind.to_string(),
+            so_id: 0,
+            so_no: String::new(),
             memo: String::new(),
             created_by: String::new(),
             created_at: String::new(),
@@ -151,7 +157,7 @@ pub struct ConsignStatementRow {
     pub end: Money,
 }
 
-const D_COLS: &str = "id,no,period,date,customer,kind,memo,created_by,created_at";
+const D_COLS: &str = "id,no,period,date,customer,kind,so_id,so_no,memo,created_by,created_at";
 const L_COLS: &str = "id,doc_id,item,item_name,unit,qty,batch_no,memo";
 
 fn map_doc(r: &rusqlite::Row) -> rusqlite::Result<ConsignDoc> {
@@ -162,9 +168,11 @@ fn map_doc(r: &rusqlite::Row) -> rusqlite::Result<ConsignDoc> {
         date: parse_date(&r.get::<_, String>(3)?),
         customer: r.get(4)?,
         kind: r.get(5)?,
-        memo: r.get(6)?,
-        created_by: r.get(7)?,
-        created_at: r.get(8)?,
+        so_id: r.get(6)?,
+        so_no: r.get(7)?,
+        memo: r.get(8)?,
+        created_by: r.get(9)?,
+        created_at: r.get(10)?,
         lines: Vec::new(),
     })
 }
@@ -185,6 +193,85 @@ fn map_line(r: &rusqlite::Row) -> rusqlite::Result<ConsignLine> {
 fn parse_date(s: &str) -> NaiveDate {
     NaiveDate::parse_from_str(s, "%Y-%m-%d")
         .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).expect("1970-01-01 一定合法"))
+}
+
+/// 销售订单的交货进度（按订单行比「订了多少 / 交回多少 / 还差多少」）
+///
+/// 口径：**已交只算客供料交货单（kind='out'）**，退料/损耗不抵成品交付——
+/// 退料是客户没用完的料回去，「交付成品」与「退回余料」是两件事，混在一起会算多。
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SoProgress {
+    pub so_id: i64,
+    pub so_no: String,
+    pub date: String,
+    pub item: String,
+    pub item_name: String,
+    pub ordered: Money,
+    /// 已交（该客户 kind='out' 且挂在同一订单同一物料上的合计）
+    pub delivered: Money,
+    /// 未交 = 订购 − 已交（不低于 0）
+    pub remain: Money,
+}
+
+/// 某客户所有销售订单的交货进度（订单行 × 客供料交货）
+pub fn so_progress(db: &Db, customer: &str) -> DbResult<Vec<SoProgress>> {
+    let customer = customer.trim();
+    if customer.is_empty() {
+        return Err(FinError::msg("交货进度必须指定客户").into());
+    }
+    // 1) 该客户的订单行
+    let mut st = db.conn().prepare(
+        "SELECT s.id, s.no, s.date, l.item_code, l.item_name, l.qty_ordered
+         FROM sales_order s JOIN so_line l ON l.so_id = s.id
+         WHERE s.customer_code = ?1
+         ORDER BY s.date DESC, s.id DESC, l.id",
+    )?;
+    let mut rows: Vec<SoProgress> = st
+        .query_map([customer], |r| {
+            Ok(SoProgress {
+                so_id: r.get(0)?,
+                so_no: r.get(1)?,
+                date: r.get(2)?,
+                item: r.get(3)?,
+                item_name: r.get(4)?,
+                ordered: crate::read_money(r, 5)?,
+                delivered: Money::ZERO,
+                remain: Money::ZERO,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+
+    // 2) 已交：客供料交货单按 (订单, 物料) 汇总（Rust 侧累加，不写 SUM）
+    let mut st2 = db.conn().prepare(
+        "SELECT d.so_id, l.item, l.qty
+         FROM consign_doc d JOIN consign_line l ON l.doc_id = d.id
+         WHERE d.customer = ?1 AND d.kind = 'out' AND d.so_id > 0",
+    )?;
+    let mut pairs: Vec<(i64, String, Money)> = st2
+        .query_map([customer], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                crate::read_money(r, 2)?,
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+    for row in rows.iter_mut() {
+        let mut got = Money::ZERO;
+        for (so_id, item, qty) in &pairs {
+            if *so_id == row.so_id && item.trim() == row.item.trim() {
+                got = got + *qty;
+            }
+        }
+        row.delivered = got;
+        row.remain = if row.ordered > got {
+            row.ordered - got
+        } else {
+            Money::ZERO
+        };
+    }
+    pairs.clear();
+    Ok(rows)
 }
 
 /// 单据列表（可按客户过滤），行一并带出
@@ -246,6 +333,23 @@ pub fn doc_save(db: &Db, d: &mut ConsignDoc, who: &str) -> DbResult<i64> {
             return Err(FinError::msg(format!("第 {} 行数量必须大于 0", i + 1)).into());
         }
     }
+    // 挂了销售订单：订单必须存在、客户必须与本单一致（否则交货进了别的客户的账）
+    if d.so_id > 0 {
+        let so = crate::scm::so_get(db, d.so_id)?
+            .ok_or_else(|| FinError::msg(format!("销售订单 {} 不存在", d.so_id)))?;
+        if so.customer_code.trim() != customer {
+            return Err(FinError::msg(format!(
+                "销售订单 {} 的客户是 {}，与本单客户 {} 不一致",
+                so.no,
+                so.customer_code.trim(),
+                customer
+            ))
+            .into());
+        }
+        d.so_no = so.no;
+    } else {
+        d.so_no = String::new();
+    }
     if d.is_outbound() {
         for (i, l) in d.lines.iter().enumerate() {
             let batch = l.batch_no.trim();
@@ -276,14 +380,17 @@ pub fn doc_save(db: &Db, d: &mut ConsignDoc, who: &str) -> DbResult<i64> {
     };
     let id = if d.id > 0 {
         let n = tx.execute(
-            "UPDATE consign_doc SET period=?2,date=?3,customer=?4,kind=?5,memo=?6 WHERE id=?1",
+            "UPDATE consign_doc SET period=?2,date=?3,customer=?4,kind=?5,memo=?6,
+                    so_id=?7,so_no=?8 WHERE id=?1",
             rusqlite::params![
                 d.id,
                 d.period.ymm(),
                 d.date.to_string(),
                 customer,
                 d.kind,
-                d.memo
+                d.memo,
+                d.so_id,
+                d.so_no
             ],
         )?;
         if n == 0 {
@@ -293,8 +400,8 @@ pub fn doc_save(db: &Db, d: &mut ConsignDoc, who: &str) -> DbResult<i64> {
         d.id
     } else {
         tx.execute(
-            "INSERT INTO consign_doc(no,period,date,customer,kind,memo,created_by,created_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            "INSERT INTO consign_doc(no,period,date,customer,kind,memo,so_id,so_no,created_by,created_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             rusqlite::params![
                 no,
                 d.period.ymm(),
@@ -302,6 +409,8 @@ pub fn doc_save(db: &Db, d: &mut ConsignDoc, who: &str) -> DbResult<i64> {
                 customer,
                 d.kind,
                 d.memo,
+                d.so_id,
+                d.so_no,
                 who,
                 now()
             ],
@@ -578,6 +687,75 @@ mod tests {
 
     fn save(db: &Db, mut v: ConsignDoc) -> i64 {
         doc_save(db, &mut v, "u").unwrap()
+    }
+
+    /// 直接造一张销售订单（绕开信用检查与状态机，只测客供料这边）
+    fn so(db: &Db, no: &str, customer: &str, item: &str, qty: &str) -> i64 {
+        let c = db.conn();
+        c.execute(
+            "INSERT INTO sales_order(period,no,date,customer_code,customer_name,status)
+             VALUES(202611,?1,'2026-11-01',?2,'客户甲','confirmed')",
+            rusqlite::params![no, customer],
+        )
+        .unwrap();
+        let id = c.last_insert_rowid();
+        c.execute(
+            "INSERT INTO so_line(so_id,item_code,item_name,qty_ordered) VALUES(?1,?2,?3,?4)",
+            rusqlite::params![id, item, format!("{item} 毛坯"), qty],
+        )
+        .unwrap();
+        id
+    }
+
+    #[test]
+    fn 交货单挂销售订单并算出交货进度() {
+        let db = mem();
+        let so_id = so(&db, "SO-202611-001", "C001", "MB01", "100");
+        save(&db, doc("C001", "in", 1, &[("MB01", "B1", "200")]));
+
+        let mut out = doc("C001", "out", 5, &[("MB01", "B1", "60")]);
+        out.so_id = so_id;
+        doc_save(&db, &mut out, "u").unwrap();
+        assert_eq!(out.so_no, "SO-202611-001", "保存时回填订单号快照");
+
+        // 退料 / 损耗不抵成品交付
+        let mut back = doc("C001", "return", 8, &[("MB01", "B1", "10")]);
+        back.so_id = so_id;
+        doc_save(&db, &mut back, "u").unwrap();
+        save(&db, doc("C001", "loss", 9, &[("MB01", "B1", "5")]));
+
+        let rows = so_progress(&db, "C001").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].so_no, "SO-202611-001");
+        assert_eq!(rows[0].item, "MB01");
+        assert_eq!(rows[0].ordered, m("100"));
+        assert_eq!(rows[0].delivered, m("60"), "已交只算交货单，退料不抵");
+        assert_eq!(rows[0].remain, m("40"));
+
+        // 交够了未交就是 0，不会出现负数
+        let mut more = doc("C001", "out", 12, &[("MB01", "B1", "50")]);
+        more.so_id = so_id;
+        doc_save(&db, &mut more, "u").unwrap();
+        let rows = so_progress(&db, "C001").unwrap();
+        assert_eq!(rows[0].delivered, m("110"));
+        assert_eq!(rows[0].remain, Money::ZERO);
+    }
+
+    #[test]
+    fn 挂别人的销售订单要报错() {
+        let db = mem();
+        let so_id = so(&db, "SO-202611-002", "C002", "MB01", "100");
+        save(&db, doc("C001", "in", 1, &[("MB01", "B1", "50")]));
+        let mut out = doc("C001", "out", 5, &[("MB01", "B1", "10")]);
+        out.so_id = so_id;
+        let err = doc_save(&db, &mut out, "u").unwrap_err().to_string();
+        assert!(err.contains("不一致"), "实际报错：{err}");
+
+        // 订单不存在也要拦（不能挂一张不存在的单）
+        let mut out2 = doc("C001", "out", 5, &[("MB01", "B1", "10")]);
+        out2.so_id = 9999;
+        let err = doc_save(&db, &mut out2, "u").unwrap_err().to_string();
+        assert!(err.contains("不存在"), "实际报错：{err}");
     }
 
     #[test]

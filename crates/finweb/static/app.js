@@ -13184,6 +13184,7 @@ async function viewConsign(main) {
       <button class="btn primary sm" id="cs-load">查询单据</button>
       <button class="btn ghost sm" id="cs-bal">查结存</button>
       <button class="btn ghost sm" id="cs-stmt">客户对账单</button>
+      <button class="btn ghost sm" id="cs-sop">交货进度</button>
       ${can("order_ops") ? `<button class="btn primary sm" id="cs-new">登记单据</button>` : ""}
     </div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">单据</h3><div id="cs-docs" class="muted">加载中…</div></div>
@@ -13203,10 +13204,11 @@ async function viewConsign(main) {
       kinds = r.kinds || [];
       docs = r.docs || [];
       $("#cs-docs", main).innerHTML = docs.length
-        ? `<table class="grid"><thead><tr><th>单号</th><th>日期</th><th>客户</th><th>类型</th><th>行数</th><th>合计数量</th><th>备注</th><th></th></tr></thead><tbody>${docs.map((d) => {
+        ? `<table class="grid"><thead><tr><th>单号</th><th>日期</th><th>客户</th><th>类型</th><th>销售订单</th><th>行数</th><th>合计数量</th><th>备注</th><th></th></tr></thead><tbody>${docs.map((d) => {
             const total = (d.lines || []).reduce((s, l) => s + (parseFloat(String(l.qty).replace(/,/g, "")) || 0), 0);
             return `<tr><td>${esc(d.no)}</td><td>${esc(d.date)}</td><td>${esc(d.customer)}</td>
               <td><span class="tag">${esc(d.kind_label || d.kind)}</span></td>
+              <td>${esc(d.so_no || "—")}</td>
               <td class="num">${(d.lines || []).length}</td><td class="num">${fmt(total)}</td>
               <td>${esc(d.memo || "")}</td>
               <td class="row-actions">${can("order_ops") ? `<button class="btn ghost sm" data-cs-del="${d.id}">删</button>` : ""}</td></tr>`;
@@ -13238,6 +13240,8 @@ async function viewConsign(main) {
       <div class="field"><label>客户 *</label><input id="cs-customer" value="${esc(cust())}" /></div>
       <div class="field"><label>单据类型 *</label><select id="cs-kind">${kindOpts("in")}</select></div>
       <div class="field"><label>日期 *</label><input id="cs-date" type="date" value="${esc(state.today || "")}" /></div>
+      <div class="field"><label>销售订单</label><select id="cs-so"><option value="0">不挂订单</option></select>
+        <span class="muted" style="font-size:12px;margin-left:6px">交货挂上订单后，「交货进度」能看每单还差多少</span></div>
       <div class="field"><label>备注</label><input id="cs-memo" /></div>
       <div id="cs-lines"></div>
       <div class="foot"><button class="btn ghost sm" id="cs-add">加一行</button><button class="btn primary" id="cs-save">保存</button><button class="btn ghost" id="cs-cancel">取消</button></div>`, true);
@@ -13252,6 +13256,15 @@ async function viewConsign(main) {
       $all("[data-f]", m).forEach((el) => (el.oninput = () => { rows[+el.dataset.i][el.dataset.f] = el.value; }));
       $all("[data-del]", m).forEach((b) => (b.onclick = () => { rows.splice(+b.dataset.i, 1); drawLines(); }));
     };
+    // 拉当期销售订单填下拉（客户填了就只留该客户的）
+    api(`/sales/so?period=${encodeURIComponent(state.current || "")}`)
+      .then((r) => {
+        const all = (r.rows || []).filter((so) => !cust() || String(so.customer_code || "").trim() === cust());
+        $("#cs-so", m).innerHTML =
+          `<option value="0">不挂订单</option>` +
+          all.map((so) => `<option value="${so.id}">${esc(so.no)} · ${esc(so.customer_code || "")} · ${esc(so.date || "")}</option>`).join("");
+      })
+      .catch(() => {});
     drawLines();
     $("#cs-add", m).onclick = () => { rows.push({ item: "", item_name: "", unit: "件", qty: "", batch_no: "" }); drawLines(); };
     $("#cs-cancel", m).onclick = closeModal;
@@ -13261,6 +13274,7 @@ async function viewConsign(main) {
         kind: $("#cs-kind", m).value,
         date: $("#cs-date", m).value.trim(),
         memo: $("#cs-memo", m).value.trim(),
+        so_id: Number($("#cs-so", m).value || 0),
         lines: rows.filter((l) => l.item.trim() || l.qty.trim()),
       };
       if (!body.customer || !body.date) { toast("客户与日期必填", "err"); return; }
@@ -13296,6 +13310,30 @@ async function viewConsign(main) {
     };
   };
 
+  const openProgress = () => {
+    const m = modal(`<h3>销售订单交货进度</h3>
+      <div class="field"><label>客户 *</label><input id="cs-sop-cust" value="${esc(cust())}" /></div>
+      <div id="cs-sop-out" class="muted">点「算进度」</div>
+      <div class="foot"><button class="btn primary" id="cs-sop-run">算进度</button><button class="btn ghost" id="cs-sop-close">关闭</button></div>`, true);
+    $("#cs-sop-close", m).onclick = closeModal;
+    $("#cs-sop-run", m).onclick = async () => {
+      const c = $("#cs-sop-cust", m).value.trim();
+      if (!c) { toast("交货进度必须指定客户", "err"); return; }
+      try {
+        const r = await api(`/consign/so-progress?customer=${encodeURIComponent(c)}`);
+        const rows = r.rows || [];
+        $("#cs-sop-out", m).innerHTML = rows.length
+          ? `<table class="grid"><thead><tr><th>订单号</th><th>日期</th><th>物料</th><th>名称</th><th>订购</th><th>已交</th><th>未交</th></tr></thead><tbody>${rows.map((x) => `<tr>
+              <td>${esc(x.so_no)}</td><td>${esc(x.date || "")}</td><td>${esc(x.item)}</td><td>${esc(x.item_name || "")}</td>
+              <td class="num">${fmt(x.ordered)}</td><td class="num">${fmt(x.delivered)}</td>
+              <td class="num"${num(x.remain) > 0 ? ' style="color:var(--err)"' : ""}>${fmt(x.remain)}</td></tr>`).join("")}</tbody></table>
+              <div class="muted" style="font-size:12px">已交只算交货单，退料 / 损耗不抵成品交付</div>`
+          : `<div class="muted">该客户没有销售订单</div>`;
+      } catch (e) { toast(e.message, "err"); }
+    };
+  };
+
+  $("#cs-sop", main).onclick = openProgress;
   $("#cs-load", main).onclick = loadDocs;
   $("#cs-bal", main).onclick = loadBal;
   $("#cs-stmt", main).onclick = openStatement;
