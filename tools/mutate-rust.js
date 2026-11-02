@@ -1379,6 +1379,47 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::overhead_pool"],
   },
   {
+    // 返工数量不校验原单计划量：凭空冒出一批返工件，成本无处对账。
+    name: "㊹ 返工数量不校验原单计划量",
+    file: "crates/findb/src/rework.rs",
+    from: "    if o.qty > po.planned_qty {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "rework::tests::返工单必须挂来源订单"],
+  },
+  {
+    // 结案后还能追加成本：上个月看过的报表会变样。
+    name: "㊹ 已结案仍可追加返工成本",
+    file: "crates/findb/src/rework.rs",
+    from: "    if order.is_closed() {\n        return Err(blocked(\n            \"返工单已结案，不能再追加成本（要补先把状态改回「进行中」）\",\n        ));\n    }",
+    to: "    if false {\n        return Err(blocked(\"返工单已结案\"));\n    }",
+    cmd: ["test", "-p", "findb", "--lib", "rework::tests::已结案的返工单不许改也不许删"],
+  },
+  {
+    // 结账后还能改返工单：与工资表那道闸同一个理由，账已经报出去了。
+    name: "㊹ 结账后仍可改返工单",
+    file: "crates/findb/src/rework.rs",
+    // 只改判断本身（整块替换会让 upto 变成死变量、编译不过，变异就成了"没跑"）
+    from: "        if period <= upto {",
+    to: "        if period <= upto && false {",
+    cmd: ["test", "-p", "findb", "--lib", "rework::tests::结账后的返工单不许改"],
+  },
+  {
+    // 占比的分子用返工自身成本当分母：占比永远 100%，等于没算。
+    name: "㊹ 返工占比分母取返工自身",
+    file: "crates/findb/src/rework.rs",
+    from: "        let po_cost = crate::manufacturing::get_prod_total_cost(db, o.po_id)?;",
+    to: "        let po_cost = total;",
+    cmd: ["test", "-p", "findb", "--lib", "rework::tests::返工成本三段汇总"],
+  },
+  {
+    // 已结案的返工单也允许删：成本明细跟着没了，历史对不上。
+    name: "㊹ 已结案也能删返工单",
+    file: "crates/findb/src/rework.rs",
+    from: "    if old.is_closed() {\n        return Err(blocked(\"返工单已结案，要删先改回「进行中」\"));\n    }",
+    to: "    if false {\n        return Err(blocked(\"返工单已结案\"));\n    }",
+    cmd: ["test", "-p", "findb", "--lib", "rework::tests::已结案的返工单不许改也不许删"],
+  },
+  {
     // 报工流水记成"今天所在期间"：账套期间与今天不一致时，工时分摊永远分不到。
     name: "㊸ 报工流水不跟订单期间",
     file: "crates/findb/src/advanced.rs",

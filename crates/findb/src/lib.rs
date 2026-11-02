@@ -42,6 +42,7 @@ pub mod processfee;
 pub mod procurement;
 pub mod receipt;
 pub mod reports;
+pub mod rework;
 pub mod sales;
 pub mod schema;
 pub mod scm;

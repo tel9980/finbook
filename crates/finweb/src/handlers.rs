@@ -58,6 +58,7 @@ pub(crate) mod processfee;
 pub(crate) mod procure;
 pub(crate) mod prod;
 pub(crate) mod reports;
+pub(crate) mod rework;
 pub(crate) mod sales;
 pub(crate) mod settle;
 pub(crate) mod voucher;
@@ -78,6 +79,7 @@ use self::processfee::*;
 use self::procure::*;
 use self::prod::*;
 use self::reports::*;
+use self::rework::*;
 use self::sales::*;
 use self::settle::*;
 use self::voucher::*;
@@ -562,6 +564,11 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/prod/:id/qc", get(list_prod_qc).post(prod_qc_ep))
         .route("/api/prod/:id/ops", get(get_prod_ops))
         .route("/api/prod/op/dispatch", post(dispatch_prod_op))
+        .route("/api/rework", get(list_rework).post(save_rework))
+        .route("/api/rework/report", get(rework_report))
+        .route("/api/rework/:id", get(get_rework).delete(delete_rework))
+        .route("/api/rework/:id/costs", post(add_rework_cost))
+        .route("/api/rework/costs/:id", delete(delete_rework_cost))
         .route("/api/prod/:id/ops/init", post(init_prod_ops))
         .route("/api/prod/op/report", post(report_prod_op))
         .route("/api/prod/op/finish", post(finish_prod_op))

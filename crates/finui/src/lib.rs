@@ -231,6 +231,18 @@ impl FinBookApp {
                     views.tool_ledger.invalidate();
                 }
             }
+            ConfirmAction::DeleteRework(id) => {
+                if !ctx.can(Perm::ProductionOps) {
+                    ctx.error(format!("没有「{}」权限", Perm::ProductionOps.label()));
+                    return;
+                }
+                let r = findb::rework::delete(ctx.db(), id);
+                if ctx.handle(r).is_some() {
+                    ctx.log("生产", "返工单", &format!("删除 #{id}"));
+                    ctx.info("已删除返工单");
+                    views.rework.invalidate();
+                }
+            }
             ConfirmAction::DeletePieceRate(id) => {
                 if !ctx.can(Perm::ProductionOps) {
                     ctx.error(format!("没有「{}」权限", Perm::ProductionOps.label()));

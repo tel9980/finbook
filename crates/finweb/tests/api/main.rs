@@ -466,6 +466,7 @@ mod platform;
 mod processfee;
 mod prod;
 mod reports;
+mod rework;
 mod sales;
 mod settle;
 mod voucher;

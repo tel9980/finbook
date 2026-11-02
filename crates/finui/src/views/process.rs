@@ -13,6 +13,8 @@ use findb::consign::{self, ConsignBalance, ConsignDoc, ConsignStatementRow};
 use findb::fixture::{self, ToolBalance, ToolItem, ToolMove};
 use findb::piecepay::{self, PiecePay, PieceRate};
 use findb::processfee::{self, FeeQuote, PriceRule};
+use findb::rework;
+use findb::scm;
 
 use crate::state::{AppCtx, ConfirmAction};
 use crate::theme::palette;
@@ -1915,6 +1917,465 @@ impl ToolLedgerView {
                 self.nm_times.clear();
                 self.nm_memo.clear();
                 self.dirty = true;
+            }
+            Err(e) => self.err = e.to_string(),
+        }
+    }
+}
+
+// ===========================================================================
+// 返工成本单：返工单独归集，看「这批返工亏了多少」
+// ===========================================================================
+pub struct ReworkView {
+    pub period_text: String,
+    /// 报表行（区间内每张返工单：三段成本 + 占原单比例）
+    pub rows: Vec<rework::ReworkStat>,
+    /// 选中的返工单
+    pub sel: Option<i64>,
+    pub costs: Vec<rework::ReworkCost>,
+    pub err: String,
+    pub dirty: bool,
+    key: String,
+    // 新建
+    pub new_open: bool,
+    pub nb_po: i64,
+    pub nb_qty: String,
+    pub nb_date: String,
+    pub nb_reason: String,
+    pub nb_memo: String,
+    // 追加成本
+    pub nb_kind: String,
+    pub nb_amount: String,
+    pub nb_cost_memo: String,
+}
+
+impl Default for ReworkView {
+    fn default() -> Self {
+        Self {
+            period_text: String::new(),
+            rows: Vec::new(),
+            sel: None,
+            costs: Vec::new(),
+            err: String::new(),
+            dirty: true,
+            key: String::new(),
+            new_open: false,
+            nb_po: 0,
+            nb_qty: String::new(),
+            nb_date: String::new(),
+            nb_reason: String::new(),
+            nb_memo: String::new(),
+            nb_kind: "material".to_string(),
+            nb_amount: String::new(),
+            nb_cost_memo: String::new(),
+        }
+    }
+}
+
+impl ReworkView {
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    pub fn enter(&mut self, ctx: &mut AppCtx<'_>) {
+        if self.period_text.is_empty() {
+            self.period_text = ctx.period().code();
+        }
+        if self.nb_date.is_empty() {
+            self.nb_date = chrono::Local::now()
+                .date_naive()
+                .format("%Y-%m-%d")
+                .to_string();
+        }
+        self.dirty = true;
+    }
+
+    fn period(&self, ctx: &AppCtx<'_>) -> fincore::Period {
+        fincore::Period::parse(&self.period_text).unwrap_or_else(|_| ctx.period())
+    }
+
+    fn reload(&mut self, ctx: &mut AppCtx<'_>) {
+        let p = self.period(ctx);
+        let key = format!("rework|{}", p.code());
+        if !self.dirty && self.key == key {
+            return;
+        }
+        self.key = key;
+        self.dirty = false;
+        match rework::report(ctx.db(), p, p) {
+            Ok(v) => self.rows = v,
+            Err(e) => {
+                self.rows.clear();
+                self.err = e.to_string();
+            }
+        }
+        if let Some(id) = self.sel {
+            match rework::costs(ctx.db(), id) {
+                Ok(v) => self.costs = v,
+                Err(e) => self.err = e.to_string(),
+            }
+        }
+    }
+
+    pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        self.reload(ctx);
+
+        widgets::page_header(ui, "返工成本单", |ui| {
+            txt(
+                ui,
+                RichText::new("返工的材料/工时单独归集，不进原单 —— 原单单位成本才不虚高").weak(),
+            );
+        });
+
+        let mut want_new = false;
+        widgets::toolbar(ui, |ui| {
+            txt(ui, "期间");
+            if widgets::text_input(ui, &mut self.period_text, 110.0, "2026-01").changed() {
+                self.dirty = true;
+            }
+            if ui.button("刷新").clicked() {
+                self.dirty = true;
+            }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    ctx.can(Perm::ProductionOps),
+                    egui::Button::new("新建返工单"),
+                )
+                .clicked()
+            {
+                want_new = true;
+            }
+        });
+        if want_new {
+            self.new_open = true;
+        }
+
+        if !self.err.is_empty() {
+            txt(ui, RichText::new(&self.err).color(palette::CREDIT));
+        }
+
+        let cols = [
+            widgets::TCol::new("单号", 110.0),
+            widgets::TCol::new("日期", 90.0),
+            widgets::TCol::new("来源订单", 120.0),
+            widgets::TCol::new("物料", 150.0),
+            widgets::TCol::new("返工数量", 80.0).right(),
+            widgets::TCol::new("原因", 140.0),
+            widgets::TCol::new("状态", 70.0),
+            widgets::TCol::new("材料", 90.0).right(),
+            widgets::TCol::new("人工", 90.0).right(),
+            widgets::TCol::new("制造费用", 90.0).right(),
+            widgets::TCol::new("合计", 100.0).right(),
+            widgets::TCol::new("占原单", 80.0).right(),
+        ];
+        let rows = self.rows.clone();
+        let mut pick: Option<i64> = None;
+        widgets::grid(ui, "rework_grid", &cols, rows.len(), 22.0, |i, c, ui| {
+            let r = &rows[i];
+            match c {
+                0 => {
+                    if ui
+                        .selectable_label(self.sel == Some(r.rw_id), &r.no)
+                        .clicked()
+                    {
+                        pick = Some(r.rw_id);
+                    }
+                }
+                1 => txt(ui, &r.date),
+                2 => txt(ui, &r.po_no),
+                3 => txt(ui, format!("{} {}", r.item_code, r.item_name)),
+                4 => widgets::amount_label(ui, r.qty),
+                5 => txt(ui, &r.reason),
+                6 => txt(ui, rework::status_label(&r.status)),
+                7 => widgets::amount_label(ui, r.material),
+                8 => widgets::amount_label(ui, r.labor),
+                9 => widgets::amount_label(ui, r.overhead),
+                10 => widgets::amount_label(ui, r.total),
+                11 => {
+                    if r.ratio.is_empty() {
+                        txt(ui, "—")
+                    } else {
+                        txt(ui, format!("{}%", r.ratio))
+                    }
+                }
+                _ => {}
+            }
+        });
+        if let Some(id) = pick {
+            self.sel = Some(id);
+            match rework::costs(ctx.db(), id) {
+                Ok(v) => self.costs = v,
+                Err(e) => self.err = e.to_string(),
+            }
+        }
+
+        // 选中一张单：成本明细 + 追加/删除
+        let Some(id) = self.sel else {
+            return;
+        };
+        let closed = self
+            .rows
+            .iter()
+            .find(|r| r.rw_id == id)
+            .map(|r| r.status == "closed")
+            .unwrap_or(false);
+        ui.separator();
+        let title = self
+            .rows
+            .iter()
+            .find(|r| r.rw_id == id)
+            .map(|r| format!("{} 的成本明细", r.no))
+            .unwrap_or_else(|| "成本明细".to_string());
+        txt(ui, RichText::new(title).strong());
+        if closed {
+            txt(
+                ui,
+                RichText::new("已结案：这批返工的钱已经认下来了，要改先把状态改回「进行中」")
+                    .color(palette::WARN),
+            );
+        }
+
+        let ccols = [
+            widgets::TCol::new("成本项", 110.0),
+            widgets::TCol::new("金额", 110.0).right(),
+            widgets::TCol::new("备注", 240.0),
+        ];
+        let costs = self.costs.clone();
+        let mut del_cost: Option<i64> = None;
+        widgets::grid(
+            ui,
+            "rework_cost_grid",
+            &ccols,
+            costs.len(),
+            22.0,
+            |i, c, ui| {
+                let x = &costs[i];
+                match c {
+                    0 => txt(ui, x.kind_label()),
+                    1 => widgets::amount_label(ui, x.amount),
+                    2 => {
+                        ui.horizontal(|ui| {
+                            txt(ui, &x.memo);
+                            if !closed
+                                && ui
+                                    .add_enabled(
+                                        ctx.can(Perm::ProductionOps),
+                                        egui::Button::new("删").small(),
+                                    )
+                                    .clicked()
+                            {
+                                del_cost = Some(x.id);
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            },
+        );
+        if let Some(cid) = del_cost {
+            match rework::delete_cost(ctx.db(), cid) {
+                Ok(()) => {
+                    ctx.log("生产", "返工成本", &format!("删除 {cid}"));
+                    self.dirty = true;
+                    self.invalidate();
+                }
+                Err(e) => self.err = e.to_string(),
+            }
+        }
+
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("rework_cost_kind")
+                .width(120.0)
+                .selected_text(rework::cost_kind_label(&self.nb_kind))
+                .show_ui(ui, |ui| {
+                    for (k, l) in rework::COST_KINDS {
+                        ui.selectable_value(&mut self.nb_kind, (*k).to_string(), *l);
+                    }
+                });
+            widgets::money_input(ui, &mut self.nb_amount, 110.0);
+            widgets::text_input(ui, &mut self.nb_cost_memo, 200.0, "备注");
+            if ui
+                .add_enabled(
+                    ctx.can(Perm::ProductionOps) && !closed,
+                    egui::Button::new("追加成本"),
+                )
+                .clicked()
+            {
+                let amount = widgets::parse_money(&self.nb_amount);
+                if !amount.is_positive() {
+                    self.err = "金额必须大于 0".to_string();
+                } else {
+                    match rework::add_cost(
+                        ctx.db(),
+                        id,
+                        &self.nb_kind,
+                        amount,
+                        self.nb_cost_memo.trim(),
+                    ) {
+                        Ok(_) => {
+                            ctx.log(
+                                "生产",
+                                "返工成本",
+                                &format!(
+                                    "{id} {} {}",
+                                    rework::cost_kind_label(&self.nb_kind),
+                                    amount
+                                ),
+                            );
+                            self.nb_amount.clear();
+                            self.nb_cost_memo.clear();
+                            self.dirty = true;
+                            self.invalidate();
+                        }
+                        Err(e) => self.err = e.to_string(),
+                    }
+                }
+            }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    ctx.can(Perm::ProductionOps),
+                    egui::Button::new(if closed { "改回进行中" } else { "结案" }),
+                )
+                .clicked()
+            {
+                if let Some(mut o) = rework::get(ctx.db(), id).ok().flatten() {
+                    o.status = if closed {
+                        "open".into()
+                    } else {
+                        "closed".into()
+                    };
+                    match rework::save(ctx.db(), &mut o, &ctx.user().username) {
+                        Ok(_) => {
+                            ctx.log("生产", "返工单", &format!("{} {}", o.no, o.status_label()));
+                            self.dirty = true;
+                            self.invalidate();
+                        }
+                        Err(e) => self.err = e.to_string(),
+                    }
+                }
+            }
+            if ui
+                .add_enabled(
+                    ctx.can(Perm::ProductionOps),
+                    egui::Button::new("删除此单").small(),
+                )
+                .clicked()
+            {
+                ctx.confirm(
+                    "删除返工单",
+                    "成本明细会一起删掉，确定？",
+                    ConfirmAction::DeleteRework(id),
+                );
+            }
+        });
+
+        if self.new_open {
+            self.show_new_window(ctx, ui);
+        }
+    }
+
+    fn show_new_window(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        let mut open = self.new_open;
+        let mut pending: Option<(i64, String, String, String, String)> = None;
+        egui::Window::new("新建返工单")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                let orders = scm::prod_list(ctx.db(), ctx.period(), None).unwrap_or_default();
+                if orders.is_empty() {
+                    txt(
+                        ui,
+                        RichText::new("本期还没有生产订单：先下生产订单再登记返工")
+                            .color(palette::WARN),
+                    );
+                    return;
+                }
+                if self.nb_po == 0 {
+                    self.nb_po = orders[0].id;
+                }
+                let cur = orders
+                    .iter()
+                    .find(|o| o.id == self.nb_po)
+                    .map(|o| format!("{} {} ×{}", o.no, o.item_code, o.planned_qty))
+                    .unwrap_or_default();
+                ui.horizontal(|ui| {
+                    txt(ui, "来源生产订单");
+                    egui::ComboBox::from_id_salt("rework_po")
+                        .width(240.0)
+                        .selected_text(cur)
+                        .show_ui(ui, |ui| {
+                            for o in &orders {
+                                ui.selectable_value(
+                                    &mut self.nb_po,
+                                    o.id,
+                                    format!("{} {} ×{}", o.no, o.item_code, o.planned_qty),
+                                );
+                            }
+                        });
+                });
+                ui.horizontal(|ui| {
+                    txt(ui, "返工数量");
+                    widgets::money_input(ui, &mut self.nb_qty, 110.0);
+                });
+                ui.horizontal(|ui| {
+                    txt(ui, "日期");
+                    widgets::text_input(ui, &mut self.nb_date, 110.0, "2026-01-20");
+                });
+                ui.horizontal(|ui| {
+                    txt(ui, "原因");
+                    widgets::text_input(ui, &mut self.nb_reason, 220.0, "挂具印痕 / 膜厚不足");
+                });
+                ui.horizontal(|ui| {
+                    txt(ui, "备注");
+                    widgets::text_input(ui, &mut self.nb_memo, 240.0, "");
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("保存").clicked() {
+                        pending = Some((
+                            self.nb_po,
+                            self.nb_qty.clone(),
+                            self.nb_date.clone(),
+                            self.nb_reason.clone(),
+                            self.nb_memo.clone(),
+                        ));
+                    }
+                    if ui.button("取消").clicked() {
+                        self.new_open = false;
+                    }
+                });
+            });
+        self.new_open = open;
+        let Some((po_id, qty, date, reason, memo)) = pending else {
+            return;
+        };
+        let date = match NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d") {
+            Ok(d) => d,
+            Err(_) => {
+                self.err = "日期格式应为 YYYY-MM-DD".to_string();
+                return;
+            }
+        };
+        let mut o = rework::ReworkOrder::new(po_id, date);
+        o.qty = widgets::parse_money(&qty);
+        o.reason = reason;
+        o.memo = memo;
+        match rework::save(ctx.db(), &mut o, &ctx.user().username) {
+            Ok(id) => {
+                ctx.log(
+                    "生产",
+                    "返工单",
+                    &format!("{} 来源 {} 数量 {}", o.no, o.po_no, o.qty),
+                );
+                self.sel = Some(id);
+                self.new_open = false;
+                self.nb_qty.clear();
+                self.nb_reason.clear();
+                self.nb_memo.clear();
+                self.dirty = true;
+                self.invalidate();
             }
             Err(e) => self.err = e.to_string(),
         }

@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 42;
+pub const SCHEMA_VERSION: i64 = 43;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1657,6 +1657,37 @@ CREATE TABLE IF NOT EXISTS tool_move (
 );
 CREATE INDEX IF NOT EXISTS idx_tool_move_code ON tool_move(tool_code);
 CREATE INDEX IF NOT EXISTS idx_tool_move_period ON tool_move(period);
+
+-- v43: 返工件成本单。返工件是「已经做过、要再做一遍」的活，
+-- 它的材料/工时不该混进原订单的成本里，否则原单单位成本虚高、差异分析也对不上。
+CREATE TABLE IF NOT EXISTS rework_order(
+    id          INTEGER PRIMARY KEY,
+    no          TEXT NOT NULL,
+    period      INTEGER NOT NULL,
+    date        TEXT NOT NULL,
+    po_id       INTEGER NOT NULL DEFAULT 0,          -- 原生产订单
+    po_no       TEXT NOT NULL DEFAULT '',
+    item_code   TEXT NOT NULL DEFAULT '',
+    item_name   TEXT NOT NULL DEFAULT '',
+    qty         TEXT NOT NULL DEFAULT '0',           -- 返工数量（成品件数）
+    reason      TEXT NOT NULL DEFAULT '',            -- 返工原因（槽液/挂具/客户改要求…）
+    status      TEXT NOT NULL DEFAULT 'open',        -- open 进行中 / closed 已结案
+    memo        TEXT NOT NULL DEFAULT '',
+    created_by  TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT '',
+    UNIQUE(no)
+);
+CREATE INDEX IF NOT EXISTS idx_rework_period ON rework_order(period);
+CREATE INDEX IF NOT EXISTS idx_rework_po ON rework_order(po_id);
+CREATE TABLE IF NOT EXISTS rework_cost(
+    id          INTEGER PRIMARY KEY,
+    rw_id       INTEGER NOT NULL,
+    cost_type   TEXT NOT NULL,                       -- material 材料 / labor 人工 / overhead 制造费用
+    amount      TEXT NOT NULL DEFAULT '0',
+    memo        TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_rework_cost_rw ON rework_cost(rw_id);
 
 "#;
 

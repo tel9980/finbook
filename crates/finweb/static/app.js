@@ -1336,6 +1336,7 @@ const NAV_ITEMS = [
   { id: "consign", label: "客供料台账", perm: "order_ops", production: true, group: "生产制造" },
   { id: "piece-pay", label: "计件工资", perm: "production_ops", production: true, group: "生产制造" },
   { id: "tool-ledger", label: "挂具台账", perm: "production_ops", production: true, group: "生产制造" },
+  { id: "rework", label: "返工成本单", perm: "production_ops", production: true, group: "生产制造" },
   { id: "funds", label: "资金管理", perm: "fin_report", group: "资金" },
   { id: "budget-versions", label: "预算版本", perm: "fin_report", group: "管理会计" },
   { id: "budget-alerts", label: "预算预警", perm: "fin_report", group: "管理会计" },
@@ -1401,6 +1402,7 @@ const VIEWS = {
   "dim-profit": viewDimProfit,
   "consign": viewConsign,
   "tool-ledger": viewToolLedger,
+  "rework": viewRework,
   "piece-pay": viewPiecePay,
   "price-rules": viewPriceRules,
   "period-end": viewPeriodEnd,
@@ -13626,6 +13628,218 @@ async function viewToolLedger(main) {
   if (bItem) bItem.onclick = openItem;
   await loadBal();
   await loadMoves();
+}
+
+
+// ===========================================================================
+// 返工成本单：返工的材料/人工/制造费用单独归集，看「这批返工亏了多少」
+// ===========================================================================
+async function viewRework(main) {
+  main.innerHTML = `<h2>返工成本单</h2>
+    <div class="toolbar">
+      <label>期间 <input id="rw-period" style="width:100px" placeholder="202601" /></label>
+      <button class="btn primary sm" id="rw-reload">查询</button>
+      ${can("production_ops") ? `<button class="btn ghost sm" id="rw-new">新建返工单</button>` : ""}
+      <button class="btn ghost sm" id="rw-print">打印预览</button>
+    </div>
+    <div class="panel"><div id="rw-list" class="muted">加载中…</div></div>
+    <div class="muted" style="font-size:12px">返工单挂在原生产订单上，成本单独归集 —— 返工的钱不进原单，原单单位成本才不会虚高；「占原单」= 返工成本 ÷ 原单已归集成本</div>`;
+
+  const periodInput = $("#rw-period");
+  if (periodInput && !periodInput.value) periodInput.value = state.current || "";
+
+  let rows = [];
+
+  const load = async () => {
+    const el = $("#rw-list");
+    el.className = "muted";
+    el.textContent = "加载中…";
+    const q = periodInput && periodInput.value ? `?period=${encodeURIComponent(periodInput.value)}` : "";
+    const d = await api(`/rework${q}`);
+    rows = d.orders || [];
+    if (!rows.length) {
+      el.textContent = "这一期没有返工单。";
+      return;
+    }
+    const total = rows.reduce((a, r) => a + num(r.total), 0);
+    el.className = "";
+    el.innerHTML = `<table class="grid">
+      <thead><tr><th>单号</th><th>日期</th><th>来源订单</th><th>物料</th><th class="r">返工数量</th>
+        <th>原因</th><th>状态</th><th class="r">材料</th><th class="r">人工</th><th class="r">制造费用</th>
+        <th class="r">合计</th><th>操作</th></tr></thead>
+      <tbody>${rows
+        .map(
+          (r) => `<tr>
+            <td>${esc(r.no)}</td>
+            <td>${esc(r.date)}</td>
+            <td>${esc(r.po_no)}</td>
+            <td>${esc(r.item_code)} ${esc(r.item_name)}</td>
+            <td class="r">${fmt(r.qty)}</td>
+            <td>${esc(r.reason || "")}</td>
+            <td>${esc(r.status === "closed" ? "已结案" : "进行中")}</td>
+            <td class="r">${fmt(r.material)}</td>
+            <td class="r">${fmt(r.labor)}</td>
+            <td class="r">${fmt(r.overhead)}</td>
+            <td class="r">${fmt(r.total)}</td>
+            <td><button class="btn ghost sm" data-rw-open="${r.id}">成本</button>
+                <button class="btn ghost sm" data-rw-del="${r.id}">删除</button></td>
+          </tr>`
+        )
+        .join("")}</tbody>
+      <tfoot><tr><td colspan="10" class="r">合计</td><td class="r">${fmt(String(total))}</td><td></td></tr></tfoot>
+    </table>`;
+    for (const b of $all("[data-rw-open]", el)) {
+      b.addEventListener("click", () => openCosts(Number(b.dataset.rwOpen)));
+    }
+    for (const b of $all("[data-rw-del]", el)) {
+      b.addEventListener("click", async () => {
+        if (!(await confirmDialog("删除这张返工单？成本明细会一起删掉。", true))) return;
+        try {
+          await api(`/rework/${b.dataset.rwDel}`, { method: "DELETE" });
+          toast("已删除");
+          load();
+        } catch (e) {
+          toast(e.message, "err");
+        }
+      });
+    }
+  };
+
+  // 新建：选来源生产订单（带出物料/计划量），数量不能超过它
+  $("#rw-new")?.addEventListener("click", async () => {
+    let orders = [];
+    try {
+      const d = await api("/prod");
+      orders = d.orders || [];
+    } catch (e) {
+      toast(e.message, "err");
+      return;
+    }
+    if (!orders.length) {
+      toast("本期还没有生产订单，先下生产订单再返工", "err");
+      return;
+    }
+    modal(`<h3>新建返工单</h3>
+      <div class="form">
+        <label>来源生产订单 <select id="rwn-po">${orders
+          .map(
+            (o) =>
+              `<option value="${o.id}" data-planned="${esc(o.planned_qty)}">${esc(o.no)} ${esc(o.item_code)} ×${esc(o.planned_qty)}</option>`
+          )
+          .join("")}</select></label>
+        <label>返工数量 <input id="rwn-qty" style="width:110px" placeholder="不超过原单计划量" /></label>
+        <label>日期 <input id="rwn-date" type="date" value="${state.today || ""}" /></label>
+        <label>原因 <input id="rwn-reason" style="width:220px" placeholder="如 挂具印痕 / 氧化膜厚不足" /></label>
+        <label>备注 <input id="rwn-memo" style="width:260px" /></label>
+      </div>
+      <div class="toolbar"><button class="btn primary sm" id="rwn-save">保存</button>
+        <button class="btn ghost sm" id="rwn-cancel">取消</button></div>`);
+    $("#rwn-cancel").addEventListener("click", closeModal);
+    $("#rwn-save").addEventListener("click", async () => {
+      const sel = $("#rwn-po");
+      const opt = sel.options[sel.selectedIndex];
+      const qty = num($("#rwn-qty").value);
+      const planned = num(opt?.dataset.planned || "0");
+      if (!(qty > 0)) return toast("返工数量必须大于 0", "err");
+      if (qty > planned) return toast(`返工数量不能超过原单计划量 ${fmt(opt?.dataset.planned || "0")}`, "err");
+      try {
+        const r = await postJson("/rework", {
+          po_id: Number(sel.value),
+          qty: $("#rwn-qty").value,
+          date: $("#rwn-date").value,
+          reason: $("#rwn-reason").value,
+          memo: $("#rwn-memo").value,
+        });
+        closeModal();
+        toast(`已建返工单 ${r.no}`);
+        load();
+      } catch (e) {
+        toast(e.message, "err");
+      }
+    });
+  });
+
+  // 成本明细：三段汇总 + 追加/删除
+  const openCosts = async (id) => {
+    const d = await api(`/rework/${id}`);
+    const o = d.order;
+    const list = (d.costs || [])
+      .map(
+        (c) => `<tr><td>${esc(kindLabel(d.kinds, c.cost_type))}</td><td class="r">${fmt(c.amount)}</td>
+          <td>${esc(c.memo || "")}</td>
+          <td><button class="btn ghost sm" data-cost-del="${c.id}">删</button></td></tr>`
+      )
+      .join("");
+    modal(`<h3>${esc(o.no)} · ${esc(o.po_no)} ${esc(o.item_code)}（返工 ${fmt(o.qty)}）</h3>
+      <div class="muted">原因：${esc(o.reason || "—")}　状态：${esc(o.status === "closed" ? "已结案" : "进行中")}</div>
+      <table class="grid">
+        <thead><tr><th>成本项</th><th class="r">金额</th><th>备注</th><th>操作</th></tr></thead>
+        <tbody>${list || `<tr><td colspan="4" class="muted">还没有成本记录</td></tr>`}</tbody>
+        <tfoot><tr><td class="r">材料</td><td class="r">${fmt(d.material)}</td><td></td><td></td></tr>
+          <tr><td class="r">人工</td><td class="r">${fmt(d.labor)}</td><td></td><td></td></tr>
+          <tr><td class="r">制造费用</td><td class="r">${fmt(d.overhead)}</td><td></td><td></td></tr>
+          <tr><td class="r">合计</td><td class="r">${fmt(d.total)}</td><td></td><td></td></tr></tfoot>
+      </table>
+      <div class="toolbar">
+        <select id="rwc-kind">${(d.kinds || [])
+          .map((k) => `<option value="${k.code}">${esc(k.label)}</option>`)
+          .join("")}</select>
+        <input id="rwc-amt" style="width:110px" placeholder="金额" />
+        <input id="rwc-memo" style="width:180px" placeholder="备注" />
+        <button class="btn primary sm" id="rwc-add">追加成本</button>
+        <button class="btn ghost sm" id="rwc-close">关闭</button>
+      </div>
+      <div class="muted" style="font-size:12px">已结案的单不许再改成本：结案意味着这批返工的钱已经认下来了</div>`);
+    $("#rwc-close").addEventListener("click", closeModal);
+    $("#rwc-add").addEventListener("click", async () => {
+      const amt = num($("#rwc-amt").value);
+      if (!(amt > 0)) return toast("金额必须大于 0", "err");
+      try {
+        await postJson(`/rework/${id}/costs`, {
+          cost_type: $("#rwc-kind").value,
+          amount: $("#rwc-amt").value,
+          memo: $("#rwc-memo").value,
+        });
+        closeModal();
+        toast("已追加");
+        load();
+      } catch (e) {
+        toast(e.message, "err");
+      }
+    });
+    for (const b of $all("[data-cost-del]")) {
+      b.addEventListener("click", async () => {
+        try {
+          await api(`/rework/costs/${b.dataset.costDel}`, { method: "DELETE" });
+          closeModal();
+          toast("已删除");
+          load();
+        } catch (e) {
+          toast(e.message, "err");
+        }
+      });
+    }
+  };
+
+  $("#rw-reload")?.addEventListener("click", load);
+  $("#rw-print")?.addEventListener("click", () => {
+    const el = $("#rw-list");
+    if (!el.querySelector("table")) return toast("先查询出数据再打印");
+    printPreview("返工成本单", el);
+  });
+  load();
+}
+
+// 带千分位的金额字符串 → 数字（列表里求和、比较都用它）
+function num(v) {
+  if (v === null || v === undefined) return 0;
+  const n = Number(String(v).replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function kindLabel(kinds, code) {
+  const k = (kinds || []).find((x) => x.code === code);
+  return k ? k.label : code;
 }
 
 (async function boot() {
