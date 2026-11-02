@@ -166,3 +166,123 @@ async fn profit_sheet_rows_then_report_by_account() {
     let msg = body_string(resp).await;
     assert!(msg.contains("合计会翻倍"), "错误要说清后果：{msg}");
 }
+
+#[tokio::test]
+async fn profit_sheet_auto_map_previews_then_applies() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // ① 先按表建好科目（每行一个同名末级科目）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/profit-sheet/create-accounts",
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // ② 把「电费」这一行的科目清掉（模拟：厂里原来把电费记在别的科目上，现在想挂回自己那个）
+    let v = get_json(&state, &sid, "/api/profit-sheet").await;
+    let rows = v["rows"].as_array().unwrap().clone();
+    let elec = rows.iter().find(|r| r["label"] == "电费").unwrap().clone();
+    let elec_id = elec["id"].as_i64().unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/profit-sheet",
+            &sid,
+            serde_json::json!({
+                "id": elec_id, "seq": 4, "label": "电费", "hint": "",
+                "kind": "expense", "accounts": "", "disabled": false
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // ③ 预览：只算不写
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/profit-sheet/auto-map",
+            &sid,
+            serde_json::json!({ "apply": false }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["applied"], false);
+    assert_eq!(v["touched"], 0);
+    let auto = v["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["label"] == "电费")
+        .unwrap()
+        .clone();
+    let added = auto["added"].as_array().unwrap();
+    // 标准科目表里本来就有「510103 水电费」，加上刚建的「电费」，两个都该挂上
+    assert!(!added.is_empty(), "电费这一行应该能找到科目：{added:?}");
+    let names: Vec<String> = added
+        .iter()
+        .map(|a| a[1].as_str().unwrap_or("").to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n.contains("电费")),
+        "要挂上名字里带电费的那个：{names:?}"
+    );
+    let elec_code = added[0][0].as_str().unwrap().to_string();
+    assert!(elec_code.starts_with("5101"), "{elec_code}");
+
+    // 预览没写库
+    let v = get_json(&state, &sid, "/api/profit-sheet").await;
+    let still = v["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["label"] == "电费")
+        .unwrap()
+        .clone();
+    assert_eq!(still["accounts"], "", "预览不许改数据");
+
+    // ④ 落地
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/profit-sheet/auto-map",
+            &sid,
+            serde_json::json!({ "apply": true }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["applied"], true);
+    assert!(v["touched"].as_u64().unwrap() >= 1);
+
+    let v = get_json(&state, &sid, "/api/profit-sheet").await;
+    let done = v["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["label"] == "电费")
+        .unwrap()
+        .clone();
+    let done_codes: Vec<&str> = done["accounts"].as_str().unwrap().split(',').collect();
+    assert!(
+        done_codes.contains(&elec_code.as_str()),
+        "落地后这一行要挂着 {elec_code}：{done_codes:?}"
+    );
+
+    // ⑤ 再跑一次不再改动（幂等）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/profit-sheet/auto-map",
+            &sid,
+            serde_json::json!({ "apply": true }),
+        ))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["touched"], 0, "挂好的行不该再动");
+}

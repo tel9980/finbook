@@ -425,6 +425,7 @@ pub fn router(state: Arc<WebState>) -> Router {
             "/api/profit-sheet/create-accounts",
             post(create_profit_sheet_accounts),
         )
+        .route("/api/profit-sheet/auto-map", post(auto_map_profit_sheet))
         .route("/api/profit-sheet/reset", post(reset_profit_sheet))
         .route("/api/profit-sheet/:id", delete(delete_profit_sheet_row))
         .route(

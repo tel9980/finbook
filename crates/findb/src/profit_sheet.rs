@@ -325,6 +325,186 @@ pub fn create_accounts(db: &Db) -> DbResult<(usize, usize)> {
     Ok((created, touched))
 }
 
+/// 每一行按什么关键字去找现有科目。
+///
+/// 名字取自厂里那张表，关键字取得比行名宽一点（「货车运输费」对「运输/运费/加油」），
+/// 但**不用单字**——「电」会把电话费、电焊机都捞进来。
+const KEYWORDS: &[(&str, &[&str])] = &[
+    ("厂租", &["厂租", "房租", "租金", "租赁"]),
+    ("电费", &["电费", "水电"]),
+    ("水费", &["水费", "水电"]),
+    ("化工", &["化工", "化学", "药剂"]),
+    ("染料", &["染料", "封闭剂", "除油"]),
+    ("工资", &["工资", "薪酬", "薪金"]),
+    ("包装", &["包装"]),
+    ("货车运输", &["运输", "运费", "加油", "油费", "车辆"]),
+    ("外发加工", &["加工费", "委外", "外协", "外发"]),
+    ("税金", &["税金", "税费", "附加", "增值税"]),
+    (
+        "社保",
+        &["社保", "社会保险", "养老", "医疗", "工伤", "失业"],
+    ),
+    ("业务费", &["业务招待", "招待", "业务费"]),
+    ("办公用品", &["办公"]),
+    ("维修", &["维修", "修理", "配件"]),
+    ("挂具", &["挂具", "夹具", "模具"]),
+    ("收入", &["主营业务收入", "其他业务收入", "收入"]),
+];
+
+/// 一行最多自动挂几个科目。挂太多多半是关键字太宽（比如「材料」把化工和包装都捞进来）。
+const MAX_PER_ROW: usize = 3;
+
+fn keywords_for(label: &str) -> Vec<String> {
+    let l = label
+        .replace("支出：", "")
+        .replace("收入：", "")
+        .trim()
+        .to_string();
+    for (key, kws) in KEYWORDS {
+        if l.contains(key) {
+            return kws.iter().map(|s| s.to_string()).collect();
+        }
+    }
+    // 认不出来的行名，就拿行名本身去找
+    vec![l]
+}
+
+/// 自动挂科目：一行结果
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct AutoRow {
+    pub seq: i64,
+    pub label: String,
+    /// 这次要挂上去的科目（编码, 名称）
+    pub added: Vec<(String, String)>,
+    /// 本来就有科目、这次没动的
+    pub kept: String,
+    /// 给用户看的一句话
+    pub note: String,
+}
+
+/// 自动挂科目的结果
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct AutoMap {
+    pub rows: Vec<AutoRow>,
+    /// 没找到对应科目的行（序号, 行名）
+    pub unmatched: Vec<(i64, String)>,
+    /// 这次改了几行
+    pub touched: usize,
+    /// 真的写库了吗（false = 只是预览）
+    pub applied: bool,
+}
+
+/// 按**现有科目名**把这张表的行挂上科目。
+///
+/// 为什么先预览再落地：猜错了不会报错，只会让某一行金额偏大、另一行偏小，
+/// 合计还是对的——这种错最难发现。所以 `apply = false` 只算不写，
+/// 界面上先把「哪行挂哪几个科目」摆出来，人看过再点应用。
+///
+/// 三条硬规则：
+/// 1. 只认**末级**科目（挂上级等于把下级一起算进来，会和别的行重复）；
+/// 2. 一个科目只能挂一行（`used` 集合，含本来就被别人挂着的）；
+/// 3. 支出行只认成本/费用类、收入行只认收入类（不然「应收账款」会被「收入」两个字捞进来）。
+pub fn auto_map(db: &Db, apply: bool) -> DbResult<AutoMap> {
+    ensure_defaults(db)?;
+    let chart = crate::accounts::chart(db)?;
+    let all = crate::accounts::list(db)?;
+    let rows = list(db)?;
+
+    // 已经被任何一行挂着的科目，不能再挂到别处
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    for r in &rows {
+        for c in r.codes() {
+            used.insert(c);
+        }
+    }
+
+    let mut out = AutoMap {
+        rows: Vec::new(),
+        unmatched: Vec::new(),
+        touched: 0,
+        applied: apply,
+    };
+    for mut row in rows {
+        if row.disabled {
+            continue;
+        }
+        if !row.codes().is_empty() {
+            out.rows.push(AutoRow {
+                seq: row.seq,
+                label: row.label.clone(),
+                added: Vec::new(),
+                kept: row.accounts.clone(),
+                note: "已经有科目，没动".to_string(),
+            });
+            continue;
+        }
+        let kws = keywords_for(&row.label);
+        let want_income = row.is_revenue();
+        let mut added: Vec<(String, String)> = Vec::new();
+        // 名字像、但已经被别的行挂走的科目：单独记下来，好告诉用户「不是没有，是被占了」
+        let mut busy: Vec<(String, String)> = Vec::new();
+        for a in &all {
+            if !chart.is_leaf(&a.code) {
+                continue;
+            }
+            let cat_ok = if want_income {
+                a.category == AcctCategory::Income
+            } else {
+                matches!(a.category, AcctCategory::Cost | AcctCategory::Expense)
+            };
+            if !cat_ok || !kws.iter().any(|k| a.name.contains(k.as_str())) {
+                continue;
+            }
+            if used.contains(&a.code) {
+                busy.push((a.code.clone(), a.name.clone()));
+            } else {
+                added.push((a.code.clone(), a.name.clone()));
+            }
+        }
+        if added.is_empty() {
+            let note = if busy.is_empty() {
+                "现有科目里没有像它的名字：点「按这张表生成科目」新建，或手工填".to_string()
+            } else {
+                let names: Vec<String> = busy.iter().map(|(c, n)| format!("{c} {n}")).collect();
+                format!(
+                    "{} 已经挂在别的行上了：一个科目只能挂一行，要分开看就得拆科目",
+                    names.join("、")
+                )
+            };
+            if busy.is_empty() {
+                out.unmatched.push((row.seq, row.label.clone()));
+            }
+            out.rows.push(AutoRow {
+                seq: row.seq,
+                label: row.label.clone(),
+                added: Vec::new(),
+                kept: String::new(),
+                note,
+            });
+            continue;
+        }
+        added.sort_by(|a, b| a.0.cmp(&b.0));
+        added.truncate(MAX_PER_ROW);
+        let codes: Vec<String> = added.iter().map(|(c, _)| c.clone()).collect();
+        row.accounts = codes.join(",");
+        if apply {
+            save(db, &mut row)?;
+            out.touched += 1;
+        }
+        for c in &codes {
+            used.insert(c.clone());
+        }
+        out.rows.push(AutoRow {
+            seq: row.seq,
+            label: row.label.clone(),
+            added,
+            kept: String::new(),
+            note: format!("挂上 {} 个科目", codes.len()),
+        });
+    }
+    Ok(out)
+}
+
 /// 算出整张表。
 pub fn report(db: &Db, period: Period) -> DbResult<Sheet> {
     use crate::balances::{BalanceQuery, BalanceSnapshot};
@@ -515,6 +695,62 @@ mod tests {
         assert_eq!(s.unmapped, 0);
         // 收入行带月总产量
         assert!(line(&s, "收入：月总产量").qty.is_some());
+    }
+
+    #[test]
+    fn 自动挂科目按现有科目名找末级科目且不重复() {
+        let db = crate::tests::mem();
+        let preview = auto_map(&db, false).unwrap();
+        assert!(!preview.applied);
+        assert_eq!(preview.touched, 0);
+
+        let find = |seq: i64| preview.rows.iter().find(|r| r.seq == seq).unwrap().clone();
+
+        // 电费 → 510103 水电费（末级）
+        let e = find(4);
+        assert_eq!(e.added.len(), 1, "电费只该挂一个：{:?}", e.added);
+        assert_eq!(e.added[0].0, "510103");
+
+        // 水费 → 名字像的只有同一个「水电费」，已被电费占了：不许重复挂
+        let w = find(5);
+        assert!(w.added.is_empty());
+        assert!(w.note.contains("已经挂在别的行"), "{}", w.note);
+
+        // 工资 → 510101 / 660101 / 660201 三个「工资」，最多挂 3 个
+        let g = find(8);
+        assert_eq!(g.added.len(), 3, "{:?}", g.added);
+        assert_eq!(g.added[0].0, "510101");
+
+        // 化工这类标准表里根本没有的名字，不许硬塞一个「其他」
+        assert!(find(6).added.is_empty());
+        assert!(preview
+            .unmatched
+            .iter()
+            .any(|(s, l)| *s == 6 && l == "化工"));
+
+        // 预览不写库
+        assert!(list(&db)
+            .unwrap()
+            .iter()
+            .all(|r| r.seq == 1 || r.accounts.is_empty()));
+
+        // 落地
+        let applied = auto_map(&db, true).unwrap();
+        assert!(applied.applied);
+        assert!(applied.touched >= 5, "{}", applied.touched);
+        let rows = list(&db).unwrap();
+        let electric = rows.iter().find(|r| r.seq == 4).unwrap();
+        assert_eq!(electric.accounts, "510103");
+        // 再跑一次：已经挂好的行不动（幂等）
+        assert_eq!(auto_map(&db, true).unwrap().touched, 0);
+
+        // 全局不重复
+        let mut seen = BTreeSet::new();
+        for r in &rows {
+            for c in r.codes() {
+                assert!(seen.insert(c.clone()), "科目 {c} 挂了两次");
+            }
+        }
     }
 
     #[test]

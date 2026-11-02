@@ -6402,6 +6402,7 @@ async function viewProfitSheet(main) {
       <label>期间 <input id="ps-period" value="${esc(state.current)}" style="width:90px" /></label>
       <button class="btn primary" id="ps-run">出表</button>
       <button class="btn ghost sm" id="ps-accounts" title="给还没挂科目的行，在 5101 制造费用下建一个同名末级科目">按这张表生成科目</button>
+      <button class="btn ghost sm" id="ps-auto" title="按你现有科目的名字，把这张表的行挂上去（先给你看，再决定）">自动挂科目</button>
       <button class="btn ghost sm" id="ps-edit">编辑行</button>
       <button class="btn ghost sm" id="ps-print">打印预览</button>
     </div>
@@ -6437,7 +6438,7 @@ async function viewProfitSheet(main) {
       </tfoot></table>`;
     const n = last.unmapped || 0;
     $("#ps-warn").innerHTML = n
-      ? `<span class="neg">有 ${n} 行还没挂科目</span>：你的账里这些费用记在哪个科目？点「按这张表生成科目」自动建，或点「编辑行」手工填。`
+      ? `<span class="neg">有 ${n} 行还没挂科目</span>：你的账里这些费用记在哪个科目？点「自动挂科目」按现有科目名对一遍，或「按这张表生成科目」新建，也可以点「编辑行」手工填。`
       : "";
   };
 
@@ -6533,6 +6534,41 @@ async function viewProfitSheet(main) {
       await loadRows();
       await run();
     } catch (e) { toast(e.message, "err"); }
+  });
+  // 自动挂科目：先预览（不写库），人看过再落地。
+  // 猜错了不会报错，只会让某一行金额偏大、另一行偏小，合计还是对的——这种错最难发现。
+  $("#ps-auto").addEventListener("click", async () => {
+    let preview;
+    try {
+      preview = await postJson("/profit-sheet/auto-map", { apply: false });
+    } catch (e) { toast(e.message, "err"); return; }
+    const rows = preview.rows || [];
+    const added = rows.filter((r) => (r.added || []).length);
+    const body = rows.map((r) => {
+      const add = (r.added || []).map((a) => `${esc(a[0])} ${esc(a[1])}`).join("<br>");
+      return `<tr><td class="r">${r.seq}</td><td>${esc(r.label)}</td>
+        <td class="mono">${add || "—"}</td>
+        <td class="muted">${esc(r.note || "")}</td></tr>`;
+    }).join("");
+    modal(`<h3>自动挂科目（先看一眼）</h3>
+      <div class="muted" style="margin-bottom:8px">按你现有科目的名字去对这张表的行。同一科目只挂一行；
+        标准科目表里没有的名字（化工、染料封闭剂…）会留空，等你自己建。</div>
+      <table class="grid"><thead><tr><th class="r" style="width:60px">序号</th><th>科目</th>
+        <th style="width:220px">将挂的科目</th><th>说明</th></tr></thead><tbody>${body}</tbody></table>
+      <div class="toolbar" style="margin-top:12px;justify-content:flex-end">
+        <button class="btn ghost" id="ps-auto-cancel">取消</button>
+        <button class="btn primary" id="ps-auto-ok" ${added.length ? "" : "disabled"}>应用这 ${added.length} 行</button>
+      </div>`, true);
+    $("#ps-auto-cancel").addEventListener("click", () => closeModal());
+    $("#ps-auto-ok").addEventListener("click", async () => {
+      try {
+        const r = await postJson("/profit-sheet/auto-map", { apply: true });
+        closeModal();
+        toast(`挂好 ${r.touched} 行${(r.unmatched || []).length ? `，还有 ${r.unmatched.length} 行没找到科目` : ""}`);
+        await loadRows();
+        await run();
+      } catch (e) { toast(e.message, "err"); }
+    });
   });
   $("#ps-edit").addEventListener("click", () => {
     const box = $("#ps-rows");

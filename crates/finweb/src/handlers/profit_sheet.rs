@@ -119,6 +119,35 @@ pub(super) async fn create_profit_sheet_accounts(
     ))
 }
 
+#[derive(serde::Deserialize)]
+pub(super) struct AutoMapReq {
+    /// false = 只预览（不写库）；true = 落地
+    #[serde(default)]
+    pub apply: bool,
+}
+
+/// 按现有科目名自动挂科目（先预览、再落地）
+pub(super) async fn auto_map_profit_sheet(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<AutoMapReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let _ = &state;
+    user.require(Perm::AccountEdit)?;
+    let db = &user.db;
+    let r = findb::profit_sheet::auto_map(db, req.apply)?;
+    if req.apply {
+        db.log(
+            user.username(),
+            "利润分析表",
+            "自动挂科目",
+            &format!("改动 {} 行，没找到 {} 行", r.touched, r.unmatched.len()),
+        )?;
+    }
+    let v = serde_json::to_value(&r).unwrap_or(serde_json::Value::Null);
+    Ok(Json(v))
+}
+
 /// 恢复默认行
 pub(super) async fn reset_profit_sheet(
     State(state): State<Arc<WebState>>,

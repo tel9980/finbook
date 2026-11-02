@@ -8,7 +8,7 @@
 
 use egui::{RichText, Ui};
 use fincore::{Money, Period};
-use findb::profit_sheet::{self, Row, Sheet};
+use findb::profit_sheet::{self, AutoMap, Row, Sheet};
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -28,6 +28,8 @@ pub struct ProfitSheetView {
     pub ed_revenue: bool,
     pub err: String,
     pub dirty: bool,
+    /// 自动挂科目的预览（Some 时开着窗口）
+    pub auto: Option<AutoMap>,
     key: String,
 }
 
@@ -45,6 +47,7 @@ impl Default for ProfitSheetView {
             ed_revenue: false,
             err: String::new(),
             dirty: true,
+            auto: None,
             key: String::new(),
         }
     }
@@ -136,6 +139,111 @@ impl ProfitSheetView {
         }
     }
 
+    /// 按现有科目名先算一遍（不写库）
+    fn preview_auto(&mut self, ctx: &mut AppCtx<'_>) {
+        match profit_sheet::auto_map(ctx.db(), false) {
+            Ok(m) => {
+                self.err.clear();
+                self.auto = Some(m);
+            }
+            Err(e) => self.err = e.to_string(),
+        }
+    }
+
+    fn apply_auto(&mut self, ctx: &mut AppCtx<'_>) {
+        match profit_sheet::auto_map(ctx.db(), true) {
+            Ok(m) => {
+                self.err.clear();
+                ctx.info(format!(
+                    "挂好 {} 行，还有 {} 行没找到科目",
+                    m.touched,
+                    m.unmatched.len()
+                ));
+                self.auto = None;
+                self.dirty = true;
+            }
+            Err(e) => self.err = e.to_string(),
+        }
+    }
+
+    /// 预览窗口：一行一行摆出来，人看过再点应用。
+    ///
+    /// 猜错了不会报错，只会让某一行金额偏大、另一行偏小，合计还是对的——所以不能直接落地。
+    fn show_auto_window(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        let Some(m) = self.auto.clone() else { return };
+        let mut open = true;
+        let mut apply = false;
+        let mut cancel = false;
+        egui::Window::new("自动挂科目（先看一眼）")
+            .open(&mut open)
+            .default_width(720.0)
+            .show(ui.ctx(), |ui| {
+                ui.label(
+                    RichText::new(
+                        "按你现有科目的名字去对这张表的行。同一科目只挂一行；标准科目表里没有的名字（化工、染料封闭剂…）会留空，等你自己建。",
+                    )
+                    .weak(),
+                );
+                ui.add_space(4.0);
+                let cols = [
+                    widgets::TCol::new("序号", 50.0).right(),
+                    widgets::TCol::new("科目", 140.0),
+                    widgets::TCol::new("将挂的科目", 260.0),
+                    widgets::TCol::new("说明", 240.0),
+                ];
+                let rows = m.rows.clone();
+                widgets::grid(ui, "profit_sheet_auto", &cols, rows.len(), 22.0, |i, c, ui| {
+                    let Some(r) = rows.get(i) else { return };
+                    match c {
+                        0 => {
+                            ui.label(r.seq.to_string());
+                        }
+                        1 => {
+                            ui.label(&r.label);
+                        }
+                        2 => {
+                            if r.added.is_empty() {
+                                if r.kept.is_empty() {
+                                    ui.label(RichText::new("—").weak());
+                                } else {
+                                    ui.label(RichText::new(format!("已有 {}", r.kept)).weak());
+                                }
+                            } else {
+                                let t = r
+                                    .added
+                                    .iter()
+                                    .map(|(c, n)| format!("{c} {n}"))
+                                    .collect::<Vec<_>>()
+                                    .join("、");
+                                ui.label(RichText::new(t).monospace());
+                            }
+                        }
+                        _ => {
+                            ui.label(RichText::new(&r.note).weak());
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let n = m.rows.iter().filter(|r| !r.added.is_empty()).count();
+                    if ui
+                        .add_enabled(n > 0, egui::Button::new(format!("应用这 {n} 行")))
+                        .clicked()
+                    {
+                        apply = true;
+                    }
+                    if ui.button("取消").clicked() {
+                        cancel = true;
+                    }
+                });
+            });
+        if apply {
+            self.apply_auto(ctx);
+        } else if cancel || !open {
+            self.auto = None;
+        }
+    }
+
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         self.reload(ctx);
         let p = self.period(ctx);
@@ -171,6 +279,13 @@ impl ProfitSheetView {
                 .clicked()
             {
                 self.create_accounts(ctx);
+            }
+            if ui
+                .button("自动挂科目")
+                .on_hover_text("按你现有科目的名字去对这张表的行：先给你看，再决定要不要落地")
+                .clicked()
+            {
+                self.preview_auto(ctx);
             }
             ui.separator();
             if let Some(mode) = crate::views::export::export_print_controls(ui, ctx) {
@@ -418,6 +533,8 @@ impl ProfitSheetView {
         if let Some(i) = pick {
             self.pick(i);
         }
+
+        self.show_auto_window(ctx, ui);
 
         if self.sel.is_some() {
             ui.add_space(8.0);

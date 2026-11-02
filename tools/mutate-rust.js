@@ -1403,6 +1403,30 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "consign::tests::交货单挂销售订单并算出交货进度"],
   },
   {
+    // 自动挂科目不管科目是否已被别的行占用：同一科目挂两行，合计翻倍。
+    name: "㊾ 自动挂科目不管科目已被占用",
+    file: "crates/findb/src/profit_sheet.rs",
+    from: "            if used.contains(&a.code) {",
+    to: "            if false {",
+    cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::自动挂科目按现有科目名找末级科目且不重复"],
+  },
+  {
+    // 支出行也认资产/负债类科目：「应付职工薪酬」会被「薪酬」两个字捞进来。
+    name: "㊾ 自动挂科目把负债类科目挂到支出行",
+    file: "crates/findb/src/profit_sheet.rs",
+    from: "                matches!(a.category, AcctCategory::Cost | AcctCategory::Expense)",
+    to: "                true",
+    cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::自动挂科目按现有科目名找末级科目且不重复"],
+  },
+  {
+    // 预览也写库：人还没看，行就被改掉了。
+    name: "㊾ 自动挂科目预览也写库",
+    file: "crates/findb/src/profit_sheet.rs",
+    from: "        if apply {\n            save(db, &mut row)?;",
+    to: "        if true {\n            save(db, &mut row)?;",
+    cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::自动挂科目按现有科目名找末级科目且不重复"],
+  },
+  {
     // 收入行也按借方取数：收入会显示成负数，净利润整张表跟着错。
     name: "㊽ 利润分析表收入行按借方取数",
     file: "crates/findb/src/profit_sheet.rs",
