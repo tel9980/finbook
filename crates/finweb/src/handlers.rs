@@ -566,6 +566,12 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/prod/op/dispatch", post(dispatch_prod_op))
         .route("/api/rework", get(list_rework).post(save_rework))
         .route("/api/rework/report", get(rework_report))
+        .route("/api/rework/analysis", get(rework_analysis))
+        .route(
+            "/api/rework/reasons",
+            get(list_rework_reasons).post(save_rework_reason),
+        )
+        .route("/api/rework/reasons/:id", delete(delete_rework_reason))
         .route("/api/rework/:id", get(get_rework).delete(delete_rework))
         .route("/api/rework/:id/costs", post(add_rework_cost))
         .route("/api/rework/costs/:id", delete(delete_rework_cost))

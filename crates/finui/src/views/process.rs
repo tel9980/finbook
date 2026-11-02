@@ -1942,7 +1942,14 @@ pub struct ReworkView {
     pub nb_qty: String,
     pub nb_date: String,
     pub nb_reason: String,
+    /// 原因分类编码（空 = 未分类）
+    pub nb_code: String,
+    /// 责任部门 / 班组
+    pub nb_dept: String,
     pub nb_memo: String,
+    /// 原因分类字典 + 本期按原因/按部门汇总
+    pub reasons: Vec<rework::Reason>,
+    pub analysis: Option<rework::Analysis>,
     // 追加成本
     pub nb_kind: String,
     pub nb_amount: String,
@@ -1964,7 +1971,11 @@ impl Default for ReworkView {
             nb_qty: String::new(),
             nb_date: String::new(),
             nb_reason: String::new(),
+            nb_code: String::new(),
+            nb_dept: String::new(),
             nb_memo: String::new(),
+            reasons: Vec::new(),
+            analysis: None,
             nb_kind: "material".to_string(),
             nb_amount: String::new(),
             nb_cost_memo: String::new(),
@@ -2006,6 +2017,17 @@ impl ReworkView {
             Ok(v) => self.rows = v,
             Err(e) => {
                 self.rows.clear();
+                self.err = e.to_string();
+            }
+        }
+        match rework::reason_list(ctx.db()) {
+            Ok(v) => self.reasons = v,
+            Err(e) => self.err = e.to_string(),
+        }
+        match rework::analyze(ctx.db(), p, p) {
+            Ok(a) => self.analysis = Some(a),
+            Err(e) => {
+                self.analysis = None;
                 self.err = e.to_string();
             }
         }
@@ -2061,7 +2083,9 @@ impl ReworkView {
             widgets::TCol::new("来源订单", 120.0),
             widgets::TCol::new("物料", 150.0),
             widgets::TCol::new("返工数量", 80.0).right(),
+            widgets::TCol::new("分类", 80.0),
             widgets::TCol::new("原因", 140.0),
+            widgets::TCol::new("部门", 90.0),
             widgets::TCol::new("状态", 70.0),
             widgets::TCol::new("材料", 90.0).right(),
             widgets::TCol::new("人工", 90.0).right(),
@@ -2086,13 +2110,15 @@ impl ReworkView {
                 2 => txt(ui, &r.po_no),
                 3 => txt(ui, format!("{} {}", r.item_code, r.item_name)),
                 4 => widgets::amount_label(ui, r.qty),
-                5 => txt(ui, &r.reason),
-                6 => txt(ui, rework::status_label(&r.status)),
-                7 => widgets::amount_label(ui, r.material),
-                8 => widgets::amount_label(ui, r.labor),
-                9 => widgets::amount_label(ui, r.overhead),
-                10 => widgets::amount_label(ui, r.total),
-                11 => {
+                5 => txt(ui, &r.reason_label),
+                6 => txt(ui, &r.reason),
+                7 => txt(ui, if r.dept.is_empty() { "—" } else { &r.dept }),
+                8 => txt(ui, rework::status_label(&r.status)),
+                9 => widgets::amount_label(ui, r.material),
+                10 => widgets::amount_label(ui, r.labor),
+                11 => widgets::amount_label(ui, r.overhead),
+                12 => widgets::amount_label(ui, r.total),
+                13 => {
                     if r.ratio.is_empty() {
                         txt(ui, "—")
                     } else {
@@ -2102,6 +2128,54 @@ impl ReworkView {
                 _ => {}
             }
         });
+        // 按原因 / 按部门汇总：哪种原因最费钱、哪个班组返工最多
+        if let Some(a) = self.analysis.clone() {
+            ui.separator();
+            txt(
+                ui,
+                RichText::new(format!(
+                    "返工成本分析：本期 {} 张，合计 {}",
+                    a.count,
+                    a.total.fmt_money()
+                ))
+                .strong(),
+            );
+            for (title, list) in [("按原因", &a.by_reason), ("按责任部门", &a.by_dept)] {
+                txt(ui, RichText::new(title).weak());
+                let cols = [
+                    widgets::TCol::new("分组", 120.0),
+                    widgets::TCol::new("张数", 60.0).right(),
+                    widgets::TCol::new("返工件数", 90.0).right(),
+                    widgets::TCol::new("材料", 90.0).right(),
+                    widgets::TCol::new("人工", 90.0).right(),
+                    widgets::TCol::new("制造费用", 90.0).right(),
+                    widgets::TCol::new("合计", 100.0).right(),
+                    widgets::TCol::new("占比", 70.0).right(),
+                ];
+                let list = list.clone();
+                let id = format!("rework_an_{title}");
+                widgets::grid(ui, &id, &cols, list.len(), 22.0, |i, c, ui| {
+                    let b = &list[i];
+                    match c {
+                        0 => txt(ui, &b.label),
+                        1 => txt(ui, b.count.to_string()),
+                        2 => widgets::amount_label(ui, b.qty),
+                        3 => widgets::amount_label(ui, b.material),
+                        4 => widgets::amount_label(ui, b.labor),
+                        5 => widgets::amount_label(ui, b.overhead),
+                        6 => widgets::amount_label(ui, b.total),
+                        _ => {
+                            if b.share.is_empty() {
+                                txt(ui, "—")
+                            } else {
+                                txt(ui, format!("{}%", b.share))
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
         if let Some(id) = pick {
             self.sel = Some(id);
             match rework::costs(ctx.db(), id) {
@@ -2278,7 +2352,7 @@ impl ReworkView {
 
     fn show_new_window(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         let mut open = self.new_open;
-        let mut pending: Option<(i64, String, String, String, String)> = None;
+        let mut pending: Option<(i64, String, String, String, String, String, String)> = None;
         egui::Window::new("新建返工单")
             .collapsible(false)
             .resizable(false)
@@ -2325,7 +2399,32 @@ impl ReworkView {
                     widgets::text_input(ui, &mut self.nb_date, 110.0, "2026-01-20");
                 });
                 ui.horizontal(|ui| {
-                    txt(ui, "原因");
+                    txt(ui, "原因分类");
+                    let cur = self
+                        .reasons
+                        .iter()
+                        .find(|r| r.code == self.nb_code)
+                        .map(|r| r.name.clone())
+                        .unwrap_or_else(|| rework::UNCLASSIFIED.to_string());
+                    egui::ComboBox::from_id_salt("rework_reason_code")
+                        .width(120.0)
+                        .selected_text(cur)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut self.nb_code,
+                                String::new(),
+                                rework::UNCLASSIFIED,
+                            );
+                            let list = self.reasons.clone();
+                            for r in list.iter().filter(|r| !r.disabled) {
+                                ui.selectable_value(&mut self.nb_code, r.code.clone(), &r.name);
+                            }
+                        });
+                    txt(ui, "责任部门");
+                    widgets::text_input(ui, &mut self.nb_dept, 120.0, "氧化一班");
+                });
+                ui.horizontal(|ui| {
+                    txt(ui, "原因备注");
                     widgets::text_input(ui, &mut self.nb_reason, 220.0, "挂具印痕 / 膜厚不足");
                 });
                 ui.horizontal(|ui| {
@@ -2339,6 +2438,8 @@ impl ReworkView {
                             self.nb_qty.clone(),
                             self.nb_date.clone(),
                             self.nb_reason.clone(),
+                            self.nb_code.clone(),
+                            self.nb_dept.clone(),
                             self.nb_memo.clone(),
                         ));
                     }
@@ -2348,7 +2449,7 @@ impl ReworkView {
                 });
             });
         self.new_open = open;
-        let Some((po_id, qty, date, reason, memo)) = pending else {
+        let Some((po_id, qty, date, reason, code, dept, memo)) = pending else {
             return;
         };
         let date = match NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d") {
@@ -2361,6 +2462,8 @@ impl ReworkView {
         let mut o = rework::ReworkOrder::new(po_id, date);
         o.qty = widgets::parse_money(&qty);
         o.reason = reason;
+        o.reason_code = code.trim().to_uppercase();
+        o.dept = dept.trim().to_string();
         o.memo = memo;
         match rework::save(ctx.db(), &mut o, &ctx.user().username) {
             Ok(id) => {
@@ -2373,6 +2476,7 @@ impl ReworkView {
                 self.new_open = false;
                 self.nb_qty.clear();
                 self.nb_reason.clear();
+                self.nb_dept.clear();
                 self.nb_memo.clear();
                 self.dirty = true;
                 self.invalidate();

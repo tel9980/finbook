@@ -14,6 +14,10 @@
 //!   再往里加钱会让上个月看过的报表变样。
 //! - 期间已结账的返工单不许改（与工资表那道闸同一个理由）。
 //!
+//! 原因与责任：`reason` 是自由文本备注，`reason_code` 指向 `rework_reason` 小字典
+//! （没有字典，同一件事会写成「槽液不好」「槽液」「槽液问题」三行，汇不出总额），
+//! `dept` 记责任部门/班组。有了这两个字段才能回答「哪种原因最费钱、哪个班组返工最多」。
+//!
 //! 本模块**不生成凭证**：返工是内部成本归集与差异分析，材料/人工的真实发生额
 //! 在领料、报工、工资那边已经入过账，这里再出一次就是重复入账。
 
@@ -59,6 +63,270 @@ pub fn status_label(status: &str) -> &'static str {
         .unwrap_or("进行中")
 }
 
+/// 未分类/未指定时的展示名（空编码不是错误，是一堆「谁都没填」的单据）
+pub const UNCLASSIFIED: &str = "未分类";
+pub const NO_DEPT: &str = "未指定";
+
+/// 返工原因分类（小字典）
+///
+/// 为什么要有字典：`reason` 是自由文本，「槽液不好」「槽液」「槽液问题」会变成三行，
+/// 按原因汇总就等于没汇总。字典只做规范化，具体细节仍写在 `reason` 备注里。
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct Reason {
+    pub id: i64,
+    pub code: String,
+    pub name: String,
+    pub disabled: bool,
+    pub memo: String,
+}
+
+const R_COLS: &str = "id,code,name,disabled,memo";
+
+fn map_reason(r: &rusqlite::Row<'_>) -> rusqlite::Result<Reason> {
+    Ok(Reason {
+        id: r.get(0)?,
+        code: r.get(1)?,
+        name: r.get(2)?,
+        disabled: r.get::<_, i64>(3)? != 0,
+        memo: r.get(4)?,
+    })
+}
+
+/// 原因分类列表（停用的也返回，界面要能看见并重新启用）
+pub fn reason_list(db: &Db) -> DbResult<Vec<Reason>> {
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {R_COLS} FROM rework_reason ORDER BY disabled, code"
+    ))?;
+    let rows = st.query_map([], map_reason)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+/// 编码 → 名称；报表里把编码翻成中文
+fn reason_names(db: &Db) -> DbResult<std::collections::HashMap<String, String>> {
+    let mut map = std::collections::HashMap::new();
+    for r in reason_list(db)? {
+        map.insert(r.code, r.name);
+    }
+    Ok(map)
+}
+
+fn reason_name(code: &str, names: &std::collections::HashMap<String, String>) -> String {
+    let code = code.trim();
+    if code.is_empty() {
+        return UNCLASSIFIED.to_string();
+    }
+    names
+        .get(code)
+        .cloned()
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| code.to_string())
+}
+
+/// 保存原因分类（code 是主键语义，改名不换码 —— 换码会让历史单据变成「未分类」）
+pub fn reason_save(db: &Db, r: &mut Reason) -> DbResult<i64> {
+    let code = r.code.trim().to_uppercase();
+    let name = r.name.trim();
+    if code.is_empty() {
+        return Err(invalid("原因分类编码必填"));
+    }
+    if name.is_empty() {
+        return Err(invalid("原因分类名称必填"));
+    }
+    let tx = db.write_tx()?;
+    let id = if r.id > 0 {
+        tx.execute(
+            "UPDATE rework_reason SET code=?2,name=?3,disabled=?4,memo=?5 WHERE id=?1",
+            rusqlite::params![r.id, code, name, r.disabled as i64, r.memo.trim()],
+        )?;
+        r.id
+    } else {
+        let hit: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM rework_reason WHERE code=?1",
+                rusqlite::params![code],
+                |x| x.get(0),
+            )
+            .optional()?;
+        if let Some(id) = hit {
+            // 编码唯一：重复新增当成改名，别让用户对着「约束冲突」发呆
+            tx.execute(
+                "UPDATE rework_reason SET name=?2,disabled=?3,memo=?4 WHERE id=?1",
+                rusqlite::params![id, name, r.disabled as i64, r.memo.trim()],
+            )?;
+            id
+        } else {
+            tx.execute(
+                "INSERT INTO rework_reason(code,name,disabled,memo) VALUES(?1,?2,?3,?4)",
+                rusqlite::params![code, name, r.disabled as i64, r.memo.trim()],
+            )?;
+            tx.last_insert_rowid()
+        }
+    };
+    tx.commit()?;
+    r.id = id;
+    r.code = code;
+    Ok(id)
+}
+
+/// 删除原因分类：已经被返工单引用的不许删（删了历史单据就成「未分类」，报表口径会变）
+pub fn reason_delete(db: &Db, id: i64) -> DbResult<()> {
+    let code: String = db
+        .conn()
+        .query_row(
+            "SELECT code FROM rework_reason WHERE id=?1",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| invalid(format!("原因分类 {id} 不存在")))?;
+    let n: i64 = db.conn().query_row(
+        "SELECT COUNT(*) FROM rework_order WHERE reason_code=?1",
+        rusqlite::params![code],
+        |r| r.get(0),
+    )?;
+    if n > 0 {
+        return Err(blocked(format!(
+            "有 {n} 张返工单用了这个原因分类，删掉它们会变成「未分类」：先改单，或改成停用"
+        )));
+    }
+    let tx = db.write_tx()?;
+    tx.execute(
+        "DELETE FROM rework_reason WHERE id=?1",
+        rusqlite::params![id],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// 分组汇总的一行（按原因 / 按部门共用）
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct Bucket {
+    /// 分组键（原因编码或部门名；空 = 未分类/未指定）
+    pub key: String,
+    pub label: String,
+    /// 返工单张数
+    pub count: i64,
+    /// 返工件数合计
+    pub qty: Money,
+    pub material: Money,
+    pub labor: Money,
+    pub overhead: Money,
+    pub total: Money,
+    /// 占本期返工成本合计的比例（%）；合计为 0 时是空串
+    pub share: String,
+}
+
+/// 返工成本的分组分析：按原因 + 按部门
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct Analysis {
+    pub from: Period,
+    pub to: Period,
+    pub by_reason: Vec<Bucket>,
+    pub by_dept: Vec<Bucket>,
+    /// 本期返工成本合计（两个维度分组的分子分母都以它为基准）
+    pub total: Money,
+    pub count: i64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Acc {
+    count: i64,
+    qty: Money,
+    material: Money,
+    labor: Money,
+    overhead: Money,
+    total: Money,
+}
+
+impl Acc {
+    fn add(&mut self, s: &ReworkStat) {
+        self.count += 1;
+        self.qty += s.qty;
+        self.material += s.material;
+        self.labor += s.labor;
+        self.overhead += s.overhead;
+        self.total += s.total;
+    }
+}
+
+fn bucket_of(key: String, label: String, acc: Acc, grand: Money) -> Bucket {
+    // 分母用「本期返工成本合计」，不是行内金额：0 时给空串而不是 0%
+    let share = if grand.is_zero() {
+        String::new()
+    } else {
+        (acc.total * 100)
+            .checked_div(grand)
+            .unwrap_or(Money::ZERO)
+            .round2()
+            .fmt_plain()
+    };
+    Bucket {
+        key,
+        label,
+        count: acc.count,
+        qty: acc.qty,
+        material: acc.material,
+        labor: acc.labor,
+        overhead: acc.overhead,
+        total: acc.total,
+        share,
+    }
+}
+
+/// 按原因 / 按部门汇总返工成本，金额大的排前面
+///
+/// 空编码/空部门不丢：它们是「谁都没填」的单据，丢掉会让各组合计不等于总合计，
+/// 看上去像算错了。所以单独成一桶「未分类 / 未指定」。
+pub fn analyze(db: &Db, from: Period, to: Period) -> DbResult<Analysis> {
+    let stats = report(db, from, to)?;
+    let mut grand = Money::ZERO;
+    let mut count = 0i64;
+    let mut by_r: std::collections::BTreeMap<String, (String, Acc)> =
+        std::collections::BTreeMap::new();
+    let mut by_d: std::collections::BTreeMap<String, Acc> = std::collections::BTreeMap::new();
+    for s in &stats {
+        grand += s.total;
+        count += 1;
+        let rk = s.reason_code.trim().to_string();
+        let entry = by_r
+            .entry(rk.clone())
+            .or_insert_with(|| (s.reason_label.clone(), Acc::default()));
+        entry.1.add(s);
+        let dk = s.dept.trim().to_string();
+        by_d.entry(dk).or_default().add(s);
+    }
+    let mut by_reason: Vec<Bucket> = by_r
+        .into_iter()
+        .map(|(k, (label, acc))| bucket_of(k, label, acc, grand))
+        .collect();
+    let mut by_dept: Vec<Bucket> = by_d
+        .into_iter()
+        .map(|(k, acc)| {
+            let label = if k.trim().is_empty() {
+                NO_DEPT.to_string()
+            } else {
+                k.clone()
+            };
+            bucket_of(k, label, acc, grand)
+        })
+        .collect();
+    // 金额大的在前；同额按编码/名称排，保证输出稳定（测试才写得死）
+    by_reason.sort_by(|a, b| b.total.cmp(&a.total).then(a.key.cmp(&b.key)));
+    by_dept.sort_by(|a, b| b.total.cmp(&a.total).then(a.key.cmp(&b.key)));
+    Ok(Analysis {
+        from,
+        to,
+        by_reason,
+        by_dept,
+        total: grand,
+        count,
+    })
+}
+
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct ReworkOrder {
     pub id: i64,
@@ -71,7 +339,12 @@ pub struct ReworkOrder {
     pub item_code: String,
     pub item_name: String,
     pub qty: Money,
+    /// 原因备注（自由文本）
     pub reason: String,
+    /// 原因分类（指向 `rework_reason.code`，空 = 未分类）
+    pub reason_code: String,
+    /// 责任部门 / 班组（空 = 未指定）
+    pub dept: String,
     pub status: String,
     pub memo: String,
     pub created_by: String,
@@ -137,6 +410,12 @@ pub struct ReworkStat {
     pub item_name: String,
     pub qty: Money,
     pub reason: String,
+    /// 原因分类编码（空 = 未分类）
+    pub reason_code: String,
+    /// 原因分类名称（字典里的中文名；未分类时是「未分类」）
+    pub reason_label: String,
+    /// 责任部门 / 班组（空 = 未指定）
+    pub dept: String,
     pub status: String,
     pub material: Money,
     pub labor: Money,
@@ -148,7 +427,7 @@ pub struct ReworkStat {
     pub ratio: String,
 }
 
-const O_COLS: &str = "id,no,period,date,po_id,po_no,item_code,item_name,qty,reason,status,memo,created_by,created_at";
+const O_COLS: &str = "id,no,period,date,po_id,po_no,item_code,item_name,qty,reason,reason_code,dept,status,memo,created_by,created_at";
 const C_COLS: &str = "id,rw_id,cost_type,amount,memo,created_at";
 
 fn map_order(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReworkOrder> {
@@ -163,10 +442,12 @@ fn map_order(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReworkOrder> {
         item_name: r.get(7)?,
         qty: crate::read_money(r, 8)?,
         reason: r.get(9)?,
-        status: r.get(10)?,
-        memo: r.get(11)?,
-        created_by: r.get(12)?,
-        created_at: r.get(13)?,
+        reason_code: r.get(10)?,
+        dept: r.get(11)?,
+        status: r.get(12)?,
+        memo: r.get(13)?,
+        created_by: r.get(14)?,
+        created_at: r.get(15)?,
     })
 }
 
@@ -338,7 +619,7 @@ pub fn save(db: &Db, o: &mut ReworkOrder, who: &str) -> DbResult<i64> {
     let id = if o.id > 0 {
         tx.execute(
             "UPDATE rework_order SET period=?2,date=?3,po_id=?4,po_no=?5,item_code=?6,item_name=?7,
-                    qty=?8,reason=?9,status=?10,memo=?11 WHERE id=?1",
+                    qty=?8,reason=?9,reason_code=?10,dept=?11,status=?12,memo=?13 WHERE id=?1",
             rusqlite::params![
                 o.id,
                 o.period.ymm(),
@@ -349,6 +630,8 @@ pub fn save(db: &Db, o: &mut ReworkOrder, who: &str) -> DbResult<i64> {
                 o.item_name,
                 crate::exact_param(o.qty),
                 o.reason.trim(),
+                o.reason_code.trim(),
+                o.dept.trim(),
                 o.status,
                 o.memo.trim(),
             ],
@@ -357,8 +640,8 @@ pub fn save(db: &Db, o: &mut ReworkOrder, who: &str) -> DbResult<i64> {
     } else {
         let no = next_no(&tx, o.period)?;
         tx.execute(
-            "INSERT INTO rework_order(no,period,date,po_id,po_no,item_code,item_name,qty,reason,status,memo,created_by,created_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            "INSERT INTO rework_order(no,period,date,po_id,po_no,item_code,item_name,qty,reason,reason_code,dept,status,memo,created_by,created_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             rusqlite::params![
                 no,
                 o.period.ymm(),
@@ -369,6 +652,8 @@ pub fn save(db: &Db, o: &mut ReworkOrder, who: &str) -> DbResult<i64> {
                 o.item_name,
                 crate::exact_param(o.qty),
                 o.reason.trim(),
+                o.reason_code.trim(),
+                o.dept.trim(),
                 o.status,
                 o.memo.trim(),
                 who,
@@ -463,6 +748,7 @@ pub fn delete_cost(db: &Db, cost_id: i64) -> DbResult<()> {
 /// 「这批返工亏了多少」就靠这张表回答：total 是返工本身花掉的钱，
 /// ratio 是它占原单已归集成本的比例。
 pub fn report(db: &Db, from: Period, to: Period) -> DbResult<Vec<ReworkStat>> {
+    let names = reason_names(db)?;
     let mut out = Vec::new();
     let mut st = db.conn().prepare(&format!(
         "SELECT {O_COLS} FROM rework_order WHERE period>=?1 AND period<=?2 ORDER BY date, id"
@@ -498,6 +784,9 @@ pub fn report(db: &Db, from: Period, to: Period) -> DbResult<Vec<ReworkStat>> {
             item_name: o.item_name,
             qty: o.qty,
             reason: o.reason,
+            reason_code: o.reason_code.clone(),
+            reason_label: reason_name(&o.reason_code, &names),
+            dept: o.dept,
             status: o.status,
             material,
             labor,
@@ -724,5 +1013,94 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM voucher", [], |r| r.get(0))
             .unwrap();
         assert_eq!(before, after, "返工单不该生成凭证");
+    }
+
+    /// 原因分类：自由文本汇不出总额，字典才能；空编码/空部门单独成桶，不能丢
+    #[test]
+    fn 返工成本按原因与部门分组且不丢未分类() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        // 字典：槽液 SLUG / 挂具 GJ
+        let mut r1 = Reason {
+            code: "slug".into(),
+            name: "槽液".into(),
+            ..Default::default()
+        };
+        reason_save(&db, &mut r1).unwrap();
+        assert_eq!(r1.code, "SLUG", "编码统一大写，历史单据才对得上");
+        let mut r2 = Reason {
+            code: "GJ".into(),
+            name: "挂具".into(),
+            ..Default::default()
+        };
+        reason_save(&db, &mut r2).unwrap();
+
+        let po_id = po(&db, p, "SC2026010007", "铝件G", "20");
+        let mk = |qty: &str, code: &str, dept: &str, cost: &str| {
+            let mut o = rw(po_id, qty);
+            o.reason_code = code.into();
+            o.dept = dept.into();
+            let id = save(&db, &mut o, "u1").unwrap();
+            add_cost(&db, id, "labor", m(cost), "").unwrap();
+            id
+        };
+        mk("3", "SLUG", "氧化一班", "300");
+        mk("2", "SLUG", "氧化二班", "100");
+        mk("1", "GJ", "氧化一班", "50");
+        mk("1", "", "", "50"); // 谁都没填
+
+        let a = analyze(&db, p, p).unwrap();
+        assert_eq!(a.count, 4);
+        assert_eq!(a.total, m("500"), "合计 300+100+50+50");
+        // 按原因：槽液 400（80%）、挂具 50（10%）、未分类 50（10%）
+        assert_eq!(a.by_reason.len(), 3, "三种原因各一桶，空编码也要有一桶");
+        let slug = a.by_reason.iter().find(|b| b.label == "槽液").unwrap();
+        assert_eq!(slug.key, "SLUG");
+        assert_eq!(slug.total, m("400"));
+        assert_eq!(slug.share, "80.00");
+        let gj = a.by_reason.iter().find(|b| b.label == "挂具").unwrap();
+        assert_eq!(gj.total, m("50"));
+        let none = a
+            .by_reason
+            .iter()
+            .find(|b| b.label == UNCLASSIFIED)
+            .expect("没填分类的不能丢");
+        assert_eq!(none.total, m("50"));
+        assert_eq!(none.key, "");
+        // 按部门：氧化一班 350、氧化二班 100、未指定 50；分组合计 == 总合计
+        let sum_d: Money = a.by_dept.iter().fold(Money::ZERO, |acc, b| acc + b.total);
+        assert_eq!(sum_d, a.total, "各分组合计必须等于总合计（不丢行才成立）");
+        let one = a.by_dept.iter().find(|b| b.label == "氧化一班").unwrap();
+        assert_eq!(one.count, 2);
+        assert_eq!(one.total, m("350"));
+        assert_eq!(a.by_dept.last().unwrap().label, NO_DEPT);
+        // 报表行也带中文分类名
+        let rows = report(&db, p, p).unwrap();
+        assert!(rows.iter().any(|x| x.reason_label == "槽液"));
+        assert!(rows.iter().any(|x| x.reason_label == UNCLASSIFIED));
+    }
+
+    /// 分类被单据引用就不许删（删了历史单据会变成「未分类」，口径跟着变）
+    #[test]
+    fn 原因分类被引用就不许删只能停用() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mut r = Reason {
+            code: "SLUG".into(),
+            name: "槽液".into(),
+            ..Default::default()
+        };
+        reason_save(&db, &mut r).unwrap();
+        let po_id = po(&db, p, "SC2026010008", "铝件H", "5");
+        let mut o = rw(po_id, "1");
+        o.reason_code = "SLUG".into();
+        save(&db, &mut o, "u1").unwrap();
+
+        let e = reason_delete(&db, r.id).unwrap_err().to_string();
+        assert!(e.contains("先改单"), "被引用时要提示怎么办：{e}");
+        // 停用是可以的：新单不再选它，历史单据照样显示
+        r.disabled = true;
+        reason_save(&db, &mut r).unwrap();
+        assert!(reason_list(&db).unwrap().iter().any(|x| x.disabled));
     }
 }

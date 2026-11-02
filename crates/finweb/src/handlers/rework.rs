@@ -11,10 +11,30 @@ pub struct ReworkReq {
     #[serde(default)]
     pub date: String,
     pub qty: String,
+    /// 原因备注（自由文本）
     #[serde(default)]
     pub reason: String,
+    /// 原因分类编码（指向 rework_reason.code，空 = 未分类）
+    #[serde(default)]
+    pub reason_code: String,
+    /// 责任部门 / 班组（空 = 未指定）
+    #[serde(default)]
+    pub dept: String,
     #[serde(default)]
     pub status: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+#[derive(Deserialize)]
+pub struct ReasonReq {
+    #[serde(default)]
+    pub id: i64,
+    pub code: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub disabled: bool,
     #[serde(default)]
     pub memo: String,
 }
@@ -108,6 +128,8 @@ pub(super) async fn save_rework(
     o.period = fincore::Period::from_date(date);
     o.qty = parse_money_checked(&req.qty)?;
     o.reason = req.reason.trim().to_string();
+    o.reason_code = req.reason_code.trim().to_uppercase();
+    o.dept = req.dept.trim().to_string();
     o.status = if req.status.trim().is_empty() {
         "open".to_string()
     } else {
@@ -218,5 +240,86 @@ pub(super) async fn rework_report(
         "to": to.label(),
         "rows": rows,
         "total": total,
+    })))
+}
+
+/// 原因分类字典（页面进来要它填下拉）
+pub(super) async fn list_rework_reasons(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let rows = findb::rework::reason_list(&user.db)?;
+    Ok(Json(json!({ "rows": rows })))
+}
+
+/// 保存原因分类（编码是历史单据的锚，改名不换码）
+pub(super) async fn save_rework_reason(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<ReasonReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::ProductionOps)?;
+    let db = &user.db;
+    let mut r = findb::rework::Reason {
+        id: req.id,
+        code: req.code.trim().to_string(),
+        name: req.name.trim().to_string(),
+        disabled: req.disabled,
+        memo: req.memo.trim().to_string(),
+    };
+    let id = findb::rework::reason_save(db, &mut r)?;
+    db.log(
+        user.username(),
+        "生产",
+        "返工原因分类",
+        &format!("{} {}", r.code, r.name),
+    )?;
+    Ok(Json(json!({ "ok": true, "id": id, "code": r.code })))
+}
+
+/// 删除原因分类（被返工单引用的会被拦下，提示改成停用）
+pub(super) async fn delete_rework_reason(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::ProductionOps)?;
+    let db = &user.db;
+    findb::rework::reason_delete(db, id)?;
+    db.log(
+        user.username(),
+        "生产",
+        "返工原因分类",
+        &format!("删除 #{id}"),
+    )?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 按原因 / 按部门汇总返工成本（回答「哪种原因最费钱、哪个班组返工最多」）
+pub(super) async fn rework_analysis(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let p = current_period(&state, &user);
+    let from = period_param(q.get("from").or_else(|| q.get("period")), p)?;
+    let to = period_param(q.get("to").or_else(|| q.get("period")), from)?;
+    if from > to {
+        return Err(AppError::bad_request(format!(
+            "起始期间 {} 不能晚于结束期间 {}",
+            from.label(),
+            to.label()
+        )));
+    }
+    let a = findb::rework::analyze(&user.db, from, to)?;
+    Ok(Json(json!({
+        "from": from.label(),
+        "to": to.label(),
+        "by_reason": a.by_reason,
+        "by_dept": a.by_dept,
+        "total": a.total,
+        "count": a.count,
     })))
 }

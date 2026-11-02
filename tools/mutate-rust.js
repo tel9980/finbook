@@ -1379,6 +1379,30 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::overhead_pool"],
   },
   {
+    // 分析不按原因分组：所有单据并进一桶，等于没按原因汇总。
+    name: "㊺ 返工分析不按原因分组（全并一桶）",
+    file: "crates/findb/src/rework.rs",
+    from: "        let rk = s.reason_code.trim().to_string();",
+    to: "        let rk = String::new();",
+    cmd: ["test", "-p", "findb", "--lib", "rework::tests::返工成本按原因与部门分组"],
+  },
+  {
+    // 占比分母取行内金额：每行都是 100%，看不出谁占大头。
+    name: "㊺ 返工占比分母取行内金额（永远 100%）",
+    file: "crates/findb/src/rework.rs",
+    from: "            .checked_div(grand)",
+    to: "            .checked_div(acc.total)",
+    cmd: ["test", "-p", "findb", "--lib", "rework::tests::返工成本按原因与部门分组"],
+  },
+  {
+    // 未分类/未指定被丢掉：各分组合计不等于总合计，看上去像算错了。
+    name: "㊺ 未分类的返工单在分析里被丢掉",
+    file: "crates/findb/src/rework.rs",
+    from: "        let rk = s.reason_code.trim().to_string();",
+    to: "        if s.reason_code.trim().is_empty() {\n            continue;\n        }\n        let rk = s.reason_code.trim().to_string();",
+    cmd: ["test", "-p", "findb", "--lib", "rework::tests::返工成本按原因与部门分组"],
+  },
+  {
     // 返工数量不校验原单计划量：凭空冒出一批返工件，成本无处对账。
     name: "㊹ 返工数量不校验原单计划量",
     file: "crates/findb/src/rework.rs",

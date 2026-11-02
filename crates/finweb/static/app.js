@@ -13641,8 +13641,11 @@ async function viewRework(main) {
       <button class="btn primary sm" id="rw-reload">查询</button>
       ${can("production_ops") ? `<button class="btn ghost sm" id="rw-new">新建返工单</button>` : ""}
       <button class="btn ghost sm" id="rw-print">打印预览</button>
+      <button class="btn ghost sm" id="rw-reasons">原因分类</button>
     </div>
     <div class="panel"><div id="rw-list" class="muted">加载中…</div></div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">返工成本分析</h3>
+      <div id="rw-analysis" class="muted">加载中…</div></div>
     <div class="muted" style="font-size:12px">返工单挂在原生产订单上，成本单独归集 —— 返工的钱不进原单，原单单位成本才不会虚高；「占原单」= 返工成本 ÷ 原单已归集成本</div>`;
 
   const periodInput = $("#rw-period");
@@ -13665,7 +13668,7 @@ async function viewRework(main) {
     el.className = "";
     el.innerHTML = `<table class="grid">
       <thead><tr><th>单号</th><th>日期</th><th>来源订单</th><th>物料</th><th class="r">返工数量</th>
-        <th>原因</th><th>状态</th><th class="r">材料</th><th class="r">人工</th><th class="r">制造费用</th>
+        <th>分类</th><th>原因</th><th>状态</th><th class="r">材料</th><th class="r">人工</th><th class="r">制造费用</th>
         <th class="r">合计</th><th>操作</th></tr></thead>
       <tbody>${rows
         .map(
@@ -13675,6 +13678,7 @@ async function viewRework(main) {
             <td>${esc(r.po_no)}</td>
             <td>${esc(r.item_code)} ${esc(r.item_name)}</td>
             <td class="r">${fmt(r.qty)}</td>
+            <td>${esc(r.reason_label || "未分类")}</td>
             <td>${esc(r.reason || "")}</td>
             <td>${esc(r.status === "closed" ? "已结案" : "进行中")}</td>
             <td class="r">${fmt(r.material)}</td>
@@ -13686,7 +13690,7 @@ async function viewRework(main) {
           </tr>`
         )
         .join("")}</tbody>
-      <tfoot><tr><td colspan="10" class="r">合计</td><td class="r">${fmt(String(total))}</td><td></td></tr></tfoot>
+      <tfoot><tr><td colspan="11" class="r">合计</td><td class="r">${fmt(String(total))}</td><td></td></tr></tfoot>
     </table>`;
     for (const b of $all("[data-rw-open]", el)) {
       b.addEventListener("click", () => openCosts(Number(b.dataset.rwOpen)));
@@ -13703,14 +13707,149 @@ async function viewRework(main) {
         }
       });
     }
+    loadAnalysis();
   };
+
+  // 按原因 / 按部门汇总：回答「哪种原因最费钱、哪个班组返工最多」
+  const loadAnalysis = async () => {
+    const el = $("#rw-analysis");
+    if (!el) return;
+    const q = periodInput && periodInput.value ? `?period=${encodeURIComponent(periodInput.value)}` : "";
+    let d;
+    try {
+      d = await api(`/rework/analysis${q}`);
+    } catch (e) {
+      el.className = "muted";
+      el.textContent = e.message;
+      return;
+    }
+    const block = (title, list, emptyLabel) => {
+      const arr = list || [];
+      if (!arr.length) return `<div class="muted">${emptyLabel}</div>`;
+      return `<table class="grid"><thead><tr><th>${title}</th><th class="r">张数</th><th class="r">返工件数</th>
+          <th class="r">材料</th><th class="r">人工</th><th class="r">制造费用</th>
+          <th class="r">合计</th><th class="r">占比</th></tr></thead>
+        <tbody>${arr
+          .map(
+            (b) => `<tr>
+              <td>${esc(b.label)}</td>
+              <td class="r">${b.count}</td>
+              <td class="r">${fmt(b.qty)}</td>
+              <td class="r">${fmt(b.material)}</td>
+              <td class="r">${fmt(b.labor)}</td>
+              <td class="r">${fmt(b.overhead)}</td>
+              <td class="r">${fmt(b.total)}</td>
+              <td class="r">${esc(b.share || "—")}${b.share ? "%" : ""}</td>
+            </tr>`
+          )
+          .join("")}</tbody></table>`;
+    };
+    el.className = "";
+    el.innerHTML = `<div class="muted" style="margin-bottom:6px">本期 ${d.count} 张返工单，返工成本合计 ${fmt(d.total)}</div>
+      <h4 style="margin:8px 0 4px;font-size:13px">按原因</h4>${block("原因", d.by_reason, "这一期没有返工成本")}
+      <h4 style="margin:12px 0 4px;font-size:13px">按责任部门</h4>${block("部门", d.by_dept, "这一期没有返工成本")}`;
+  };
+
+  // 原因分类维护：没有字典，同一件事会写成三行，按原因汇总就等于没汇总
+  $("#rw-reasons")?.addEventListener("click", async () => {
+    let list = [];
+    try {
+      const d = await api("/rework/reasons");
+      list = d.rows || [];
+    } catch (e) {
+      toast(e.message, "err");
+      return;
+    }
+    modal(`<h3>返工原因分类</h3>
+      <div class="muted" style="font-size:12px;margin-bottom:8px">编码是历史单据的锚：改名可以，换码会让旧单变成「未分类」。删除只能删没被用过的，用过的改成停用。</div>
+      <div id="rr-list"></div>
+      <div class="form" style="margin-top:8px">
+        <label>编码 <input id="rr-code" style="width:90px" placeholder="SLUG" /></label>
+        <label>名称 <input id="rr-name" style="width:140px" placeholder="槽液" /></label>
+        <label>备注 <input id="rr-memo" style="width:180px" /></label>
+      </div>
+      <div class="toolbar"><button class="btn primary sm" id="rr-add">新增分类</button>
+        <button class="btn ghost sm" id="rr-close">关闭</button></div>`);
+    const draw = () => {
+      const box = $("#rr-list");
+      if (!list.length) {
+        box.innerHTML = `<div class="muted">还没有原因分类</div>`;
+        return;
+      }
+      box.innerHTML = `<table class="grid"><thead><tr><th>编码</th><th>名称</th><th>备注</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody>${list
+          .map(
+            (r) => `<tr>
+              <td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.memo || "")}</td>
+              <td>${r.disabled ? "停用" : "启用"}</td>
+              <td><button class="btn ghost sm" data-rr-toggle="${r.id}" data-dis="${r.disabled ? 0 : 1}">${r.disabled ? "启用" : "停用"}</button>
+                  <button class="btn ghost sm" data-rr-del="${r.id}">删除</button></td>
+            </tr>`
+          )
+          .join("")}</tbody></table>`;
+      for (const b of $all("[data-rr-toggle]", box)) {
+        b.addEventListener("click", async () => {
+          const r = list.find((x) => String(x.id) === b.dataset.rrToggle);
+          try {
+            await postJson("/rework/reasons", {
+              id: r.id,
+              code: r.code,
+              name: r.name,
+              memo: r.memo || "",
+              disabled: b.dataset.dis === "1",
+            });
+            await refresh();
+          } catch (e) {
+            toast(e.message, "err");
+          }
+        });
+      }
+      for (const b of $all("[data-rr-del]", box)) {
+        b.addEventListener("click", async () => {
+          if (!(await confirmDialog("删除这个原因分类？被返工单用过的不许删。", true))) return;
+          try {
+            await api(`/rework/reasons/${b.dataset.rrDel}`, { method: "DELETE" });
+            await refresh();
+          } catch (e) {
+            toast(e.message, "err");
+          }
+        });
+      }
+    };
+    const refresh = async () => {
+      const d = await api("/rework/reasons");
+      list = d.rows || [];
+      draw();
+    };
+    draw();
+    $("#rr-close").addEventListener("click", closeModal);
+    $("#rr-add").addEventListener("click", async () => {
+      try {
+        await postJson("/rework/reasons", {
+          code: $("#rr-code").value,
+          name: $("#rr-name").value,
+          memo: $("#rr-memo").value,
+        });
+        $("#rr-code").value = "";
+        $("#rr-name").value = "";
+        $("#rr-memo").value = "";
+        await refresh();
+        toast("已保存");
+      } catch (e) {
+        toast(e.message, "err");
+      }
+    });
+  });
 
   // 新建：选来源生产订单（带出物料/计划量），数量不能超过它
   $("#rw-new")?.addEventListener("click", async () => {
     let orders = [];
+    let reasons = [];
     try {
       const d = await api("/prod");
       orders = d.orders || [];
+      const rd = await api("/rework/reasons");
+      reasons = (rd.rows || []).filter((r) => !r.disabled);
     } catch (e) {
       toast(e.message, "err");
       return;
@@ -13729,7 +13868,11 @@ async function viewRework(main) {
           .join("")}</select></label>
         <label>返工数量 <input id="rwn-qty" style="width:110px" placeholder="不超过原单计划量" /></label>
         <label>日期 <input id="rwn-date" type="date" value="${state.today || ""}" /></label>
-        <label>原因 <input id="rwn-reason" style="width:220px" placeholder="如 挂具印痕 / 氧化膜厚不足" /></label>
+        <label>原因分类 <select id="rwn-code"><option value="">未分类</option>${reasons
+          .map((r) => `<option value="${esc(r.code)}">${esc(r.name)}</option>`)
+          .join("")}</select></label>
+        <label>责任部门 <input id="rwn-dept" style="width:140px" placeholder="如 氧化一班" /></label>
+        <label>原因备注 <input id="rwn-reason" style="width:220px" placeholder="如 挂具印痕 / 氧化膜厚不足" /></label>
         <label>备注 <input id="rwn-memo" style="width:260px" /></label>
       </div>
       <div class="toolbar"><button class="btn primary sm" id="rwn-save">保存</button>
@@ -13748,6 +13891,8 @@ async function viewRework(main) {
           qty: $("#rwn-qty").value,
           date: $("#rwn-date").value,
           reason: $("#rwn-reason").value,
+          reason_code: $("#rwn-code").value,
+          dept: $("#rwn-dept").value,
           memo: $("#rwn-memo").value,
         });
         closeModal();

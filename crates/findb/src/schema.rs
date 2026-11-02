@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 43;
+pub const SCHEMA_VERSION: i64 = 44;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1670,7 +1670,9 @@ CREATE TABLE IF NOT EXISTS rework_order(
     item_code   TEXT NOT NULL DEFAULT '',
     item_name   TEXT NOT NULL DEFAULT '',
     qty         TEXT NOT NULL DEFAULT '0',           -- 返工数量（成品件数）
-    reason      TEXT NOT NULL DEFAULT '',            -- 返工原因（槽液/挂具/客户改要求…）
+    reason      TEXT NOT NULL DEFAULT '',            -- 返工原因（自由文本，给不识分类的人写备注）
+    reason_code TEXT NOT NULL DEFAULT '',            -- v44: 原因分类（指向 rework_reason.code）
+    dept        TEXT NOT NULL DEFAULT '',            -- v44: 责任部门/班组
     status      TEXT NOT NULL DEFAULT 'open',        -- open 进行中 / closed 已结案
     memo        TEXT NOT NULL DEFAULT '',
     created_by  TEXT NOT NULL DEFAULT '',
@@ -1688,6 +1690,16 @@ CREATE TABLE IF NOT EXISTS rework_cost(
     created_at  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_rework_cost_rw ON rework_cost(rw_id);
+-- v44: 返工原因分类字典。自由文本没法按原因汇总（「槽液不好」和「槽液」是两行），
+-- 所以要一张小字典把原因规范化；责任部门同理，用文本但按值分组。
+CREATE TABLE IF NOT EXISTS rework_reason(
+    id          INTEGER PRIMARY KEY,
+    code        TEXT NOT NULL,                       -- 分类编码（SLUG/YJ/KH…）
+    name        TEXT NOT NULL DEFAULT '',
+    disabled    INTEGER NOT NULL DEFAULT 0,
+    memo        TEXT NOT NULL DEFAULT '',
+    UNIQUE(code)
+);
 
 "#;
 
@@ -1806,6 +1818,12 @@ const MIGRATE_V41: &[(&str, &str, &str)] = &[
 /// 同一物料可以有多版工艺（见 MIGRATE_V41 的计件单价分版本）。在建单那一刻
 /// 选了哪一版，工序清单就按哪一版生成、报工流水的版本也跟着定下来。不记这一列，
 /// 事后重生成工序只能退回默认版本，报工记的版本就与当初排产的那一版对不上。
+/// v44：返工单补「原因分类」与「责任部门」，让返工成本能按原因/部门汇总
+const MIGRATE_V44: &[(&str, &str, &str)] = &[
+    ("rework_order", "reason_code", "TEXT NOT NULL DEFAULT ''"),
+    ("rework_order", "dept", "TEXT NOT NULL DEFAULT ''"),
+];
+
 const MIGRATE_V42: &[(&str, &str, &str)] = &[(
     "production_order",
     "routing_version",
@@ -2343,6 +2361,7 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_generic(conn, MIGRATE_V41)?;
             // v42：生产订单记下按哪一版工艺排产
             migrate_generic(conn, MIGRATE_V42)?;
+            migrate_generic(conn, MIGRATE_V44)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：
@@ -2597,6 +2616,7 @@ mod tests {
             .iter()
             .chain(MIGRATE_V41.iter())
             .chain(MIGRATE_V42.iter())
+            .chain(MIGRATE_V44.iter())
         {
             // DROP COLUMN 不允许还有索引指着该列，先摘掉相关索引
             for idx in indexes_of(&conn, table) {
@@ -2628,6 +2648,7 @@ mod tests {
             .iter()
             .chain(MIGRATE_V41.iter())
             .chain(MIGRATE_V42.iter())
+            .chain(MIGRATE_V44.iter())
         {
             assert!(
                 column_exists(&conn, table, col).unwrap(),
