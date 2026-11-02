@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 45;
+pub const SCHEMA_VERSION: i64 = 46;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1701,6 +1701,23 @@ CREATE TABLE IF NOT EXISTS rework_reason(
     disabled    INTEGER NOT NULL DEFAULT 0,
     memo        TEXT NOT NULL DEFAULT '',
     UNIQUE(code)
+);
+-- v46: 月份利润分析表的行（厂里自己那张表的样子）。
+--
+-- 小厂不按会计准则的科目结构看利润，他们看的是一张固定的费用清单：
+-- 厂租、电费、水费、化工、染料封闭剂、工资、包装材料、货车运输费……
+-- 这些名目在标准科目表里对不上（「化工」不是一个科目），所以把「行」
+-- 做成数据：每行挂若干科目编码，金额 = 这些科目本期发生额之和。
+-- 要改口径就改这一行的科目，不用改代码。
+CREATE TABLE IF NOT EXISTS profit_sheet_row(
+    id          INTEGER PRIMARY KEY,
+    seq         INTEGER NOT NULL,                    -- 序号（照抄厂里那张表）
+    label       TEXT NOT NULL,                       -- 科目（行名）
+    hint        TEXT NOT NULL DEFAULT '',            -- 备注（含哪些内容）
+    kind        TEXT NOT NULL DEFAULT 'expense',     -- revenue / expense
+    accounts    TEXT NOT NULL DEFAULT '',            -- 挂的科目编码，逗号分隔
+    disabled    INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(seq)
 );
 
 "#;

@@ -58,6 +58,8 @@ pub enum NavItem {
     DimProfit,
     /// 月度简报（一页纸：赚了多少、钱在哪、干了多少）
     MonthBrief,
+    /// 利润分析表（照抄厂里那张表的行）
+    ProfitSheet,
     /// 资金管理（日报/票据/融资/盘点/支票簿/日记账/借支/预算/预测）
     Funds,
     /// 预算分析（年度逐月 vs 实际，含部门维度）
@@ -135,6 +137,7 @@ impl NavItem {
             NavItem::Budget => "预算管理".to_string(),
             NavItem::DimProfit => "多维损益".to_string(),
             NavItem::MonthBrief => "月度简报".to_string(),
+            NavItem::ProfitSheet => "利润分析表".to_string(),
             NavItem::Funds => "资金管理".to_string(),
             NavItem::BudgetAnalysis => "预算分析".to_string(),
             NavItem::Cost => "成本核算".to_string(),
@@ -237,6 +240,7 @@ impl NavItem {
             | NavItem::BudgetAlerts
             | NavItem::DimProfit
             | NavItem::MonthBrief
+            | NavItem::ProfitSheet
             | NavItem::BudgetAnalysis => "管理会计",
             NavItem::Funds => "业务",
             NavItem::Cost => "业务",
@@ -270,6 +274,7 @@ impl NavItem {
             | NavItem::BudgetAlerts
             | NavItem::DimProfit
             | NavItem::MonthBrief
+            | NavItem::ProfitSheet
             | NavItem::CustomReport
             | NavItem::BudgetAnalysis => Some(Perm::Report),
             NavItem::Funds | NavItem::Cost => Some(Perm::Report),
@@ -341,6 +346,7 @@ impl NavItem {
             NavItem::BudgetAnalysis,
             NavItem::DimProfit,
             NavItem::MonthBrief,
+            NavItem::ProfitSheet,
             NavItem::Funds,
             NavItem::Cost,
             NavItem::Consign,
@@ -407,6 +413,8 @@ pub enum ConfirmAction {
     DeletePieceRate(i64),
     /// 删除挂具档案
     DeleteToolItem(String),
+    /// 删除利润分析表的一行
+    DeleteProfitSheetRow(i64),
     /// 删除挂具收发记录
     DeleteToolMove(i64),
     DeleteRework(i64),

@@ -1323,6 +1323,7 @@ const NAV_ITEMS = [
   { id: "daily", label: "科目日报表", perm: "fin_report", group: "账簿报表" },
   { id: "dim-profit", label: "多维损益", perm: "fin_report", group: "账簿报表" },
   { id: "month-brief", label: "月度简报", perm: "fin_report", group: "账簿报表" },
+  { id: "profit-sheet", label: "利润分析表", perm: "fin_report", group: "账簿报表" },
   { id: "notes", label: "报表附注", perm: "fin_report", group: "账簿报表" },
   { id: "custom-reports", label: "自定义报表", perm: "fin_report", group: "账簿报表" },
   { id: "period-end", label: "期末处理", perm: "period_close", group: "期末" },
@@ -1402,6 +1403,7 @@ const VIEWS = {
   "daily": viewDaily,
   "dim-profit": viewDimProfit,
   "month-brief": viewMonthBrief,
+  "profit-sheet": viewProfitSheet,
   "consign": viewConsign,
   "tool-ledger": viewToolLedger,
   "rework": viewRework,
@@ -6390,6 +6392,156 @@ async function viewSummaryTable(main) {
 // `findb::mgmt::dim_profit_report`，与桌面端是同一个函数，口径不会分叉。
 // 只做「直接归属」：分录挂了哪个部门就算哪个部门，没挂的进「未分配」——
 // 分摊率每家公司都不一样，编一个出来只会把账算歪。
+// 月份利润分析表：照抄厂里那张表（序号/科目/行次/金额/备注），按行取数。
+//
+// 厂里那张表的名目在标准科目表里对不上（「化工」不是一个科目），所以行是数据：
+// 每行挂若干科目，金额 = 这些科目本期发生额之和。没挂科目的行一键建同名科目。
+async function viewProfitSheet(main) {
+  main.innerHTML = `<h2>利润分析表</h2>
+    <div class="toolbar">
+      <label>期间 <input id="ps-period" value="${esc(state.current)}" style="width:90px" /></label>
+      <button class="btn primary" id="ps-run">出表</button>
+      <button class="btn ghost sm" id="ps-accounts" title="给还没挂科目的行，在 5101 制造费用下建一个同名末级科目">按这张表生成科目</button>
+      <button class="btn ghost sm" id="ps-edit">编辑行</button>
+      <button class="btn ghost sm" id="ps-print">打印预览</button>
+    </div>
+    <div class="muted" style="margin:6px 0">这张表照抄厂里在用的格式。金额从挂的科目本期发生额取，不用手工填。</div>
+    <div id="ps-warn" class="muted" style="margin:6px 0"></div>
+    <div id="ps-result" class="muted">加载中…</div>
+    <div id="ps-rows" style="margin-top:14px"></div>`;
+  let last = null;
+
+  const render = () => {
+    if (!last) return;
+    const rows = last.rows || [];
+    // 行次：收入行从 1 起、支出行也从 1 起（厂里那张表就是这么编的）
+    let revNo = 0;
+    let expNo = 0;
+    const body = rows.map((r) => {
+      const isRev = (r.label || "").startsWith("收入");
+      const no = isRev ? ++revNo : ++expNo;
+      const qty = r.qty ? `<span class="muted" style="margin-left:6px">产量 ${esc(r.qty)}</span>` : "";
+      const unm = r.unmapped ? ` <span class="neg" title="这一行还没挂科目，金额取不到">未挂科目</span>` : "";
+      return `<tr><td class="r">${r.seq}</td><td>${esc(r.label)}${unm}${qty}</td><td class="r">${no}</td>
+        <td class="r">${esc(r.amount)}</td><td class="muted">${esc(r.hint || "")}</td></tr>`;
+    }).join("");
+    const profit = Number(String(last.profit ?? "").replace(/,/g, "")) || 0;
+    $("#ps-result").innerHTML = `<table class="grid">
+      <thead><tr><th class="r" style="width:60px">序号</th><th>科目</th><th class="r" style="width:60px">行次</th>
+        <th class="r" style="width:130px">金额（元）</th><th>备注</th></tr></thead>
+      <tbody>${body}</tbody>
+      <tfoot>
+        <tr><th colspan="3">收入合计</th><th class="r">${esc(last.revenue)}</th><th></th></tr>
+        <tr><th colspan="3">支出合计</th><th class="r">${esc(last.expense)}</th><th></th></tr>
+        <tr><th colspan="3">净利润（亏损以「-」号填写）</th><th class="r ${profit < 0 ? "neg" : "pos"}">${esc(last.profit)}</th><th></th></tr>
+      </tfoot></table>`;
+    const n = last.unmapped || 0;
+    $("#ps-warn").innerHTML = n
+      ? `<span class="neg">有 ${n} 行还没挂科目</span>：你的账里这些费用记在哪个科目？点「按这张表生成科目」自动建，或点「编辑行」手工填。`
+      : "";
+  };
+
+  const run = async () => {
+    const p = $("#ps-period").value.trim();
+    try {
+      last = await api(`/profit-sheet/report?period=${encodeURIComponent(p)}`);
+      render();
+    } catch (e) { toast(e.message, "err"); }
+  };
+
+  const loadRows = async () => {
+    try {
+      const r = await api("/profit-sheet");
+      const rows = r.rows || [];
+      $("#ps-rows").innerHTML = `<div class="panel"><div class="muted" style="margin-bottom:6px">
+        行的口径：每行挂的科目决定它取哪些发生额。同一科目只能挂一行，否则合计会翻倍。</div>
+        <table class="grid"><thead><tr><th class="r" style="width:60px">序号</th><th>科目</th><th>类型</th>
+          <th>挂的科目</th><th>备注</th><th style="width:120px">操作</th></tr></thead><tbody>
+        ${rows.map((x) => `<tr><td class="r">${x.seq}</td><td>${esc(x.label)}</td>
+          <td>${x.kind === "revenue" ? "收入" : "支出"}</td>
+          <td class="mono">${esc(x.accounts || "—")}</td>
+          <td class="muted">${esc(x.hint || "")}</td>
+          <td><button class="btn ghost sm" data-ps-edit="${x.id}">编辑</button>
+            <button class="btn ghost sm" data-ps-del="${x.id}">删</button></td></tr>`).join("")}
+        </tbody></table>
+        <div class="toolbar" style="margin-top:8px"><button class="btn ghost sm" id="ps-add">新增一行</button></div></div>`;
+      $("#ps-add").addEventListener("click", () => openEditor(null));
+      $all("[data-ps-edit]").forEach((b) => b.addEventListener("click", () => {
+        openEditor(rows.find((x) => String(x.id) === b.dataset.psEdit));
+      }));
+      $all("[data-ps-del]").forEach((b) => b.addEventListener("click", async () => {
+        if (!(await confirmDialog("删掉这一行？出表时就不再显示。", true))) return;
+        try {
+          await api(`/profit-sheet/${b.dataset.psDel}`, { method: "DELETE" });
+          toast("已删除");
+          await loadRows();
+          await run();
+        } catch (e) { toast(e.message, "err"); }
+      }));
+    } catch (e) { toast(e.message, "err"); }
+  };
+
+  const openEditor = (row) => {
+    const r = row || { id: 0, seq: 0, label: "", hint: "", kind: "expense", accounts: "" };
+    modal(`<h3>${row ? "编辑" : "新增"}一行</h3>
+      <div class="form">
+        <label>序号 <input id="pe-seq" value="${r.seq || ""}" style="width:70px" /></label>
+        <label>科目（行名） <input id="pe-label" value="${esc(r.label)}" style="width:180px" /></label>
+        <label>类型 <select id="pe-kind">
+          <option value="expense"${r.kind === "expense" ? " selected" : ""}>支出</option>
+          <option value="revenue"${r.kind === "revenue" ? " selected" : ""}>收入</option>
+        </select></label>
+        <label>挂的科目 <input id="pe-accounts" value="${esc(r.accounts || "")}" style="width:220px" placeholder="510106,660209" /></label>
+        <label>备注 <input id="pe-hint" value="${esc(r.hint || "")}" style="width:260px" /></label>
+      </div>
+      <div class="toolbar" style="margin-top:10px">
+        <button class="btn primary" id="pe-save">保存</button>
+        <button class="btn ghost" id="pe-cancel">取消</button>
+      </div>`);
+    $("#pe-cancel").addEventListener("click", () => closeModal());
+    $("#pe-save").addEventListener("click", async () => {
+      const body = {
+        id: r.id || 0,
+        seq: Number($("#pe-seq").value) || 0,
+        label: $("#pe-label").value.trim(),
+        kind: $("#pe-kind").value,
+        accounts: $("#pe-accounts").value.trim(),
+        hint: $("#pe-hint").value.trim(),
+        disabled: false,
+      };
+      try {
+        await postJson("/profit-sheet", body);
+        closeModal();
+        toast("已保存");
+        await loadRows();
+        await run();
+      } catch (e) { toast(e.message, "err"); }
+    });
+  };
+
+  $("#ps-run").addEventListener("click", run);
+  $("#ps-print").addEventListener("click", () => {
+    const el = $("#ps-result").querySelector("table");
+    if (!el) return toast("先出表再打印", "err");
+    printPreview("利润分析表", el);
+  });
+  $("#ps-accounts").addEventListener("click", async () => {
+    if (!(await confirmDialog("给还没挂科目的行，在 5101 制造费用下各建一个同名末级科目？建完这张表就自动出数。", false))) return;
+    try {
+      const r = await postJson("/profit-sheet/create-accounts", {});
+      toast(`新建 ${r.created} 个科目，回写 ${r.touched} 行`);
+      await loadRows();
+      await run();
+    } catch (e) { toast(e.message, "err"); }
+  });
+  $("#ps-edit").addEventListener("click", () => {
+    const box = $("#ps-rows");
+    if (box.innerHTML) { box.innerHTML = ""; return; }
+    loadRows();
+  });
+  run();
+}
+
 async function viewMonthBrief(main) {
   main.innerHTML = `<h2>月度简报</h2>
     <div class="toolbar">

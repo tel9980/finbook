@@ -207,6 +207,18 @@ impl FinBookApp {
                     views.price_rules.invalidate();
                 }
             }
+            ConfirmAction::DeleteProfitSheetRow(id) => {
+                if !ctx.can(Perm::AccountEdit) {
+                    ctx.error(format!("没有「{}」权限", Perm::AccountEdit.label()));
+                    return;
+                }
+                let r = findb::profit_sheet::delete(ctx.db(), id);
+                if ctx.handle(r).is_some() {
+                    ctx.log("利润分析表", "删除行", &id.to_string());
+                    ctx.info("已删除该行");
+                    views.profit_sheet.invalidate();
+                }
+            }
             ConfirmAction::DeleteToolItem(code) => {
                 if !ctx.can(Perm::ProductionOps) {
                     ctx.error(format!("没有「{}」权限", Perm::ProductionOps.label()));

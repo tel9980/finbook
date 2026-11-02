@@ -1403,6 +1403,30 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "consign::tests::交货单挂销售订单并算出交货进度"],
   },
   {
+    // 收入行也按借方取数：收入会显示成负数，净利润整张表跟着错。
+    name: "㊽ 利润分析表收入行按借方取数",
+    file: "crates/findb/src/profit_sheet.rs",
+    from: "                r.credit - r.debit",
+    to: "                r.debit - r.credit",
+    cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::利润分析表按行取数并算出净利润"],
+  },
+  {
+    // 同一科目挂两行：合计翻倍，而报表看起来完全正常。
+    name: "㊽ 同一科目可以挂两行（合计翻倍）",
+    file: "crates/findb/src/profit_sheet.rs",
+    from: "            if mine.contains(&code) {",
+    to: "            if false && mine.contains(&code) {",
+    cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::同一科目挂两行要报错"],
+  },
+  {
+    // 没挂科目的行不标出来：用户看着一片 0 以为这月没花钱。
+    name: "㊽ 没挂科目的行不标记",
+    file: "crates/findb/src/profit_sheet.rs",
+    from: "        let is_unmapped = codes.is_empty();",
+    to: "        let is_unmapped = false && codes.is_empty();",
+    cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::未挂科目的行会被标出来"],
+  },
+  {
     // 上月没账也硬做同比：新账套第一个月会显示一堆 0%，被读成「和上月持平」。
     name: "㊼ 简报上月没账也硬做同比",
     file: "crates/findb/src/brief.rs",

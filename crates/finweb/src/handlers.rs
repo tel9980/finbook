@@ -57,6 +57,7 @@ pub(crate) mod platform;
 pub(crate) mod processfee;
 pub(crate) mod procure;
 pub(crate) mod prod;
+pub(crate) mod profit_sheet;
 pub(crate) mod reports;
 pub(crate) mod rework;
 pub(crate) mod sales;
@@ -78,6 +79,7 @@ use self::platform::*;
 use self::processfee::*;
 use self::procure::*;
 use self::prod::*;
+use self::profit_sheet::*;
 use self::reports::*;
 use self::rework::*;
 use self::sales::*;
@@ -414,6 +416,17 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/reports/income-statement", get(get_income_statement))
         .route("/api/reports/dim-profit", get(get_dim_profit))
         .route("/api/reports/brief", get(get_month_brief))
+        .route(
+            "/api/profit-sheet",
+            get(list_profit_sheet).post(save_profit_sheet_row),
+        )
+        .route("/api/profit-sheet/report", get(profit_sheet_report))
+        .route(
+            "/api/profit-sheet/create-accounts",
+            post(create_profit_sheet_accounts),
+        )
+        .route("/api/profit-sheet/reset", post(reset_profit_sheet))
+        .route("/api/profit-sheet/:id", delete(delete_profit_sheet_row))
         .route(
             "/api/reports/income-statement/print",
             get(print_income_statement),

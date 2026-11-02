@@ -41,6 +41,7 @@ pub mod piecepay;
 pub mod printform;
 pub mod processfee;
 pub mod procurement;
+pub mod profit_sheet;
 pub mod receipt;
 pub mod reports;
 pub mod rework;
