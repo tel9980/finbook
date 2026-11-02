@@ -1322,6 +1322,7 @@ const NAV_ITEMS = [
   { id: "compare", label: "报表对比", perm: "fin_report", group: "账簿报表" },
   { id: "daily", label: "科目日报表", perm: "fin_report", group: "账簿报表" },
   { id: "dim-profit", label: "多维损益", perm: "fin_report", group: "账簿报表" },
+  { id: "month-brief", label: "月度简报", perm: "fin_report", group: "账簿报表" },
   { id: "notes", label: "报表附注", perm: "fin_report", group: "账簿报表" },
   { id: "custom-reports", label: "自定义报表", perm: "fin_report", group: "账簿报表" },
   { id: "period-end", label: "期末处理", perm: "period_close", group: "期末" },
@@ -1400,6 +1401,7 @@ const VIEWS = {
   "compare": viewCompare,
   "daily": viewDaily,
   "dim-profit": viewDimProfit,
+  "month-brief": viewMonthBrief,
   "consign": viewConsign,
   "tool-ledger": viewToolLedger,
   "rework": viewRework,
@@ -6388,6 +6390,67 @@ async function viewSummaryTable(main) {
 // `findb::mgmt::dim_profit_report`，与桌面端是同一个函数，口径不会分叉。
 // 只做「直接归属」：分录挂了哪个部门就算哪个部门，没挂的进「未分配」——
 // 分摊率每家公司都不一样，编一个出来只会把账算歪。
+async function viewMonthBrief(main) {
+  main.innerHTML = `<h2>月度简报</h2>
+    <div class="toolbar">
+      <label>期间 <input id="mb-period" value="${esc(state.current)}" style="width:90px" /></label>
+      <button class="btn primary" id="mb-run">查询</button>
+      <button class="btn ghost sm" id="mb-print">打印预览</button>
+    </div>
+    <div class="muted" style="margin:6px 0">一页纸看三件事：赚了多少、钱在哪、干了多少。所有数字都从既有单据算出来，不用另外录。</div>
+    <div id="mb-result" class="muted">加载中…</div>`;
+  $("#mb-print").addEventListener("click", () => {
+    const el = $("#mb-result").querySelector("table");
+    if (!el) return toast("先查询出数据再打印", "err");
+    printPreview("月度简报", el);
+  });
+  const run = async () => {
+    const p = $("#mb-period").value.trim();
+    try {
+      const r = await api(`/reports/brief?period=${encodeURIComponent(p)}`);
+      const rows = r.rows || [];
+      if (!rows.length) {
+        $("#mb-result").innerHTML = `<div class="muted">这一期还没有数据。</div>`;
+        return;
+      }
+      // 按 group 分组，保持后端给的顺序（后端顺序就是给人读的顺序）
+      const groups = [];
+      for (const x of rows) {
+        let g = groups.find((y) => y.name === x.group);
+        if (!g) { g = { name: x.group, rows: [] }; groups.push(g); }
+        g.rows.push(x);
+      }
+      const fmtNum = (x) => {
+        const v = Number(String(x ?? "").replace(/,/g, ""));
+        return Number.isFinite(v) ? v : 0;
+      };
+      const deltaCell = (x) => {
+        if (x.delta === null || x.delta === undefined) return `<td class="r muted">—</td><td class="r muted">—</td>`;
+        const d = fmtNum(x.delta);
+        if (d === 0) return `<td class="r">0.00</td><td class="r muted">—</td>`;
+        // 变好标绿、变差标红：方向由后端给的 better_high 决定，
+        // 不判断方向会把「应收暴涨」标成绿色。
+        const good = x.better_high ? d > 0 : d < 0;
+        const cls = good ? "pos" : "neg";
+        const sign = d > 0 ? "+" : "";
+        const pct = x.delta_pct ? ` (${sign}${x.delta_pct}%)` : "";
+        return `<td class="r ${cls}">${sign}${esc(x.delta)}</td><td class="r ${cls}">${esc(pct ? pct.trim() : "")}</td>`;
+      };
+      const body = groups
+        .map((g) => `<tr><th colspan="5" class="mb-group">${esc(g.name)}</th></tr>` +
+          g.rows.map((x) => `<tr><td>${esc(x.label)}</td><td class="r">${esc(x.value)}</td>
+            <td class="r muted">${x.prev === null || x.prev === undefined ? "—" : esc(x.prev)}</td>${deltaCell(x)}</tr>`).join(""))
+        .join("");
+      $("#mb-result").innerHTML = `<table class="grid">
+        <thead><tr><th>项目</th><th class="r">本期</th><th class="r">上月</th><th class="r">增减</th><th class="r">增减%</th></tr></thead>
+        <tbody>${body}</tbody></table>
+        <div class="muted" style="margin-top:6px">${r.has_prev ? `对比期间：${esc(r.prev_period)}` : `上月（${esc(r.prev_period)}）没有账，同比一栏显示「—」`}</div>`;
+    } catch (e) { toast(e.message, "err"); }
+  };
+  $("#mb-run").addEventListener("click", run);
+  run();
+}
+
 async function viewDimProfit(main) {
   const DIMS = [
     { code: "dept", label: "部门" },

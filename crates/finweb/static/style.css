@@ -1685,3 +1685,16 @@ details.wb-ref .card .v { font-size: 14px; }
 .hm-row .both { font-size: 11px; color: var(--muted); }
 .hm-row .nett { font-size: 11px; color: var(--text); font-weight: 700; }
 .hm-empty { font-size: 12.5px; color: var(--muted); }
+
+/* 月度简报：分组标题行 + 增减着色
+   着色方向由后端 better_high 决定（利润涨是好事、应收涨不是），
+   前端只负责上色，不猜方向。 */
+table.grid tr.mb-group th {
+  background: var(--z-100);
+  text-align: left;
+  font-weight: 600;
+  color: var(--z-700);
+  letter-spacing: .02em;
+}
+table.grid td.pos { color: var(--ok); }
+table.grid td.neg { color: var(--err); }

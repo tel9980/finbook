@@ -846,6 +846,48 @@ pub(super) async fn get_dim_profit(
     })))
 }
 
+/// 月度经营简报：一页纸，零新增录入。
+///
+/// 数据全部来自既有表（利润表口径 + 余额快照 + 生产订单 + 返工单），
+/// 界面不用再翻五六个页面去凑。
+pub(super) async fn get_month_brief(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::FinReport)?;
+    let db = &user.db;
+    let period = period_param(q.get("period"), current_period(&state, &user))?;
+    let brief = findb::brief::month_brief(db, period)?;
+    let row = |r: &findb::brief::BriefRow| {
+        // 数量用 fmt_qty（不带两位小数），金额用 fmt_money
+        let fmt = |m: fincore::Money| {
+            if r.is_qty {
+                m.fmt_qty()
+            } else {
+                m.fmt_money()
+            }
+        };
+        json!({
+            "key": r.key,
+            "label": r.label,
+            "group": r.group,
+            "value": fmt(r.value),
+            "prev": r.prev.map(fmt),
+            "delta": r.delta.map(fmt),
+            "delta_pct": r.delta_pct,
+            "better_high": r.better_high,
+            "is_qty": r.is_qty,
+        })
+    };
+    Ok(Json(json!({
+        "period": period_to_str(period),
+        "prev_period": period_to_str(brief.prev_period),
+        "has_prev": brief.has_prev,
+        "rows": brief.rows.iter().map(row).collect::<Vec<_>>(),
+    })))
+}
+
 pub(super) async fn get_cash_flow(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,

@@ -2001,6 +2001,10 @@ pub struct FinTotals {
     pub revenue: Money,
     /// 营业成本
     pub cost: Money,
+    /// 期间费用（销售费用 + 管理费用 + 财务费用 + 资产减值损失 + 营业外支出）
+    pub expense: Money,
+    /// 税金（税金及附加 + 所得税费用）
+    pub tax: Money,
     /// 净利润
     pub net_profit: Money,
 }
@@ -2157,13 +2161,12 @@ fn fin_totals_impl(
         s
     };
     let cost = exp("6401") + exp("6402") + unrecovered_cost;
-    let net_profit = revenue - cost - exp("6403") - exp("6601") - exp("6602") - exp("6603")
-        - exp("6701")
+    let tax = exp("6403") + exp("6801");
+    let expense = exp("6601") + exp("6602") + exp("6603") + exp("6701") + exp("6711");
+    let net_profit = revenue - cost - tax - expense
         + occ("6101") // 公允价值变动收益
         + occ("6111") // 投资收益
-        + occ("6301")
-        - exp("6711")
-        - exp("6801");
+        + occ("6301");
     // 速动资产 = 流动资产 − 存货（1403 原材料 / 1405 库存商品 / 1406 发出商品 / 1411 周转材料）
     let quick_asset = cur_asset - b("1403") - b("1405") - b("1406") - b("1411");
     Ok(FinTotals {
@@ -2175,6 +2178,8 @@ fn fin_totals_impl(
         equity,
         revenue,
         cost,
+        expense,
+        tax,
         net_profit,
     })
 }

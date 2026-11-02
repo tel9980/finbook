@@ -1403,6 +1403,30 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "consign::tests::交货单挂销售订单并算出交货进度"],
   },
   {
+    // 上月没账也硬做同比：新账套第一个月会显示一堆 0%，被读成「和上月持平」。
+    name: "㊼ 简报上月没账也硬做同比",
+    file: "crates/findb/src/brief.rs",
+    from: "    let has_prev = prev_has;",
+    to: "    let has_prev = true;",
+    cmd: ["test", "-p", "findb", "--lib", "brief::tests::上个月没有账时同比显示空"],
+  },
+  {
+    // 应收取成贷方：欠我们的钱显示成负的，看着像我们欠别人。
+    name: "㊼ 简报的应收账款正负颠倒",
+    file: "crates/findb/src/brief.rs",
+    from: "    let receivable = b(\"1122\");",
+    to: "    let receivable = b(\"1122\").negated();",
+    cmd: ["test", "-p", "findb", "--lib", "brief::tests::简报把一个月拆成"],
+  },
+  {
+    // 百分比少乘 100：翻倍显示成 +1.00%。
+    name: "㊼ 简报同比百分比少乘一百",
+    file: "crates/findb/src/brief.rs",
+    from: "                    .checked_mul(100i64)",
+    to: "                    .checked_mul(1i64)",
+    cmd: ["test", "-p", "findb", "--lib", "brief::tests::简报把一个月拆成"],
+  },
+  {
     // 分析不按原因分组：所有单据并进一桶，等于没按原因汇总。
     name: "㊺ 返工分析不按原因分组（全并一桶）",
     file: "crates/findb/src/rework.rs",

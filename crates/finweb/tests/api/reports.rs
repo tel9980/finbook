@@ -1100,3 +1100,125 @@ async fn dim_profit_web_by_dept() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
+
+/// 月度经营简报：一页纸把上月/本月放在一起比。
+///
+/// 关键守两条：① 收入/利润走利润表同一口径；② 上月没账时同比必须是空（显示「—」），
+/// 不能是 0%——0% 会被读成「和上月持平」。
+#[tokio::test]
+async fn month_brief_compares_with_previous_period() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/dashboard", &sid))
+        .await
+        .unwrap();
+    let dash: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let cur_txt = dash["current_period"].as_str().unwrap().to_string(); // 2026-01
+    let cur_ymm: i32 = cur_txt.replace('-', "").parse().unwrap();
+    let cy: i32 = cur_txt[..4].parse().unwrap();
+    let cm: i32 = cur_txt[5..7].parse().unwrap();
+    let (py, pm) = if cm == 1 { (cy - 1, 12) } else { (cy, cm - 1) };
+    let prev_ymm = py * 100 + pm;
+
+    // 上月：借 1002 1000 / 贷 600101 1000（收入 1000）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/vouchers",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": prev_ymm, "date": format!("{py}-{pm:02}-10"), "word": "记", "no": 1,
+                "attachments": 0, "memo": "", "entries": [
+                    { "line": 1, "account_code": "100201", "summary": "上月收款", "debit": "1000", "credit": "0" },
+                    { "line": 2, "account_code": "600101", "summary": "上月收款", "debit": "0", "credit": "1000" }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "上月凭证：{}",
+        body_string(resp).await
+    );
+    let vid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/vouchers/{vid}/post"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "上月记账");
+
+    // 本月：借 1002 2000 / 贷 600101 2000（收入翻倍）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/vouchers",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": cur_ymm, "date": format!("{cy}-{cm:02}-10"), "word": "记", "no": 1,
+                "attachments": 0, "memo": "", "entries": [
+                    { "line": 1, "account_code": "100201", "summary": "本月收款", "debit": "2000", "credit": "0" },
+                    { "line": 2, "account_code": "600101", "summary": "本月收款", "debit": "0", "credit": "2000" }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "本月凭证");
+    let vid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/vouchers/{vid}/post"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "本月记账");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/reports/brief?period={cur_ymm}"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["has_prev"], true, "上月有凭证，应该能比");
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 11);
+    let pick = |key: &str| {
+        rows.iter()
+            .find(|r| r["key"] == key)
+            .unwrap_or_else(|| panic!("没有 {key} 这一行"))
+    };
+    let n = |x: &serde_json::Value| {
+        x.as_str()
+            .map(|s| s.replace(',', "").parse::<f64>().unwrap_or(f64::NAN))
+            .unwrap_or_else(|| x.as_f64().unwrap_or(f64::NAN))
+    };
+
+    let revenue = pick("revenue");
+    assert_eq!(revenue["group"], "赚了多少");
+    assert_eq!(n(&revenue["value"]), 2000.0);
+    assert_eq!(n(&revenue["prev"]), 1000.0);
+    assert_eq!(n(&revenue["delta"]), 1000.0);
+    assert_eq!(revenue["delta_pct"], "100.00");
+
+    // 净利润与收入同额（没有任何成本费用）
+    assert_eq!(n(&pick("profit")["value"]), 2000.0);
+    // 现金是时点数：上月 1000 + 本月 2000 = 3000
+    assert_eq!(n(&pick("cash")["value"]), 3000.0);
+    assert_eq!(n(&pick("cash")["prev"]), 1000.0);
+    // 完工数量是数量，按 qty 格式化（不带两位小数）
+    assert_eq!(pick("finished_qty")["is_qty"], true);
+}

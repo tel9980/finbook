@@ -18,6 +18,7 @@ pub mod auxs;
 pub mod balances;
 pub mod bank;
 pub mod batch;
+pub mod brief;
 pub mod business;
 pub mod consign;
 pub mod customers;

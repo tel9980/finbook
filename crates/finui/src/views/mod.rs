@@ -28,6 +28,7 @@ pub mod invoice_view;
 pub mod ledger;
 pub mod login;
 pub mod logs;
+pub mod month_brief;
 pub mod options;
 pub mod overview;
 pub mod payroll;
@@ -89,6 +90,7 @@ pub struct Views {
     pub tool_ledger: process::ToolLedgerView,
     pub rework: process::ReworkView,
     pub dim_profit: dim_profit::DimProfitView,
+    pub month_brief: month_brief::MonthBriefView,
     pub multi_column: advanced::MultiColumnView,
     pub summary_table: advanced::SummaryTableView,
     pub ratios: advanced::RatiosView,
@@ -148,6 +150,7 @@ impl Views {
         self.piece_pay.invalidate();
         self.tool_ledger.invalidate();
         self.dim_profit.invalidate();
+        self.month_brief.invalidate();
         self.multi_column.invalidate();
         self.summary_table.invalidate();
         self.ratios.invalidate();
@@ -178,6 +181,7 @@ impl Views {
                 self.period_end.invalidate();
                 self.budget.invalidate();
                 self.dim_profit.invalidate();
+                self.month_brief.invalidate();
                 self.multi_column.invalidate();
                 self.summary_table.invalidate();
                 self.ratios.invalidate();
@@ -214,6 +218,7 @@ impl Views {
             DataKind::Mgmt => {
                 self.budget.invalidate();
                 self.dim_profit.invalidate();
+                self.month_brief.invalidate();
                 self.custom_report.invalidate();
                 self.reports.invalidate();
             }
@@ -261,6 +266,7 @@ impl Views {
                 NavItem::ToolLedger => self.tool_ledger.enter(ctx),
                 NavItem::Rework => self.rework.enter(ctx),
                 NavItem::DimProfit => self.dim_profit.enter(ctx),
+                NavItem::MonthBrief => self.month_brief.enter(ctx),
                 NavItem::MultiColumn => self.multi_column.enter(ctx),
                 NavItem::SummaryTable => self.summary_table.enter(ctx),
                 NavItem::Ratios => self.ratios.enter(ctx),
@@ -326,6 +332,7 @@ impl Views {
             NavItem::ToolLedger => self.tool_ledger.show(ctx, ui),
             NavItem::Rework => self.rework.show(ctx, ui),
             NavItem::DimProfit => self.dim_profit.show(ctx, ui),
+            NavItem::MonthBrief => self.month_brief.show(ctx, ui),
             NavItem::MultiColumn => self.multi_column.show(ctx, ui),
             NavItem::SummaryTable => self.summary_table.show(ctx, ui),
             NavItem::Ratios => self.ratios.show(ctx, ui),

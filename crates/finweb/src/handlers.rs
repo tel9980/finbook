@@ -413,6 +413,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         )
         .route("/api/reports/income-statement", get(get_income_statement))
         .route("/api/reports/dim-profit", get(get_dim_profit))
+        .route("/api/reports/brief", get(get_month_brief))
         .route(
             "/api/reports/income-statement/print",
             get(print_income_statement),

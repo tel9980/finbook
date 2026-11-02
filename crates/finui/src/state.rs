@@ -56,6 +56,8 @@ pub enum NavItem {
     Budget,
     /// 多维损益
     DimProfit,
+    /// 月度简报（一页纸：赚了多少、钱在哪、干了多少）
+    MonthBrief,
     /// 资金管理（日报/票据/融资/盘点/支票簿/日记账/借支/预算/预测）
     Funds,
     /// 预算分析（年度逐月 vs 实际，含部门维度）
@@ -132,6 +134,7 @@ impl NavItem {
             NavItem::Claims => "费用报销".to_string(),
             NavItem::Budget => "预算管理".to_string(),
             NavItem::DimProfit => "多维损益".to_string(),
+            NavItem::MonthBrief => "月度简报".to_string(),
             NavItem::Funds => "资金管理".to_string(),
             NavItem::BudgetAnalysis => "预算分析".to_string(),
             NavItem::Cost => "成本核算".to_string(),
@@ -233,6 +236,7 @@ impl NavItem {
             NavItem::Budget
             | NavItem::BudgetAlerts
             | NavItem::DimProfit
+            | NavItem::MonthBrief
             | NavItem::BudgetAnalysis => "管理会计",
             NavItem::Funds => "业务",
             NavItem::Cost => "业务",
@@ -265,6 +269,7 @@ impl NavItem {
             NavItem::Budget
             | NavItem::BudgetAlerts
             | NavItem::DimProfit
+            | NavItem::MonthBrief
             | NavItem::CustomReport
             | NavItem::BudgetAnalysis => Some(Perm::Report),
             NavItem::Funds | NavItem::Cost => Some(Perm::Report),
@@ -335,6 +340,7 @@ impl NavItem {
             NavItem::BudgetAlerts,
             NavItem::BudgetAnalysis,
             NavItem::DimProfit,
+            NavItem::MonthBrief,
             NavItem::Funds,
             NavItem::Cost,
             NavItem::Consign,
