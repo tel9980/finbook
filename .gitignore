@@ -37,3 +37,7 @@ node_modules/
 
 # 变异测试的崩溃恢复锁（tools/mutate-rust.js 运行时写，base64 存源码，约 3MB）
 .mutation-lock.json
+
+# 本地打的发布包（本机验证交叉编译时生成，别进版本库：CI 的 upload-artifact
+# 会捡 dist/*，本地残留会被当成发布产物一起发出去 —— v1.8.77 就这么误传过一次）
+/dist/
