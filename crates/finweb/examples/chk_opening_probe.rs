@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     opts.enable_audit = false;
     opts.require_audit = false;
     opts.require_cashier = false;
-    let db = findb::Db::create(&dir.join("probe.fbk"), &opts)?;
+    let db = findb::Db::create(dir.join("probe.fbk"), &opts)?;
 
     // 两个客户 + 一个供应商 + 一个银行账户 + 一个存货
     for (kind, code, name) in [

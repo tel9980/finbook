@@ -19,7 +19,7 @@ pub(super) async fn next_voucher_no(
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
     let word = q.get("word").cloned().unwrap_or_else(|| "记".to_string());
-    let no = vouchers::next_no(&db, period, &word)?;
+    let no = vouchers::next_no(db, period, &word)?;
     Ok(Json(json!({"no": no})))
 }
 
@@ -39,9 +39,9 @@ pub(super) async fn list_vouchers(
         .and_then(|s| s.parse::<i64>().ok())
         .map(|v| v.clamp(1, 1000))
         .or(Some(200));
-    let mut list = vouchers::list(&db, &query)?;
+    let mut list = vouchers::list(db, &query)?;
     // 列表需要摘要与借贷合计：`vouchers::list` 只读表头，这里批量补充分录
-    vouchers::fill_entries(&db, &mut list)?;
+    vouchers::fill_entries(db, &mut list)?;
     // 数据范围：科目区间等限制需逐张过滤（查询层只处理了「仅本人凭证」）
     list.retain(|v| user.user.can_see_voucher(v));
     let list = list.iter().map(to_item).collect();
@@ -81,8 +81,8 @@ pub(super) async fn list_vouchers_page(
     let offset = (page - 1) * page_size;
 
     let query = voucher_query_from(&q, &user);
-    let (mut rows, total) = vouchers::list_page(&db, &query, offset, page_size)?;
-    vouchers::fill_entries(&db, &mut rows)?;
+    let (mut rows, total) = vouchers::list_page(db, &query, offset, page_size)?;
+    vouchers::fill_entries(db, &mut rows)?;
 
     // 兜底：科目区间已由 SQL 下推（vouchers::build_where），这里再 retain 一次。
     // 若真的过滤掉了行，说明 SQL 条件与 can_see_voucher 不一致 —— 那时 total 就是
@@ -97,7 +97,7 @@ pub(super) async fn list_vouchers_page(
     );
 
     // 合计走全量（不分页）：财务界面要核对的是本期间总账数字
-    let (debit_total, credit_total) = vouchers::totals(&db, &query)?;
+    let (debit_total, credit_total) = vouchers::totals(db, &query)?;
     Ok(Json(VoucherPage {
         items: rows.iter().map(to_item).collect(),
         page,
@@ -117,7 +117,7 @@ pub(super) async fn get_voucher(
         return Err(AppError::forbidden("没有查看凭证的权限"));
     }
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     // 数据权限：非全量权限用户不得查看自己不可见的凭证
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权查看该凭证"));
@@ -125,7 +125,7 @@ pub(super) async fn get_voucher(
     let mut detail = VoucherDetail::from_voucher(v);
     // 更正链不是凭证本身的内容（`Voucher` 结构里没有这三个字段），
     // 所以查凭证接口顺带补上，前端一次请求就能画出链。
-    detail.amend = vouchers::amend_link(&db, id)?;
+    detail.amend = vouchers::amend_link(db, id)?;
     Ok(Json(detail))
 }
 
@@ -159,7 +159,7 @@ pub(super) async fn save_voucher(
     // 修改时保留原分录的未提交要素（辅助核算/数量/外币/结算号等）
     let mut prev_entries: Vec<Entry> = Vec::new();
     let mut v = if req.id > 0 {
-        let mut existing = vouchers::get(&db, req.id)?
+        let mut existing = vouchers::get(db, req.id)?
             .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
         // 数据权限校验：非全量权限用户不得修改自己不可见的凭证
         if !user.user.can_see_voucher(&existing) {
@@ -211,7 +211,7 @@ pub(super) async fn save_voucher(
             // 调用方自选号码撞上 UNIQUE(period,word,no) 时 rusqlite 约束错误会一路冒成
             // AppError::Db → HTTP 500（看着像服务端坏了，其实是用户填重了）。
             // 预先查一次占用并回 400；并发下仍可能漏判，那时唯一索引继续兜底。
-            if vouchers::no_taken(&db, period, &word, req.no, 0)? {
+            if vouchers::no_taken(db, period, &word, req.no, 0)? {
                 return Err(AppError::bad_request(format!(
                     "凭证号 {}-{:04} 已被占用，请换一个号或留空自动取号",
                     word, req.no
@@ -219,7 +219,7 @@ pub(super) async fn save_voucher(
             }
             req.no
         } else {
-            vouchers::next_no(&db, period, &word)?
+            vouchers::next_no(db, period, &word)?
         };
         let mut v = Voucher::new(period, date, word, no);
         v.attachments = req.attachments;
@@ -228,7 +228,7 @@ pub(super) async fn save_voucher(
     };
     v.prepared_by = user.username().to_string();
     // 加载科目表：银行尾号简写需要按科目表解析为完整编码
-    let chart = accounts::chart(&db)?;
+    let chart = accounts::chart(db)?;
     for (i, e) in req.entries.iter().enumerate() {
         let account_code = normalize_bank_account(&chart, &e.account_code)
             .unwrap_or_else(|| e.account_code.clone());
@@ -297,7 +297,7 @@ pub(super) async fn save_voucher(
                 )
             })
             .collect();
-        let overs = findb::mgmt::budget_check(&db, v.period, &adds)?;
+        let overs = findb::mgmt::budget_check(db, v.period, &adds)?;
         if !overs.is_empty() {
             let msg = overs
                 .iter()
@@ -326,7 +326,7 @@ pub(super) async fn save_voucher(
     }
     // 保存为「未记账」，核对无误后在界面点「记账」确认入账（无审核环节）
     v.status = VoucherStatus::Draft;
-    let id = vouchers::save(&db, &mut v)?;
+    let id = vouchers::save(db, &mut v)?;
     // 凭证已提交：日志失败不得把请求打成 500，否则客户端重试会多录一张凭证
     if let Err(e) = db.log(
         user.username(),
@@ -348,11 +348,11 @@ pub(super) async fn voucher_void(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权操作该凭证"));
     }
-    vouchers::set_void(&db, id, req.void, user.username())?;
+    vouchers::set_void(db, id, req.void, user.username())?;
     db.log(
         user.username(),
         "凭证",
@@ -376,11 +376,11 @@ pub(super) async fn voucher_amend(
     user.require(Perm::VoucherDelete)?;
     let db = &user.db;
     // 权限校验必须在 amend 之前：数据权限不只管「看」，也管「改」
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权更正该凭证"));
     }
-    let new_id = vouchers::amend(&db, id, &req.reason, user.username())?;
+    let new_id = vouchers::amend(db, id, &req.reason, user.username())?;
     // 操作日志由引擎在**同一事务内**写入（amend 里 log_on）：
     // 更正已提交、日志还没写就崩溃的话，账改了却查不到谁改的 ——
     // 那正是这套更正链要解决的审计洞，不能自己再捅一个。这里再写一条会重复。
@@ -394,7 +394,7 @@ pub(super) async fn voucher_post(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherPost)?;
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权记账该凭证"));
     }
@@ -410,7 +410,7 @@ pub(super) async fn voucher_post(
             "该账套启用了审核环节，请先审核凭证再记账",
         ));
     }
-    vouchers::post(&db, id, user.username())?;
+    vouchers::post(db, id, user.username())?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -422,7 +422,7 @@ pub(super) async fn voucher_audit(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherAudit)?;
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权审核该凭证"));
     }
@@ -432,7 +432,7 @@ pub(super) async fn voucher_audit(
     if v.status == VoucherStatus::Void {
         return Err(AppError::bad_request("已作废凭证不能审核"));
     }
-    vouchers::audit(&db, id, user.username())?;
+    vouchers::audit(db, id, user.username())?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -444,14 +444,14 @@ pub(super) async fn voucher_unaudit(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherUnaudit)?;
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权反审核该凭证"));
     }
     if v.status != VoucherStatus::Audited {
         return Err(AppError::bad_request("只有已审核凭证才能反审核"));
     }
-    vouchers::unaudit(&db, id, user.username())?;
+    vouchers::unaudit(db, id, user.username())?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -463,7 +463,7 @@ pub(super) async fn voucher_sign(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权对该凭证签字"));
     }
@@ -473,7 +473,7 @@ pub(super) async fn voucher_sign(
     if v.status == VoucherStatus::Void {
         return Err(AppError::bad_request("已作废凭证不能签字"));
     }
-    vouchers::sign(&db, id, user.username())?;
+    vouchers::sign(db, id, user.username())?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -485,7 +485,7 @@ pub(super) async fn voucher_unsign(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权对该凭证取消签字"));
     }
@@ -495,7 +495,7 @@ pub(super) async fn voucher_unsign(
     if v.status == VoucherStatus::Void {
         return Err(AppError::bad_request("已作废凭证不能取消签字"));
     }
-    vouchers::unsign(&db, id, user.username())?;
+    vouchers::unsign(db, id, user.username())?;
     Ok(Json(json!({"ok": true})))
 }
 
@@ -510,12 +510,12 @@ pub(super) async fn voucher_batch_post(
     let mut allowed: Vec<i64> = Vec::new();
     let mut denied = 0usize;
     for id in &req.ids {
-        match vouchers::get(&db, *id)? {
+        match vouchers::get(db, *id)? {
             Some(v) if user.user.can_see_voucher(&v) => allowed.push(*id),
             _ => denied += 1,
         }
     }
-    let (n, errs) = vouchers::post_many(&db, &allowed, user.username())?;
+    let (n, errs) = vouchers::post_many(db, &allowed, user.username())?;
     db.log(
         user.username(),
         "凭证",
@@ -533,11 +533,11 @@ pub(super) async fn voucher_unpost(
     // 反记账（已记账 → 未记账），修改前需先反记账
     user.require(Perm::VoucherUnpost)?;
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权反记账该凭证"));
     }
-    vouchers::unpost(&db, id)?;
+    vouchers::unpost(db, id)?;
     Ok(Json(json!({"ok": true, "action": "unposted"})))
 }
 
@@ -549,7 +549,7 @@ pub(super) async fn voucher_reverse(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权冲销该凭证"));
     }
@@ -565,7 +565,7 @@ pub(super) async fn voucher_reverse(
         NaiveDate::parse_from_str(&req.date, "%Y-%m-%d")
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
     };
-    let nid = vouchers::reverse(&db, id, user.username(), period, date)?;
+    let nid = vouchers::reverse(db, id, user.username(), period, date)?;
     Ok(Json(json!({"id": nid})))
 }
 
@@ -595,7 +595,7 @@ pub(super) async fn voucher_renumber(
     } else {
         req.word.trim().to_string()
     };
-    let n = vouchers::renumber(&db, period, &word)?;
+    let n = vouchers::renumber(db, period, &word)?;
     Ok(Json(json!({"ok": true, "renumbered": n})))
 }
 
@@ -607,7 +607,7 @@ pub(super) async fn voucher_delete(
     user.require(Perm::VoucherDelete)?;
     let db = &user.db;
     // 加载后做守卫校验：状态、结账期间、数据权限
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权删除该凭证"));
     }
@@ -620,7 +620,7 @@ pub(super) async fn voucher_delete(
         return Err(AppError::bad_request("已记账凭证不能直接删除，请先反记账"));
     }
     // 期间是否已结账
-    if let Some(closed) = findb::periods::closed_upto(&*db)? {
+    if let Some(closed) = findb::periods::closed_upto(db)? {
         if v.period <= closed {
             return Err(AppError::bad_request(format!(
                 "{} 及以前期间已结账，不能删除该凭证",
@@ -628,7 +628,7 @@ pub(super) async fn voucher_delete(
             )));
         }
     }
-    vouchers::delete(&db, id)?;
+    vouchers::delete(db, id)?;
     db.log(user.username(), "凭证", "删除", &v.voucher_no())?;
     Ok(Json(json!({"ok": true})))
 }
@@ -640,7 +640,7 @@ pub(super) async fn get_ledger(
 ) -> Result<Json<Vec<fincore::balance::LedgerRow>>, AppError> {
     user.require(Perm::FinReport)?;
     let (db, chart, lq) = ledger_query_from(&state, &user, &q)?;
-    let rows = balances::ledger(&db, &chart, &lq)?;
+    let rows = balances::ledger(db, &chart, &lq)?;
     Ok(Json(rows))
 }
 
@@ -652,7 +652,7 @@ pub(super) async fn get_general_ledger(
 ) -> Result<Json<Vec<fincore::GeneralLedgerRow>>, AppError> {
     user.require(Perm::FinReport)?;
     let (db, _chart, lq) = ledger_query_from(&state, &user, &q)?;
-    Ok(Json(balances::general_ledger(&db, &lq)?))
+    Ok(Json(balances::general_ledger(db, &lq)?))
 }
 
 /// 日记账（现金/银行）
@@ -663,7 +663,7 @@ pub(super) async fn get_journal(
 ) -> Result<Json<Vec<fincore::JournalRow>>, AppError> {
     user.require(Perm::FinReport)?;
     let (db, chart, lq) = ledger_query_from(&state, &user, &q)?;
-    Ok(Json(balances::journal(&db, &chart, &lq)?))
+    Ok(Json(balances::journal(db, &chart, &lq)?))
 }
 
 pub(super) async fn print_voucher_form(
@@ -677,8 +677,8 @@ pub(super) async fn print_voucher_form(
     }
     let db = &user.db;
     let company = user.company.clone();
-    let chart = accounts::chart(&db)?;
-    let aux_names = findb::auxs::full_name_map(&*db)?;
+    let chart = accounts::chart(db)?;
+    let aux_names = findb::auxs::full_name_map(db)?;
 
     let mut query = VoucherQuery::default().with_data_scope(&user.user);
     query.asc = true;
@@ -698,8 +698,8 @@ pub(super) async fn print_voucher_form(
         .and_then(|s| s.parse::<i64>().ok())
         .map(|v| v.clamp(1, 1000))
         .or(Some(500));
-    let mut list = vouchers::list(&db, &query)?;
-    vouchers::fill_entries(&db, &mut list)?;
+    let mut list = vouchers::list(db, &query)?;
+    vouchers::fill_entries(db, &mut list)?;
     list.retain(|v| user.user.can_see_voucher(v));
     if list.is_empty() {
         return Err(AppError::bad_request("没有可打印的凭证"));
@@ -748,7 +748,7 @@ pub(super) async fn print_ledger_form(
     }
     let db = &user.db;
     let company = user.company.clone();
-    let chart = accounts::chart(&db)?;
+    let chart = accounts::chart(db)?;
     let from = period_param(q.get("from"), current_period(&state, &user))?;
     let to = period_param(q.get("to"), from)?;
     if from > to {
@@ -788,7 +788,7 @@ pub(super) async fn print_ledger_form(
 
     // 期初余额
     let snap = BalanceSnapshot::load(
-        &db,
+        db,
         &BalanceQuery::range(from, from)
             .with_user_scope(&user.user)
             .with_dept_scope(&user.user),
@@ -802,7 +802,7 @@ pub(super) async fn print_ledger_form(
 
     let (title, rows) = match ktype {
         "general" => {
-            let list = balances::general_ledger(&db, &lq)?;
+            let list = balances::general_ledger(db, &lq)?;
             let rows = list
                 .into_iter()
                 .map(|r| findb::printform::LedgerPrintRow {
@@ -822,7 +822,7 @@ pub(super) async fn print_ledger_form(
             ("总账".to_string(), rows)
         }
         "journal" => {
-            let list = balances::journal(&db, &chart, &lq)?;
+            let list = balances::journal(db, &chart, &lq)?;
             let rows = list
                 .into_iter()
                 .map(|r| findb::printform::LedgerPrintRow {
@@ -842,7 +842,7 @@ pub(super) async fn print_ledger_form(
             ("日记账".to_string(), rows)
         }
         _ => {
-            let list = balances::ledger(&db, &chart, &lq)?;
+            let list = balances::ledger(db, &chart, &lq)?;
             let rows = list
                 .into_iter()
                 .map(|r| findb::printform::LedgerPrintRow {
@@ -883,11 +883,11 @@ pub(super) async fn list_voucher_attachments(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let v = vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+    let v = vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权查看该凭证的附件"));
     }
-    let list: Vec<serde_json::Value> = findb::attach::list(&db, id)?
+    let list: Vec<serde_json::Value> = findb::attach::list(db, id)?
         .iter()
         .map(attachment_json)
         .collect();
@@ -907,7 +907,7 @@ pub(super) async fn upload_voucher_attachment(
     let voucher_no = {
         let db = &user.db;
         let v =
-            vouchers::get(&db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
+            vouchers::get(db, id)?.ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
         if !user.user.can_see_voucher(&v) {
             return Err(AppError::forbidden("无权为该凭证上传附件"));
         }
@@ -943,7 +943,7 @@ pub(super) async fn upload_voucher_attachment(
         return Err(AppError::bad_request("文件超过 10MB 上限"));
     }
     let db = &user.db;
-    let aid = findb::attach::add(&db, id, &name, &data, user.username())?;
+    let aid = findb::attach::add(db, id, &name, &data, user.username())?;
     db.log(
         user.username(),
         "凭证",

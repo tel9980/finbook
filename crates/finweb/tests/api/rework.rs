@@ -344,5 +344,5 @@ async fn rework_analysis_groups_by_reason_and_dept() {
         .iter()
         .find(|r| r["code"].as_str().unwrap() == "SLUG")
         .unwrap();
-    assert_eq!(slug["disabled"].as_bool().unwrap(), true);
+    assert!(slug["disabled"].as_bool().unwrap());
 }

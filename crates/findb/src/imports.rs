@@ -370,9 +370,7 @@ fn aux_kind_of_dim(s: &str) -> Option<fincore::AuxKind> {
 /// 「客户,存货」→ AuxMask。分隔符认中英文逗号、顿号、斜杠、分号。
 fn parse_aux_mask(s: &str) -> fincore::account::AuxMask {
     let mut m = fincore::account::AuxMask::NONE;
-    for part in
-        s.split(|c: char| c == ',' || c == '，' || c == '、' || c == '/' || c == ';' || c == '；')
-    {
+    for part in s.split([',', '，', '、', '/', ';', '；']) {
         if let Some(k) = aux_kind_of_dim(part) {
             m = m.with(k);
         }

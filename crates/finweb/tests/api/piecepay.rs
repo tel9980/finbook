@@ -111,7 +111,7 @@ async fn piece_work_fills_payroll() {
     assert_eq!(money_num(rows[0]["qty"].as_str().unwrap()), 100.0);
     assert_eq!(money_num(rows[0]["amount"].as_str().unwrap()), 150.0);
     assert_eq!(money_num(v["total"].as_str().unwrap()), 150.0);
-    assert_eq!(rows[0]["lines"][0]["matched"].as_bool().unwrap(), true);
+    assert!(rows[0]["lines"][0]["matched"].as_bool().unwrap());
 
     // 回填工资表
     let resp = handlers::router(state.clone())

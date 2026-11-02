@@ -25,8 +25,7 @@ fn opts() -> BookOptions {
 }
 
 fn db_at(dir: &std::path::Path, name: &str) -> findb::Db {
-    let db = findb::Db::create_no_admin(dir.join(name), &opts()).expect("建账套失败");
-    db
+    findb::Db::create_no_admin(dir.join(name), &opts()).expect("建账套失败")
 }
 
 /// 客户 + 供应商 + 现金流量项目三张档案：导出成 xlsx，导进另一个空账套，

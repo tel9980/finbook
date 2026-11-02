@@ -345,7 +345,7 @@ pub fn receipt_audit(db: &Db, id: i64, who: &str) -> DbResult<(i64, usize)> {
     };
     let summary = v.memo.clone();
     // 资金腿辅助核算统一取一处（收付款/调拨共用），见 funds::fund_account_aux
-    let fund_aux = crate::funds::fund_account_aux(&fund, bank.as_deref());
+    let fund_aux = crate::funds::fund_account_aux(&fund, bank);
     let mut line: i32 = 1;
     if receipt {
         v.push_entry(Entry {

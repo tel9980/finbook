@@ -22,7 +22,7 @@ pub(super) async fn get_atp(
     if item.is_empty() {
         return Err(AppError::bad_request("缺少存货编码 item"));
     }
-    let a = findb::scm::atp(&db, item)?;
+    let a = findb::scm::atp(db, item)?;
     let mut out = json!({
         "item": a.item,
         "on_hand": a.on_hand,
@@ -41,7 +41,7 @@ pub(super) async fn get_atp(
     if let Some(d) = q.get("date").map(|s| s.trim()).filter(|s| !s.is_empty()) {
         let on = NaiveDate::parse_from_str(d, "%Y-%m-%d")
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?;
-        let u = findb::scm::atp_until(&db, item, on)?;
+        let u = findb::scm::atp_until(db, item, on)?;
         out["as_of"] = json!(d);
         out["incoming"] = json!(u.incoming);
         out["atp"] = json!(u.atp);
@@ -59,7 +59,7 @@ pub(super) async fn run_export_schedule(
     user.require(Perm::Export)?;
     let db = &user.db;
     let dir = state.books_dir.join("exports");
-    let path = findb::exports::sched_run(&db, id, &dir)?;
+    let path = findb::exports::sched_run(db, id, &dir)?;
     db.log(user.username(), "导出", "立即执行计划任务", &path)?;
     Ok(Json(json!({ "ok": true, "path": path })))
 }
@@ -73,7 +73,7 @@ pub(super) async fn get_dashboard(
     let (v, e, a) = db.stats()?;
     let start = db.options().start_period;
     let cur = current_period(&state, &user);
-    let closed = periods::closed_upto(&*db)?;
+    let closed = periods::closed_upto(db)?;
     Ok(Json(Dashboard {
         company: user.company.clone(),
         start_period: period_to_str(start),
@@ -102,9 +102,9 @@ pub(super) async fn get_workbench(
         .and_then(|s| s.parse::<i32>().ok())
         .unwrap_or(12)
         .clamp(3, 24);
-    let mut out = findb::workbench::collect(&db, &user.user, cur, n)?;
+    let mut out = findb::workbench::collect(db, &user.user, cur, n)?;
     if user.can(Perm::FinReport) {
-        wb_report_domain(&db, &user, cur, n, &mut out)?;
+        wb_report_domain(db, &user, cur, n, &mut out)?;
     }
     Ok(Json(out))
 }
@@ -134,7 +134,7 @@ pub(super) async fn quick_search(
         ..Default::default()
     }
     .with_data_scope(&user.user);
-    for v in findb::vouchers::list(&db, &vq)? {
+    for v in findb::vouchers::list(db, &vq)? {
         rows.push(json!({
             "kind": "voucher",
             "id": v.id,
@@ -177,21 +177,21 @@ pub(super) async fn quick_search(
             "po",
             "po-doc",
             "SELECT id, no, supplier_name FROM purchase_order WHERE no LIKE ?1 OR supplier_name LIKE ?2 ORDER BY id DESC LIMIT 3",
-            &db,
+            db,
             &like,
         ));
         rows.extend(pack(
             "so",
             "so-doc",
             "SELECT id, no, customer_name FROM sales_order WHERE no LIKE ?1 OR customer_name LIKE ?2 ORDER BY id DESC LIMIT 3",
-            &db,
+            db,
             &like,
         ));
         rows.extend(pack(
             "req",
             "po-doc",
             "SELECT id, no, item_name FROM purchase_req WHERE no LIKE ?1 OR item_name LIKE ?2 ORDER BY id DESC LIMIT 3",
-            &db,
+            db,
             &like,
         ));
     }
@@ -238,7 +238,7 @@ pub(super) async fn quick_search(
 
     // 我的报销（数据范围与列表页一致）
     let mut mine = 0;
-    for c in findb::business::claim_list(&db, cur, None)? {
+    for c in findb::business::claim_list(db, cur, None)? {
         if mine >= 3 {
             break;
         }
@@ -271,9 +271,9 @@ pub(super) async fn get_overview(
     }
     let db = &user.db;
     let period = period_param(q.get("period"), current_period(&state, &user))?;
-    let o = findb::reports::overview(&db, period)?;
+    let o = findb::reports::overview(db, period)?;
     let recent: Vec<VoucherListItem> = o.recent.iter().map(to_item).collect();
-    let a = findb::advanced::financial_analysis(&db, period, Some(&user.user))?;
+    let a = findb::advanced::financial_analysis(db, period, Some(&user.user))?;
     let trend: Vec<serde_json::Value> = a
         .trend
         .iter()
@@ -342,7 +342,7 @@ pub(super) async fn list_accounts(
 ) -> Result<Json<Vec<fincore::Account>>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    Ok(Json(accounts::list(&*db)?))
+    Ok(Json(accounts::list(db)?))
 }
 
 /// 补齐内置科目表（旧账套补入新版本新增的科目，仅管理员）
@@ -354,8 +354,8 @@ pub(super) async fn fill_default_accounts(
         return Err(AppError::forbidden("该操作仅限系统管理员"));
     }
     let db = &user.db;
-    let before = accounts::list(&*db)?.len();
-    let inserted = accounts::fill_missing_defaults(&*db)?;
+    let before = accounts::list(db)?.len();
+    let inserted = accounts::fill_missing_defaults(db)?;
     if inserted > 0 {
         db.log(
             user.username(),
@@ -927,9 +927,9 @@ pub(super) async fn export_vouchers(
     }
     query.asc = true;
     query.limit = Some(5000);
-    let mut list = vouchers::list(&db, &query)?;
-    vouchers::fill_entries(&db, &mut list)?;
-    let chart = accounts::chart(&db)?;
+    let mut list = vouchers::list(db, &query)?;
+    vouchers::fill_entries(db, &mut list)?;
+    let chart = accounts::chart(db)?;
     let mut rows: Vec<Vec<String>> = vec![[
         "日期",
         "凭证号",
@@ -986,7 +986,7 @@ pub(super) async fn export_ledger(
         .get(&lq.code)
         .map(|a| format!("{} {}", a.code, a.name))
         .unwrap_or_else(|| lq.code.clone());
-    let list = balances::ledger(&db, &chart, &lq)?;
+    let list = balances::ledger(db, &chart, &lq)?;
     let has_qty = list.iter().any(|r| r.qty_balance.is_some());
     let mut header: Vec<String> = ["日期", "凭证号", "摘要", "借方", "贷方", "方向", "余额"]
         .iter()
@@ -1028,7 +1028,7 @@ pub(super) async fn export_payroll(
     user.require(Perm::Export)?;
     let db = &user.db;
     let period = period_param(q.get("period"), current_period(&state, &user))?;
-    let list = business::payroll_list(&db, period)?;
+    let list = business::payroll_list(db, period)?;
     let list = scope_payroll(&user, &list);
     let mut rows = vec![[
         "员工",
@@ -1081,7 +1081,7 @@ pub(super) async fn export_claims(
         .get("status")
         .filter(|s| !s.is_empty())
         .map(|s| business::ClaimStatus::parse(s));
-    let list = business::claim_list(&db, period, status)?;
+    let list = business::claim_list(db, period, status)?;
     // 与 list_claims 同一个口径（部门范围 + 仅本人经手），不再各写一遍
     let list: Vec<&business::Claim> = scope_claims(&user, &list);
     let mut rows = vec![[
@@ -1136,7 +1136,7 @@ pub(super) async fn export_dunning(
     if kind != "ar" && kind != "ap" {
         return Err(AppError::bad_request("kind 必须是 ar 或 ap"));
     }
-    let csv = findb::exports::build_csv(&db, &format!("dunning_{}", kind), period)?;
+    let csv = findb::exports::build_csv(db, &format!("dunning_{}", kind), period)?;
     let (_, rows) = csv;
     db.log(
         user.username(),
@@ -1195,7 +1195,7 @@ pub(super) async fn export_dunning_xlsx(
     let mut detail_rows: Vec<Vec<String>> = Vec::new();
     let mut mean: Money = Money::ZERO;
     for d in &list {
-        mean = mean + d.owed_total();
+        mean += d.owed_total();
         summary_rows.push(vec![
             d.no.clone(),
             d.date.format("%Y-%m-%d").to_string(),
@@ -1324,14 +1324,14 @@ pub(super) async fn create_account(
     let mut acc = req.account;
     acc.aux = build_aux_mask(&req.aux_kinds);
     let db = &user.db;
-    if accounts::get(&db, &acc.code)?.is_some() {
+    if accounts::get(db, &acc.code)?.is_some() {
         return Err(AppError::bad_request("科目已存在"));
     }
     // 与桌面端同一套校验：编码必须是数字且符合级长方案、名称非空、上级存在。
     // 少了这一层，非数字编码会写进库，后续 BalanceSnapshot 的前缀聚合按字节
     // 切片时会 panic，整个账套的报表都打不开。
-    accounts::chart(&db)?.validate_new(&acc).into_result()?;
-    accounts::insert(&db, &acc)?;
+    accounts::chart(db)?.validate_new(&acc).into_result()?;
+    accounts::insert(db, &acc)?;
     db.log(
         user.username(),
         "基础资料",
@@ -1350,11 +1350,11 @@ pub(super) async fn update_account(
     let mut acc = req.account;
     acc.aux = build_aux_mask(&req.aux_kinds);
     let db = &user.db;
-    if accounts::get(&db, &acc.code)?.is_none() {
+    if accounts::get(db, &acc.code)?.is_none() {
         return Err(AppError::not_found("科目不存在"));
     }
-    accounts::chart(&db)?.validate_edit(&acc).into_result()?;
-    accounts::update(&db, &acc)?;
+    accounts::chart(db)?.validate_edit(&acc).into_result()?;
+    accounts::update(db, &acc)?;
     db.log(
         user.username(),
         "基础资料",
@@ -1371,14 +1371,14 @@ pub(super) async fn delete_account(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    if accounts::get(&db, &code)?.is_none() {
+    if accounts::get(db, &code)?.is_none() {
         return Err(AppError::not_found("科目不存在"));
     }
-    let (vouchers, entries) = accounts::usage(&db, &code)?;
+    let (vouchers, entries) = accounts::usage(db, &code)?;
     if vouchers > 0 || entries > 0 {
         return Err(AppError::bad_request("科目已被凭证使用，无法删除"));
     }
-    accounts::delete(&db, &code)?;
+    accounts::delete(db, &code)?;
     db.log(user.username(), "基础资料", "删除科目", &code)?;
     Ok(Json(json!({"ok": true})))
 }
@@ -1390,7 +1390,7 @@ pub(super) async fn list_templates(
 ) -> Result<Json<Vec<template::Template>>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    Ok(Json(template::list(&*db)?))
+    Ok(Json(template::list(db)?))
 }
 
 pub(super) async fn create_template(
@@ -1400,7 +1400,7 @@ pub(super) async fn create_template(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let id = template::insert(&db, &t)?;
+    let id = template::insert(db, &t)?;
     db.log(user.username(), "凭证模板", "新建模板", &t.name)?;
     Ok(Json(json!({"id": id})))
 }
@@ -1424,7 +1424,7 @@ pub(super) async fn generate_template(
     // BEGIN IMMEDIATE，避免双击/并发各生成一张。手工模板允许多次调用，
     // 只有周期性模板才按 last_period 拒绝重复。
     let tx = db.write_tx()?;
-    let t = template::get(&db, id)?.ok_or_else(|| AppError::not_found("模板不存在"))?;
+    let t = template::get(db, id)?.ok_or_else(|| AppError::not_found("模板不存在"))?;
     if t.freq != template::Freq::Manual {
         if let Some(last) = t.last_period {
             if period.ymm() <= last.ymm() {
@@ -1462,7 +1462,7 @@ pub(super) async fn due_templates(
         Some(ym) => period_checked(ym)?,
         None => db.options().start_period,
     };
-    Ok(Json(template::due_list(&db, period)?))
+    Ok(Json(template::due_list(db, period)?))
 }
 
 // ---------------- 辅助核算档案 ----------------
@@ -1487,7 +1487,7 @@ pub(super) async fn list_aux(
         Some("1") | Some("true")
     );
     Ok(Json(auxs::list(
-        &db,
+        db,
         &AuxQuery {
             kind: Some(kind),
             include_disabled,
@@ -1503,7 +1503,7 @@ pub(super) async fn create_aux(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AuxEdit)?;
     let db = &user.db;
-    let id = auxs::insert(&db, &e)?;
+    let id = auxs::insert(db, &e)?;
     db.log(
         user.username(),
         "档案",
@@ -1544,7 +1544,7 @@ pub(super) async fn preset_aux(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AuxEdit)?;
     let db = &user.db;
-    let (n, skipped) = auxs::insert_presets(&db, q.kind)?;
+    let (n, skipped) = auxs::insert_presets(db, q.kind)?;
     db.log(
         user.username(),
         "档案",
@@ -1564,7 +1564,7 @@ pub(super) async fn update_aux(
     let db = &user.db;
     let mut e = e;
     e.id = id;
-    auxs::update(&db, &e)?;
+    auxs::update(db, &e)?;
     db.log(user.username(), "档案", "修改档案", &e.name)?;
     Ok(Json(json!({"ok": true})))
 }
@@ -1576,7 +1576,7 @@ pub(super) async fn delete_aux(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AuxEdit)?;
     let db = &user.db;
-    auxs::delete(&db, id)?;
+    auxs::delete(db, id)?;
     db.log(user.username(), "档案", "删除档案", &id.to_string())?;
     Ok(Json(json!({"ok": true})))
 }
@@ -1690,7 +1690,7 @@ pub(super) async fn list_export_schedules(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Export)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::exports::sched_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::exports::sched_list(db)? })))
 }
 
 /// 新增/修改计划任务
@@ -1716,7 +1716,7 @@ pub(super) async fn save_export_schedule(
         created_by: String::new(),
         created_at: String::new(),
     };
-    let id = findb::exports::sched_save(&db, &s, user.username())?;
+    let id = findb::exports::sched_save(db, &s, user.username())?;
     db.log(
         user.username(),
         "导出",
@@ -1734,7 +1734,7 @@ pub(super) async fn delete_export_schedule(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Export)?;
     let db = &user.db;
-    findb::exports::sched_delete(&db, id)?;
+    findb::exports::sched_delete(db, id)?;
     db.log(user.username(), "导出", "删除计划任务", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -1751,7 +1751,7 @@ pub(super) async fn parse_aux_batch(
     user.require(Perm::Report)?;
     let db = &user.db;
     // 库里已有的编码 —— 用来标「这个编码已经有了」，避免用户以为导进去了
-    let existing = auxs::codes(&db, req.kind)?;
+    let existing = auxs::codes(db, req.kind)?;
     let parsed = fincore::batch::auxiliary::parse(&req.text, req.kind, &existing);
     let rows: Vec<AuxBatchRowView> = parsed
         .rows
@@ -1792,7 +1792,7 @@ pub(super) async fn import_aux_batch(
     // 这个编码，用来防重复」。第一版只用一个数组，装成功后被当成 skipped 报出去，
     // 用户看到「已导入 2 条，跳过 2 条」—— 2 + 2 ≠ 2，数字对不上，
     // 第一反应是「这软件出 bug 了」。
-    let existing = auxs::codes(&db, req.kind)?;
+    let existing = auxs::codes(db, req.kind)?;
     let mut items: Vec<AuxEntity> = Vec::new();
     let mut in_book: Vec<String> = Vec::new();
     let mut dup_in_batch: Vec<String> = Vec::new();
@@ -1830,7 +1830,7 @@ pub(super) async fn import_aux_batch(
             "duplicate_in_batch": dup_in_batch,
         })));
     }
-    let (n, skipped) = auxs::insert_many_skip_existing(&db, &items)?;
+    let (n, skipped) = auxs::insert_many_skip_existing(db, &items)?;
     db.log(
         user.username(),
         "档案",

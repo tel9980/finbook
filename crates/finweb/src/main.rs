@@ -266,11 +266,14 @@ fn static_dir() -> PathBuf {
 fn asset_version() -> String {
     let dir = static_dir();
     let mut latest: u128 = 0;
-    // 必须与 index.html 里带 `?v=` 的**每一个**脚本/样式表对应上。
-    // 漏一个，那个文件单独改动时版本号不变 → 浏览器按旧 URL 拿到旧的缓存副本
-    // （静态资源现在带一年期 `immutable`，漏项不再是「下次回源就对了」而是
-    // 「一直错到别的文件也被改」）。`icons.js` 曾经就漏在这份清单外。
-    for name in ["app.js", "style.css", "util.js", "icons.js"] {
+    // 清单必须覆盖 index.html 里带 `?v=` 的**每一个**脚本/样式表。漏一个，那个
+    // 文件单独改动时版本号不变 → 浏览器按旧 URL 拿到旧的缓存副本（静态资源带
+    // 一年期 `immutable`，漏项不再是「下次回源就对了」而是「一直错到别的文件也
+    // 被改」）。`icons.js` 曾经就漏在这份硬编码清单外。
+    //
+    // 前端拆成 `app*.js` 之后硬编码更容易漏，所以改成**从 index.html 里扫**：
+    // 页面引用了什么就统计什么，以后加一个脚本只改 index.html 一处即可。
+    for name in referenced_assets(&dir) {
         if let Ok(meta) = std::fs::metadata(dir.join(name)) {
             if let Ok(m) = meta.modified() {
                 if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
@@ -283,5 +286,44 @@ fn asset_version() -> String {
         "dev".to_string()
     } else {
         latest.to_string()
+    }
+}
+
+/// 从 `index.html` 里扫出它引用的 JS/CSS 文件名（如 `app.js`、`style.css`）。
+///
+/// 只认以 `/` 开头的引号内路径，`?v={{V}}` 之类的查询串在第一个 `?` 处截断。
+/// 扫不到（文件缺失或格式变了）时退回固定清单——退回只是「别把版本号搞成 dev」，
+/// 正确性仍然靠 index.html 单一来源：只要能读到页面，就与页面完全一致。
+fn referenced_assets(dir: &std::path::Path) -> Vec<String> {
+    const FALLBACK: [&str; 4] = ["app.js", "style.css", "util.js", "icons.js"];
+    let html = match std::fs::read_to_string(dir.join("index.html")) {
+        Ok(h) => h,
+        Err(_) => return FALLBACK.iter().map(|s| s.to_string()).collect(),
+    };
+    let mut names: Vec<String> = Vec::new();
+    for piece in html.split(['"', '\'']) {
+        let path = piece.trim();
+        if !path.starts_with('/') {
+            continue;
+        }
+        let file = path
+            .split('?')
+            .next()
+            .unwrap_or(path)
+            .trim_start_matches('/');
+        if file.is_empty() || file.contains("{{") {
+            continue;
+        }
+        if !(file.ends_with(".js") || file.ends_with(".css")) {
+            continue;
+        }
+        if !names.iter().any(|n| n == file) {
+            names.push(file.to_string());
+        }
+    }
+    if names.is_empty() {
+        FALLBACK.iter().map(|s| s.to_string()).collect()
+    } else {
+        names
     }
 }

@@ -15,7 +15,7 @@ pub(super) async fn delete_budget_row(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    findb::mgmt::budget_delete(&db, id)?;
+    findb::mgmt::budget_delete(db, id)?;
     db.log(user.username(), "预算", "删除预算行", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -63,7 +63,7 @@ pub(super) async fn get_periods(
         vec![period_to_str(start)]
     };
     let cur = current_period(&state, &user);
-    let closed = periods::closed_upto(&*db)?;
+    let closed = periods::closed_upto(db)?;
     Ok(Json(json!({
         "current": period_to_str(cur),
         "closed_upto": closed.map(period_to_str),
@@ -134,10 +134,10 @@ pub(super) async fn period_precheck(
     user.require(Perm::PeriodClose)?;
     let period = period_checked(ymm)?;
     let db = &user.db;
-    let issues = periods::precheck(&db, period, true)?;
-    let chart = accounts::chart(&db)?;
+    let issues = periods::precheck(db, period, true)?;
+    let chart = accounts::chart(db)?;
     // 预检展示与【结转】按钮同口径：结转按含草稿取数（见 period_carry_forward）
-    let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
+    let snap = BalanceSnapshot::load(db, &BalanceQuery::period(period).with_posted_only(false))?;
     let pl_rows = snap.carry_forward_rows(&chart);
     let profit = snap
         .for_account(fincore::engine::period_end::PROFIT_ACCOUNT, None)
@@ -147,7 +147,7 @@ pub(super) async fn period_precheck(
         "issues": issues,
         "pl_count": pl_rows.len(),
         "profit_balance": profit.fmt_money(),
-        "closed_upto": periods::closed_upto(&*db)?.map(period_to_str),
+        "closed_upto": periods::closed_upto(db)?.map(period_to_str),
     })))
 }
 
@@ -160,12 +160,12 @@ pub(super) async fn period_year_end(
     user.require(Perm::CarryForward)?;
     let period = period_checked(ymm)?;
     let db = &user.db;
-    let chart = accounts::chart(&db)?;
+    let chart = accounts::chart(db)?;
     // 同 period_carry_forward：含草稿取数，保证第一次生成的结转草稿能清零 4103，
     // 第二次调用（余额 0）才会被拒，否则同一笔利润会被结转两次。
     // 取数与落库放同一事务，避免并发请求都读到结转前余额。
     let tx = db.write_tx()?;
-    let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
+    let snap = BalanceSnapshot::load(db, &BalanceQuery::period(period).with_posted_only(false))?;
     let profit = snap
         .for_account(fincore::engine::period_end::PROFIT_ACCOUNT, None)
         .end();
@@ -207,7 +207,7 @@ pub(super) async fn period_close(
     user.require(Perm::PeriodClose)?;
     let period = period_checked(ymm)?;
     let db = &user.db;
-    let issues = periods::close(&db, period, user.username(), req.require_carry)?;
+    let issues = periods::close(db, period, user.username(), req.require_carry)?;
     if !issues.is_empty() {
         return Err(AppError::bad_request(issues.join("；")));
     }
@@ -223,7 +223,7 @@ pub(super) async fn period_unclose(
     user.require(Perm::PeriodClose)?;
     let period = period_checked(ymm)?;
     let db = &user.db;
-    periods::unclose(&db, period, user.username())?;
+    periods::unclose(db, period, user.username())?;
     Ok(Json(
         json!({ "ok": true, "unclosed": period_to_str(period) }),
     ))
@@ -270,7 +270,7 @@ pub(super) async fn account_detail_ep(
     if !user.user.can_see_account(&account) {
         return Err(AppError::forbidden("无权查看该科目"));
     }
-    let (begin, rows) = findb::balances::account_detail(&db, &account, from, to)?;
+    let (begin, rows) = findb::balances::account_detail(db, &account, from, to)?;
     let (td, tc): (Money, Money) = rows.iter().fold((Money::ZERO, Money::ZERO), |(ad, ac), r| {
         (ad + r.debit, ac + r.credit)
     });
@@ -337,7 +337,7 @@ pub(super) async fn get_multi_column(
     if !user.user.can_see_account(&main) || cols.iter().any(|c| !user.user.can_see_account(c)) {
         return Err(AppError::forbidden("无权查看该科目"));
     }
-    let rows = advanced::multi_column_table(&db, &main, &cols, from, to, Some(&user.user))?;
+    let rows = advanced::multi_column_table(db, &main, &cols, from, to, Some(&user.user))?;
     Ok(Json(
         serde_json::json!({ "main": main, "cols": cols, "rows": rows }),
     ))
@@ -355,7 +355,7 @@ pub(super) async fn get_summary_table(
         current_period(&state, &user),
     )?;
     let db = &user.db;
-    let rows = advanced::summary_table(&db, from, to, Some(&user.user))?;
+    let rows = advanced::summary_table(db, from, to, Some(&user.user))?;
     Ok(Json(
         serde_json::json!({ "from": period_to_str(from), "to": period_to_str(to), "rows": rows }),
     ))
@@ -379,7 +379,7 @@ pub(super) async fn get_fin_ratios(
             fincore::Period::new(period.year(), 1).unwrap_or(period)
         });
     let db = &user.db;
-    let rows = advanced::fin_ratios(&db, period, from, Some(&user.user))?;
+    let rows = advanced::fin_ratios(db, period, from, Some(&user.user))?;
     Ok(Json(
         serde_json::json!({ "period": period_to_str(period), "ratios": rows }),
     ))
@@ -405,7 +405,7 @@ pub(super) async fn get_equity_statement(
         )));
     }
     let db = &user.db;
-    let stmt = findb::reports::equity_statement(&db, from, period, Some(&user.user))?;
+    let stmt = findb::reports::equity_statement(db, from, period, Some(&user.user))?;
     Ok(Json(serde_json::json!({
         "from": period_to_str(from),
         "to": period_to_str(period),
@@ -441,15 +441,8 @@ pub(super) async fn get_report_compare(
         (cur, prev)
     };
     let db = &user.db;
-    let rows = findb::reports::report_compare(
-        &db,
-        &key,
-        cur_from,
-        cur,
-        prev_from,
-        prev,
-        Some(&user.user),
-    )?;
+    let rows =
+        findb::reports::report_compare(db, &key, cur_from, cur, prev_from, prev, Some(&user.user))?;
     Ok(Json(serde_json::json!({
         "key": key,
         "current": period_to_str(cur),
@@ -484,7 +477,7 @@ pub(super) async fn get_account_daily(
         .map(|s| s == "1" || s == "true")
         .unwrap_or(true);
     let rows =
-        findb::reports::account_daily_report(&db, &code, from, to, Some(&user.user), posted_only)?;
+        findb::reports::account_daily_report(db, &code, from, to, Some(&user.user), posted_only)?;
     Ok(Json(serde_json::json!({ "code": code, "rows": rows })))
 }
 
@@ -499,7 +492,7 @@ pub(super) async fn get_period_reconcile(
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
     let db = &user.db;
-    let items = findb::reports::period_reconcile(&db, period)?;
+    let items = findb::reports::period_reconcile(db, period)?;
     Ok(Json(
         serde_json::json!({ "period": period_to_str(period), "items": items }),
     ))
@@ -520,7 +513,7 @@ pub(super) async fn get_aux_balance(
     }
     let (from, to) = report_range(&state, &user, &q)?;
     let db = &user.db;
-    let rows = balances::aux_balance(&db, kind, from, to, Some(&user.user))?;
+    let rows = balances::aux_balance(db, kind, from, to, Some(&user.user))?;
     Ok(Json(json!({
         "kind": kind.code(),
         "kind_label": kind.label(),
@@ -539,7 +532,7 @@ pub(super) async fn get_qty_balance(
     user.require(Perm::FinReport)?;
     let (from, to) = report_range(&state, &user, &q)?;
     let db = &user.db;
-    let rows = balances::qty_balance_sheet(&db, from, to, Some(&user.user))?;
+    let rows = balances::qty_balance_sheet(db, from, to, Some(&user.user))?;
     Ok(Json(json!({
         "from": period_to_str(from),
         "to": period_to_str(to),
@@ -555,14 +548,14 @@ pub(super) async fn get_custom_report(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = &user.db;
-    let r = findb::mgmt::custom_get(&db, &key)?
+    let r = findb::mgmt::custom_get(db, &key)?
         .ok_or_else(|| AppError::not_found("自定义报表不存在"))?;
     let period = period_param(q.get("period"), current_period(&state, &user))?;
     // 用 detailed 版本：公式写错/取数失败（数据库忙、脏数据）时该单元格按 0 占位，
     // 但**必须把原因回传**。旧的 `custom_report_values` 直接丢弃 warnings，
     // 报表会打印出一片像样的 0 而用户完全看不出哪里错了——财务报表最坏的失败模式。
     let (values, warnings) =
-        findb::mgmt::custom_report_values_detailed(&db, &r, period, Some(&user.user))?;
+        findb::mgmt::custom_report_values_detailed(db, &r, period, Some(&user.user))?;
     let matrix: Vec<Vec<String>> = values
         .iter()
         .map(|row| row.iter().map(|m| m.fmt_money()).collect())
@@ -596,7 +589,7 @@ pub(super) async fn get_budget_alerts(
         .get("threshold")
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(90);
-    let rows = findb::mgmt::budget_alerts(&db, period, from, threshold)?;
+    let rows = findb::mgmt::budget_alerts(db, period, from, threshold)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -607,7 +600,7 @@ pub(super) async fn copy_budget_version(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    let n = advanced::bversion_copy(&db, &req.from, &req.to)?;
+    let n = advanced::bversion_copy(db, &req.from, &req.to)?;
     Ok(Json(serde_json::json!({ "ok": true, "copied": n })))
 }
 
@@ -628,7 +621,7 @@ pub(super) async fn list_notes(
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
     let db = &user.db;
-    let rows = advanced::note_list(&db, &report_key, period)?;
+    let rows = advanced::note_list(db, &report_key, period)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -649,7 +642,7 @@ pub(super) async fn save_note(
         updated_by: user.username().to_string(),
         updated_at: String::new(),
     };
-    let id = advanced::note_save(&db, &mut n)?;
+    let id = advanced::note_save(db, &mut n)?;
     Ok(Json(serde_json::json!({ "ok": true, "id": id })))
 }
 
@@ -660,7 +653,7 @@ pub(super) async fn delete_note(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    advanced::note_delete(&db, id)?;
+    advanced::note_delete(db, id)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -681,8 +674,8 @@ pub(super) async fn get_budget_analysis(
         .unwrap_or_else(|| current_period(&state, &user).year());
     let version = q.get("version").cloned().unwrap_or_default();
     let upto = q.get("upto").and_then(|s| parse_period(s));
-    let rows = findb::mgmt::budget_analysis(&db, year, &version, upto)?;
-    let summary = findb::mgmt::budget_analysis_summary(&db, year, &version)?;
+    let rows = findb::mgmt::budget_analysis(db, year, &version, upto)?;
+    let summary = findb::mgmt::budget_analysis_summary(db, year, &version)?;
     Ok(Json(
         serde_json::json!({ "year": year, "rows": rows, "summary": summary }),
     ))
@@ -697,7 +690,7 @@ pub(super) async fn get_balance_sheet(
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let t = statement_table(
-        &db,
+        db,
         &user,
         "balance_sheet",
         from,
@@ -723,7 +716,7 @@ pub(super) async fn print_balance_sheet(
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let t = statement_table(
-        &db,
+        db,
         &user,
         "balance_sheet",
         from,
@@ -752,7 +745,7 @@ pub(super) async fn get_income_statement(
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let t = statement_table(
-        &db,
+        db,
         &user,
         "income_statement",
         from,
@@ -897,7 +890,7 @@ pub(super) async fn get_cash_flow(
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     // 本期 + 上期一起算：只给本期净额没法判断「是好是坏」
-    let (cf, prev_cf) = findb::reports::cash_flow_compare(&db, from, to, Some(&user.user))?;
+    let (cf, prev_cf) = findb::reports::cash_flow_compare(db, from, to, Some(&user.user))?;
     let (pf, pt) = findb::reports::prior_range(from, to);
     let line = |l: &fincore::report::cashflow::CashFlowLine| json!({ "code": l.code, "name": l.name, "inflow": l.inflow.fmt_money(), "outflow": l.outflow.fmt_money(), "net": l.net.fmt_money() });
     Ok(Json(json!({
@@ -943,7 +936,7 @@ pub(super) async fn print_cash_flow(
     let (from, to) = report_range(&state, &user, &q)?;
     // 打印页也带上期对比：Excel 有、网页有，打印页没有的话，拿纸去开会的人看到的
     // 是唯一一份「只有本期」的表。
-    let (cf, prev) = findb::reports::cash_flow_compare(&db, from, to, Some(&user.user))?;
+    let (cf, prev) = findb::reports::cash_flow_compare(db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
     let html = crate::report_html::cash_flow_html(
         &cf,
@@ -966,7 +959,7 @@ pub(super) async fn print_equity_statement(
     user.require(Perm::FinReport)?;
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
-    let stmt = findb::reports::equity_statement(&db, from, to, Some(&user.user))?;
+    let stmt = findb::reports::equity_statement(db, from, to, Some(&user.user))?;
     let subtitle = format!("{} 至 {}", from.label(), to.label());
     let html = crate::report_html::equity_html(
         &stmt,
@@ -1038,8 +1031,8 @@ pub(super) async fn list_budget_rows(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let ver = findb::advanced::bversion_current(&*db)?;
-    let rows: Vec<serde_json::Value> = findb::mgmt::budget_list(&db, period)?
+    let ver = findb::advanced::bversion_current(db)?;
+    let rows: Vec<serde_json::Value> = findb::mgmt::budget_list(db, period)?
         .into_iter()
         .filter(|b| b.version == ver)
         .map(|b| {
@@ -1073,7 +1066,7 @@ pub(super) async fn save_budget_row(
     if amount.is_negative() {
         return Err(AppError::bad_request("预算金额不能为负"));
     }
-    let ver = findb::advanced::bversion_current(&*db)?;
+    let ver = findb::advanced::bversion_current(db)?;
     let b = findb::mgmt::Budget {
         id: 0,
         period,
@@ -1083,7 +1076,7 @@ pub(super) async fn save_budget_row(
         memo: req.memo,
         version: ver,
     };
-    let id = findb::mgmt::budget_upsert_version(&db, &b)?;
+    let id = findb::mgmt::budget_upsert_version(db, &b)?;
     db.log(
         user.username(),
         "预算",
@@ -1112,7 +1105,7 @@ pub(super) async fn period_carry_forward(
     user.require(Perm::CarryForward)?;
     let period = period_checked(ymm)?;
     let db = &user.db;
-    let chart = accounts::chart(&db)?;
+    let chart = accounts::chart(db)?;
     // 结转是"操作"不是报表：按含未记账（排除作废）取数。结转生成的凭证本身是草稿，
     // 若按已记账口径取数，草稿看不见 → 第二次调用时损益仍未清零 → 重复结转。
     // 结账前 checklist 要求全部记账，届时两种口径结果相同（H-3 定案的已记账口径
@@ -1122,7 +1115,7 @@ pub(super) async fn period_carry_forward(
     // 损益已经被第一张清零，账上就多了一笔重复结转。BEGIN IMMEDIATE 让后来者
     // 等前者提交后再取数，第二次看到的净额已是 0。
     let tx = db.write_tx()?;
-    let snap = BalanceSnapshot::load(&db, &BalanceQuery::period(period).with_posted_only(false))?;
+    let snap = BalanceSnapshot::load(db, &BalanceQuery::period(period).with_posted_only(false))?;
     let rows = snap.carry_forward_rows(&chart);
     if rows.is_empty() {
         return Err(AppError::bad_request(
@@ -1137,7 +1130,7 @@ pub(super) async fn period_carry_forward(
     // 明明有 658,000 的损益额，提示却说「损益发生额均为零」。
     //
     // 这里主动查本期已有的结转凭证，把因果和补救一起给出。
-    let carried: Vec<String> = vouchers::list(&db, &vouchers::VoucherQuery::period(period))?
+    let carried: Vec<String> = vouchers::list(db, &vouchers::VoucherQuery::period(period))?
         .into_iter()
         .filter(|v| v.source == VoucherSource::CarryForward && v.status != VoucherStatus::Void)
         .map(|v| format!("{} #{}", v.word, v.no))
@@ -1232,7 +1225,7 @@ pub(super) async fn list_custom_reports(
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
     user.require(Perm::FinReport)?;
     let db = &user.db;
-    let rows: Vec<serde_json::Value> = findb::mgmt::custom_list(&*db)?
+    let rows: Vec<serde_json::Value> = findb::mgmt::custom_list(db)?
         .iter()
         .map(custom_json)
         .collect();
@@ -1250,7 +1243,7 @@ pub(super) async fn save_custom_report(
         return Err(AppError::bad_request("报表名称不能为空"));
     }
     let key = if req.key.trim().is_empty() {
-        findb::mgmt::custom_next_key(&*db)?
+        findb::mgmt::custom_next_key(db)?
     } else {
         req.key.trim().to_string()
     };
@@ -1273,7 +1266,7 @@ pub(super) async fn save_custom_report(
         .into_iter()
         .map(|(li, ci, e)| json!({ "line": li, "column": ci, "error": e }))
         .collect();
-    findb::mgmt::custom_save(&db, &r)?;
+    findb::mgmt::custom_save(db, &r)?;
     db.log(
         user.username(),
         "报表",
@@ -1290,7 +1283,7 @@ pub(super) async fn delete_custom_report(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    findb::mgmt::custom_delete(&db, &key)?;
+    findb::mgmt::custom_delete(db, &key)?;
     db.log(user.username(), "报表", "删除自定义报表", &key)?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -1303,8 +1296,8 @@ pub(super) async fn list_budget_versions(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = &user.db;
-    let versions = advanced::bversion_list(&*db)?;
-    let current = advanced::bversion_current(&*db)?;
+    let versions = advanced::bversion_list(db)?;
+    let current = advanced::bversion_current(db)?;
     Ok(Json(
         serde_json::json!({ "versions": versions, "current": current }),
     ))
@@ -1321,7 +1314,7 @@ pub(super) async fn save_budget_version(
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
     advanced::bversion_save(
-        &db,
+        db,
         &advanced::BudgetVersion {
             key: req.key,
             name: req.name,
@@ -1340,7 +1333,7 @@ pub(super) async fn delete_budget_version(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    advanced::bversion_delete(&db, &key)?;
+    advanced::bversion_delete(db, &key)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -1351,12 +1344,12 @@ pub(super) async fn activate_budget_version(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    let mut v = advanced::bversion_list(&*db)?
+    let mut v = advanced::bversion_list(db)?
         .into_iter()
         .find(|v| v.key == key)
         .ok_or_else(|| AppError::NotFound(format!("预算版本 {key} 不存在")))?;
     v.is_current = true;
-    advanced::bversion_save(&db, &v)?;
+    advanced::bversion_save(db, &v)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -1371,7 +1364,7 @@ pub(super) async fn print_income_statement(
     let db = &user.db;
     let (from, to) = report_range(&state, &user, &q)?;
     let t = statement_table(
-        &db,
+        db,
         &user,
         "income_statement",
         from,
@@ -1398,7 +1391,7 @@ pub(super) async fn update_template(
     let db = &user.db;
     let mut t = t;
     t.id = id;
-    template::update(&db, &t)?;
+    template::update(db, &t)?;
     db.log(user.username(), "凭证模板", "修改模板", &t.name)?;
     Ok(Json(json!({"ok": true})))
 }
@@ -1410,7 +1403,7 @@ pub(super) async fn delete_template(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
     let db = &user.db;
-    template::delete(&db, id)?;
+    template::delete(db, id)?;
     db.log(user.username(), "凭证模板", "删除模板", &id.to_string())?;
     Ok(Json(json!({"ok": true})))
 }

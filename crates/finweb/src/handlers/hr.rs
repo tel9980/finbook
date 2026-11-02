@@ -15,7 +15,7 @@ pub(super) async fn list_payroll(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     let period = query_period(&state, &user, &q);
-    let rows = business::payroll_list(&db, period)?;
+    let rows = business::payroll_list(db, period)?;
     let rows: Vec<business::Payroll> = scope_payroll(&user, &rows).into_iter().cloned().collect();
     Ok(Json(rows))
 }
@@ -29,7 +29,7 @@ pub(super) async fn export_payroll_bank_file(
     user.require(Perm::Export)?;
     let db = &user.db;
     let period = query_period(&state, &user, &q);
-    let rows = business::payroll_list(&db, period)?;
+    let rows = business::payroll_list(db, period)?;
     let rows = scope_payroll(&user, &rows);
     let mut out = vec![vec![
         "账号".to_string(),
@@ -41,7 +41,7 @@ pub(super) async fn export_payroll_bank_file(
         if !p.net.is_positive() {
             continue;
         }
-        let (acc, bank) = employee_bank(&db, &p.employee)?;
+        let (acc, bank) = employee_bank(db, &p.employee)?;
         if acc.is_empty() {
             skipped += 1;
             continue;
@@ -88,9 +88,9 @@ pub(super) async fn get_payroll_slip(
     if !doc_in_scope(&user, employee) {
         return Err(AppError::forbidden("数据范围受限，不能查看他人的工资条"));
     }
-    let p = business::payroll_get(&db, period, employee)?
+    let p = business::payroll_get(db, period, employee)?
         .ok_or_else(|| AppError::not_found("该员工本期无工资记录"))?;
-    let ytd = business::payroll_ytd(&db, period, employee)?;
+    let ytd = business::payroll_ytd(db, period, employee)?;
     Ok(Json(json!({
         "period": period_to_str(period),
         "payroll": {
@@ -119,7 +119,7 @@ pub(super) async fn get_payroll_tax_report(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     let period = query_period(&state, &user, &q);
-    let rows = business::payroll_list(&db, period)?;
+    let rows = business::payroll_list(db, period)?;
     // 数据范围：受限账号只出自己（或本部门）的工资行，与列表口径一致
     let rows = scope_payroll(&user, &rows);
     let items: Vec<serde_json::Value> = rows
@@ -159,9 +159,9 @@ pub(super) async fn save_payroll(
     let db = &user.db;
     let period = query_period(&state, &user, &q);
     // 改动已有工资行之前先过闸：已结账、或本月工资凭证已生成，都不许改
-    business::payroll_guard_editable(&db, period)?;
+    business::payroll_guard_editable(db, period)?;
     let p = business::payroll_calc(
-        &db,
+        db,
         period,
         employee,
         r.dept.trim(),
@@ -174,7 +174,7 @@ pub(super) async fn save_payroll(
         parse_money_checked(&r.housing_co)?,
         r.memo.trim(),
     )?;
-    let id = business::payroll_upsert(&db, &p)?;
+    let id = business::payroll_upsert(db, &p)?;
     db.log(
         user.username(),
         "工资",
@@ -238,7 +238,7 @@ pub(super) async fn generate_payroll(
     if rows.is_empty() {
         return Err(AppError::bad_request("没有可导入的工资行"));
     }
-    let n = business::payroll_generate(&db, period, &rows)?;
+    let n = business::payroll_generate(db, period, &rows)?;
     db.log(
         user.username(),
         "工资",
@@ -257,7 +257,7 @@ pub(super) async fn delete_payroll(
     let db = &user.db;
     // 删除前拦截已生成凭证的工资行
     let p =
-        business::payroll_get_by_id(&db, id)?.ok_or_else(|| AppError::not_found("工资行不存在"))?;
+        business::payroll_get_by_id(db, id)?.ok_or_else(|| AppError::not_found("工资行不存在"))?;
     if !doc_in_scope(&user, &p.employee) {
         return Err(AppError::forbidden("无权操作他人的工资行"));
     }
@@ -266,7 +266,7 @@ pub(super) async fn delete_payroll(
             "该工资行已生成凭证，不能删除（请先删除/反记账相关凭证）",
         ));
     }
-    business::payroll_delete(&db, id)?;
+    business::payroll_delete(db, id)?;
     db.log(user.username(), "工资", "删除工资行", &id.to_string())?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -288,7 +288,7 @@ pub(super) async fn payroll_ytd(
             "数据范围受限，不能查看他人的年度工资累计",
         ));
     }
-    Ok(Json(business::payroll_ytd(&db, period, employee.trim())?))
+    Ok(Json(business::payroll_ytd(db, period, employee.trim())?))
 }
 
 /// 工资计提凭证
@@ -303,7 +303,7 @@ pub(super) async fn payroll_accrue(
     let period = query_period(&state, &user, &q);
     let date = req_date(&r.date, period.last_day())?;
     let id = business::payroll_accrue_voucher(
-        &db,
+        db,
         period,
         date,
         r.expense.trim(),
@@ -333,7 +333,7 @@ pub(super) async fn payroll_social_pay(
     let period = query_period(&state, &user, &q);
     let date = req_date(&r.date, period.last_day())?;
     let id = business::payroll_social_voucher(
-        &db,
+        db,
         period,
         date,
         r.social_payable.trim(),
@@ -363,7 +363,7 @@ pub(super) async fn payroll_pay(
     let period = query_period(&state, &user, &q);
     let date = req_date(&r.date, period.last_day())?;
     let id = business::payroll_pay_voucher(
-        &db,
+        db,
         period,
         date,
         r.payable_account.trim(),
@@ -394,7 +394,7 @@ pub(super) async fn list_claims(
         .get("status")
         .filter(|s| !s.is_empty())
         .map(|s| business::ClaimStatus::parse(s));
-    let rows = business::claim_list(&db, period, status)?;
+    let rows = business::claim_list(db, period, status)?;
     let rows: Vec<business::Claim> = scope_claims(&user, &rows).into_iter().cloned().collect();
     Ok(Json(rows))
 }
@@ -407,7 +407,7 @@ pub(super) async fn next_claim_no(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     let period = query_period(&state, &user, &q);
-    let no = business::claim_next_no(&db, period)?;
+    let no = business::claim_next_no(db, period)?;
     Ok(Json(json!({ "no": no })))
 }
 
@@ -440,7 +440,7 @@ pub(super) async fn create_claim(
     let c = business::Claim {
         id: 0,
         period,
-        no: business::claim_next_no(&db, period)?,
+        no: business::claim_next_no(db, period)?,
         biz_date: date,
         applicant: applicant.to_string(),
         dept: r.dept.trim().to_string(),
@@ -455,7 +455,7 @@ pub(super) async fn create_claim(
         voucher_id: None,
         created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
     };
-    let id = business::claim_insert(&db, &c)?;
+    let id = business::claim_insert(db, &c)?;
     db.log(
         user.username(),
         "报销",
@@ -473,7 +473,7 @@ pub(super) async fn update_claim(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let mut c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
+    let mut c = business::claim_get(db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !claim_visible(&user, &c) {
         return Err(AppError::forbidden("数据范围受限，不能修改他人的报销单"));
     }
@@ -493,7 +493,7 @@ pub(super) async fn update_claim(
     c.reason = r.reason.trim().to_string();
     c.amount = parse_money_checked(&r.amount)?;
     c.items = claim_items(&r.items)?;
-    business::claim_update(&db, &c)?;
+    business::claim_update(db, &c)?;
     db.log(
         user.username(),
         "报销",
@@ -510,7 +510,7 @@ pub(super) async fn delete_claim(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherDelete)?;
     let db = &user.db;
-    let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
+    let c = business::claim_get(db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !claim_visible(&user, &c) {
         return Err(AppError::forbidden("数据范围受限，不能删除他人的报销单"));
     }
@@ -519,7 +519,7 @@ pub(super) async fn delete_claim(
         return Err(AppError::bad_request("该报销单已生成凭证，请先删除凭证"));
     }
     let label = c.no.clone();
-    business::claim_delete(&db, id)?;
+    business::claim_delete(db, id)?;
     db.log(user.username(), "报销", "删除报销单", &label)?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -533,7 +533,7 @@ pub(super) async fn claim_transition(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     let to = business::ClaimStatus::parse(&r.status);
-    let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
+    let c = business::claim_get(db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !claim_visible(&user, &c) {
         return Err(AppError::forbidden("数据范围受限，不能操作他人的报销单"));
     }
@@ -547,7 +547,7 @@ pub(super) async fn claim_transition(
     };
     if let Some(appr) = gate_for {
         if let findb::workflow::Gate::Pending { next } =
-            findb::workflow::intercept(&db, findb::workflow::BIZ_CLAIM, id, &user.user, appr, "")?
+            findb::workflow::intercept(db, findb::workflow::BIZ_CLAIM, id, &user.user, appr, "")?
         {
             db.log(
                 user.username(),
@@ -558,7 +558,7 @@ pub(super) async fn claim_transition(
             return Ok(Json(json!({ "ok": true, "status": to, "pending": next })));
         }
     }
-    business::claim_transition(&db, id, to, user.username())?;
+    business::claim_transition(db, id, to, user.username())?;
     db.log(
         user.username(),
         "报销",
@@ -577,7 +577,7 @@ pub(super) async fn claim_voucher(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     // 先验权限再验参数：范围外的单子连"参数对不对"都不该告诉调用方
-    let c = business::claim_get(&db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
+    let c = business::claim_get(db, id)?.ok_or_else(|| AppError::not_found("报销单不存在"))?;
     if !claim_visible(&user, &c) {
         return Err(AppError::forbidden(
             "数据范围受限，不能为他人报销单生成凭证",
@@ -591,7 +591,7 @@ pub(super) async fn claim_voucher(
         // 幂等：支付时已自动出过凭证 → 返回同一张（不新增）
         return Ok(Json(json!({ "id": existing, "already": true })));
     }
-    let vid = business::claim_voucher(&db, id, pay, user.username())?;
+    let vid = business::claim_voucher(db, id, pay, user.username())?;
     db.log(
         user.username(),
         "报销",

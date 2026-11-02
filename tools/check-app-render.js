@@ -31,7 +31,10 @@ const fs = require("fs");
 const path = require("path");
 
 const ROOT = process.env.FIX_ROOT || path.join(__dirname, "..");
-const APP = path.join(ROOT, "crates/finweb/static/app.js");
+// 前端已拆成 16 份 app*.js（经典 script，按 index.html 顺序加载）。视图函数散落
+// 在其中，所以这里用**拼接后的整份源码**做抽取：函数级抽取不受文件边界影响，
+// 而只读第一份 app.js 会漏掉绝大部分视图（检查变空转还不报错）。
+const APP = () => require("./lib-app-src.js").readAppBundle();
 
 /// 从源码里按大括号配平抽出一个 `function name(...) { ... }` 的完整原文。
 function extractFn(src, name) {
@@ -104,18 +107,22 @@ const CASES = [
 ];
 
 function main() {
-  if (!fs.existsSync(APP)) {
-    console.log(`FAIL 找不到 ${APP}`);
+  let src;
+  try {
+    src = APP();
+  } catch (e) {
+    console.log(`FAIL 读不到前端脚本：${e.message}`);
     return 1;
   }
-  const src = fs.readFileSync(APP, "utf8");
   let bad = 0;
   for (const c of CASES) {
     const body = extractFn(src, c.fn);
     if (!body) {
       // 函数改名/删掉了：用例失效必须报出来。静默跳过就是「看着在守，
       // 实际没守」—— 本仓库最忌讳的失效模式。
-      console.log(`FAIL app.js 里找不到函数 ${c.fn}，检查用例已失效，请同步更新 tools/check-app-render.js`);
+      console.log(
+        `FAIL 前端脚本（app*.js 拼接）里找不到函数 ${c.fn}，检查用例已失效，请同步更新 tools/check-app-render.js`
+      );
       bad++;
       continue;
     }

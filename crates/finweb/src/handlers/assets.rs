@@ -11,8 +11,8 @@ pub(super) async fn list_assets(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let cards: Vec<serde_json::Value> = findb::assets::list(&*db)?.iter().map(asset_json).collect();
-    let ledger: Vec<serde_json::Value> = findb::assets::ledger(&db, period)?
+    let cards: Vec<serde_json::Value> = findb::assets::list(db)?.iter().map(asset_json).collect();
+    let ledger: Vec<serde_json::Value> = findb::assets::ledger(db, period)?
         .iter()
         .map(|r| {
             json!({
@@ -23,7 +23,7 @@ pub(super) async fn list_assets(
             })
         })
         .collect();
-    let plan: Vec<serde_json::Value> = findb::assets::dep_plan(&db, period)?
+    let plan: Vec<serde_json::Value> = findb::assets::dep_plan(db, period)?
         .iter()
         .map(|p| {
             json!({
@@ -33,7 +33,7 @@ pub(super) async fn list_assets(
             })
         })
         .collect();
-    let deps: Vec<serde_json::Value> = findb::assets::dep_list_period(&db, period)?
+    let deps: Vec<serde_json::Value> = findb::assets::dep_list_period(db, period)?
         .iter()
         .map(|d| {
             json!({
@@ -60,10 +60,10 @@ pub(super) async fn create_asset(
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
     let a = asset_from_req(&req)?;
-    if findb::assets::get_by_code(&db, &a.code)?.is_some() {
+    if findb::assets::get_by_code(db, &a.code)?.is_some() {
         return Err(AppError::bad_request("资产编码已存在"));
     }
-    let id = findb::assets::insert(&db, &a)?;
+    let id = findb::assets::insert(db, &a)?;
     db.log(
         user.username(),
         "固定资产",
@@ -82,7 +82,7 @@ pub(super) async fn update_asset(
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
     let existing =
-        findb::assets::get(&db, id)?.ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
+        findb::assets::get(db, id)?.ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
     if existing.status == findb::assets::AssetStatus::Disposed {
         return Err(AppError::bad_request("已清理的卡片不能修改"));
     }
@@ -93,7 +93,7 @@ pub(super) async fn update_asset(
     a.dispose_amount = existing.dispose_amount;
     a.voucher_id = existing.voucher_id;
     // 已计提过折旧：影响计价的字段冻结，避免历史折旧与台账对不上
-    if !findb::assets::dep_list(&db, id)?.is_empty() {
+    if !findb::assets::dep_list(db, id)?.is_empty() {
         let frozen = a.original_value != existing.original_value
             || a.residual_rate != existing.residual_rate
             || a.life_months != existing.life_months
@@ -105,7 +105,7 @@ pub(super) async fn update_asset(
             ));
         }
     }
-    findb::assets::update_logged(&db, &existing, &a, user.username(), "卡片编辑")?;
+    findb::assets::update_logged(db, &existing, &a, user.username(), "卡片编辑")?;
     db.log(
         user.username(),
         "固定资产",
@@ -122,8 +122,8 @@ pub(super) async fn delete_asset(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    let a = findb::assets::get(&db, id)?.ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
-    findb::assets::delete(&db, id)?;
+    let a = findb::assets::get(db, id)?.ok_or_else(|| AppError::not_found("资产卡片不存在"))?;
+    findb::assets::delete(db, id)?;
     db.log(
         user.username(),
         "固定资产",
@@ -140,7 +140,7 @@ pub(super) async fn list_asset_deps(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    let rows: Vec<serde_json::Value> = findb::assets::dep_list(&db, id)?
+    let rows: Vec<serde_json::Value> = findb::assets::dep_list(db, id)?
         .iter()
         .map(|d| {
             json!({
@@ -163,7 +163,7 @@ pub(super) async fn list_asset_changes(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::assets::changes(&db, id)? })))
+    Ok(Json(json!({ "rows": findb::assets::changes(db, id)? })))
 }
 
 /// 固定资产 ↔ 总账对账（原值/累计折旧逐科目差异）
@@ -178,7 +178,7 @@ pub(super) async fn asset_gl_reconcile(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let r = findb::assets::gl_reconcile(&db, period)?;
+    let r = findb::assets::gl_reconcile(db, period)?;
     Ok(Json(json!({
         "period": period_to_str(period),
         "rows": r.rows,
@@ -200,7 +200,7 @@ pub(super) async fn impair_asset(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    if findb::assets::get(&db, id)?.is_none() {
+    if findb::assets::get(db, id)?.is_none() {
         return Err(AppError::not_found("资产卡片不存在"));
     }
     let period = if req.period > 0 {
@@ -209,7 +209,7 @@ pub(super) async fn impair_asset(
         current_period(&state, &user)
     };
     let amount = parse_money_checked(&req.amount)?;
-    let aid = findb::assets::impair(&db, id, period, amount, &req.memo)?;
+    let aid = findb::assets::impair(db, id, period, amount, &req.memo)?;
     db.log(
         user.username(),
         "固定资产",
@@ -243,7 +243,7 @@ pub(super) async fn save_asset_count(
     };
     let mut lines = Vec::with_capacity(req.lines.len());
     for l in &req.lines {
-        if findb::assets::get(&db, l.asset_id)?.is_none() {
+        if findb::assets::get(db, l.asset_id)?.is_none() {
             return Err(AppError::bad_request(format!(
                 "资产 #{} 不存在",
                 l.asset_id
@@ -253,7 +253,7 @@ pub(super) async fn save_asset_count(
     }
     let mut c = findb::assets::AssetCount {
         id: 0,
-        no: findb::assets::ac_next_no(&db, period)?,
+        no: findb::assets::ac_next_no(db, period)?,
         period,
         date,
         status: "draft".into(),
@@ -261,7 +261,7 @@ pub(super) async fn save_asset_count(
         memo: req.memo,
         lines,
     };
-    let id = findb::assets::ac_save(&db, &mut c)?;
+    let id = findb::assets::ac_save(db, &mut c)?;
     db.log(
         user.username(),
         "固定资产",
@@ -279,7 +279,7 @@ pub(super) async fn post_asset_count(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    let n = findb::assets::ac_post(&db, id)?;
+    let n = findb::assets::ac_post(db, id)?;
     db.log(
         user.username(),
         "固定资产",
@@ -296,7 +296,7 @@ pub(super) async fn list_asset_counts(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::assets::ac_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::assets::ac_list(db)? })))
 }
 
 pub(super) async fn dispose_asset(
@@ -313,7 +313,7 @@ pub(super) async fn dispose_asset(
     } else {
         parse_money_checked(&req.amount)?
     };
-    let vid = findb::assets::dispose(&db, id, period, amount, user.username())?;
+    let vid = findb::assets::dispose(db, id, period, amount, user.username())?;
     db.log(
         user.username(),
         "固定资产",
@@ -335,7 +335,7 @@ pub(super) async fn depreciate_assets(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     let period = period_checked(req.ymm)?;
-    let res = findb::assets::depreciate_period(&db, period, user.username())?;
+    let res = findb::assets::depreciate_period(db, period, user.username())?;
     Ok(Json(json!({
         "already": res.already,
         "count": res.count,
@@ -353,7 +353,7 @@ pub(super) async fn delete_asset_deps_period(
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
     let period = period_checked(req.ymm)?;
-    let removed = findb::assets::dep_delete_period(&db, period)?;
+    let removed = findb::assets::dep_delete_period(db, period)?;
     db.log(
         user.username(),
         "固定资产",

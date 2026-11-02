@@ -260,7 +260,7 @@ pub fn so_progress(db: &Db, customer: &str) -> DbResult<Vec<SoProgress>> {
         let mut got = Money::ZERO;
         for (so_id, item, qty) in &pairs {
             if *so_id == row.so_id && item.trim() == row.item.trim() {
-                got = got + *qty;
+                got += *qty;
             }
         }
         row.delivered = got;

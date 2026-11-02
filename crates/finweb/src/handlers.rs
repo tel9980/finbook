@@ -51,6 +51,7 @@ pub(crate) mod fixture;
 pub(crate) mod funds;
 pub(crate) mod hr;
 pub(crate) mod inventory;
+pub(crate) mod meter;
 pub(crate) mod misc;
 pub(crate) mod piecepay;
 pub(crate) mod platform;
@@ -73,6 +74,7 @@ use self::fixture::*;
 use self::funds::*;
 use self::hr::*;
 use self::inventory::*;
+use self::meter::*;
 use self::misc::*;
 use self::piecepay::*;
 use self::platform::*;
@@ -326,6 +328,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/tax/vat", get(get_tax_vat))
         .route("/api/tax/vat/export", get(export_tax_vat))
         .route("/api/tax/vat/detail", get(get_tax_vat_detail))
+        .route("/api/tax/precheck", get(get_tax_precheck))
         .route(
             "/api/tax/options",
             get(get_tax_options).post(save_tax_options),
@@ -600,6 +603,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/prod/:id/issue", post(prod_issue_ep))
         .route("/api/prod/:id/complete", post(prod_complete_ep))
         .route("/api/prod/:id/outsource-fee", post(outsource_fee_ep))
+        .route("/api/outsource/compare", get(outsource_compare))
+        .route("/api/meter", get(list_meter).post(add_meter))
+        .route("/api/meter/close", post(close_meter))
+        .route("/api/meter/:id", delete(delete_meter))
         .route("/api/bom", get(get_bom_ep).post(save_bom_ep))
         .route("/api/mrp/latest", get(get_mrp_latest))
         .route("/api/mrp/run", post(run_mrp))
@@ -781,6 +788,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/settle/run", post(manual_settle_endpoint))
         // 通用往来互抵：跨往来单位 / 跨科目（代收代付、三方抵账），自动出过渡凭证
         .route("/api/settle/cross", post(cross_settle_endpoint))
+        .route("/api/claim", get(get_claim).post(post_claim))
         .route("/api/settle/records", get(list_settle_records))
         .route("/api/settle/unsettle", post(unsettle_endpoint))
         .route("/api/settle/aging", get(get_settle_aging))
@@ -1459,8 +1467,6 @@ fn wb_report_domain(
     Ok(())
 }
 
-/// 期末结账请求
-
 fn can_view_vouchers(user: &CurrentUser) -> bool {
     user.can(Perm::Report)
         || user.can(Perm::VoucherNew)
@@ -1574,10 +1580,6 @@ fn default_true() -> bool {
     true
 }
 
-/// 红字冲销请求：冲销凭证落到的期间与日期
-
-/// 断号重排请求：period + word
-
 // ---------------------------------------------------------------------------
 // 凭证附件（上传/下载/删除；数据超过阈值落 .attachments 目录，否则入库）
 // ---------------------------------------------------------------------------
@@ -1651,8 +1653,6 @@ fn invoice_from_req(r: &InvoiceReq) -> Result<findb::invoices::Invoice, AppError
         updated_at: String::new(),
     })
 }
-
-/// 发票列表查询参数
 
 // ---------------------------------------------------------------------------
 // 数据导入（其他软件 / CSV / Excel）
@@ -1749,7 +1749,7 @@ fn ledger_query_from<'a>(
         .map(|s| s == "1" || s == "true")
         .unwrap_or(true);
     let db = &user.db;
-    let chart = accounts::chart(&db)?;
+    let chart = accounts::chart(db)?;
     if !user.user.can_see_account(&code) {
         return Err(AppError::forbidden("无权查看该科目"));
     }
@@ -1792,8 +1792,8 @@ fn trial_balance_data(
     // 而真实凭证的对方分录（银行/往来）根本不挂部门——收窄后必然「借方有、贷方没有」，
     // 一张本来平衡的表被算成不平。部门口径看明细账或多维损益。
     let bq = BalanceQuery::range(from, to).with_user_scope(&user.user);
-    let snap = BalanceSnapshot::load(&db, &bq)?;
-    let chart = accounts::chart(&db)?;
+    let snap = BalanceSnapshot::load(db, &bq)?;
+    let chart = accounts::chart(db)?;
     let rows = snap.account_table(&chart, &bq);
     let totals = snap.trial_balance(&chart);
     Ok((rows, totals))
@@ -2171,8 +2171,6 @@ fn po_status_parse(s: &str) -> Result<findb::scm::PoStatus, AppError> {
     })
 }
 
-/// 工作流闸门的判定结果
-
 /// 工作流闸门。收成函数是为了让「哪种单据走工作流」只有这一处实现。
 ///
 /// 早先 4 个调用点各自抄一遍 `match intercept(...)? { Pending => …,
@@ -2495,12 +2493,10 @@ fn open_entry_json(e: &findb::settle::OpenEntry) -> serde_json::Value {
     })
 }
 
-/// 通用往来互抵请求：借方挂账 + 贷方挂账，科目/往来单位可以不同
-
-/// 核销「未核销清单」默认返回多少行、最多多少行。
-///
-/// 默认 200：一屏十几行，200 行足够翻；上限 2000 是防止有人写 `limit=999999`
-/// 把 700KB 的包又拉回来。
+// 核销「未核销清单」默认返回多少行、最多多少行。
+//
+// 默认 200：一屏十几行，200 行足够翻；上限 2000 是防止有人写 `limit=999999`
+// 把 700KB 的包又拉回来。
 
 // ---------------- 往来对冲单（应收 ↔ 应付相互抵销） ----------------
 
@@ -2725,25 +2721,23 @@ fn build_aux_mask(kinds: &[String]) -> AuxMask {
     mask
 }
 
-/// 期初保存请求。
-///
-/// `rows` + `delete_ids` 是有意设计的：原来 body 是裸数组、只有 upsert 语义，
-/// **界面上的「移除」永远落不了地** —— 前端把行从草稿删掉、提交时只带剩下的行，
-/// 后端按 (account_code, aux_key) 做 upsert，于是被移除的那行留在库里。实测：
-/// 移除 140501 → 保存 → DB 里那行纹丝不动，试算平衡从平衡变成差 999,999。
-/// 会计改个错字重新保存，期初金额就翻倍。
-///
-/// 不做「整表替换」而按 id 精确删：同一张表可能还有别人维护的行（带辅助核算
-/// 维度的期初），按提交集合反推该删谁会误删。
-///
-/// 保留 `#[serde(untagged)]` 的裸数组分支：老客户端与既有集成测试仍在发裸数组，
-/// 改成只认对象会让它们全部 422。
+// 期初保存请求（DTO 已下沉到 handlers/，这里留的是当年定下来的口径）
+//
+// `rows` + `delete_ids` 是有意设计的：原来 body 是裸数组、只有 upsert 语义，
+// **界面上的「移除」永远落不了地** —— 前端把行从草稿删掉、提交时只带剩下的行，
+// 后端按 (account_code, aux_key) 做 upsert，于是被移除的那行留在库里。实测：
+// 移除 140501 → 保存 → DB 里那行纹丝不动，试算平衡从平衡变成差 999,999。
+// 会计改个错字重新保存，期初金额就翻倍。
+//
+// 不做「整表替换」而按 id 精确删：同一张表可能还有别人维护的行（带辅助核算
+// 维度的期初），按提交集合反推该删谁会误删。
+//
+// 保留 `#[serde(untagged)]` 的裸数组分支：老客户端与既有集成测试仍在发裸数组，
+// 改成只认对象会让它们全部 422。
 
 // ---------------- 期初余额批量粘贴 ----------------
 
-/// 解析请求
-
-/// 导入请求（前端回传确认过的行）
+// 期初批量粘贴的两个请求体（解析预览 / 确认导入）都只要 rows，DTO 定义在下方
 
 #[derive(Deserialize, serde::Serialize, Clone)]
 struct BeginBatchRow {
@@ -2760,7 +2754,7 @@ struct BeginBatchRow {
 fn chart_ctx(
     db: &findb::Db,
 ) -> Result<(std::collections::HashMap<String, String>, Vec<String>), findb::DbError> {
-    let chart = findb::accounts::chart(&db)?;
+    let chart = findb::accounts::chart(db)?;
     let all = chart.all(); // Vec<&Account>
     let dirs: std::collections::HashMap<String, String> = all
         .iter()
@@ -2859,20 +2853,14 @@ fn backup_belongs_to(name: &str, key: &str) -> bool {
     &rest[pos + 1..] == key
 }
 
-/// 预置档案端点的入参：只要类别
-
 /// `?kind=` 查询串。
 ///
-/// **`kind` 必须有 `#[serde(default)]`**：axum 对查询串反序列化失败时返回 422，
-/// 而不是交给处理函数里那行 `unwrap_or(Dept)`。少写这一个属性，
-/// 前端 `loadAuxPreset` 就会 catch 到 422 直接 return —— 按钮保持 hidden、
-/// 提示区空白，整条预置链路静默消失，而且**编译期和 Rust 测试都发现不了**
-/// （E2E 才暴露）。这是「参数从 URL 进来」比「从 body 进来」更危险的地方：
-/// body 少字段会 422，query 少字段也会 422，两者都很难在本地顺手测到。
-
-/// 辅助档案批量粘贴：解析（预览）
-
-/// 辅助档案批量粘贴：真正落库
+// **`kind` 必须有 `#[serde(default)]`**：axum 对查询串反序列化失败时返回 422，
+// 而不是交给处理函数里那行 `unwrap_or(Dept)`。少写这一个属性，
+// 前端 `loadAuxPreset` 就会 catch 到 422 直接 return —— 按钮保持 hidden、
+// 提示区空白，整条预置链路静默消失，而且**编译期和 Rust 测试都发现不了**
+// （E2E 才暴露）。这是「参数从 URL 进来」比「从 body 进来」更危险的地方：
+// body 少字段会 422，query 少字段也会 422，两者都很难在本地顺手测到。
 
 #[derive(Deserialize, serde::Serialize, Clone)]
 struct AuxBatchRow {
@@ -2887,8 +2875,6 @@ struct AuxBatchRow {
     #[serde(default)]
     disabled: bool,
 }
-
-/// 解析结果里的一行（给前端渲染预览表格）
 
 // ===========================================================================
 // 工资管理（对齐桌面端 finui：工资表 / 个税明细 / 凭证生成，入口权限 VoucherNew）
@@ -3025,7 +3011,6 @@ fn build_xlsx(
 }
 
 /// 三大报表 + 所有者权益变动表的导出目标
-
 impl StatementKind {
     fn filename(self) -> &'static str {
         match self {
@@ -3261,11 +3246,11 @@ async fn sheet_upload(mut multipart: axum::extract::Multipart) -> Result<Vec<u8>
     Ok(data)
 }
 
-/// 《期初收集表》的空模板：已预填当前账套的科目、客户、供应商清单。
-/// 期初对账视图的 DTO。
-///
-/// 金额一律给**字符串**（`fmt_plain`）：前端直接显示，不做二次格式化 ——
-/// 对账页上一个千分位错位就会让人怀疑是数字错了，而它只是显示问题。
+// 《期初收集表》的空模板：已预填当前账套的科目、客户、供应商清单。
+// 期初对账视图的 DTO。
+//
+// 金额一律给**字符串**（`fmt_plain`）：前端直接显示，不做二次格式化 ——
+// 对账页上一个千分位错位就会让人怀疑是数字错了，而它只是显示问题。
 
 #[cfg(test)]
 mod security_regression_tests {

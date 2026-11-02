@@ -486,16 +486,16 @@ fn balance_in(tx: &rusqlite::Transaction, code: &str) -> DbResult<ToolBalance> {
         match kind.as_str() {
             "buy" => bal.in_stock += qty,
             "issue" => {
-                bal.in_stock = bal.in_stock - qty;
+                bal.in_stock -= qty;
                 bal.in_use += qty;
             }
             "back" => {
-                bal.in_use = bal.in_use - qty;
+                bal.in_use -= qty;
                 bal.in_stock += qty;
                 bal.used_times += times;
             }
             "scrap" => {
-                bal.in_stock = bal.in_stock - qty;
+                bal.in_stock -= qty;
                 bal.scraped += qty;
             }
             _ => {}
@@ -542,16 +542,16 @@ pub fn balances(db: &Db) -> DbResult<Vec<ToolBalance>> {
         match kind.as_str() {
             "buy" => b.in_stock += qty,
             "issue" => {
-                b.in_stock = b.in_stock - qty;
+                b.in_stock -= qty;
                 b.in_use += qty;
             }
             "back" => {
-                b.in_use = b.in_use - qty;
+                b.in_use -= qty;
                 b.in_stock += qty;
                 b.used_times += times;
             }
             "scrap" => {
-                b.in_stock = b.in_stock - qty;
+                b.in_stock -= qty;
                 b.scraped += qty;
             }
             _ => {}
@@ -654,11 +654,7 @@ mod tests {
         let mut m = ToolMove::new("GJ03", "back", NaiveDate::from_ymd_opt(2026, 1, 2).unwrap());
         m.qty = Money::parse("1").unwrap();
         let e = move_save(&db, &mut m, "张三").unwrap_err();
-        assert!(
-            e.to_string().contains("在用 0"),
-            "没说清在用多少：{}",
-            e.to_string()
-        );
+        assert!(e.to_string().contains("在用 0"), "没说清在用多少：{}", e);
     }
 
     #[test]

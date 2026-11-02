@@ -231,9 +231,9 @@ fn sheet_to_html(sheet: &Sheet, title: &str, opts: &fincore::account::BookOption
     let mut rows = String::new();
     for r in &sheet.rows {
         rows.push_str("<tr>");
-        for c in 0..cols {
+        for (c, money) in money_cols.iter().enumerate().take(cols) {
             let cell = r.get(c).map(|s| s.as_str()).unwrap_or("");
-            if money_cols[c] {
+            if *money {
                 rows.push_str(&format!("<td class='r'>{}</td>", escape_html(cell)));
             } else {
                 rows.push_str(&format!("<td>{}</td>", escape_html(cell)));

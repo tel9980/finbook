@@ -29,12 +29,12 @@ fn make_sheet(
         .iter()
         .enumerate()
     {
-        s.write_string(1, c as u16, *h, &f).unwrap();
+        s.write_string(1, c as u16, h, &f).unwrap();
     }
     for (i, (code, name, amt)) in ar.iter().enumerate() {
         let r = 2 + i as u32;
-        s.write_string(r, 0, *code, &f).unwrap();
-        s.write_string(r, 1, *name, &f).unwrap();
+        s.write_string(r, 0, code, &f).unwrap();
+        s.write_string(r, 1, name, &f).unwrap();
         s.write_number(r, 2, *amt, &f).unwrap();
     }
     let last = 2 + ar.len() as u32;
@@ -56,12 +56,12 @@ fn make_sheet(
     .iter()
     .enumerate()
     {
-        s.write_string(1, c as u16, *h, &f).unwrap();
+        s.write_string(1, c as u16, h, &f).unwrap();
     }
     for (i, (code, name, amt)) in ap.iter().enumerate() {
         let r = 2 + i as u32;
-        s.write_string(r, 0, *code, &f).unwrap();
-        s.write_string(r, 1, *name, &f).unwrap();
+        s.write_string(r, 0, code, &f).unwrap();
+        s.write_string(r, 1, name, &f).unwrap();
         s.write_string(r, 2, "化工料", &f).unwrap();
         s.write_number(r, 3, *amt, &f).unwrap();
     }
@@ -74,11 +74,11 @@ fn make_sheet(
     s.write_string(0, 0, "各账户余额 · 截止 2026-10-31", &f)
         .unwrap();
     for (c, h) in ["科目编码", "账户", "余额", "说明"].iter().enumerate() {
-        s.write_string(1, c as u16, *h, &f).unwrap();
+        s.write_string(1, c as u16, h, &f).unwrap();
     }
     for (i, (code, amt)) in bal.iter().enumerate() {
         let r = 2 + i as u32;
-        s.write_string(r, 0, *code, &f).unwrap();
+        s.write_string(r, 0, code, &f).unwrap();
         s.write_string(r, 1, "账户", &f).unwrap();
         s.write_number(r, 2, *amt, &f).unwrap();
     }
@@ -88,11 +88,11 @@ fn make_sheet(
     s.set_name("④ 基本资料").unwrap();
     s.write_string(0, 0, "基本资料与平衡检查", &f).unwrap();
     for (c, h) in ["项目", "金额", "说明"].iter().enumerate() {
-        s.write_string(1, c as u16, *h, &f).unwrap();
+        s.write_string(1, c as u16, h, &f).unwrap();
     }
     for (i, (k, amt)) in eq.iter().enumerate() {
         let r = 2 + i as u32;
-        s.write_string(r, 0, *k, &f).unwrap();
+        s.write_string(r, 0, k, &f).unwrap();
         s.write_number(r, 1, *amt, &f).unwrap();
     }
 

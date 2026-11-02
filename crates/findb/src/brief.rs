@@ -313,16 +313,14 @@ mod tests {
             "记",
             crate::vouchers::next_no(db, period, "记").unwrap(),
         );
-        let mut no = 1;
-        for (code, debit, credit, customer) in lines {
-            let mut e = Entry::new(no, code, "简报测试");
+        for (i, (code, debit, credit, customer)) in lines.into_iter().enumerate() {
+            let mut e = Entry::new(i as i32 + 1, code, "简报测试");
             e.debit = m(debit);
             e.credit = m(credit);
             if !customer.is_empty() {
                 e.aux.customer = Some(customer.to_string());
             }
             v.entries.push(e);
-            no += 1;
         }
         let id = vouchers::save(db, &mut v).unwrap();
         vouchers::post(db, id, "t").unwrap();

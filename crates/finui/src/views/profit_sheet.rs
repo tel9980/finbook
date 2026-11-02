@@ -461,7 +461,7 @@ impl ProfitSheetView {
                         let mut hint = l.hint.clone();
                         if let Some(q) = l.qty {
                             if !hint.is_empty() {
-                                hint.push_str("　");
+                                hint.push('　');
                             }
                             hint.push_str(&format!("产量 {}", q.fmt_qty()));
                         }

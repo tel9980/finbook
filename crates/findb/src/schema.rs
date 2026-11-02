@@ -32,7 +32,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 46;
+pub const SCHEMA_VERSION: i64 = 47;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1719,6 +1719,26 @@ CREATE TABLE IF NOT EXISTS profit_sheet_row(
     disabled    INTEGER NOT NULL DEFAULT 0,
     UNIQUE(seq)
 );
+
+-- ===========================================================================
+-- v47：电费/水费充值台账（充值只是预付，抄表才转成本）
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS meter_reading (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT NOT NULL DEFAULT 'electric',
+    meter_no    TEXT NOT NULL DEFAULT '',
+    period      INTEGER NOT NULL,
+    read_date   TEXT NOT NULL,
+    qty         TEXT NOT NULL DEFAULT '0',
+    unit_price  TEXT NOT NULL DEFAULT '0',
+    amount_incl TEXT NOT NULL DEFAULT '0',
+    tax_rate    TEXT NOT NULL DEFAULT '0.13',
+    voucher_id  INTEGER NOT NULL DEFAULT 0,
+    memo        TEXT NOT NULL DEFAULT '',
+    created_by  TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_meter_period ON meter_reading(period, kind);
 
 "#;
 

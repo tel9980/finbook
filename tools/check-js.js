@@ -59,8 +59,10 @@ for (const f of targets) {
 // 检查——人会开始无视它，那真 bug 就一起漏了。函数边界用「顶格的 function /
 // async function」近似，本文件的视图函数都是这个写法。
 const STATIC = path.join(__dirname, "..", "crates", "finweb", "static");
-const idTargets = [path.join(STATIC, "app.js"), path.join(STATIC, "index.html")].filter((f) =>
-  fs.existsSync(f)
+// 前端拆成 16 份 app*.js：重复 id 的判据是「同一函数里出现两次」，而函数可能被
+// 拆到任何一份脚本里，所以每份都要看（漏一份 = 那份里的重复 id 再也查不出来）。
+const idTargets = [...require("./lib-app-src.js").appFileNames().map((n) => path.join(STATIC, n)), path.join(STATIC, "index.html")].filter(
+  (f) => fs.existsSync(f)
 );
 const TOP_FN = /^(?:async\s+)?function\s+\w+|^(?:const|let|var)\s+\w+\s*=\s*(?:async\s*)?\(/;
 for (const f of idTargets) {
@@ -129,6 +131,9 @@ for (const f of idTargets) {
 //      否则注入的 `data &&` 引用未定义变量 → 直接 ReferenceError，整个前端白屏。
 // ---------------------------------------------------------------------------
 const ANCHOR = "r.status === 401";
+// 注意：这里**故意只查 app.js 这一份**。反代的 sub_filter 是对「发出去的 /app.js」
+// 做替换的，所以锚点必须留在 app.js 里（api() 正好也在这一份），拆到别的脚本里
+// 锚点就跑到 sub_filter 管不着的文件去了。这是一条与部署配置的隐形契约。
 const appFile = path.join(STATIC, "app.js");
 if (fs.existsSync(appFile)) {
   const src = fs.readFileSync(appFile, "utf8");
@@ -171,9 +176,22 @@ if (fs.existsSync(appFile)) {
 //
 // 判据一律取**函数体**（顶格 function 到下一个顶格 `}`），不在全文件里 grep：
 // 一个会误报的检查等于没有检查 —— 人会开始无视它，真 bug 就一起漏了。
+//
+// 前端已拆成 16 份 app*.js：这里的 `appSrc` 是**拼接后的整份源码**，
+// 否则这些扫描只会覆盖第一份脚本（拆分当天不报错、只是少查 15 个文件）。
+// 行号仍然按真实文件报：`ownerOf` 把拼接后的行号映回「文件名:行号」。
 // ---------------------------------------------------------------------------
-const appSrc = fs.existsSync(appFile) ? fs.readFileSync(appFile, "utf8") : "";
-const appLines = appSrc.split(/\r?\n/);
+const APP_FILES = require("./lib-app-src.js").readAppFiles();
+const appLines = [];
+const ownerOf = [];
+for (const f of APP_FILES) {
+  const ls = f.src.split(/\r?\n/);
+  ls.forEach((line, i) => {
+    appLines.push(line);
+    ownerOf.push(f.name + ":" + (i + 1));
+  });
+}
+const appSrc = appLines.join("\n");
 
 /** 取某个顶层函数的完整函数体；找不到返回 "" */
 function fnBody(name) {
@@ -499,7 +517,9 @@ if (appSrc) {
   if (dlgHits.length) {
     bad++;
     for (const h of dlgHits) {
-      console.log(`FAIL app.js:${h} 的 confirmDialog/toast 文案里有 markdown 强调号 **`);
+      console.log(
+        `FAIL ${ownerOf[h - 1] || "app*.js"} 的 confirmDialog/toast 文案里有 markdown 强调号 **`
+      );
     }
     console.log(
       "    confirmDialog 走 esc(message)，那是 HTML 转义不是 markdown；" +

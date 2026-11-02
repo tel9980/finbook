@@ -1118,7 +1118,6 @@ mod tests {
         let mut e = Entry::new(2, "600101", "收入");
         e.credit = m("1000");
         v.entries.push(e);
-        let mut v = v;
         let id = vouchers::save(&db, &mut v).unwrap();
         vouchers::post(&db, id, "t").unwrap();
         for (no, dept, amt) in [
@@ -1134,7 +1133,6 @@ mod tests {
             let mut e = Entry::new(2, "1001", "付款");
             e.credit = m(amt);
             v.entries.push(e);
-            let mut v = v;
             let id = vouchers::save(&db, &mut v).unwrap();
             vouchers::post(&db, id, "t").unwrap();
         }

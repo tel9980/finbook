@@ -210,8 +210,8 @@ const MUT = [
     // 只放开"审"不放开"撤审" → 会计能审却撤不回来
     name: "⑨ 撤审仍用旧判据（能审却撤不回）",
     file: "crates/finweb/src/handlers/funds.rs",
-    from: "    require_fund_doc_gate(&user)?;\n    let db = &user.db;\n    findb::receipt::receipt_unaudit(&db, id)?;",
-    to: "    user.require(Perm::VoucherAudit)?;\n    let db = &user.db;\n    findb::receipt::receipt_unaudit(&db, id)?;",
+    from: "    require_fund_doc_gate(&user)?;\n    let db = &user.db;\n    findb::receipt::receipt_unaudit(db, id)?;",
+    to: "    user.require(Perm::VoucherAudit)?;\n    let db = &user.db;\n    findb::receipt::receipt_unaudit(db, id)?;",
     cmd: API("receipt_audit_gates_on_audit_or_post_permission"),
   },
   {
@@ -450,8 +450,8 @@ const MUT = [
     // 而且刷新也没用（同一个连接）。这是"优化出来的错"里最难查的一种。
     name: "⑱ 余额快照缓存的键忽略写入计数",
     file: "crates/findb/src/balances.rs",
-    from: "                q.prepared_by.as_deref().unwrap_or(\"\"),\n                db.conn().total_changes()",
-    to: "                q.prepared_by.as_deref().unwrap_or(\"\"),\n                0i64",
+    from: "            q.prepared_by.as_deref().unwrap_or(\"\"),\n            db.conn().total_changes()",
+    to: "            q.prepared_by.as_deref().unwrap_or(\"\"),\n            0i64",
     cmd: FADV("snapshot_cache_sees_new_voucher"),
   },
   {
@@ -658,7 +658,7 @@ const MUT = [
   {
     // 预收/预付被当成欠款累加 → 客户预存 300 变成「应向我方支付 1300」
     name: "㉔ 催款单把预收也当欠款",
-    file: "crates/findb/src/settle.rs",
+    file: "crates/findb/src/settle/dunning.rs",
     from: "        let owed = !signed.is_negative();",
     to: "        let owed = true;",
     cmd: FSETTLE("dunning_counts_only_what_is_actually_owed"),
@@ -681,28 +681,28 @@ const MUT = [
   },
   {
     name: "㉒ 撤销不看结账线",
-    file: "crates/findb/src/settle.rs",
+    file: "crates/findb/src/settle/core.rs",
     from: "        if rec.period <= upto {",
     to: "        if false {",
     cmd: FSETTLE("unsettle_refuses_records_in_a_closed_period"),
   },
   {
     name: "㉒ 部分撤销不夹住记录金额",
-    file: "crates/findb/src/settle.rs",
+    file: "crates/findb/src/settle/core.rs",
     from: "    if amount > rec.amount {",
     to: "    if false {",
     cmd: FSETTLE("unsettle_part_rejects_more_than_the_record"),
   },
   {
     name: "㉒ 核销记录仍按单据期间",
-    file: "crates/findb/src/settle.rs",
+    file: "crates/findb/src/settle/core.rs",
     from: "    let rec_period = crate::periods::current_period_of(tx)?;",
     to: "    let rec_period = f.period;",
     cmd: FSETTLE("settle_record_is_dated_by_the_settlement_period_not_the_invoice"),
   },
   {
     name: "㉒ 撤到零不删记录",
-    file: "crates/findb/src/settle.rs",
+    file: "crates/findb/src/settle/core.rs",
     from: "    if left.is_zero() {",
     to: "    if false {",
     cmd: FSETTLE("unsettle_part_reduces_the_record_and_reopens_the_amount"),
@@ -873,14 +873,14 @@ const MUT = [
   // --- v1.8.48 账期落地 ---------------------------------------------------
   {
     name: "㉚ 账期不参与逾期计算",
-    file: "crates/findb/src/settle.rs",
+    file: "crates/findb/src/settle/aging.rs",
     from: "                let due_days = *d - l.max_days;",
     to: "                let due_days = 0 - l.max_days;",
     cmd: FSETTLE("aging_uses_pay_days_to_compute_overdue"),
   },
   {
     name: "㉚ 账龄读不到客商档案的账期",
-    file: "crates/findb/src/settle.rs",
+    file: "crates/findb/src/settle/aging.rs",
     from: "        if let Some(v) = a.props.get(fincore::auxiliary::prop::PAY_DAYS) {",
     to: `        if let Some(v) = a.props.get("__no_such_prop__") {`,
     cmd: FSETTLE("aging_uses_pay_days_to_compute_overdue"),
@@ -912,14 +912,14 @@ const MUT = [
   // --- v1.8.50 催款函逾期 + 现金流对比 -------------------------------------
   {
     name: "㉜ 催款明细不算逾期",
-    file: "crates/findb/src/settle.rs",
+    file: "crates/findb/src/settle/dunning.rs",
     from: "    (letter_date - doc_date)\n        .num_days()\n        .saturating_sub(days)\n        .max(0)",
     to: "    0",
     cmd: FSETTLE("dunning_items_carry_overdue_days_from_pay_days"),
   },
   {
     name: "㉜ 没设账期也硬算逾期",
-    file: "crates/findb/src/settle.rs",
+    file: "crates/findb/src/settle/dunning.rs",
     from: "    let Some(days) = pay_days else {\n        return 0;\n    };",
     to: "    let days = pay_days.unwrap_or(0);",
     cmd: FSETTLE("dunning_overdue_is_zero_without_pay_days"),
@@ -1325,8 +1325,8 @@ const MUT = [
     // 生成工序不吃订单版本：选了 V1 也按默认版本建，报工版本随之错位。
     name: "㊷ 生成工序不吃订单版本",
     file: "crates/finweb/src/handlers/prod.rs",
-    from: "    let ops = advanced::prod_op_init_from_routing_version(&db, id, code, &order.routing_version)\n        .unwrap_or(0);",
-    to: "    let ops = advanced::prod_op_init_from_routing(&db, id, code).unwrap_or(0);",
+    from: "    let ops = advanced::prod_op_init_from_routing_version(db, id, code, &order.routing_version)\n        .unwrap_or(0);",
+    to: "    let ops = advanced::prod_op_init_from_routing(db, id, code).unwrap_or(0);",
     cmd: [
       "test",
       "-p",
@@ -1547,7 +1547,73 @@ const MUT = [
     to: "            Period::from_date(today).ymm(),",
     cmd: ["test", "-p", "finweb", "--test", "api", "--", "overhead_by_hours_takes_pool_from_account"],
   },
-
+  {
+    // 漏做月末「转出未交增值税」时不提醒：222101xx 三个明细挂着余额、
+    // 222102 是 0，下月缴税无处可冲，而申报表看着完全正常。
+    name: "㊺ 申报体检不提醒漏做转出未交增值税",
+    file: "crates/findb/src/taxprecheck.rs",
+    from: "    if form.payable > Money::ZERO && carry_out.is_zero() {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "taxprecheck::tests::matched_voucher_passes_but_missing_transfer_is_warned"],
+  },
+  {
+    // 未认证的进项票被当成不存在：会计以为「票录了就能抵」，
+    // 申报表里却没有这张票的税额，月底对不上时已经过了申报期。
+    name: "㊻ 申报体检不点名未认证的进项票",
+    file: "crates/findb/src/taxprecheck.rs",
+    from: "            i.kind == \"in\"\n                && i.status != \"verified\"\n                && i.status != \"rejected\"\n                && in_month(i.date.as_str(), first, last)",
+    to: "            i.kind == \"in\" && false",
+    cmd: ["test", "-p", "findb", "--lib", "taxprecheck::tests::unverified_input_invoice_is_warned_not_errored"],
+  },
+  {
+    // 销项账票不符从「错误」降级成「提醒」：差了 130 元销项也照样放行申报，
+    // 而这正是「票录了、凭证没记」的典型信号。
+    name: "㊼ 销项账票不符只当提醒不报错",
+    file: "crates/findb/src/taxprecheck.rs",
+    from: "                    Level::Error,\n                    \"output-tax-vs-ledger\",",
+    to: "                    Level::Warn,\n                    \"output-tax-vs-ledger\",",
+    cmd: ["test", "-p", "findb", "--lib", "taxprecheck::tests::invoice_without_voucher_is_error"],
+  },
+  {
+    // 结转时跳过进项：可抵的税被计进成本，成本虚高、税白交
+    name: "㊽ 抄表结转漏掉进项税",
+    file: "crates/findb/src/meter.rs",
+    from: "    if tax.is_positive() {\n        v.push_entry(Entry {\n            debit: tax,",
+    to: "    if false {\n        v.push_entry(Entry {\n            debit: tax,",
+    cmd: ["test", "-p", "findb", "--lib", "meter::tests::close_books_recharge_to_cost"],
+  },
+  {
+    // 已结转的台账行允许删除：凭证还在，删了就是账证不符
+    name: "㊾ 已结转的台账行允许删除",
+    file: "crates/findb/src/meter.rs",
+    from: "    if r.is_closed() {\n        return Err(FinError::msg(format!(",
+    to: "    if false {\n        return Err(FinError::msg(format!(",
+    cmd: ["test", "-p", "findb", "--lib", "meter::tests::close_books_recharge_to_cost"],
+  },
+  {
+    // 认领不设上限：一笔 600 的收款能认掉 800 的挂账，钱凭空多出来
+    name: "㊿ 收款认领不检查未认额上限",
+    file: "crates/findb/src/claim.rs",
+    from: "    if total > open {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "claim::tests::cannot_over_claim"],
+  },
+  {
+    // 把借方挂账当成收款：认领工作台会把「还欠着的单」列成「收到的钱」
+    name: "51 认领工作台把借方挂账当收款",
+    file: "crates/findb/src/claim.rs",
+    from: ".filter(|e| e.credit > Money::ZERO && e.open() > Money::ZERO)",
+    to: ".filter(|e| e.debit > Money::ZERO && e.open() > Money::ZERO)",
+    cmd: ["test", "-p", "findb", "--lib", "claim::tests::claim_splits_one_receipt_across_customers"],
+  },
+  {
+    // 建议不再优先同一客户：把「这笔钱属于他」的常识丢掉，先按日期乱点鸳鸯
+    name: "52 认领建议不优先同一客户",
+    file: "crates/findb/src/claim.rs",
+    from: "    let mut same: Vec<&Candidate> = cands.iter().filter(|c| c.party == inflow.party).collect();",
+    to: "    let mut same: Vec<&Candidate> = cands.iter().filter(|c| c.party != inflow.party).collect();",
+    cmd: ["test", "-p", "findb", "--lib", "claim::tests::claim_splits_one_receipt_across_customers"],
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

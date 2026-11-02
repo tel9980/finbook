@@ -21,7 +21,7 @@ pub(super) async fn cost_wip_ep(
         .unwrap_or_else(|| current_period(&state, &user));
     Ok(Json(json!({
         "period": period_to_str(period),
-        "rows": findb::manufacturing::wip_cost(&db, period)?,
+        "rows": findb::manufacturing::wip_cost(db, period)?,
     })))
 }
 
@@ -51,9 +51,9 @@ pub(super) async fn prod_from_so_ep(
         }
         Some(q)
     };
-    let id = findb::scm::prod_from_so(&db, req.so_id, period, date, want, user.username())?;
-    let o = findb::scm::prod_get(&db, id)?.ok_or_else(|| AppError::not_found("生产订单不存在"))?;
-    let atp = findb::scm::atp(&db, &o.item_code)?;
+    let id = findb::scm::prod_from_so(db, req.so_id, period, date, want, user.username())?;
+    let o = findb::scm::prod_get(db, id)?.ok_or_else(|| AppError::not_found("生产订单不存在"))?;
+    let atp = findb::scm::atp(db, &o.item_code)?;
     Ok(Json(json!({
         "ok": true,
         "id": id,
@@ -80,7 +80,7 @@ pub(super) async fn cost_variance_ep(
         .unwrap_or_else(|| current_period(&state, &user));
     Ok(Json(json!({
         "period": period_to_str(period),
-        "rows": findb::manufacturing::cost_variance_report(&db, period)?,
+        "rows": findb::manufacturing::cost_variance_report(db, period)?,
     })))
 }
 
@@ -98,7 +98,7 @@ pub(super) async fn cost_forecast_ep(
         .unwrap_or_else(|| current_period(&state, &user));
     Ok(Json(json!({
         "period": period_to_str(period),
-        "rows": findb::manufacturing::cost_forecast_report(&db, period)?,
+        "rows": findb::manufacturing::cost_forecast_report(db, period)?,
     })))
 }
 
@@ -120,7 +120,7 @@ pub(super) async fn cost_overhead_ep(
         } else {
             req.from_account.trim()
         };
-        findb::manufacturing::overhead_pool_from_account(&db, period, code)?
+        findb::manufacturing::overhead_pool_from_account(db, period, code)?
     } else {
         parse_money_checked(&req.amount)?
     };
@@ -129,7 +129,7 @@ pub(super) async fn cost_overhead_ep(
             "分摊金额必须大于 0（留空则按制造费用科目本期发生额，本期没有发生额可分）",
         ));
     }
-    let rows = findb::manufacturing::overhead_allocate_with(&db, period, amount, base, req.apply)?;
+    let rows = findb::manufacturing::overhead_allocate_with(db, period, amount, base, req.apply)?;
     if req.apply {
         db.log(
             user.username(),
@@ -167,7 +167,7 @@ pub(super) async fn get_cost_variance(
     user.require(Perm::Report)?;
     let db = &user.db;
     let period = query_period(&state, &user, &q);
-    let r = findb::stdcost::variance_report(&db, period)?;
+    let r = findb::stdcost::variance_report(db, period)?;
     Ok(Json(json!({
         "period": r.period,
         "rows": r.rows,
@@ -176,7 +176,7 @@ pub(super) async fn get_cost_variance(
         "missing": r.missing,
         "warnings": r.warnings,
         // 「算了但没算的」要能在界面上说清楚，而不是让人以为差异表是完整的
-        "std_items": findb::business::cost_configs(&*db)?,
+        "std_items": findb::business::cost_configs(db)?,
     })))
 }
 
@@ -189,7 +189,7 @@ pub(super) async fn list_workflows(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::workflow::flow_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::workflow::flow_list(db)? })))
 }
 
 /// 预置流程模板清单（不返回 nodes/edges 全文，前端只要元信息做选择卡片；
@@ -201,7 +201,7 @@ pub(super) async fn list_wf_templates(
     user.require(Perm::Report)?;
     let db = &user.db;
     // 带上「该单据是否已有流程」，前端好提示是新建还是会被替换
-    let existing = findb::workflow::flow_list(&*db)?;
+    let existing = findb::workflow::flow_list(db)?;
     let rows: Vec<serde_json::Value> = findb::workflow::templates()
         .into_iter()
         .map(|t| {
@@ -241,7 +241,7 @@ pub(super) async fn apply_wf_template(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
     let db = &user.db;
-    let f = findb::workflow::apply_template(&db, &req.key, &req.biz_type, user.username())?;
+    let f = findb::workflow::apply_template(db, &req.key, &req.biz_type, user.username())?;
     db.log(
         user.username(),
         "工作流",
@@ -258,7 +258,7 @@ pub(super) async fn save_workflow(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
     let db = &user.db;
-    let id = findb::workflow::flow_save(&db, &f, user.username())?;
+    let id = findb::workflow::flow_save(db, &f, user.username())?;
     db.log(
         user.username(),
         "工作流",
@@ -280,7 +280,7 @@ pub(super) async fn publish_workflow(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
     let db = &user.db;
-    findb::workflow::flow_set_status(&db, id, true, user.username())?;
+    findb::workflow::flow_set_status(db, id, true, user.username())?;
     db.log(user.username(), "工作流", "发布流程", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -292,7 +292,7 @@ pub(super) async fn unpublish_workflow(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
     let db = &user.db;
-    findb::workflow::flow_set_status(&db, id, false, user.username())?;
+    findb::workflow::flow_set_status(db, id, false, user.username())?;
     db.log(user.username(), "工作流", "撤回发布", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -304,7 +304,7 @@ pub(super) async fn delete_workflow(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
     let db = &user.db;
-    findb::workflow::flow_delete(&db, id)?;
+    findb::workflow::flow_delete(db, id)?;
     db.log(user.username(), "工作流", "删除流程", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -316,7 +316,7 @@ pub(super) async fn list_wf_instances(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::workflow::instances(&*db)? })))
+    Ok(Json(json!({ "rows": findb::workflow::instances(db)? })))
 }
 
 /// 某单据类型可用的条件字段（画布上配条件边时的候选清单）
@@ -357,7 +357,7 @@ pub(super) async fn list_prod_orders(
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
     let period = current_period(&state, &user);
-    let orders = findb::scm::prod_list(&db, period, None)?;
+    let orders = findb::scm::prod_list(db, period, None)?;
     let items: Vec<serde_json::Value> = orders
         .iter()
         .map(|o| {
@@ -372,7 +372,7 @@ pub(super) async fn list_prod_orders(
                 "order_kind": o.order_kind,
                 "so_id": o.so_id,
                 "so_no": if o.so_id > 0 {
-                    findb::scm::so_get(&db, o.so_id)
+                    findb::scm::so_get(db, o.so_id)
                         .ok()
                         .flatten()
                         .map(|s| s.no)
@@ -399,7 +399,7 @@ pub(super) async fn get_prod_ops(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    let ops = advanced::prod_op_list(&db, id)?;
+    let ops = advanced::prod_op_list(db, id)?;
     Ok(Json(serde_json::json!({ "po_id": id, "ops": ops })))
 }
 
@@ -419,14 +419,14 @@ pub(super) async fn init_prod_ops(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    let order = findb::manufacturing::get_prod_order(&db, id)?
+    let order = findb::manufacturing::get_prod_order(db, id)?
         .ok_or_else(|| AppError::NotFound(format!("生产订单 {id} 不存在")))?;
     // ?version=V2 可以指定工艺版本；不传就用默认版本（没有默认版本时退到第一个版本）
     let version = q
         .get("version")
         .map(|v| v.trim().to_string())
         .unwrap_or_default();
-    let n = advanced::prod_op_init_from_routing_version(&db, id, &order.item_code, &version)?;
+    let n = advanced::prod_op_init_from_routing_version(db, id, &order.item_code, &version)?;
     if n == 0 {
         return Err(AppError::bad_request(format!(
             "存货 {} 还没有工艺路线，先在「工艺路线」里维护",
@@ -450,7 +450,7 @@ pub(super) async fn dispatch_prod_op(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    advanced::prod_op_dispatch(&db, req.op_id, req.worker.trim())?;
+    advanced::prod_op_dispatch(db, req.op_id, req.worker.trim())?;
     db.log(
         user.username(),
         "生产",
@@ -468,7 +468,7 @@ pub(super) async fn report_prod_op(
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
     advanced::prod_op_report(
-        &db,
+        db,
         req.op_id,
         parse_money_checked(&req.qty)?,
         parse_money_checked(&req.hours)?,
@@ -483,7 +483,7 @@ pub(super) async fn finish_prod_op(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    advanced::prod_op_finish(&db, req.op_id)?;
+    advanced::prod_op_finish(db, req.op_id)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -499,14 +499,56 @@ pub(super) async fn outsource_fee_ep(
     let db = &user.db;
     let date = prod_act_date(&req.date);
     let amount = parse_money_checked(&req.amount)?;
-    let vid = findb::manufacturing::outsource_fee(&db, id, amount, date, user.username())?;
+    let ticket = findb::outsource::Ticket::parse(&req.ticket).map_err(AppError::bad_request)?;
+    let vid = findb::manufacturing::outsource_fee_with_ticket(
+        db,
+        id,
+        amount,
+        ticket,
+        date,
+        user.username(),
+    )?;
     db.log(
         user.username(),
         "生产",
         "委外加工费",
-        &format!("PO#{id} ×{} 凭证#{vid}", amount.fmt_qty()),
+        &format!(
+            "PO#{id} ×{}（{}）凭证#{vid}",
+            amount.fmt_qty(),
+            ticket.label()
+        ),
     )?;
     Ok(Json(json!({ "ok": true, "voucher_id": vid })))
+}
+
+/// 委外加工费三种票的对比：同一笔钱，13% / 3% / 无票 各是什么成本。
+///
+/// 独立端点而不是塞进「确认加工费」的响应里：这个数是**谈价时**用的，
+/// 会计会在还没决定找谁加工之前先算一遍，那时订单还不存在。
+pub(super) async fn outsource_compare(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let gross = parse_money_checked(q.get("gross").map(|s| s.as_str()).unwrap_or("0"))?;
+    let rows = findb::outsource::compare(gross).map_err(AppError::bad_request)?;
+    let out: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "kind": r.ticket.key(),
+                "label": r.ticket.label(),
+                "rate": r.ticket.rate(),
+                "gross": r.gross.fmt_money(),
+                "net": r.net.fmt_money(),
+                "tax": r.tax.fmt_money(),
+                "real_cost": r.real_cost().fmt_money(),
+                "note": r.note,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "gross": gross.fmt_money(), "rows": out })))
 }
 
 /// 细排：批量写回计划开工/完工日（仅未完工订单可排）
@@ -525,7 +567,7 @@ pub(super) async fn schedule_prod(
         .into_iter()
         .map(|i| (i.id, i.start.trim().to_string(), i.end.trim().to_string()))
         .collect();
-    let n = findb::scm::prod_schedule(&db, &items)?;
+    let n = findb::scm::prod_schedule(db, &items)?;
     db.log(
         user.username(),
         "生产",
@@ -578,13 +620,13 @@ pub(super) async fn create_prod_ep(
         plan_end: String::new(),
         routing_version: req.version.trim().to_string(),
     };
-    order.no = findb::scm::prod_next_no(&db, period)?;
-    let id = findb::scm::prod_save(&db, &mut order)?;
+    order.no = findb::scm::prod_next_no(db, period)?;
+    let id = findb::scm::prod_save(db, &mut order)?;
     // 该存货配了工艺路线就顺手把工序清单建出来（没配就留空，
     // 之后可以在「工艺路线」里维护完再调 /api/prod/:id/ops/init 补建）。
     // 按订单记下的版本建：下单时选了 V2，工序就该是 V2 那几道，
     // 报工流水才会带上 V2，计件单价也才按 V2 算。
-    let ops = advanced::prod_op_init_from_routing_version(&db, id, code, &order.routing_version)
+    let ops = advanced::prod_op_init_from_routing_version(db, id, code, &order.routing_version)
         .unwrap_or(0);
     db.log(
         user.username(),
@@ -619,7 +661,7 @@ pub(super) async fn prod_release_ep(
     let db = &user.db;
     // 先过工作流：未到终态时只推进流程，不改订单状态
     match workflow_gate(
-        &db,
+        db,
         &user,
         findb::workflow::BIZ_PRODUCTION_ORDER,
         id,
@@ -629,7 +671,7 @@ pub(super) async fn prod_release_ep(
         WfGate::Rejected => return Ok(Json(json!({ "ok": true, "rejected": true }))),
         WfGate::Continue => {}
     }
-    findb::scm::prod_release(&db, id)?;
+    findb::scm::prod_release(db, id)?;
     db.log(user.username(), "生产", "下达生产订单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true, "status": "已下达" })))
 }
@@ -642,7 +684,7 @@ pub(super) async fn prod_start_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    findb::manufacturing::prod_start(&db, id)?;
+    findb::manufacturing::prod_start(db, id)?;
     db.log(user.username(), "生产", "开工", &format!("PO#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -656,7 +698,7 @@ pub(super) async fn update_prod_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    if findb::manufacturing::get_prod_order(&db, id)?.is_none() {
+    if findb::manufacturing::get_prod_order(db, id)?.is_none() {
         return Err(AppError::not_found("生产订单不存在"));
     }
     let qty = if req.qty.trim().is_empty() {
@@ -665,7 +707,7 @@ pub(super) async fn update_prod_ep(
         Some(parse_money_checked(&req.qty)?)
     };
     findb::manufacturing::prod_update(
-        &db,
+        db,
         id,
         qty,
         req.plan_start.as_deref(),
@@ -685,10 +727,10 @@ pub(super) async fn cancel_prod_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    if findb::manufacturing::get_prod_order(&db, id)?.is_none() {
+    if findb::manufacturing::get_prod_order(db, id)?.is_none() {
         return Err(AppError::not_found("生产订单不存在"));
     }
-    findb::manufacturing::prod_cancel(&db, id, user.username())?;
+    findb::manufacturing::prod_cancel(db, id, user.username())?;
     db.log(user.username(), "生产", "生产订单取消", &format!("PO#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -701,7 +743,7 @@ pub(super) async fn list_prod_changes(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows: Vec<serde_json::Value> = findb::scm2::change_log_list(&db, "prod", id)?
+    let rows: Vec<serde_json::Value> = findb::scm2::change_log_list(db, "prod", id)?
         .iter()
         .map(|(field, old_v, new_v, by, at)| {
             json!({
@@ -722,7 +764,7 @@ pub(super) async fn prod_qc_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    if findb::manufacturing::get_prod_order(&db, id)?.is_none() {
+    if findb::manufacturing::get_prod_order(db, id)?.is_none() {
         return Err(AppError::not_found("生产订单不存在"));
     }
     let date = if req.date.trim().is_empty() {
@@ -737,7 +779,7 @@ pub(super) async fn prod_qc_ep(
         parse_money_checked(&req.qty_fail)?
     };
     let (qid, no, result) = findb::manufacturing::prod_qc_save(
-        &db,
+        db,
         id,
         parse_money_checked(&req.qty_insp)?,
         qty_fail,
@@ -766,7 +808,7 @@ pub(super) async fn list_prod_qc(
     user.require(Perm::Report)?;
     let db = &user.db;
     Ok(Json(
-        json!({ "rows": findb::manufacturing::prod_qc_list(&db, id)? }),
+        json!({ "rows": findb::manufacturing::prod_qc_list(db, id)? }),
     ))
 }
 
@@ -781,7 +823,7 @@ pub(super) async fn prod_issue_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    let order = findb::manufacturing::get_prod_order(&db, id)?
+    let order = findb::manufacturing::get_prod_order(db, id)?
         .ok_or_else(|| AppError::bad_request("生产订单不存在"))?;
     if !matches!(
         order.status,
@@ -791,7 +833,7 @@ pub(super) async fn prod_issue_ep(
     }
     // 按单限额领料（v1：BOM 全量一次领齐，每订单仅可领一次——重复领料按累计流水拦截；
     // 带数量的部分领/超额补料留待领料单流程迭代）
-    let issued = findb::manufacturing::prod_issue_count(&db, &order.no)?;
+    let issued = findb::manufacturing::prod_issue_count(db, &order.no)?;
     if issued > 0 {
         return Err(AppError::bad_request(format!(
             "该订单已领过料（累计 {issued} 笔流水）：按单限额只允许领料一次，补料走退料/人工调整"
@@ -799,7 +841,7 @@ pub(super) async fn prod_issue_ep(
     }
     let date = prod_act_date(&req.date);
     let rows =
-        findb::manufacturing::prod_issue_materials(&db, id, date, order.period, user.username())?;
+        findb::manufacturing::prod_issue_materials(db, id, date, order.period, user.username())?;
     let total: Money = rows.iter().map(|(_, _, a)| *a).sum();
     db.log(
         user.username(),
@@ -829,7 +871,7 @@ pub(super) async fn prod_complete_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    let order = findb::manufacturing::get_prod_order(&db, id)?
+    let order = findb::manufacturing::get_prod_order(db, id)?
         .ok_or_else(|| AppError::bad_request("生产订单不存在"))?;
     // 完工数量必须落在 [1, 未完工数量] 区间：prod_complete 把 completed_qty 直接覆盖写，
     // 其唯一守卫是条件更新 status='in_progress'——那只防重复完工，拦不住超完工。
@@ -856,7 +898,7 @@ pub(super) async fn prod_complete_ep(
     }
     let date = prod_act_date(&req.date);
     let move_id =
-        findb::manufacturing::prod_complete(&db, id, date, order.period, qty, user.username())?;
+        findb::manufacturing::prod_complete(db, id, date, order.period, qty, user.username())?;
     db.log(
         user.username(),
         "生产",
@@ -876,7 +918,7 @@ pub(super) async fn list_approvals(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = advanced::approval_list(&db, 100)?;
+    let rows = advanced::approval_list(db, 100)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -886,7 +928,7 @@ pub(super) async fn list_approval_todo(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = advanced::approval_todo(&db, user.username())?;
+    let rows = advanced::approval_todo(db, user.username())?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -897,7 +939,7 @@ pub(super) async fn get_approval(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let ap = advanced::approval_get(&db, id)?
+    let ap = advanced::approval_get(db, id)?
         .ok_or_else(|| AppError::NotFound("审批流不存在".to_string()))?;
     Ok(Json(serde_json::json!({ "approval": ap })))
 }
@@ -910,7 +952,7 @@ pub(super) async fn start_approval(
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
     let id = advanced::approval_start(
-        &db,
+        db,
         &req.biz_kind,
         req.biz_id,
         &req.title,
@@ -928,7 +970,7 @@ pub(super) async fn act_approval(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    let ap = advanced::approval_act(&db, id, user.username(), req.approve, &req.comment)?;
+    let ap = advanced::approval_act(db, id, user.username(), req.approve, &req.comment)?;
     Ok(Json(serde_json::json!({ "approval": ap })))
 }
 
@@ -939,7 +981,7 @@ pub(super) async fn cancel_approval(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::AccountEdit)?;
     let db = &user.db;
-    advanced::approval_cancel(&db, id, user.username())?;
+    advanced::approval_cancel(db, id, user.username())?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -950,7 +992,7 @@ pub(super) async fn clear_cost_method(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CostOps)?;
     let db = &user.db;
-    findb::business::item_cost_method_clear(&db, &item)?;
+    findb::business::item_cost_method_clear(db, &item)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -972,7 +1014,7 @@ pub(super) async fn get_wf_instance_for(
         .get("id")
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| AppError::bad_request("缺少 id"))?;
-    let st = findb::workflow::instance_for(&db, biz_type, biz_id)?;
+    let st = findb::workflow::instance_for(db, biz_type, biz_id)?;
     Ok(Json(json!({
         "found": st.found,
         "status": st.status,
@@ -999,7 +1041,7 @@ pub(super) async fn gl_reconcile_ep(
             .ok_or_else(|| AppError::bad_request("期间格式应为 202601 或 2026-01"))?,
         None => current_period(&state, &user),
     };
-    let rep = findb::balances::gl_reconcile(&db, period, Some(&user.user))?;
+    let rep = findb::balances::gl_reconcile(db, period, Some(&user.user))?;
     Ok(Json(json!({
         "period": period_to_str(period),
         "stock_total": rep.stock_total,
@@ -1032,7 +1074,7 @@ pub(super) async fn sales_cost_ep(
     };
     let method = fincore::engine::costing::CostMethod::parse(&req.method);
     let vid = findb::business::stock_cost_voucher(
-        &db,
+        db,
         period,
         date,
         method,
@@ -1068,7 +1110,7 @@ pub(super) async fn list_cost_configs(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = &user.db;
-    let rows = findb::business::cost_configs(&*db)?;
+    let rows = findb::business::cost_configs(db)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -1080,7 +1122,7 @@ pub(super) async fn save_cost_method(
     user.require(Perm::CostOps)?;
     let db = &user.db;
     let sc = parse_money_checked(&req.standard_cost)?;
-    findb::business::item_cost_method_set(&db, &req.item, Some(&req.method), sc)?;
+    findb::business::item_cost_method_set(db, &req.item, Some(&req.method), sc)?;
     db.log(
         user.username(),
         "成本",
@@ -1112,7 +1154,7 @@ pub(super) async fn run_period_end_cost(
             "期末结价落库请使用 POST /api/cost/period-end?apply=1",
         ));
     }
-    let rows = findb::business::period_end_cost(&db, period, apply)?;
+    let rows = findb::business::period_end_cost(db, period, apply)?;
     Ok(Json(
         serde_json::json!({ "period": period.label(), "rows": rows, "apply": apply }),
     ))
@@ -1170,9 +1212,14 @@ pub(super) struct OpFinishReq {
 
 #[derive(Deserialize)]
 pub(super) struct OutsourceFeeReq {
+    /// 价税合计（无票时即实付金额）
     amount: String,
     #[serde(default)]
     date: String,
+    /// 票种：13（专用发票）/ 3（征收率）/ none（无票）。不传按无票处理，
+    /// 与老接口语义一致（老前端只传金额，那时全部按无票记）。
+    #[serde(default)]
+    ticket: String,
 }
 
 #[derive(Deserialize)]

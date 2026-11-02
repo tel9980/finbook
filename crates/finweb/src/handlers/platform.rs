@@ -218,7 +218,7 @@ pub(super) async fn reset_user_password(
     let db = &user.db;
     // 单密码统一：账套内没有独立口令，重置即重置该用户的平台口令，
     // 再同步到其出现过的所有账套。目标必须是当前账套成员，防越权重置陌生人口令。
-    if users::get(&db, &username)?.is_none() {
+    if users::get(db, &username)?.is_none() {
         return Err(AppError::not_found("该用户不在当前账套"));
     }
     let ru = state

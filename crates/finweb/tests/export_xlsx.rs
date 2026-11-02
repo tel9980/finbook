@@ -316,7 +316,7 @@ async fn upload_fbk_registers_a_usable_book() {
     // 回到桌面端打开同一个账套，若那行还是 `must_change_pwd = 1`，会先被要求
     // 「首次登录必须改密」—— 刚迁移完就给一道密码闸门，很容易被当成迁移出错。
     {
-        let db = findb::Db::open(&books_dir.join(format!("{key}.fbk"))).expect("重新打开账套");
+        let db = findb::Db::open(books_dir.join(format!("{key}.fbk"))).expect("重新打开账套");
         let u = findb::users::get(&db, "boss").unwrap().unwrap();
         assert!(
             !u.must_change_pwd,
@@ -328,7 +328,7 @@ async fn upload_fbk_registers_a_usable_book() {
     // 或者这个账套是修复之前导入的），也不该把平台已认证的身份拦在门外 ——
     // 平台层 `RealmUser` 已经按真身拦过一次了，账套这份影子不参与鉴权。
     {
-        let db = findb::Db::open(&books_dir.join(format!("{key}.fbk"))).expect("重新打开账套");
+        let db = findb::Db::open(books_dir.join(format!("{key}.fbk"))).expect("重新打开账套");
         let mut u = findb::users::get(&db, "boss").unwrap().unwrap();
         u.must_change_pwd = true;
         findb::users::update(&db, &u).unwrap();

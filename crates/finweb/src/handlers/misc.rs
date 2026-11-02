@@ -8,13 +8,13 @@ pub(super) async fn download_attachment(
     user.require(Perm::Report)?;
     let db = &user.db;
     let a =
-        findb::attach::get(&db, id)?.ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
-    let v = vouchers::get(&db, a.voucher_id)?
+        findb::attach::get(db, id)?.ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
+    let v = vouchers::get(db, a.voucher_id)?
         .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权查看该附件"));
     }
-    let data = findb::attach::read(&db, id)?;
+    let data = findb::attach::read(db, id)?;
     let ctype = match a.kind.to_lowercase().as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -48,13 +48,13 @@ pub(super) async fn delete_attachment(
     user.require(Perm::VoucherEdit)?;
     let db = &user.db;
     let a =
-        findb::attach::get(&db, id)?.ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
-    let v = vouchers::get(&db, a.voucher_id)?
+        findb::attach::get(db, id)?.ok_or_else(|| AppError::NotFound("附件不存在".to_string()))?;
+    let v = vouchers::get(db, a.voucher_id)?
         .ok_or_else(|| AppError::NotFound("凭证不存在".to_string()))?;
     if !user.user.can_see_voucher(&v) {
         return Err(AppError::forbidden("无权删除该附件"));
     }
-    findb::attach::delete(&db, id)?;
+    findb::attach::delete(db, id)?;
     db.log(
         user.username(),
         "凭证",

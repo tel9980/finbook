@@ -520,6 +520,27 @@ pub fn page_shell(
         page = po.page_css(cols),
     )
 }
+
+// ---------------------------------------------------------------------------
+// 催款函 / 对账函（一页 A4，直接发给客户）
+// ---------------------------------------------------------------------------
+
+/// 把一张催款单渲染成可以打印、可以直接发出去的函
+///
+/// 为什么单独写一份而不复用报表壳：函是**有收件人和落款的文书**，报表是表。
+/// 复用会把「致：XX 公司」塞进报表抬头，两头都不像。
+///
+/// 版式（纸张方向/边距/字号/落款开关）仍然走账套的 `PrintOptions`——
+/// 这是 v1.8.27 定下的口径：能打印的东西就该认账套里的纸张设置。
+pub fn dunning_letter_html(
+    d: &findb::settle::Dunning,
+    company: &str,
+    unit: &str,
+    po: &fincore::PrintOptions,
+) -> String {
+    // 实现在 `findb::printform` —— 桌面端也要打同一封信，两处各写一份迟早会长歪
+    findb::printform::dunning_letter_html(d, company, unit, po)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,25 +679,4 @@ mod tests {
         let html = report_table_html(&t, "测试公司", "元", &po, true);
         assert!(html.contains("size:A4 landscape"), "10 列在纵向放不下");
     }
-}
-
-// ---------------------------------------------------------------------------
-// 催款函 / 对账函（一页 A4，直接发给客户）
-// ---------------------------------------------------------------------------
-
-/// 把一张催款单渲染成可以打印、可以直接发出去的函
-///
-/// 为什么单独写一份而不复用报表壳：函是**有收件人和落款的文书**，报表是表。
-/// 复用会把「致：XX 公司」塞进报表抬头，两头都不像。
-///
-/// 版式（纸张方向/边距/字号/落款开关）仍然走账套的 `PrintOptions`——
-/// 这是 v1.8.27 定下的口径：能打印的东西就该认账套里的纸张设置。
-pub fn dunning_letter_html(
-    d: &findb::settle::Dunning,
-    company: &str,
-    unit: &str,
-    po: &fincore::PrintOptions,
-) -> String {
-    // 实现在 `findb::printform` —— 桌面端也要打同一封信，两处各写一份迟早会长歪
-    findb::printform::dunning_letter_html(d, company, unit, po)
 }

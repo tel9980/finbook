@@ -19,7 +19,7 @@ pub(super) async fn list_invoices(
     // 让它收窄筛选条件而不是误以为"就这么多"。
     const INVOICE_LIST_MAX: i64 = 500;
     let rows = findb::invoices::list(
-        &db,
+        db,
         &findb::invoices::InvoiceQuery {
             kind: if q.kind.is_empty() {
                 None
@@ -54,7 +54,7 @@ pub(super) async fn invoice_summary(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = &user.db;
-    let sum = findb::invoices::summary(&*db)?;
+    let sum = findb::invoices::summary(db)?;
     let by_kind: serde_json::Map<String, serde_json::Value> = sum
         .into_iter()
         .map(|(k, tax_total, tax_amt, n)| {
@@ -75,7 +75,7 @@ pub(super) async fn invoice_from_po(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let id = findb::invoices::push_from_po(&db, req.po_id, user.username())?;
+    let id = findb::invoices::push_from_po(db, req.po_id, user.username())?;
     db.log(
         user.username(),
         "发票",
@@ -93,7 +93,7 @@ pub(super) async fn invoice_from_so(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let id = findb::invoices::push_from_so(&db, req.so_id, user.username())?;
+    let id = findb::invoices::push_from_so(db, req.so_id, user.username())?;
     db.log(
         user.username(),
         "发票",
@@ -111,7 +111,7 @@ pub(super) async fn create_invoice(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     let inv = invoice_from_req(&req)?;
-    let id = findb::invoices::insert(&db, &inv, user.username())?;
+    let id = findb::invoices::insert(db, &inv, user.username())?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -125,11 +125,11 @@ pub(super) async fn invoice_set_status(
     let db = &user.db;
     // 归属校验：状态机接口同样不得改他人录入的发票（否则绕过 update_invoice 的守卫）
     let existing =
-        findb::invoices::get(&db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
+        findb::invoices::get(db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
     if existing.created_by != user.username() && !user.user.is_admin() {
         return Err(AppError::forbidden("无权修改他人录入的发票状态"));
     }
-    let inv = findb::invoices::set_status(&db, id, &req.status, user.username())?;
+    let inv = findb::invoices::set_status(db, id, &req.status, user.username())?;
     Ok(Json(invoice_json(&inv)))
 }
 
@@ -153,10 +153,50 @@ pub(super) async fn get_tax_vat_detail(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::bad_request("缺少参数 rate（税率档，如 13）"))?;
-    let rows = findb::taxdecl::bucket_detail(&db, kind, period, rate)?;
+    let rows = findb::taxdecl::bucket_detail(db, kind, period, rate)?;
     Ok(Json(
         json!({ "kind": kind, "rate": rate, "rows": rows, "count": rows.len() }),
     ))
+}
+
+/// 申报前体检：把「票上的数」和「账上的数」摆在一起看差在哪
+///
+/// 为什么不塞进 `/tax/vat`：申报表是**结果**，体检是**过程**。
+/// 会计会在报税那几天反复点体检、改票、再体检，而申报表只在最后看一次。
+/// 两个东西的生命周期完全不同，塞一个响应里只会让前端每次改一张票就重渲整张表。
+///
+/// 也不做「自动改账」：体检只举手，不动手。任何自动修正都会在真出问题时
+/// 让会计失去追查的入口。
+pub(super) async fn get_tax_precheck(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let db = &user.db;
+    let period = query_period(&state, &user, &q);
+    let r = findb::taxprecheck::precheck(db, period)?;
+    let items: Vec<serde_json::Value> = r
+        .items
+        .iter()
+        .map(|i| {
+            json!({
+                "level": i.level.label(),
+                "code": i.code,
+                "title": i.title,
+                "detail": i.detail,
+                "amount": i.amount.map(|a| a.fmt_money()),
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "period": r.period,
+        "can_file": r.can_file,
+        "errors": r.errors,
+        "warns": r.warns,
+        "infos": r.infos,
+        "items": items,
+    })))
 }
 
 /// 导出申报表 CSV（带 BOM，Excel 双击直接打开不乱码）
@@ -168,7 +208,7 @@ pub(super) async fn export_tax_vat(
     user.require(Perm::Export)?;
     let db = &user.db;
     let period = query_period(&state, &user, &q);
-    let f = findb::taxdecl::vat_main_form(&db, period)?;
+    let f = findb::taxdecl::vat_main_form(db, period)?;
     let company = db.options().company;
 
     let mut out = String::from("\u{feff}");
@@ -286,7 +326,7 @@ pub(super) async fn get_so_reconcile(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::scm2::so_reconcile(&db, current_period(&state, &user))?;
+    let rows = findb::scm2::so_reconcile(db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -301,7 +341,7 @@ pub(super) async fn list_quotation(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let rows = findb::sales::quo_list(&db, period)?;
+    let rows = findb::sales::quo_list(db, period)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -313,12 +353,12 @@ pub(super) async fn save_quotation(
     user.require(Perm::OrderOps)?;
     let db = &user.db;
     if req.no.is_empty() {
-        req.no = findb::sales::quo_next_no(&db, req.period)?;
+        req.no = findb::sales::quo_next_no(db, req.period)?;
     }
     if req.prepared_by.is_empty() {
         req.prepared_by = user.user.display_name.clone();
     }
-    let id = findb::sales::quo_save(&db, &mut req)?;
+    let id = findb::sales::quo_save(db, &mut req)?;
     Ok(Json(serde_json::json!({ "id": id, "no": req.no })))
 }
 
@@ -330,14 +370,8 @@ pub(super) async fn approve_quotation(
     user.require(Perm::OrderOps)?;
     let db = &user.db;
     // 工作流拦截：有已发布流程 → 先走节点链（Pending 只推进不批单；终态才执行原审批）
-    match findb::workflow::intercept(
-        &db,
-        findb::workflow::BIZ_QUOTATION,
-        id,
-        &user.user,
-        true,
-        "",
-    )? {
+    match findb::workflow::intercept(db, findb::workflow::BIZ_QUOTATION, id, &user.user, true, "")?
+    {
         findb::workflow::Gate::Pending { next } => {
             db.log(
                 user.username(),
@@ -352,7 +386,7 @@ pub(super) async fn approve_quotation(
         }
         _ => {}
     }
-    findb::sales::quo_approve(&db, id)?;
+    findb::sales::quo_approve(db, id)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -379,7 +413,7 @@ pub(super) async fn add_so_shipment(
     }
     // 对标金蝶：未确认订单不能出库（草稿/作废订单先确认）
     let so =
-        findb::scm::so_get(&db, req.so_id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
+        findb::scm::so_get(db, req.so_id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
     if matches!(
         so.status,
         findb::scm::SoStatus::Draft | findb::scm::SoStatus::Cancelled
@@ -393,7 +427,7 @@ pub(super) async fn add_so_shipment(
     // 第二步失败（仓库不存在等）时收入与应收已入账提交，却没有任何发货记录，
     // 留下无法自动撤销的孤儿凭证。
     let (id, ivid) = findb::sales::so_shipment_all(
-        &db,
+        db,
         req.so_id,
         period,
         date,
@@ -402,9 +436,9 @@ pub(super) async fn add_so_shipment(
         &req.warehouse,
         user.username(),
     )?;
-    findb::scm::so_progress_update(&db, req.so_id)?;
+    findb::scm::so_progress_update(db, req.so_id)?;
     // 出库成功 → 完成该订单最早一条待发通知（备货指令闭环）
-    let _ = findb::sales::notice_fulfill_on_shipment(&db, req.so_id)?;
+    let _ = findb::sales::notice_fulfill_on_shipment(db, req.so_id)?;
     Ok(Json(
         serde_json::json!({ "ok": true, "id": id, "voucher_id": ivid }),
     ))
@@ -433,7 +467,7 @@ pub(super) async fn add_so_return(
     }
     // 对标金蝶：未确认订单不能退货
     let so =
-        findb::scm::so_get(&db, req.so_id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
+        findb::scm::so_get(db, req.so_id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
     if matches!(
         so.status,
         findb::scm::SoStatus::Draft | findb::scm::SoStatus::Cancelled
@@ -447,7 +481,7 @@ pub(super) async fn add_so_return(
     // 再由 so_return_with_stock 报「退货数量超过净发货」——收入和应收已被冲掉，
     // 却没有退货单，用户只看到一个 400。
     let (id, ivid) = findb::sales::so_return_all(
-        &db,
+        db,
         req.so_id,
         period,
         date,
@@ -456,7 +490,7 @@ pub(super) async fn add_so_return(
         &req.warehouse,
         user.username(),
     )?;
-    findb::scm::so_progress_update(&db, req.so_id)?;
+    findb::scm::so_progress_update(db, req.so_id)?;
     Ok(Json(
         serde_json::json!({ "ok": true, "id": id, "voucher_id": ivid }),
     ))
@@ -482,16 +516,16 @@ pub(super) async fn add_so_payment(
     let amount = parse_money_checked(&req.amount)?;
     // 对标金蝶：收款动作即出台账凭证并按客户自动核销（默认资金账户取账套配置）
     let so =
-        findb::scm::so_get(&db, req.so_id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
+        findb::scm::so_get(db, req.so_id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
     // 审核流：先落草稿收付款单（凭证由审核人审核时同事务生成并自动核销）
     //
     // 写入顺序与 add_po_payment 刻意一致：依赖数据（收款流水）先落，草稿收付款单最后建。
     // findb 没有 so_payment_add / receipt_create 的 `_in(tx,…)` 变体，三步无法共事务，
     // 只能靠顺序收敛失败面——建单在前时，建流水失败会留下可被审核并生成付款凭证的孤立草稿单。
     // 残留的非原子性：建单成功后勾稽建边失败，仅缺一条勾稽边，业务数据仍自洽。
-    let id = findb::sales::so_payment_add(&db, req.so_id, period, date, amount, &req.memo)?;
+    let id = findb::sales::so_payment_add(db, req.so_id, period, date, amount, &req.memo)?;
     let doc_id = findb::receipt::receipt_create(
-        &db,
+        db,
         "receipt",
         date,
         "",
@@ -504,7 +538,7 @@ pub(super) async fn add_so_payment(
         user.username(),
     )?;
     // 票↔款勾稽：本订单已下推的销项发票与本次收付款单自动建边
-    findb::docflow::link_receipt_to_src_invoice(&db, "so", req.so_id, doc_id)?;
+    findb::docflow::link_receipt_to_src_invoice(db, "so", req.so_id, doc_id)?;
     // 审计日志失败不得把已提交的收款变成 500：客户端重试会重复入账
     if let Err(e) = db.log(
         user.username(),
@@ -539,12 +573,12 @@ pub(super) async fn print_so_form(
             .get("period")
             .and_then(|s| parse_period(s))
             .unwrap_or_else(|| current_period(&state, &user));
-        for o in findb::scm::so_list(&db, period, None)? {
+        for o in findb::scm::so_list(db, period, None)? {
             orders.push(so_to_print(o));
         }
     } else {
         for id in ids {
-            let o = findb::scm::so_get(&db, id)?
+            let o = findb::scm::so_get(db, id)?
                 .ok_or_else(|| AppError::bad_request(format!("销售订单 #{id} 不存在")))?;
             orders.push(so_to_print(o));
         }
@@ -580,7 +614,7 @@ pub(super) async fn convert_quotation(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = &user.db;
-    let so_id = findb::sales::quo_to_order(&db, id, user.username())?;
+    let so_id = findb::sales::quo_to_order(db, id, user.username())?;
     db.log(
         user.username(),
         "销售",
@@ -605,7 +639,7 @@ pub(super) async fn list_so(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let mut rows = findb::scm::so_list(&db, period, None)?;
+    let mut rows = findb::scm::so_list(db, period, None)?;
     // 字段级价格权限：无「价格查看」——列表中单价/税额/金额服务端置零（数量保留）
     if !user.user.can(Perm::PriceView) {
         for o in &mut rows {
@@ -638,7 +672,7 @@ pub(super) async fn create_notice(
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
     };
     let qty = parse_money_checked(&req.qty)?;
-    let nid = findb::sales::notice_create(&db, id, qty, date, &req.memo, user.username())?;
+    let nid = findb::sales::notice_create(db, id, qty, date, &req.memo, user.username())?;
     db.log(
         user.username(),
         "销售",
@@ -655,7 +689,7 @@ pub(super) async fn list_notices(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::sales::notice_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::sales::notice_list(db)? })))
 }
 
 /// 保存销售订单：服务端计算行金额（数量×单价）与税额（金额×税率）；
@@ -692,14 +726,14 @@ pub(super) async fn save_so(
         std::collections::HashMap::new();
     if so.id > 0 {
         let old =
-            findb::scm::so_get(&db, so.id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
+            findb::scm::so_get(db, so.id)?.ok_or_else(|| AppError::not_found("销售订单不存在"))?;
         so.no = old.no;
         so.shipped_amount = old.shipped_amount;
         for l in &old.lines {
             old_price.insert(l.item_code.clone(), (l.unit_price, l.tax_rate));
         }
     } else {
-        so.no = findb::scm::so_next_no(&db, period)?;
+        so.no = findb::scm::so_next_no(db, period)?;
     }
     for l in &req.lines {
         if l.item_code.trim().is_empty() {
@@ -751,7 +785,7 @@ pub(super) async fn save_so(
     if so.lines.is_empty() {
         return Err(AppError::bad_request("订单至少一行明细"));
     }
-    let id = findb::scm::so_save(&db, &mut so)?;
+    let id = findb::scm::so_save(db, &mut so)?;
     db.log(
         user.username(),
         "销售",
@@ -785,14 +819,14 @@ pub(super) async fn transition_so(
     // 「确认」是订单的审批动作（签出即对外承诺）；partialShip / completed /
     // cancelled 是确认之后的执行动作，再走一遍审批链等于让仓库收货要财务再批一次。
     if to == findb::scm::SoStatus::Confirmed {
-        match workflow_gate(&db, &user, findb::workflow::BIZ_SALES_ORDER, id, "销售订单")? {
+        match workflow_gate(db, &user, findb::workflow::BIZ_SALES_ORDER, id, "销售订单")? {
             WfGate::Pending(next) => return Ok(Json(json!({ "ok": true, "pending": next }))),
             WfGate::Rejected => return Ok(Json(json!({ "ok": true, "rejected": true }))),
             WfGate::Continue => {}
         }
     }
     // 状态机由 findb 的 so_set_status 把关（非法跳变 → 400）
-    findb::scm::so_set_status(&db, id, to)?;
+    findb::scm::so_set_status(db, id, to)?;
     // 状态已提交：日志失败不得把请求打成 500，否则客户端重试会重复流转
     if let Err(e) = db.log(
         user.username(),
@@ -812,7 +846,7 @@ pub(super) async fn delete_so(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = &user.db;
-    findb::scm::so_delete(&db, id)?;
+    findb::scm::so_delete(db, id)?;
     db.log(user.username(), "销售", "删除销售订单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -826,7 +860,7 @@ pub(super) async fn get_credit_check(
     let db = &user.db;
     let customer = q.get("customer").cloned().unwrap_or_default();
     let (receivable, limit, over) =
-        findb::sales::credit_check(&db, &customer, current_period(&state, &user))?;
+        findb::sales::credit_check(db, &customer, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({
         "receivable": receivable.fmt_money(),
         "limit": limit.fmt_money(),
@@ -840,7 +874,7 @@ pub(super) async fn get_so_track(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::sales::so_execution_track(&db, current_period(&state, &user))?;
+    let rows = findb::sales::so_execution_track(db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -850,7 +884,7 @@ pub(super) async fn get_sales_stats(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::sales::sales_stats(&db, current_period(&state, &user))?;
+    let rows = findb::sales::sales_stats(db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -865,7 +899,7 @@ pub(super) async fn get_notices(
     user.require(Perm::Report)?;
     let db = &user.db;
     let cur = current_period(&state, &user);
-    let todos = findb::workbench::collect_todos(&db, &user.user, cur)?;
+    let todos = findb::workbench::collect_todos(db, &user.user, cur)?;
     let see_all = user.can(Perm::AuditLog);
     let me = user.username().to_string();
     let events = db
@@ -920,7 +954,7 @@ pub(super) async fn update_invoice(
     // 归属校验 + 保留服务端字段：普通用户不能改他人发票，
     // 且表单未提交的 attach_id/created_by/status 不能被覆盖清零
     let existing =
-        findb::invoices::get(&db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
+        findb::invoices::get(db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
     if existing.created_by != user.username() && !user.user.is_admin() {
         return Err(AppError::forbidden("无权修改他人录入的发票"));
     }
@@ -933,7 +967,7 @@ pub(super) async fn update_invoice(
         // 状态变更走专用接口（带状态机校验），此处不接受表单覆盖
         inv.status = existing.status.clone();
     }
-    findb::invoices::update(&db, &inv)?;
+    findb::invoices::update(db, &inv)?;
     db.log(user.username(), "发票", "更新", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -946,11 +980,11 @@ pub(super) async fn delete_invoice(
     user.require(Perm::VoucherDelete)?;
     let db = &user.db;
     let existing =
-        findb::invoices::get(&db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
+        findb::invoices::get(db, id)?.ok_or_else(|| AppError::not_found("发票不存在"))?;
     if existing.created_by != user.username() && !user.user.is_admin() {
         return Err(AppError::forbidden("无权删除他人录入的发票"));
     }
-    findb::invoices::delete(&db, id)?;
+    findb::invoices::delete(db, id)?;
     db.log(user.username(), "发票", "删除", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -961,7 +995,7 @@ pub(super) async fn get_tax_options(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::SysOption)?;
     let db = &user.db;
-    Ok(Json(json!(findb::taxdecl::TaxOptions::load(&*db)?)))
+    Ok(Json(json!(findb::taxdecl::TaxOptions::load(db)?)))
 }
 
 pub(super) async fn save_tax_options(
@@ -1000,7 +1034,7 @@ pub(super) async fn save_tax_options(
         ));
     }
     let db = &user.db;
-    req.save(&*db)?;
+    req.save(db)?;
     db.log(user.username(), "税务", "税务参数", "更新申报表参数")?;
     Ok(Json(json!({ "ok": true, "options": req })))
 }
@@ -1014,7 +1048,7 @@ pub(super) async fn get_change_log(
     let db = &user.db;
     let order_type = q.get("type").cloned().unwrap_or_else(|| "po".to_string());
     let order_id = q.get("id").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-    let rows = findb::scm2::change_log_list(&db, &order_type, order_id)?;
+    let rows = findb::scm2::change_log_list(db, &order_type, order_id)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -1026,8 +1060,8 @@ pub(super) async fn get_tax_vat(
     user.require(Perm::Report)?;
     let db = &user.db;
     let period = query_period(&state, &user, &q);
-    let form = findb::taxdecl::vat_main_form(&db, period)?;
-    let opts = findb::taxdecl::TaxOptions::load(&*db)?;
+    let form = findb::taxdecl::vat_main_form(db, period)?;
+    let opts = findb::taxdecl::TaxOptions::load(db)?;
     let company = db.options().company;
     let tax_no = db.options().tax_no;
     Ok(Json(json!({

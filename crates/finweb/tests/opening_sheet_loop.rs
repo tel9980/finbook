@@ -358,7 +358,7 @@ async fn template_carries_the_current_books_account_codes() {
             .iter()
             .any(|r| r.first().map(|s| s.as_str()) == Some("1001")),
         "账户余额纸里应当预填 1001 库存现金，实际前几行：{:?}",
-        &bal.1.iter().take(5).collect::<Vec<_>>()
+        bal.1.iter().take(5).collect::<Vec<_>>()
     );
     // 1122/2202 的余额不能出现在模板里：它们由往来两张纸生成，填了就是双计
     assert!(

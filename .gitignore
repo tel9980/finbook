@@ -34,3 +34,6 @@ node_modules/
 # 本仓库是公开的，这些人名一旦进 git 历史就删不干净。
 # 需要收集表时用 make: crates/findb 里的建账程序重新生成一份。
 /小工厂/
+
+# 变异测试的崩溃恢复锁（tools/mutate-rust.js 运行时写，base64 存源码，约 3MB）
+.mutation-lock.json

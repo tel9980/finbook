@@ -451,16 +451,16 @@ pub fn build_dunning_excel(db: &Db, kind: &str, period: Period) -> DbResult<(Str
         "备注",
     ];
     for (col, h) in dunning_headers.iter().enumerate() {
-        sheet1.write_string(0, col as u16, *h, &header_fmt)?;
+        sheet1.write_string(0, col as u16, h, &header_fmt)?;
     }
     for (row_idx, row) in dunning_rows.iter().enumerate() {
         for (col_idx, cell) in row.iter().enumerate() {
             let fmt = if col_idx == 4 { &money_fmt } else { &text_fmt };
             if col_idx == 4 {
                 let val = cell.parse::<f64>().unwrap_or(0.0);
-                sheet1.write_number(row_idx as u32 + 1, col_idx as u16, val, &fmt)?;
+                sheet1.write_number(row_idx as u32 + 1, col_idx as u16, val, fmt)?;
             } else {
-                sheet1.write_string(row_idx as u32 + 1, col_idx as u16, cell, &fmt)?;
+                sheet1.write_string(row_idx as u32 + 1, col_idx as u16, cell, fmt)?;
             }
         }
     }
@@ -496,20 +496,20 @@ pub fn build_dunning_excel(db: &Db, kind: &str, period: Period) -> DbResult<(Str
         "确认时间",
     ];
     for (col, h) in statement_headers.iter().enumerate() {
-        sheet2.write_string(0, col as u16, *h, &header_fmt)?;
+        sheet2.write_string(0, col as u16, h, &header_fmt)?;
     }
     for (row_idx, row) in statement_rows.iter().enumerate() {
         for (col_idx, cell) in row.iter().enumerate() {
-            let fmt = if matches!(col_idx, 6 | 7 | 8 | 9) {
+            let fmt = if matches!(col_idx, 6..=9) {
                 &money_fmt
             } else {
                 &text_fmt
             };
-            if matches!(col_idx, 6 | 7 | 8 | 9) {
+            if matches!(col_idx, 6..=9) {
                 let val = cell.parse::<f64>().unwrap_or(0.0);
-                sheet2.write_number(row_idx as u32 + 1, col_idx as u16, val, &fmt)?;
+                sheet2.write_number(row_idx as u32 + 1, col_idx as u16, val, fmt)?;
             } else {
-                sheet2.write_string(row_idx as u32 + 1, col_idx as u16, cell, &fmt)?;
+                sheet2.write_string(row_idx as u32 + 1, col_idx as u16, cell, fmt)?;
             }
         }
     }

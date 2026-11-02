@@ -147,7 +147,7 @@ fn summarize(code: &str, name: &str, lines: &[OpenEntry], opening: Money) -> Cus
 
 /// 客户列表：一行一客户，带余额汇总。
 ///
-//// 分页结果
+/// 分页结果
 #[derive(Debug, serde::Serialize)]
 pub struct CustomerListResult {
     pub rows: Vec<CustomerSummary>,

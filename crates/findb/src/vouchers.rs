@@ -1338,7 +1338,7 @@ pub fn post_many(db: &Db, ids: &[i64], who: &str) -> DbResult<(usize, Vec<String
 }
 
 /// 返回该凭证的凭证号，供调用方写操作日志
-fn post_tx(tx: &rusqlite::Transaction, id: i64, who: &str) -> Result<String, DbError> {
+pub(crate) fn post_tx(tx: &rusqlite::Transaction, id: i64, who: &str) -> Result<String, DbError> {
     let v: Voucher = tx
         .query_row(
             &format!("SELECT {VOUCHER_COLS} FROM voucher WHERE id=?1"),

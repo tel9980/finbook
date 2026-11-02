@@ -6,6 +6,7 @@ use chrono::NaiveDate;
 use fincore::{Money, Period};
 use rusqlite::OptionalExtension;
 
+use crate::outsource::Ticket;
 use crate::scm::{ProdStatus, ProductionOrder};
 use crate::{Db, DbError, DbResult, FinError};
 
@@ -1154,8 +1155,12 @@ pub fn prod_qc_save(
     Ok((id, no, result.to_string()))
 }
 
-/// 委外加工费确认：归集人工（CostType::Labor → 完工结转由 500102 承接）
+/// 委外加工费确认（无票口径）：归集人工（CostType::Labor → 完工结转由 500102 承接）
 /// + 生成应付凭证 借 500102 / 贷 应付科目（供应商辅助）。仅委外订单、金额 > 0；期间随订单。
+///
+/// 有票请用 [`outsource_fee_with_ticket`]：13% / 3% 的票要拆出进项，
+/// 否则把能抵的税也计进了成本，成本虚高、税也白交。这条保留原行为
+/// （等价于「无票」），因为老调用方与历史测试都按它写的。
 pub fn outsource_fee(
     db: &Db,
     po_id: i64,
@@ -1163,9 +1168,27 @@ pub fn outsource_fee(
     date: NaiveDate,
     who: &str,
 ) -> DbResult<i64> {
-    if !amount.is_positive() {
+    outsource_fee_with_ticket(db, po_id, amount, Ticket::Plain, date, who)
+}
+
+/// 委外加工费确认（带票种）：13% 专票 / 3% 征收率 / 无票。
+///
+/// `gross` 是**价税合计**（无票时就是要付的钱）。拆出来的进项挂 22210101，
+/// 成本只进**不含税**金额 —— 进项能抵，计进成本等于把可抵的税白扔掉。
+/// 加工费成本要素同样按不含税金额归集，否则完工结转的库存商品成本虚高。
+pub fn outsource_fee_with_ticket(
+    db: &Db,
+    po_id: i64,
+    gross: Money,
+    ticket: Ticket,
+    date: NaiveDate,
+    who: &str,
+) -> DbResult<i64> {
+    if !gross.is_positive() {
         return Err(FinError::msg("加工费必须大于 0").into());
     }
+    let split = crate::outsource::split(ticket, gross).map_err(FinError::msg)?;
+    let amount = split.net;
     let order = get_prod_order(db, po_id)?.ok_or_else(|| FinError::msg("生产订单不存在"))?;
     if order.order_kind != "outsourcing" {
         return Err(FinError::msg("仅委外订单可确认加工费").into());
@@ -1182,18 +1205,33 @@ pub fn outsource_fee(
     let mut v = Voucher::new(period, date, "记", no);
     v.prepared_by = who.to_string();
     v.source = VoucherSource::Business;
-    v.memo = format!("委外加工费 {}", order.no);
+    v.memo = if split.tax.is_zero() {
+        format!("委外加工费 {}（无票）", order.no)
+    } else {
+        format!(
+            "委外加工费 {}（{}，进项 {}）",
+            order.no,
+            ticket.label(),
+            split.tax.fmt_money()
+        )
+    };
     v.push_entry(Entry {
         debit: amount,
         ..Entry::new(1, "500102", "委外加工费")
     });
+    if split.tax.is_positive() {
+        v.push_entry(Entry {
+            debit: split.tax,
+            ..Entry::new(2, "22210101", "委外加工费进项")
+        });
+    }
     v.push_entry(Entry {
-        credit: amount,
+        credit: split.gross,
         aux: AuxRef {
             supplier: Some(order.supplier_code.clone()),
             ..Default::default()
         },
-        ..Entry::new(2, biz.ap.as_str(), "委外加工费")
+        ..Entry::new(3, biz.ap.as_str(), "委外加工费")
     });
     v.renumber();
     let vid = crate::vouchers::save_in(&tx, &mut v)?;
@@ -1243,6 +1281,86 @@ mod tests {
 
     fn m(s: &str) -> Money {
         Money::parse(s).unwrap()
+    }
+
+    /// 委外加工费带票：进项要拆出来挂 22210101，成本只进不含税金额。
+    ///
+    /// 这条守两件事：①同一笔 11,300 元，13% 专票的成本是 10,000 而不是 11,300；
+    /// ②成本要素（prod_cost）也要按不含税金额归集，否则完工结转的库存商品成本虚高 1,300。
+    #[test]
+    fn outsource_fee_splits_input_vat() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mut o = ProductionOrder {
+            id: 0,
+            no: crate::scm::prod_next_no(&db, p).unwrap(),
+            period: p,
+            date: chrono::NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            item_code: "A".into(),
+            item_name: "成品".into(),
+            planned_qty: m("10"),
+            completed_qty: Money::ZERO,
+            status: ProdStatus::Released,
+            work_center: String::new(),
+            so_id: 0,
+            prepared_by: "u1".into(),
+            memo: String::new(),
+            order_kind: "outsourcing".into(),
+            supplier_code: "S01".into(),
+            supplier_name: "喷砂厂".into(),
+            plan_start: String::new(),
+            plan_end: String::new(),
+            routing_version: String::new(),
+        };
+        let po_id = crate::scm::prod_save(&db, &mut o).unwrap();
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 1, 20).unwrap();
+
+        // 13% 专票：含税 11,300 → 不含税 10,000 + 进项 1,300
+        let vid = outsource_fee_with_ticket(&db, po_id, m("11300"), Ticket::Special13, date, "u1")
+            .unwrap();
+        let v = crate::vouchers::get(&db, vid).unwrap().unwrap();
+        assert_eq!(v.entries.len(), 3, "13% 票应有三行：成本 / 进项 / 应付");
+        assert_eq!(v.entries[0].account_code, "500102");
+        assert_eq!(
+            v.entries[0].debit.fmt_money(),
+            "10,000.00",
+            "成本只能是不含税金额"
+        );
+        assert_eq!(v.entries[1].account_code, "22210101");
+        assert_eq!(v.entries[1].debit.fmt_money(), "1,300.00");
+        assert_eq!(
+            v.entries[2].credit.fmt_money(),
+            "11,300.00",
+            "应付才是价税合计"
+        );
+        assert_eq!(v.entries[2].aux.supplier.as_deref(), Some("S01"));
+
+        // 成本要素同样按不含税归集
+        let cost: String = db
+            .conn()
+            .query_row(
+                "SELECT amount FROM prod_cost WHERE po_id=?1 AND cost_type=?2",
+                rusqlite::params![po_id, CostType::Labor.code()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cost, "10000.00", "成本要素要存不含税金额");
+
+        // 无票：老行为不变，两行、全额进成本
+        let po2 = {
+            let mut o2 = o.clone();
+            o2.id = 0;
+            o2.no = crate::scm::prod_next_no(&db, p).unwrap();
+            crate::scm::prod_save(&db, &mut o2).unwrap()
+        };
+        let v2 = crate::vouchers::get(
+            &db,
+            outsource_fee_with_ticket(&db, po2, m("5000"), Ticket::Plain, date, "u1").unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(v2.entries.len(), 2, "无票不该有进项行");
+        assert_eq!(v2.entries[0].debit.fmt_money(), "5,000.00");
     }
 
     #[test]

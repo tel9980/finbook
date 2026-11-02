@@ -14,9 +14,9 @@ pub(super) async fn post_landed_cost(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = &user.db;
-    let vid = findb::landedcost::post(&db, id, user.username())?;
+    let vid = findb::landedcost::post(db, id, user.username())?;
     let after =
-        findb::landedcost::get(&db, id)?.ok_or_else(|| AppError::not_found("到岸成本单不存在"))?;
+        findb::landedcost::get(db, id)?.ok_or_else(|| AppError::not_found("到岸成本单不存在"))?;
     Ok(Json(json!({
         "ok": true,
         "voucher_id": vid,
@@ -41,7 +41,7 @@ pub(super) async fn landed_cost_from_po(
         .get("po_id")
         .and_then(|s| s.trim().parse::<i64>().ok())
         .ok_or_else(|| AppError::bad_request("缺少采购订单 po_id"))?;
-    let lines = findb::landedcost::fetch_lines_from_po(&db, po_id)?;
+    let lines = findb::landedcost::fetch_lines_from_po(db, po_id)?;
     Ok(Json(json!({
         "po_id": po_id,
         "rows": lines.iter().map(|l| json!({
@@ -63,9 +63,7 @@ pub(super) async fn items_master(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = &user.db;
-    Ok(Json(
-        json!({ "rows": findb::inventory2::item_master(&*db)? }),
-    ))
+    Ok(Json(json!({ "rows": findb::inventory2::item_master(db)? })))
 }
 
 /// 单条出入库流水（差异分析点行看构成明细）
@@ -76,7 +74,7 @@ pub(super) async fn get_stock_move(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let m = findb::business::stock_move_get(&db, id)?
+    let m = findb::business::stock_move_get(db, id)?
         .ok_or_else(|| AppError::not_found(format!("出入库流水不存在：{id}")))?;
     Ok(Json(json!({
         "id": m.id,
@@ -114,7 +112,7 @@ pub(super) async fn stock_adjust_endpoint(
     };
     let qty = parse_money_checked(&req.qty)?;
     let id = findb::business::stock_adjust_full(
-        &db,
+        db,
         period,
         date,
         &req.item,
@@ -141,7 +139,7 @@ pub(super) async fn serial_out_endpoint(
     } else {
         NaiveDate::parse_from_str(&req.date, "%Y-%m-%d").unwrap_or_else(|_| period.first_day())
     };
-    let n = findb::inventory2::serial_out(&db, &req.serials, date)?;
+    let n = findb::inventory2::serial_out(db, &req.serials, date)?;
     Ok(Json(serde_json::json!({ "ok": true, "count": n })))
 }
 
@@ -153,7 +151,7 @@ pub(super) async fn get_unit(
     user.require(Perm::Warehouse)?;
     let item = q.get("item").cloned().unwrap_or_default();
     let db = &user.db;
-    let u = findb::inventory2::unit_get(&db, &item)?;
+    let u = findb::inventory2::unit_get(db, &item)?;
     Ok(Json(serde_json::json!({ "unit": u })))
 }
 
@@ -165,7 +163,7 @@ pub(super) async fn set_unit(
     user.require(Perm::Warehouse)?;
     let db = &user.db;
     findb::inventory2::unit_set(
-        &db,
+        db,
         &findb::inventory2::ItemUnit {
             item: req.item,
             base_unit: req.base_unit,
@@ -182,7 +180,7 @@ pub(super) async fn get_inv_aging(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::inventory2::inv_aging(&db, current_period(&state, &user))?;
+    let rows = findb::inventory2::inv_aging(db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -192,7 +190,7 @@ pub(super) async fn get_abc(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::inventory2::abc_analysis(&db, current_period(&state, &user))?;
+    let rows = findb::inventory2::abc_analysis(db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -213,7 +211,7 @@ pub(super) async fn assemble_endpoint(
     for (i, q) in req.children {
         children.push((i, parse_money_checked(&q)?));
     }
-    findb::inventory2::assemble(&db, period, date, &req.parent, &children, &req.memo)?;
+    findb::inventory2::assemble(db, period, date, &req.parent, &children, &req.memo)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -234,7 +232,7 @@ pub(super) async fn disassemble_endpoint(
     for (i, q) in req.children {
         children.push((i, parse_money_checked(&q)?));
     }
-    findb::inventory2::disassemble(&db, period, date, &req.parent, &children, &req.memo)?;
+    findb::inventory2::disassemble(db, period, date, &req.parent, &children, &req.memo)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -249,7 +247,7 @@ pub(super) async fn get_warehouse_stock(
         return Err(AppError::bad_request("缺少 item"));
     }
     let db = &user.db;
-    let rows = findb::inventory2::warehouse_stock(&db, &item)?;
+    let rows = findb::inventory2::warehouse_stock(db, &item)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -262,7 +260,7 @@ pub(super) async fn list_warehouses(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::warehouse::list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::warehouse::list(db)? })))
 }
 
 /// 新增/修改仓库（写：Warehouse；设默认仓自动清其它默认标记）
@@ -273,7 +271,7 @@ pub(super) async fn save_warehouse(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = &user.db;
-    findb::warehouse::save(&db, &w)?;
+    findb::warehouse::save(db, &w)?;
     db.log(
         user.username(),
         "库存",
@@ -291,7 +289,7 @@ pub(super) async fn delete_warehouse(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = &user.db;
-    findb::warehouse::delete(&db, &code)?;
+    findb::warehouse::delete(db, &code)?;
     db.log(user.username(), "库存", "删除仓库", &code)?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -309,8 +307,8 @@ pub(super) async fn get_routing(
         .get("version")
         .map(|v| v.trim().to_string())
         .unwrap_or_default();
-    let ops = advanced::routing_list_version(&db, &item, &version)?;
-    let versions = advanced::routing_versions(&db, &item)?;
+    let ops = advanced::routing_list_version(db, &item, &version)?;
+    let versions = advanced::routing_versions(db, &item)?;
     Ok(Json(
         serde_json::json!({ "item_code": item, "version": version, "ops": ops, "versions": versions }),
     ))
@@ -324,7 +322,7 @@ pub(super) async fn get_routing_versions(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    let versions = advanced::routing_versions(&db, &item)?;
+    let versions = advanced::routing_versions(db, &item)?;
     Ok(Json(
         serde_json::json!({ "item_code": item, "versions": versions }),
     ))
@@ -362,7 +360,7 @@ pub(super) async fn post_routing(
     }
     let mut count = 0usize;
     for (version, ops) in &groups {
-        advanced::routing_save_version(&db, &item, version, ops)?;
+        advanced::routing_save_version(db, &item, version, ops)?;
         count += ops.len();
     }
     Ok(Json(
@@ -377,7 +375,7 @@ pub(super) async fn delete_routing(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    advanced::routing_delete(&db, &item)?;
+    advanced::routing_delete(db, &item)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -389,7 +387,7 @@ pub(super) async fn get_mrp_latest(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    let rows = advanced::mrp_latest(&*db)?;
+    let rows = advanced::mrp_latest(db)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -405,15 +403,15 @@ pub(super) async fn run_mrp(
         demands.push((d.item_code, parse_money_checked(&d.qty)?, d.source));
     }
     if demands.is_empty() && req.from_sales {
-        demands = advanced::mrp_demands_from_sales(&db, current_period(&state, &user))?;
+        demands = advanced::mrp_demands_from_sales(db, current_period(&state, &user))?;
     }
     if demands.is_empty() {
         return Err(AppError::bad_request(
             "请提供需求清单，或勾选「从销售订单收集」",
         ));
     }
-    let run_at = advanced::mrp_run(&db, &demands)?;
-    let rows = advanced::mrp_by_run(&db, &run_at)?;
+    let run_at = advanced::mrp_run(db, &demands)?;
+    let rows = advanced::mrp_by_run(db, &run_at)?;
     Ok(Json(serde_json::json!({ "run_at": run_at, "rows": rows })))
 }
 
@@ -425,10 +423,10 @@ pub(super) async fn mrp_to_req_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = &user.db;
-    if findb::advanced::mrp_get(&db, id)?.is_none() {
+    if findb::advanced::mrp_get(db, id)?.is_none() {
         return Err(AppError::not_found("MRP 结果行不存在"));
     }
-    let (req_id, no) = findb::advanced::mrp_to_req(&db, id, user.username())?;
+    let (req_id, no) = findb::advanced::mrp_to_req(db, id, user.username())?;
     db.log(
         user.username(),
         "采购",
@@ -455,7 +453,7 @@ pub(super) async fn form_convert_ep(
     };
     let qty = parse_money_checked(&req.qty)?;
     findb::inventory2::form_convert(
-        &db,
+        db,
         period,
         date,
         req.from_item.trim(),
@@ -498,7 +496,7 @@ pub(super) async fn qc_order_ep(
         req.inspector.trim().to_string()
     };
     let id = findb::procurement::qc_save(
-        &db,
+        db,
         req.po_id,
         insp,
         fail,
@@ -534,7 +532,7 @@ pub(super) async fn below_safety_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = &user.db;
-    let rows = findb::inventory2::below_safety(&*db)?;
+    let rows = findb::inventory2::below_safety(db)?;
     Ok(Json(json!({
         "rows": rows
             .iter()
@@ -561,7 +559,7 @@ pub(super) async fn run_mps(
     }
     if req.from_sales {
         extra.extend(advanced::mrp_demands_from_sales(
-            &db,
+            db,
             current_period(&state, &user),
         )?);
     }
@@ -578,8 +576,8 @@ pub(super) async fn run_mps(
         req.due_date.trim().to_string()
     };
     // 销售需求已在 handler 合并，findb 侧不再取（sales_period=0）
-    let run_at = advanced::mps_run(&db, &extra, Period::from_ymm(0), &due)?;
-    let rows = advanced::mps_latest(&*db)?;
+    let run_at = advanced::mps_run(db, &extra, Period::from_ymm(0), &due)?;
+    let rows = advanced::mps_latest(db)?;
     db.log(
         user.username(),
         "生产",
@@ -598,7 +596,7 @@ pub(super) async fn get_mps_latest(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::ProductionOps)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": advanced::mps_latest(&*db)? })))
+    Ok(Json(json!({ "rows": advanced::mps_latest(db)? })))
 }
 
 /// MPS 下达：状态 open → converted 并一键生成已下达生产订单（数量可改）
@@ -616,7 +614,7 @@ pub(super) async fn convert_mps(
         Some(parse_money_checked(&req.qty)?)
     };
     let (oid, no) =
-        advanced::mps_convert_to_order(&db, id, q, current_period(&state, &user), user.username())?;
+        advanced::mps_convert_to_order(db, id, q, current_period(&state, &user), user.username())?;
     db.log(
         user.username(),
         "生产",
@@ -644,7 +642,7 @@ pub(super) async fn rough_mps(
     } else {
         req.daily_qty.trim()
     })?;
-    let (orders, load) = advanced::rough_schedule(&db, period, daily)?;
+    let (orders, load) = advanced::rough_schedule(db, period, daily)?;
     Ok(Json(
         json!({ "orders": orders, "load": load, "daily_qty": daily }),
     ))
@@ -662,7 +660,7 @@ pub(super) async fn get_bom_ep(
     if parent.is_empty() {
         return Err(AppError::bad_request("缺少 parent（父件编码）"));
     }
-    let rows = findb::scm::bom_list(&db, parent)?;
+    let rows = findb::scm::bom_list(db, parent)?;
     Ok(Json(json!({
         "rows": rows
             .iter()
@@ -707,7 +705,7 @@ pub(super) async fn save_bom_ep(
     if items.is_empty() {
         return Err(AppError::bad_request("至少一个子件"));
     }
-    findb::scm::bom_save(&db, parent, &items)?;
+    findb::scm::bom_save(db, parent, &items)?;
     db.log(
         user.username(),
         "生产",
@@ -732,7 +730,7 @@ pub(super) async fn list_archives(
     // 空串表示"全部"：UI 下拉默认值为空，不能当成具体类型去过滤
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
     let db = &user.db;
-    let rows = advanced::archive_list(&db, period, kind)?;
+    let rows = advanced::archive_list(db, period, kind)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -745,12 +743,12 @@ pub(super) async fn create_archive(
     let db = &user.db;
     let period = period_checked(req.period)?;
     let file_no = if req.file_no.trim().is_empty() {
-        advanced::archive_next_no(&db, period, &req.kind)?
+        advanced::archive_next_no(db, period, &req.kind)?
     } else {
         req.file_no
     };
     let id = advanced::archive_create(
-        &db,
+        db,
         period,
         &req.kind,
         &req.title,
@@ -770,7 +768,7 @@ pub(super) async fn get_archive(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let a = advanced::archive_get(&db, id)?
+    let a = advanced::archive_get(db, id)?
         .ok_or_else(|| AppError::NotFound("档案不存在".to_string()))?;
     Ok(Json(serde_json::json!({ "archive": a })))
 }
@@ -782,7 +780,7 @@ pub(super) async fn verify_archive(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let a = advanced::archive_get(&db, id)?
+    let a = advanced::archive_get(db, id)?
         .ok_or_else(|| AppError::NotFound("档案不存在".to_string()))?;
     let ok = advanced::archive_verify(&a);
     Ok(Json(
@@ -797,7 +795,7 @@ pub(super) async fn list_counts(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::stocktake::count_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::stocktake::count_list(db)? })))
 }
 
 /// 新建盘点单：服务端按仓库快照账面数量（Warehouse = 仓管作业）
@@ -832,7 +830,7 @@ pub(super) async fn create_count(
         ));
     }
     let (id, no) = findb::stocktake::count_create(
-        &db,
+        db,
         period,
         date,
         req.warehouse.trim(),
@@ -857,7 +855,7 @@ pub(super) async fn apply_count(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = &user.db;
-    let (rid, vid, value) = findb::stocktake::count_apply(&db, id, user.username())?;
+    let (rid, vid, value) = findb::stocktake::count_apply(db, id, user.username())?;
     db.log(
         user.username(),
         "库存",
@@ -885,7 +883,7 @@ pub(super) async fn delete_count(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = &user.db;
-    findb::stocktake::count_delete(&db, id)?;
+    findb::stocktake::count_delete(db, id)?;
     db.log(user.username(), "库存", "删除盘点单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -905,7 +903,7 @@ pub(super) async fn register_batch(
     //（它按 (item,batch) 汇总、不过滤期间），按期间查的数量金额账却看不到。
     let period = current_period(&state, &user);
     let (id, no, bal) = findb::batch::batch_register(
-        &db,
+        db,
         period,
         &req.item,
         &req.batch_no,
@@ -944,7 +942,7 @@ pub(super) async fn batch_cost(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let (detail, totals) = findb::inventory2::batch_cost_report(&db, to)?;
+    let (detail, totals) = findb::inventory2::batch_cost_report(db, to)?;
     Ok(Json(
         json!({ "detail": detail, "totals": totals, "period": to.ymm() }),
     ))
@@ -960,7 +958,7 @@ pub(super) async fn list_batches(
     let db = &user.db;
     let item = q.get("item").cloned().unwrap_or_default();
     Ok(Json(
-        json!({ "rows": findb::batch::batch_list(&db, &item)? }),
+        json!({ "rows": findb::batch::batch_list(db, &item)? }),
     ))
 }
 
@@ -976,7 +974,7 @@ pub(super) async fn fefo_batches(
         return Err(AppError::bad_request("缺少存货编码 item"));
     }
     let qty = parse_money_checked(&req.qty)?;
-    let rows = findb::batch::fefo_recommend(&db, &req.item, qty)?;
+    let rows = findb::batch::fefo_recommend(db, &req.item, qty)?;
     Ok(Json(json!({
         "rows": rows
             .iter()
@@ -998,7 +996,7 @@ pub(super) async fn expiring_batches_ep(
         .and_then(|s| s.parse::<i64>().ok())
         .unwrap_or(30);
     Ok(Json(
-        json!({ "rows": findb::batch::expiring_batches(&db, days)? }),
+        json!({ "rows": findb::batch::expiring_batches(db, days)? }),
     ))
 }
 
@@ -1009,7 +1007,7 @@ pub(super) async fn delete_location(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = &user.db;
-    findb::batch::location_delete(&db, id)?;
+    findb::batch::location_delete(db, id)?;
     db.log(user.username(), "库存", "删除库位", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -1031,7 +1029,7 @@ pub(super) async fn get_item_plan(
         return Err(AppError::bad_request("缺少 item 存货编码"));
     }
     let db = &user.db;
-    let p = findb::advanced::item_plan_get(&db, &code)?;
+    let p = findb::advanced::item_plan_get(db, &code)?;
     Ok(Json(json!({
         "plan": p.as_ref().map(|p| json!({
             "safety_stock": p.safety_stock.fmt_qty(),
@@ -1054,7 +1052,7 @@ pub(super) async fn save_item_plan(
     }
     let db = &user.db;
     findb::advanced::item_plan_upsert(
-        &db,
+        db,
         &findb::advanced::ItemPlan {
             item_code: code.clone(),
             safety_stock: parse_money_checked(&req.safety_stock)?,
@@ -1082,7 +1080,7 @@ pub(super) async fn list_landed_cost(
     user.require(Perm::Report)?;
     let db = &user.db;
     let period = query_period(&state, &user, &q);
-    let rows = findb::landedcost::list(&db, period)?;
+    let rows = findb::landedcost::list(db, period)?;
     Ok(Json(json!({
         "period": period_to_str(period),
         "rows": rows.iter().map(lc_json).collect::<Vec<_>>(),
@@ -1162,9 +1160,9 @@ pub(super) async fn save_landed_cost(
         updated_at: String::new(),
         lines: Vec::new(),
     };
-    let id = findb::landedcost::save(&db, &mut lc, &lines, user.username())?;
+    let id = findb::landedcost::save(db, &mut lc, &lines, user.username())?;
     let after =
-        findb::landedcost::get(&db, id)?.ok_or_else(|| AppError::not_found("到岸成本单不存在"))?;
+        findb::landedcost::get(db, id)?.ok_or_else(|| AppError::not_found("到岸成本单不存在"))?;
     Ok(Json(
         json!({ "ok": true, "id": id, "row": lc_json(&after) }),
     ))
@@ -1183,7 +1181,7 @@ pub(super) async fn serial_in_endpoint(
     } else {
         NaiveDate::parse_from_str(&req.date, "%Y-%m-%d").unwrap_or_else(|_| period.first_day())
     };
-    let n = findb::inventory2::serial_in(&db, &req.item, &req.serials, &req.batch_no, date)?;
+    let n = findb::inventory2::serial_in(db, &req.item, &req.serials, &req.batch_no, date)?;
     Ok(Json(serde_json::json!({ "ok": true, "count": n })))
 }
 
@@ -1198,7 +1196,7 @@ pub(super) async fn list_serial(
         return Err(AppError::bad_request("缺少 item"));
     }
     let db = &user.db;
-    let rows = findb::inventory2::serial_list(&db, &item)?;
+    let rows = findb::inventory2::serial_list(db, &item)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -1208,7 +1206,7 @@ pub(super) async fn get_transfer_report(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::inventory2::transfer_report(&db, current_period(&state, &user))?;
+    let rows = findb::inventory2::transfer_report(db, current_period(&state, &user))?;
     let items: Vec<serde_json::Value> = rows
         .iter()
         .map(|m| {
@@ -1247,7 +1245,7 @@ pub(super) async fn do_transfer(
     let qty = parse_money_checked(&req.qty)?;
     let mut bn = req.batch_no.trim().to_string();
     if bn.is_empty() {
-        let rec = findb::batch::fefo_recommend(&db, &req.item, qty)?;
+        let rec = findb::batch::fefo_recommend(db, &req.item, qty)?;
         let first = rec
             .first()
             .ok_or_else(|| AppError::not_found("该存货没有可用批次"))?;
@@ -1261,7 +1259,7 @@ pub(super) async fn do_transfer(
         bn = first.0.clone();
     }
     let (out_id, in_id) = findb::inventory2::transfer_do(
-        &db,
+        db,
         period,
         date,
         &req.item,
@@ -1295,7 +1293,7 @@ pub(super) async fn list_locations(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Warehouse)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::batch::location_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::batch::location_list(db)? })))
 }
 
 pub(super) async fn save_location(
@@ -1310,7 +1308,7 @@ pub(super) async fn save_location(
     } else {
         &req.kind
     };
-    let id = findb::batch::location_save(&db, &req.code, &req.name, kind, &req.memo)?;
+    let id = findb::batch::location_save(db, &req.code, &req.name, kind, &req.memo)?;
     db.log(
         user.username(),
         "库存",

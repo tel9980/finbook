@@ -248,6 +248,12 @@ impl BalanceSnapshot {
     /// 漏一个字段的后果不是"慢一点"，而是"报表显示上一次的口径"，
     /// 所以宁可把整个 BalanceQuery 都摊进来。
     fn cache_key(db: &Db, q: &BalanceQuery, start: Period) -> String {
+        // 尾巴单独拼：format! 套 format! 既难读也容易在改字段时错位
+        let tail = format!(
+            "{}|{}",
+            q.prepared_by.as_deref().unwrap_or(""),
+            db.conn().total_changes()
+        );
         format!(
             "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             start.ymm(),
@@ -265,11 +271,7 @@ impl BalanceSnapshot {
             q.posted_only,
             q.exclude_carry,
             q.dept_scope.join(","),
-            format!(
-                "{}|{}",
-                q.prepared_by.as_deref().unwrap_or(""),
-                db.conn().total_changes()
-            ),
+            tail,
         )
     }
 
@@ -2785,7 +2787,6 @@ mod drill_tests {
             let mut e = Entry::new(2, "1001", "付款");
             e.credit = Money::parse(amt).unwrap();
             v.entries.push(e);
-            let mut v = v;
             let id = vouchers::save(&db, &mut v).unwrap();
             vouchers::post(&db, id, "t").unwrap();
         }

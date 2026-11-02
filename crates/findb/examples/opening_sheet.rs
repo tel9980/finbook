@@ -131,16 +131,14 @@ fn main() {
         ),
         ("", "系统的「期初余额」和「往来核销 → 期初明细」里。"),
     ];
-    let mut r: u32 = 2;
-    for (k, v) in lines {
+    for (r, (k, v)) in (2u32..).zip(lines) {
         if !k.is_empty() {
-            s.write_string(r, 1, *k, &sect).ok();
+            s.write_string(r, 1, k, &sect).ok();
         }
         if !v.is_empty() {
-            s.write_string(r, 1, *v, &text).ok();
-            s.merge_range(r, 1, r, 2, *v, &text).ok();
+            s.write_string(r, 1, v, &text).ok();
+            s.merge_range(r, 1, r, 2, v, &text).ok();
         }
-        r += 1;
     }
 
     // ---------- Sheet 2: 客户应收 ----------
@@ -204,7 +202,7 @@ fn main() {
     .iter()
     .enumerate()
     {
-        s.write_string(1, c as u16, *h, &head).ok();
+        s.write_string(1, c as u16, h, &head).ok();
     }
     for (i, (code, name, cat)) in supp.iter().enumerate() {
         let row = 2 + i as u32;
@@ -237,7 +235,7 @@ fn main() {
         .expect("t");
     s.set_row_height(0, 26).ok();
     for (c, h) in ["科目编码", "账户", "余额", "说明"].iter().enumerate() {
-        s.write_string(1, c as u16, *h, &head).ok();
+        s.write_string(1, c as u16, h, &head).ok();
     }
     let accts: &[(&str, &str, &str)] = &[
         ("100201", "G银行对公户（要票）", "银行对账单上的余额"),
@@ -261,10 +259,10 @@ fn main() {
     ];
     for (i, (code, name, m)) in accts.iter().enumerate() {
         let row = 2 + i as u32;
-        s.write_string(row, 0, *code, &text).ok();
-        s.write_string(row, 1, *name, &text).ok();
+        s.write_string(row, 0, code, &text).ok();
+        s.write_string(row, 1, name, &text).ok();
         s.write_number(row, 2, 0.0, &money).ok();
-        s.write_string(row, 3, *m, &note).ok();
+        s.write_string(row, 3, m, &note).ok();
     }
 
     // ---------- Sheet 5: 基本资料 ----------
@@ -299,9 +297,9 @@ fn main() {
     ];
     for (i, (k, m)) in rows.iter().enumerate() {
         let row = 2 + i as u32;
-        s.write_string(row, 0, *k, &text).ok();
+        s.write_string(row, 0, k, &text).ok();
         s.write_number(row, 1, 0.0, &money).ok();
-        s.write_string(row, 2, *m, &note).ok();
+        s.write_string(row, 2, m, &note).ok();
     }
 
     wb.save(&out).expect("保存");

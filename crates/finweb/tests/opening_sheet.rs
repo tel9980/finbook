@@ -53,12 +53,12 @@ fn collection_book(
         .iter()
         .enumerate()
     {
-        s.write_string(1, c as u16, *h, &f).unwrap();
+        s.write_string(1, c as u16, h, &f).unwrap();
     }
     for (i, (code, name, amt)) in ar.iter().enumerate() {
         let r = 2 + i as u32;
-        s.write_string(r, 0, *code, &f).unwrap();
-        s.write_string(r, 1, *name, &f).unwrap();
+        s.write_string(r, 0, code, &f).unwrap();
+        s.write_string(r, 1, name, &f).unwrap();
         money_cell(s, r, 2, *amt, &f);
     }
     s.write_string(2 + ar.len() as u32, 1, "应收合计", &f)
@@ -79,12 +79,12 @@ fn collection_book(
     .iter()
     .enumerate()
     {
-        s.write_string(1, c as u16, *h, &f).unwrap();
+        s.write_string(1, c as u16, h, &f).unwrap();
     }
     for (i, (code, name, amt)) in ap.iter().enumerate() {
         let r = 2 + i as u32;
-        s.write_string(r, 0, *code, &f).unwrap();
-        s.write_string(r, 1, *name, &f).unwrap();
+        s.write_string(r, 0, code, &f).unwrap();
+        s.write_string(r, 1, name, &f).unwrap();
         money_cell(s, r, 3, *amt, &f);
     }
 
@@ -93,11 +93,11 @@ fn collection_book(
     s.write_string(0, 0, "各账户余额 · 截止 2026-10-31", &f)
         .unwrap();
     for (c, h) in ["科目编码", "账户", "余额", "说明"].iter().enumerate() {
-        s.write_string(1, c as u16, *h, &f).unwrap();
+        s.write_string(1, c as u16, h, &f).unwrap();
     }
     for (i, (code, amt)) in bal.iter().enumerate() {
         let r = 2 + i as u32;
-        s.write_string(r, 0, *code, &f).unwrap();
+        s.write_string(r, 0, code, &f).unwrap();
         s.write_string(r, 1, "账户", &f).unwrap();
         money_cell(s, r, 2, *amt, &f);
     }
@@ -107,7 +107,7 @@ fn collection_book(
     s.set_name("④ 基本资料").unwrap();
     s.write_string(0, 0, "基本资料与平衡检查", &f).unwrap();
     for (c, h) in ["项目", "金额", "说明"].iter().enumerate() {
-        s.write_string(1, c as u16, *h, &f).unwrap();
+        s.write_string(1, c as u16, h, &f).unwrap();
     }
     s.write_string(2, 0, "实收资本 4001", &f).unwrap();
     s.write_number(2, 1, paid_in, &f).ok();

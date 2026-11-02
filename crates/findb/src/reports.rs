@@ -364,8 +364,7 @@ pub fn prior_range(
     from: fincore::Period,
     to: fincore::Period,
 ) -> (fincore::Period, fincore::Period) {
-    let months = ((to.ymm() / 100 - from.ymm() / 100) * 12 + (to.ymm() % 100) as i32
-        - (from.ymm() % 100) as i32
+    let months = ((to.ymm() / 100 - from.ymm() / 100) * 12 + (to.ymm() % 100) - (from.ymm() % 100)
         + 1)
     .max(1) as usize;
     // 末尾是本期起始月的前一个月，再往前推 months-1 个月就是上期的起点。

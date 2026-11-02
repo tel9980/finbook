@@ -43,9 +43,12 @@ test("税务申报：进项只认已认证，应纳税额与附加税费算对",
   // （期间未初始化/首登改密），类选择器会命中它们，断言就成了「某个横幅非空」。
   await expect(page.locator("#tx-warn")).toContainText("尚未认证", { timeout: 15_000 });
 
-  let text = await page.locator("#main").textContent();
-  expect(text).toContain("130.00"); // 销项照计（pending 也算）
-  expect(text).not.toContain("65.00"); // 进项未认证，一个都不能抵扣
+  // 断言只看**申报表四张卡**（#tx-cards），不看整页文字：
+  // 页面顶部还有「申报前体检」面板，它会明确告诉你「有 65.00 的进项票还没认证」——
+  // 那是提醒，不是抵扣。取整页文字会把提醒当成"抵扣了"，断言就自相矛盾。
+  const cards = page.locator("#tx-cards");
+  await expect(cards).toContainText("130.00"); // 销项照计（pending 也算）
+  await expect(cards).not.toContainText("65.00"); // 进项未认证，一个都不能抵扣
 
   // ---- 认证之后：进项才进得来 ----
   await page.click('.nav-item[data-view="invoices"]');
@@ -64,10 +67,10 @@ test("税务申报：进项只认已认证，应纳税额与附加税费算对",
   // textContent 会读到加载态，于是 `toContain("130.00")` 偶发失败。
   // 这个 flake 之前被 retry 盖住了，看起来像偶发，实际是断言选错了信号。
   await expect(page.locator("#tx-export")).toBeVisible({ timeout: 15_000 });
-  text = await page.locator("#main").textContent();
-  expect(text).toContain("130.00"); // 销项 130
-  expect(text).toContain("65.00"); // 进项 65（已认证）
-  expect(text).toContain("7.80"); // 附加税费 65 × (7%+3%+2%)
+  await expect(cards).toContainText("130.00"); // 销项 130
+  await expect(cards).toContainText("65.00"); // 进项 65（已认证）
+  await expect(cards).toContainText("7.80"); // 附加税费 65 × (7%+3%+2%)
+  const text = await page.locator("#main").textContent();
   expect(text).not.toContain("尚未认证"); // 认证后不该再提示
   // 界面必须明说边界，否则用户不知道哪些数能信
   expect(text).toContain("不连网");

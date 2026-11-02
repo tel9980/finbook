@@ -272,17 +272,14 @@ impl PrintOptions {
         } else {
             "A4 portrait"
         };
-        format!(
-            "{}{}",
-            self.page_box_css(size, self.margin_mm),
-            format!(
-                "body{{font-size:{pt}pt;}}\
-                 table{{border-collapse:collapse;width:100%;font-size:{pt}pt;}}\
-                 thead{{display:table-header-group;}}\
-                 tr,td,th{{break-inside:avoid;page-break-inside:avoid;}}",
-                pt = self.font_pt
-            )
-        )
+        let body = format!(
+            "body{{font-size:{pt}pt;}}\
+             table{{border-collapse:collapse;width:100%;font-size:{pt}pt;}}\
+             thead{{display:table-header-group;}}\
+             tr,td,th{{break-inside:avoid;page-break-inside:avoid;}}",
+            pt = self.font_pt
+        );
+        format!("{}{}", self.page_box_css(size, self.margin_mm), body)
     }
 
     /// 落款 HTML；关闭时返回空串（调用方直接拼接即可，不会多出空行）

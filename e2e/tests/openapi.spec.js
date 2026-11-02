@@ -8,7 +8,10 @@ test("开放 API：签发密钥→调用只读接口→停用即失效", async (
   // 「全部账套」= 平台总览页，密钥管理挂在这一页
   await page.click('.nav-item[data-view="platform-books"]');
   await expect(page.locator("#ak-list")).toBeVisible({ timeout: 15_000 });
-  await expect(page.locator("#ak-list")).toContainText("还没有签发任何密钥", { timeout: 15_000 });
+  // 不校验「一条密钥都没有」：密钥是**平台级**列表，同一台服务上重跑这套用例时
+  // 上一次留下的密钥还在（realm 复用是常态，CI 里也会连跑两次）。空态文案由
+  // 平台页自己的单测管；这里只关心「签发 → 能用 → 停用即失效」这条链路。
+  await expect(page.locator("#ak-new")).toBeVisible({ timeout: 15_000 });
 
   await page.click("#ak-new");
   await expect(page.locator("#ak-name")).toBeVisible({ timeout: 10_000 });

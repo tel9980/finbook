@@ -426,6 +426,290 @@ fn sheet_name_of(title: &str) -> String {
     cleaned.chars().take(31).collect()
 }
 
+// ---------------------------------------------------------------------------
+// 现金流量表 / 所有者权益变动表
+//
+// 这两张不是 `ReportTable`（结构特殊：一类活动一个分组、权益表是三个金额列），
+// 所以单独拼。分组标题行与「小计」行靠 `emphasis` 加粗区分层次。
+// ---------------------------------------------------------------------------
+
+/// 现金流量表：项目 | 流入 | 流出 | 净额
+pub fn cash_flow_sheet(cf: &fincore::report::cashflow::CashFlowStatement, subtitle: &str) -> Sheet {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut emphasis: Vec<usize> = Vec::new();
+
+    let push_section = |rows: &mut Vec<Vec<String>>,
+                        emphasis: &mut Vec<usize>,
+                        title: &str,
+                        lines: &[fincore::report::cashflow::CashFlowLine],
+                        net: &Money| {
+        emphasis.push(rows.len());
+        rows.push(vec![
+            title.to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ]);
+        for l in lines {
+            rows.push(vec![
+                format!("　{}", l.name),
+                l.inflow.fmt_plain(),
+                l.outflow.fmt_plain(),
+                l.net.fmt_plain(),
+            ]);
+        }
+        emphasis.push(rows.len());
+        rows.push(vec![
+            format!("{title}小计"),
+            String::new(),
+            String::new(),
+            net.fmt_plain(),
+        ]);
+        // 分组之间空一行，打印出来能断开
+        rows.push(Vec::new());
+    };
+
+    push_section(
+        &mut rows,
+        &mut emphasis,
+        "一、经营活动产生的现金流量",
+        &cf.operating,
+        &cf.operating_net,
+    );
+    push_section(
+        &mut rows,
+        &mut emphasis,
+        "二、投资活动产生的现金流量",
+        &cf.investing,
+        &cf.investing_net,
+    );
+    push_section(
+        &mut rows,
+        &mut emphasis,
+        "三、筹资活动产生的现金流量",
+        &cf.financing,
+        &cf.financing_net,
+    );
+    // 上面每个分组末尾塞了一个空行，最后那个多余的去掉
+    if rows.last().map(|r| r.is_empty()).unwrap_or(false) {
+        rows.pop();
+    }
+
+    emphasis.push(rows.len());
+    rows.push(vec![
+        "现金及现金等价物净增加额".to_string(),
+        String::new(),
+        String::new(),
+        cf.net_increase.fmt_plain(),
+    ]);
+    rows.push(vec![
+        "加：期初现金及现金等价物余额".to_string(),
+        String::new(),
+        String::new(),
+        cf.begin_cash.fmt_plain(),
+    ]);
+    emphasis.push(rows.len());
+    rows.push(vec![
+        "期末现金及现金等价物余额".to_string(),
+        String::new(),
+        String::new(),
+        cf.end_cash.fmt_plain(),
+    ]);
+
+    // 勾稽情况写在表里而不是只在页面上提示：导出的表是拿来发的，
+    // 收表的人看不到页面上的那行绿字。
+    rows.push(vec![
+        if cf.ties() {
+            "勾稽：净增加额 = 期末 − 期初货币资金，一致".to_string()
+        } else {
+            "勾稽不符：净增加额 ≠ 期末 − 期初货币资金，请检查".to_string()
+        },
+        String::new(),
+        String::new(),
+        String::new(),
+    ]);
+    // 归集情况一律用 fincore 的那一句话，三端同源
+    rows.push(vec![
+        format!("提示：{}", cf.assignment_note()),
+        String::new(),
+        String::new(),
+        String::new(),
+    ]);
+
+    Sheet::titled(
+        "现金流量表",
+        "现金流量表",
+        subtitle,
+        &["项目", "流入", "流出", "净额"],
+        &[T, M, M, M],
+    )
+    .with_rows(rows)
+    .with_emphasis(emphasis)
+}
+
+/// 所有者权益变动表：项目 | 年初余额 | 本年增减 | 年末余额
+pub fn equity_sheet(e: &fincore::report::equity::EquityStatement, subtitle: &str) -> Sheet {
+    let mut rows: Vec<Vec<String>> = e
+        .lines
+        .iter()
+        .map(|l| {
+            vec![
+                l.name.clone(),
+                l.begin.fmt_plain(),
+                l.change.fmt_plain(),
+                l.end.fmt_plain(),
+            ]
+        })
+        .collect();
+    let total_at = rows.len();
+    let t = &e.total;
+    rows.push(vec![
+        "所有者权益合计".to_string(),
+        t.begin.fmt_plain(),
+        t.change.fmt_plain(),
+        t.end.fmt_plain(),
+    ]);
+    Sheet::titled(
+        "所有者权益变动表",
+        "所有者权益变动表",
+        subtitle,
+        &["项目", "年初余额", "本年增减", "年末余额"],
+        &[T, M, M, M],
+    )
+    .with_rows(rows)
+    .with_emphasis(vec![total_at])
+}
+
+/// 现金流量表的「本期 vs 上期」对比表
+///
+/// 单独一张表而不是给主表加两列：主表已经有流入/流出/净额三列，再加两列在 A4 横向
+/// 也挤；而对比只需要看净额，一行一个项目最清楚。
+pub fn cash_flow_compare_sheet(
+    cur: &fincore::report::cashflow::CashFlowStatement,
+    prev: &fincore::report::cashflow::CashFlowStatement,
+    cur_label: &str,
+    prev_label: &str,
+) -> Sheet {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut emphasis: Vec<usize> = Vec::new();
+
+    let push_block = |rows: &mut Vec<Vec<String>>,
+                      emphasis: &mut Vec<usize>,
+                      title: &str,
+                      a: &[fincore::report::cashflow::CashFlowLine],
+                      b: &[fincore::report::cashflow::CashFlowLine]| {
+        rows.push(vec![
+            title.to_string(),
+            String::new(),
+            String::new(),
+            String::new(),
+        ]);
+        emphasis.push(rows.len() - 1);
+        // 以本期出现的项目为主序，上期有而本期没有的补在后面 —— 不能只按本期循环，
+        // 否则「上期买过设备、这期没买」这件事在对比表里会凭空消失
+        let mut seen: Vec<&str> = Vec::new();
+        for l in a.iter() {
+            seen.push(l.code.as_str());
+            let other = b.iter().find(|x| x.code == l.code).map(|x| x.net);
+            let delta = match other {
+                Some(o) => l.net - o,
+                None => l.net,
+            };
+            rows.push(vec![
+                format!("　{}", l.name),
+                l.net.fmt_plain(),
+                other.map(|o| o.fmt_plain()).unwrap_or_default(),
+                delta.fmt_plain(),
+            ]);
+        }
+        for l in b.iter() {
+            if seen.contains(&l.code.as_str()) {
+                continue;
+            }
+            rows.push(vec![
+                format!("　{}（上期有）", l.name),
+                String::new(),
+                l.net.fmt_plain(),
+                (Money::ZERO - l.net).fmt_plain(),
+            ]);
+        }
+    };
+
+    let totals = |rows: &mut Vec<Vec<String>>,
+                  emphasis: &mut Vec<usize>,
+                  label: &str,
+                  a: &Money,
+                  b: &Money| {
+        rows.push(vec![
+            label.to_string(),
+            a.fmt_plain(),
+            b.fmt_plain(),
+            (*a - *b).fmt_plain(),
+        ]);
+        emphasis.push(rows.len() - 1);
+    };
+
+    push_block(
+        &mut rows,
+        &mut emphasis,
+        "一、经营活动",
+        &cur.operating,
+        &prev.operating,
+    );
+    totals(
+        &mut rows,
+        &mut emphasis,
+        "　经营活动净额",
+        &cur.operating_net,
+        &prev.operating_net,
+    );
+    push_block(
+        &mut rows,
+        &mut emphasis,
+        "二、投资活动",
+        &cur.investing,
+        &prev.investing,
+    );
+    totals(
+        &mut rows,
+        &mut emphasis,
+        "　投资活动净额",
+        &cur.investing_net,
+        &prev.investing_net,
+    );
+    push_block(
+        &mut rows,
+        &mut emphasis,
+        "三、筹资活动",
+        &cur.financing,
+        &prev.financing,
+    );
+    totals(
+        &mut rows,
+        &mut emphasis,
+        "　筹资活动净额",
+        &cur.financing_net,
+        &prev.financing_net,
+    );
+    totals(
+        &mut rows,
+        &mut emphasis,
+        "现金及现金等价物净增加额",
+        &cur.net_increase,
+        &prev.net_increase,
+    );
+
+    Sheet::titled(
+        "本期与上期对比",
+        "现金流量表 · 本期与上期对比",
+        &format!("{cur_label} 对比 {prev_label}"),
+        &["项目", cur_label, prev_label, "变动（本期−上期）"],
+        &[ColFmt::Text, ColFmt::Money, ColFmt::Money, ColFmt::Money],
+    )
+    .with_rows(rows)
+    .with_emphasis(emphasis)
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -729,288 +1013,4 @@ mod tests {
         assert_eq!(s.rows.len(), 1);
         assert_eq!(s.rows[0][10], "停用");
     }
-}
-
-// ---------------------------------------------------------------------------
-// 现金流量表 / 所有者权益变动表
-//
-// 这两张不是 `ReportTable`（结构特殊：一类活动一个分组、权益表是三个金额列），
-// 所以单独拼。分组标题行与「小计」行靠 `emphasis` 加粗区分层次。
-// ---------------------------------------------------------------------------
-
-/// 现金流量表：项目 | 流入 | 流出 | 净额
-pub fn cash_flow_sheet(cf: &fincore::report::cashflow::CashFlowStatement, subtitle: &str) -> Sheet {
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    let mut emphasis: Vec<usize> = Vec::new();
-
-    let push_section = |rows: &mut Vec<Vec<String>>,
-                        emphasis: &mut Vec<usize>,
-                        title: &str,
-                        lines: &[fincore::report::cashflow::CashFlowLine],
-                        net: &Money| {
-        emphasis.push(rows.len());
-        rows.push(vec![
-            title.to_string(),
-            String::new(),
-            String::new(),
-            String::new(),
-        ]);
-        for l in lines {
-            rows.push(vec![
-                format!("　{}", l.name),
-                l.inflow.fmt_plain(),
-                l.outflow.fmt_plain(),
-                l.net.fmt_plain(),
-            ]);
-        }
-        emphasis.push(rows.len());
-        rows.push(vec![
-            format!("{title}小计"),
-            String::new(),
-            String::new(),
-            net.fmt_plain(),
-        ]);
-        // 分组之间空一行，打印出来能断开
-        rows.push(Vec::new());
-    };
-
-    push_section(
-        &mut rows,
-        &mut emphasis,
-        "一、经营活动产生的现金流量",
-        &cf.operating,
-        &cf.operating_net,
-    );
-    push_section(
-        &mut rows,
-        &mut emphasis,
-        "二、投资活动产生的现金流量",
-        &cf.investing,
-        &cf.investing_net,
-    );
-    push_section(
-        &mut rows,
-        &mut emphasis,
-        "三、筹资活动产生的现金流量",
-        &cf.financing,
-        &cf.financing_net,
-    );
-    // 上面每个分组末尾塞了一个空行，最后那个多余的去掉
-    if rows.last().map(|r| r.is_empty()).unwrap_or(false) {
-        rows.pop();
-    }
-
-    emphasis.push(rows.len());
-    rows.push(vec![
-        "现金及现金等价物净增加额".to_string(),
-        String::new(),
-        String::new(),
-        cf.net_increase.fmt_plain(),
-    ]);
-    rows.push(vec![
-        "加：期初现金及现金等价物余额".to_string(),
-        String::new(),
-        String::new(),
-        cf.begin_cash.fmt_plain(),
-    ]);
-    emphasis.push(rows.len());
-    rows.push(vec![
-        "期末现金及现金等价物余额".to_string(),
-        String::new(),
-        String::new(),
-        cf.end_cash.fmt_plain(),
-    ]);
-
-    // 勾稽情况写在表里而不是只在页面上提示：导出的表是拿来发的，
-    // 收表的人看不到页面上的那行绿字。
-    rows.push(vec![
-        if cf.ties() {
-            "勾稽：净增加额 = 期末 − 期初货币资金，一致".to_string()
-        } else {
-            "勾稽不符：净增加额 ≠ 期末 − 期初货币资金，请检查".to_string()
-        },
-        String::new(),
-        String::new(),
-        String::new(),
-    ]);
-    // 归集情况一律用 fincore 的那一句话，三端同源
-    rows.push(vec![
-        format!("提示：{}", cf.assignment_note()),
-        String::new(),
-        String::new(),
-        String::new(),
-    ]);
-
-    Sheet::titled(
-        "现金流量表",
-        "现金流量表",
-        subtitle,
-        &["项目", "流入", "流出", "净额"],
-        &[T, M, M, M],
-    )
-    .with_rows(rows)
-    .with_emphasis(emphasis)
-}
-
-/// 所有者权益变动表：项目 | 年初余额 | 本年增减 | 年末余额
-pub fn equity_sheet(e: &fincore::report::equity::EquityStatement, subtitle: &str) -> Sheet {
-    let mut rows: Vec<Vec<String>> = e
-        .lines
-        .iter()
-        .map(|l| {
-            vec![
-                l.name.clone(),
-                l.begin.fmt_plain(),
-                l.change.fmt_plain(),
-                l.end.fmt_plain(),
-            ]
-        })
-        .collect();
-    let total_at = rows.len();
-    let t = &e.total;
-    rows.push(vec![
-        "所有者权益合计".to_string(),
-        t.begin.fmt_plain(),
-        t.change.fmt_plain(),
-        t.end.fmt_plain(),
-    ]);
-    Sheet::titled(
-        "所有者权益变动表",
-        "所有者权益变动表",
-        subtitle,
-        &["项目", "年初余额", "本年增减", "年末余额"],
-        &[T, M, M, M],
-    )
-    .with_rows(rows)
-    .with_emphasis(vec![total_at])
-}
-
-/// 现金流量表的「本期 vs 上期」对比表
-///
-/// 单独一张表而不是给主表加两列：主表已经有流入/流出/净额三列，再加两列在 A4 横向
-/// 也挤；而对比只需要看净额，一行一个项目最清楚。
-pub fn cash_flow_compare_sheet(
-    cur: &fincore::report::cashflow::CashFlowStatement,
-    prev: &fincore::report::cashflow::CashFlowStatement,
-    cur_label: &str,
-    prev_label: &str,
-) -> Sheet {
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    let mut emphasis: Vec<usize> = Vec::new();
-
-    let push_block = |rows: &mut Vec<Vec<String>>,
-                      emphasis: &mut Vec<usize>,
-                      title: &str,
-                      a: &[fincore::report::cashflow::CashFlowLine],
-                      b: &[fincore::report::cashflow::CashFlowLine]| {
-        rows.push(vec![
-            title.to_string(),
-            String::new(),
-            String::new(),
-            String::new(),
-        ]);
-        emphasis.push(rows.len() - 1);
-        // 以本期出现的项目为主序，上期有而本期没有的补在后面 —— 不能只按本期循环，
-        // 否则「上期买过设备、这期没买」这件事在对比表里会凭空消失
-        let mut seen: Vec<&str> = Vec::new();
-        for l in a.iter() {
-            seen.push(l.code.as_str());
-            let other = b.iter().find(|x| x.code == l.code).map(|x| x.net);
-            let delta = match other {
-                Some(o) => l.net - o,
-                None => l.net,
-            };
-            rows.push(vec![
-                format!("　{}", l.name),
-                l.net.fmt_plain(),
-                other.map(|o| o.fmt_plain()).unwrap_or_default(),
-                delta.fmt_plain(),
-            ]);
-        }
-        for l in b.iter() {
-            if seen.contains(&l.code.as_str()) {
-                continue;
-            }
-            rows.push(vec![
-                format!("　{}（上期有）", l.name),
-                String::new(),
-                l.net.fmt_plain(),
-                (Money::ZERO - l.net).fmt_plain(),
-            ]);
-        }
-    };
-
-    let totals = |rows: &mut Vec<Vec<String>>,
-                  emphasis: &mut Vec<usize>,
-                  label: &str,
-                  a: &Money,
-                  b: &Money| {
-        rows.push(vec![
-            label.to_string(),
-            a.fmt_plain(),
-            b.fmt_plain(),
-            (*a - *b).fmt_plain(),
-        ]);
-        emphasis.push(rows.len() - 1);
-    };
-
-    push_block(
-        &mut rows,
-        &mut emphasis,
-        "一、经营活动",
-        &cur.operating,
-        &prev.operating,
-    );
-    totals(
-        &mut rows,
-        &mut emphasis,
-        "　经营活动净额",
-        &cur.operating_net,
-        &prev.operating_net,
-    );
-    push_block(
-        &mut rows,
-        &mut emphasis,
-        "二、投资活动",
-        &cur.investing,
-        &prev.investing,
-    );
-    totals(
-        &mut rows,
-        &mut emphasis,
-        "　投资活动净额",
-        &cur.investing_net,
-        &prev.investing_net,
-    );
-    push_block(
-        &mut rows,
-        &mut emphasis,
-        "三、筹资活动",
-        &cur.financing,
-        &prev.financing,
-    );
-    totals(
-        &mut rows,
-        &mut emphasis,
-        "　筹资活动净额",
-        &cur.financing_net,
-        &prev.financing_net,
-    );
-    totals(
-        &mut rows,
-        &mut emphasis,
-        "现金及现金等价物净增加额",
-        &cur.net_increase,
-        &prev.net_increase,
-    );
-
-    Sheet::titled(
-        "本期与上期对比",
-        "现金流量表 · 本期与上期对比",
-        &format!("{cur_label} 对比 {prev_label}"),
-        &["项目", cur_label, prev_label, "变动（本期−上期）"],
-        &[ColFmt::Text, ColFmt::Money, ColFmt::Money, ColFmt::Money],
-    )
-    .with_rows(rows)
-    .with_emphasis(emphasis)
 }

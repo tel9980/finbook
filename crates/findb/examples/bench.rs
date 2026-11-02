@@ -60,7 +60,7 @@ fn main() {
         suppliers.push(code);
     }
     for i in 1..=8 {
-        let e = AuxEntity::new(AuxKind::Item, &format!("HG{i:03}"), format!("存货{i}"));
+        let e = AuxEntity::new(AuxKind::Item, format!("HG{i:03}"), format!("存货{i}"));
         findb::auxs::insert(&db, &e).unwrap();
     }
     for (code, name) in [

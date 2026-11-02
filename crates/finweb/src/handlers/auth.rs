@@ -419,7 +419,7 @@ pub(super) async fn list_users(
 ) -> Result<Json<Vec<PublicUser>>, AppError> {
     user.require(Perm::UserManage)?;
     let db = &user.db;
-    let list = users::list(&*db)?
+    let list = users::list(db)?
         .into_iter()
         .map(|u| PublicUser::from_user(&u))
         .collect();
@@ -452,7 +452,7 @@ pub(super) async fn create_user(
         return Err(AppError::forbidden("不能将管理员加入账套"));
     }
     let db = &user.db;
-    if users::get(&db, &username)?.is_some() {
+    if users::get(db, &username)?.is_some() {
         return Err(AppError::bad_request("该用户名已存在"));
     }
     let mut u = User::new(&username, &req.display_name, req.role);
@@ -473,7 +473,7 @@ pub(super) async fn create_user(
         u.extra_perms = req.extra_perms;
         u.deny_perms = req.deny_perms;
     }
-    let id = users::insert(&db, &u)?;
+    let id = users::insert(db, &u)?;
     // 账套层的「首登改密」要同步到平台账号，否则不生效。
     //
     // 为什么不生效：登录门禁 `post_login` 读的是**平台层**的
@@ -506,7 +506,7 @@ pub(super) async fn update_user(
     user.require(Perm::UserManage)?;
     let db = &user.db;
     let mut u =
-        users::get(&db, &username)?.ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
+        users::get(db, &username)?.ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
     // 账套归属者不可被停用 / 降权 / 改名，否则账套会失去主人
     if let Some(owner) = state.realm.book_owner(&user.book_key)? {
         if username == owner {
@@ -548,7 +548,7 @@ pub(super) async fn update_user(
     if let Some(r) = req.role {
         // 不允许把最后一个管理员改成其他角色
         if u.is_admin() && r != Role::Admin {
-            let admins = users::list(&*db)?
+            let admins = users::list(db)?
                 .into_iter()
                 .filter(|x| x.is_admin())
                 .count();
@@ -583,7 +583,7 @@ pub(super) async fn update_user(
     if let Some(p) = req.deny_perms {
         u.deny_perms = p;
     }
-    users::update(&db, &u)?;
+    users::update(db, &u)?;
     db.log(
         user.username(),
         "安全",
@@ -605,10 +605,10 @@ pub(super) async fn reset_user_device(
     }
     let db = &user.db;
     // 目标必须是本账套成员：否则凭用户名即可强制下线任意平台用户的全部会话
-    if users::get(&db, &username)?.is_none() {
+    if users::get(db, &username)?.is_none() {
         return Err(AppError::not_found("该用户不在当前账套"));
     }
-    users::reset_device(&db, &username)?;
+    users::reset_device(db, &username)?;
     // 立刻下线该用户**全部**会话（含其它已绑定设备）：旧设备不能靠存量会话继续用
     state.sessions.remove_by_username(&username);
     db.log(
@@ -631,7 +631,7 @@ pub(super) async fn unlock_user(
         return Err(AppError::forbidden("只有管理员可以解锁账号"));
     }
     let db = &user.db;
-    security::unlock_user(&db, &username)?;
+    security::unlock_user(db, &username)?;
     db.log(
         user.username(),
         "安全",
@@ -679,7 +679,7 @@ pub(super) async fn delete_user(
     }
     let db = &user.db;
     let u =
-        users::get(&db, &username)?.ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
+        users::get(db, &username)?.ok_or_else(|| AppError::NotFound("用户不存在".to_string()))?;
     // 账套归属者不可删除（删了账套就没有主人了）
     if let Some(owner) = state.realm.book_owner(&user.book_key)? {
         if username == owner {
@@ -687,7 +687,7 @@ pub(super) async fn delete_user(
         }
     }
     if u.is_admin() {
-        let admins = users::list(&*db)?
+        let admins = users::list(db)?
             .into_iter()
             .filter(|x| x.is_admin())
             .count();
@@ -695,7 +695,7 @@ pub(super) async fn delete_user(
             return Err(AppError::bad_request("至少保留一个系统管理员账号"));
         }
     }
-    users::delete(&db, u.id)?;
+    users::delete(db, u.id)?;
     state.sessions.remove_by_username(&username);
     db.log(
         user.username(),

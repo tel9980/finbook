@@ -26,7 +26,7 @@ pub(super) async fn estimate_status(
         return Err(AppError::bad_request("缺少 po_id"));
     }
     let db = &user.db;
-    let rows = findb::scm2::estimate_status_by_line(&db, po_id)?;
+    let rows = findb::scm2::estimate_status_by_line(db, po_id)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -50,7 +50,7 @@ pub(super) async fn settle_estimate(
         }
     };
     // 冲回同事务生成反向凭证（借 应付 / 贷 存货）
-    let vid = findb::scm2::po_estimate_settle(&db, id, date, user.username())?;
+    let vid = findb::scm2::po_estimate_settle(db, id, date, user.username())?;
     db.log(
         user.username(),
         "采购",
@@ -69,7 +69,7 @@ pub(super) async fn get_po_reconcile(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::scm2::po_reconcile(&db, current_period(&state, &user))?;
+    let rows = findb::scm2::po_reconcile(db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -83,7 +83,7 @@ pub(super) async fn get_quota(
     let period = current_period(&state, &user);
     let supplier = q.get("supplier").cloned().unwrap_or_default();
     let item = q.get("item").cloned().unwrap_or_default();
-    let remaining = findb::scm2::quota_remaining(&db, period, &supplier, &item)?;
+    let remaining = findb::scm2::quota_remaining(db, period, &supplier, &item)?;
     Ok(Json(serde_json::json!({ "remaining": remaining })))
 }
 
@@ -100,7 +100,7 @@ pub(super) async fn set_quota(
         current_period(&state, &user)
     };
     findb::scm2::quota_set(
-        &db,
+        db,
         period,
         &req.supplier,
         &req.item,
@@ -118,7 +118,7 @@ pub(super) async fn approve_purchase_req(
     let db = &user.db;
     // 工作流拦截：有已发布流程 → 先走节点链，终态才执行原审批
     match findb::workflow::intercept(
-        &db,
+        db,
         findb::workflow::BIZ_PURCHASE_REQ,
         id,
         &user.user,
@@ -139,7 +139,7 @@ pub(super) async fn approve_purchase_req(
         }
         _ => {}
     }
-    findb::procurement::pr_approve(&db, id)?;
+    findb::procurement::pr_approve(db, id)?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -161,7 +161,7 @@ pub(super) async fn add_po_receipt(
         NaiveDate::parse_from_str(&req.date, "%Y-%m-%d").unwrap_or_else(|_| period.first_day())
     };
     let id = findb::procurement::po_receipt_with_stock(
-        &db,
+        db,
         &findb::procurement::PoReceipt {
             id: 0,
             po_id: req.po_id,
@@ -175,11 +175,11 @@ pub(super) async fn add_po_receipt(
         &req.warehouse,
     )?;
     // 待检提示：首行存货勾选了来料检验 → 入库为待检状态（质检转正后方可领用）
-    let qc_pending = findb::scm::po_get(&db, req.po_id)?
+    let qc_pending = findb::scm::po_get(db, req.po_id)?
         .and_then(|p| {
             p.lines
                 .first()
-                .map(|l| findb::business::item_qc_required(&db, &l.item_code))
+                .map(|l| findb::business::item_qc_required(db, &l.item_code))
         })
         .unwrap_or(false);
     Ok(Json(
@@ -205,7 +205,7 @@ pub(super) async fn add_po_return(
         NaiveDate::parse_from_str(&req.date, "%Y-%m-%d").unwrap_or_else(|_| period.first_day())
     };
     let id = findb::procurement::po_return_with_stock(
-        &db,
+        db,
         req.po_id,
         period,
         date,
@@ -237,7 +237,7 @@ pub(super) async fn add_po_payment(
     let amount = parse_money_checked(&req.amount)?;
     // 对标金蝶：付款动作即出台账凭证并按供应商自动核销（默认资金账户取账套配置）
     let po =
-        findb::scm::po_get(&db, req.po_id)?.ok_or_else(|| AppError::not_found("采购订单不存在"))?;
+        findb::scm::po_get(db, req.po_id)?.ok_or_else(|| AppError::not_found("采购订单不存在"))?;
     // 审核流：先落草稿收付款单（凭证由审核人审核时同事务生成并自动核销）
     //
     // 写入顺序刻意是「依赖数据先、单据最后」：findb 目前没有 receipt_create /
@@ -248,7 +248,7 @@ pub(super) async fn add_po_payment(
     // 残留的非原子性：建单成功后若勾稽建边失败，会留下「有付款流水、无勾稽边」的记录，
     // 业务数据本身仍自洽（单据与流水成对），仅勾稽边缺失，可在「票款勾稽」手工补。
     let id = findb::procurement::po_payment_add(
-        &db,
+        db,
         &findb::procurement::PoPayment {
             id: 0,
             po_id: req.po_id,
@@ -259,7 +259,7 @@ pub(super) async fn add_po_payment(
         },
     )?;
     let doc_id = findb::receipt::receipt_create(
-        &db,
+        db,
         "payment",
         date,
         "",
@@ -272,7 +272,7 @@ pub(super) async fn add_po_payment(
         user.username(),
     )?;
     // 票↔款勾稽：本订单已下推进项发票与本次收付款单自动建边
-    findb::docflow::link_receipt_to_src_invoice(&db, "po", req.po_id, doc_id)?;
+    findb::docflow::link_receipt_to_src_invoice(db, "po", req.po_id, doc_id)?;
     // 审计日志失败不得把已提交的付款变成 500：客户端重试会重复入账（见 sales_cost_ep 同理）
     if let Err(e) = db.log(
         user.username(),
@@ -299,7 +299,7 @@ pub(super) async fn get_price_history(
     user.require(Perm::Report)?;
     let db = &user.db;
     let item = q.get("item").cloned().unwrap_or_default();
-    let rows = findb::procurement::price_history(&db, &item)?;
+    let rows = findb::procurement::price_history(db, &item)?;
     let rows: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(s, p, d)| serde_json::json!({ "supplier": s, "unit_price": p.fmt_money(), "date": d }))
@@ -313,7 +313,7 @@ pub(super) async fn get_po_track(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::procurement::po_execution_track(&db, current_period(&state, &user))?;
+    let rows = findb::procurement::po_execution_track(db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -323,7 +323,7 @@ pub(super) async fn get_purchase_stats(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::procurement::purchase_stats(&db, current_period(&state, &user))?;
+    let rows = findb::procurement::purchase_stats(db, current_period(&state, &user))?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -343,12 +343,12 @@ pub(super) async fn print_po_form(
             .get("period")
             .and_then(|s| parse_period(s))
             .unwrap_or_else(|| current_period(&state, &user));
-        for o in findb::scm::po_list(&db, period, None)? {
+        for o in findb::scm::po_list(db, period, None)? {
             orders.push(po_to_print(o));
         }
     } else {
         for id in ids {
-            let o = findb::scm::po_get(&db, id)?
+            let o = findb::scm::po_get(db, id)?
                 .ok_or_else(|| AppError::bad_request(format!("采购订单 #{id} 不存在")))?;
             orders.push(po_to_print(o));
         }
@@ -387,7 +387,7 @@ pub(super) async fn list_po(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let mut rows = findb::scm::po_list(&db, period, None)?;
+    let mut rows = findb::scm::po_list(db, period, None)?;
     // 字段级价格权限：无「价格查看」——列表中单价/税额/金额服务端置零（数量保留）
     if !user.user.can(Perm::PriceView) {
         for o in &mut rows {
@@ -437,14 +437,14 @@ pub(super) async fn save_po(
         std::collections::HashMap::new();
     if po.id > 0 {
         let old =
-            findb::scm::po_get(&db, po.id)?.ok_or_else(|| AppError::not_found("采购订单不存在"))?;
+            findb::scm::po_get(db, po.id)?.ok_or_else(|| AppError::not_found("采购订单不存在"))?;
         po.no = old.no;
         po.received_amount = old.received_amount;
         for l in &old.lines {
             old_price.insert(l.item_code.clone(), (l.unit_price, l.tax_rate));
         }
     } else {
-        po.no = findb::scm::po_next_no(&db, period)?;
+        po.no = findb::scm::po_next_no(db, period)?;
     }
     for l in &req.lines {
         if l.item_code.trim().is_empty() {
@@ -496,12 +496,12 @@ pub(super) async fn save_po(
     if po.lines.is_empty() {
         return Err(AppError::bad_request("订单至少一行明细"));
     }
-    let id = findb::scm::po_save(&db, &mut po)?;
+    let id = findb::scm::po_save(db, &mut po)?;
     // 价格历史沉淀（正价行 + 有供应商）：采购编辑器「最近价带出」的数据源
     for l in &po.lines {
         if l.unit_price.is_positive() && !po.supplier_code.trim().is_empty() {
             let _ = findb::procurement::price_history_record(
-                &db,
+                db,
                 &l.item_code,
                 &po.supplier_code,
                 l.unit_price,
@@ -544,7 +544,7 @@ pub(super) async fn transition_po(
     // 同 transition_so：只在「确认」这个审批动作上走工作流
     if to == findb::scm::PoStatus::Confirmed {
         match workflow_gate(
-            &db,
+            db,
             &user,
             findb::workflow::BIZ_PURCHASE_ORDER,
             id,
@@ -556,7 +556,7 @@ pub(super) async fn transition_po(
         }
     }
     // 同 transition_so：状态机由 findb 的 po_set_status 把关（非法跳变 → 400）
-    findb::scm::po_set_status(&db, id, to)?;
+    findb::scm::po_set_status(db, id, to)?;
     // 状态已提交：日志失败不得把请求打成 500，否则客户端重试会重复流转
     if let Err(e) = db.log(
         user.username(),
@@ -576,7 +576,7 @@ pub(super) async fn delete_po(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::OrderOps)?;
     let db = &user.db;
-    findb::scm::po_delete(&db, id)?;
+    findb::scm::po_delete(db, id)?;
     db.log(user.username(), "采购", "删除采购订单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -592,7 +592,7 @@ pub(super) async fn push_req_po(
     user.require(Perm::OrderOps)?;
     let db = &user.db;
     let period = current_period(&state, &user);
-    let (po_id, po_no) = findb::docflow::req_push_po(&db, id, period, user.username())?;
+    let (po_id, po_no) = findb::docflow::req_push_po(db, id, period, user.username())?;
     db.log(
         user.username(),
         "采购",
@@ -614,7 +614,7 @@ pub(super) async fn price_history_ep(
     if item.is_empty() {
         return Err(AppError::bad_request("缺少 item"));
     }
-    let rows = findb::procurement::price_history(&db, item)?;
+    let rows = findb::procurement::price_history(db, item)?;
     Ok(Json(json!({
         "rows": rows
             .iter()
@@ -637,7 +637,7 @@ pub(super) async fn add_estimate(
     };
     // 登记暂估即同事务生成暂估凭证（借 存货 / 贷 应付-订单供应商）
     let (est_id, vid) = findb::scm2::po_estimate_add(
-        &db,
+        db,
         req.po_id,
         period,
         &req.item,
@@ -672,7 +672,7 @@ pub(super) async fn list_estimates(
         return Err(AppError::bad_request("缺少 po_id"));
     }
     let db = &user.db;
-    let rows = findb::scm2::po_estimate_list(&db, po_id)?;
+    let rows = findb::scm2::po_estimate_list(db, po_id)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -689,7 +689,7 @@ pub(super) async fn list_purchase_req(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let rows = findb::procurement::pr_list(&db, period)?;
+    let rows = findb::procurement::pr_list(db, period)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -701,12 +701,12 @@ pub(super) async fn save_purchase_req(
     user.require(Perm::OrderOps)?;
     let db = &user.db;
     if req.no.is_empty() {
-        req.no = findb::procurement::pr_next_no(&db, req.period)?;
+        req.no = findb::procurement::pr_next_no(db, req.period)?;
     }
     if req.requester.is_empty() {
         req.requester = user.user.display_name.clone();
     }
-    let id = findb::procurement::pr_save(&db, &mut req)?;
+    let id = findb::procurement::pr_save(db, &mut req)?;
     Ok(Json(serde_json::json!({ "id": id, "no": req.no })))
 }
 

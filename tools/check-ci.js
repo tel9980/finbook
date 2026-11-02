@@ -373,7 +373,10 @@ function stillMatches(src, from) {
 }
 
 const jsList = listed("tools/mutate-check.js");
-const appJs = fs.readFileSync(jsList.file, "utf8");
+// 前端是 16 份 app*.js（拆分后），每条变异自带它命中的文件（mutate-check --list 解析）。
+// 早期版本这里只读单个 app.js —— 拆分当天它不会报错，只会让一半变异「悄悄失效」。
+const appSrcOf = (name) =>
+  fs.readFileSync(require("path").join("crates/finweb/static", name), "utf8");
 
 // 数量下限：防的是最阴的一种退化 —— **有人把变异清单删掉/清空**，此后每条检查
 // 都不再有人验证，CI 依然全绿。逐条比对查不出"清单本身没了"这件事。
@@ -390,17 +393,19 @@ if (jsList.cases.length < MIN_CHECK_MUTATIONS) {
   bad++;
 }
 
-for (const [from, , name] of jsList.cases) {
-  if (!stillMatches(appJs, from)) {
+for (const { from, name, file } of jsList.cases) {
+  if (!file || !stillMatches(appSrcOf(file), from)) {
     console.log(
-      `FAIL mutate-check 的变异已失效：${name}\n      源码改了但 from 串对不上，` +
+      `FAIL mutate-check 的变异已失效：${name}\n      源码改了但 from 串对不上（文件：${file || "未定位"}），` +
         `\n      这条变异从此形同虚设（脚本会报"未生效"并返回非 0，但没人知道它已经名存实亡）。\n` +
         `      from: ${JSON.stringify(from.slice(0, 90))}`
     );
     bad++;
   }
 }
-console.log(`mutate-check：${jsList.cases.length} 条变异，全部仍能在 app.js 里定位`);
+console.log(
+  `mutate-check：${jsList.cases.length} 条变异，全部仍能在各自的 app*.js 里定位`
+);
 
 const rustList = listed("tools/mutate-rust.js");
 // 分片数不能超过变异条数，否则必然出现空分片；而空分片在 mutate-rust.js 里是
@@ -1455,7 +1460,12 @@ if (process.argv.includes("--selftest")) {
   const probes = [
     {
       name: "源码改动使某条变异失效（删掉 paintTotals 调用）",
-      apply: () => poke(jsList.file, ".yb = inp.value; paintTotals(); }", ".yb = inp.value; }"),
+      apply: () =>
+        poke(
+          "crates/finweb/static/" + jsList.cases[0].file,
+          ".yb = inp.value; paintTotals(); }",
+          ".yb = inp.value; }"
+        ),
     },
     {
       name: "变异清单被清空（只剩 1 条，等于没人守）",

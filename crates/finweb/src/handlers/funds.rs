@@ -18,7 +18,7 @@ pub(super) async fn print_receipt_form(
     let company = user.company.clone();
     let ids = print_ids(&q);
     let period = q.get("period").and_then(|s| parse_period(s));
-    let all = findb::receipt::receipt_list(&*db)?;
+    let all = findb::receipt::receipt_list(db)?;
     let mut prints = Vec::new();
     for d in all.into_iter() {
         if !ids.is_empty() {
@@ -53,7 +53,7 @@ pub(super) async fn list_bills(
     let db = &user.db;
     // 空串表示"全部"：UI 下拉默认值为空，不能当成具体类型去过滤
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
-    let rows = findb::funds::bill_list(&db, kind)?;
+    let rows = findb::funds::bill_list(db, kind)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -89,7 +89,7 @@ pub(super) async fn save_bill(
         created_at: String::new(),
         voucher_id: None,
     };
-    let id = findb::funds::bill_save(&db, &mut b)?;
+    let id = findb::funds::bill_save(db, &mut b)?;
     db.log(
         user.username(),
         "资金",
@@ -111,7 +111,7 @@ pub(super) async fn bill_transition(
         .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?;
     let to = findb::funds::BillStatus::parse(&req.status);
     // 资金动作（背书/贴现/兑付）在 findb 同事务自动生成台账凭证草稿
-    let vid = findb::funds::bill_transition(&db, id, to, date, user.username())?;
+    let vid = findb::funds::bill_transition(db, id, to, date, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -133,7 +133,7 @@ pub(super) async fn delete_bill(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::funds::bill_delete(&db, id)?;
+    findb::funds::bill_delete(db, id)?;
     db.log(user.username(), "资金", "删除票据", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -147,7 +147,7 @@ pub(super) async fn list_loans(
     let db = &user.db;
     // 空串表示"全部"：UI 下拉默认值为空，不能当成具体类型去过滤
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
-    let rows = findb::funds::loan_list(&db, kind)?;
+    let rows = findb::funds::loan_list(db, kind)?;
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
@@ -183,7 +183,7 @@ pub(super) async fn save_loan(
         settle_voucher_id: None,
         settle_date: None,
     };
-    let id = findb::funds::loan_save(&db, &mut l)?;
+    let id = findb::funds::loan_save(db, &mut l)?;
     db.log(
         user.username(),
         "资金",
@@ -214,7 +214,7 @@ pub(super) async fn loan_settle(
             None => today,
         }
     };
-    let vid = findb::funds::loan_settle(&db, id, date, user.username())?;
+    let vid = findb::funds::loan_settle(db, id, date, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -235,7 +235,7 @@ pub(super) async fn bill_voucher(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let vid = findb::funds::bill_voucher(&db, id, user.username())?;
+    let vid = findb::funds::bill_voucher(db, id, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -253,7 +253,7 @@ pub(super) async fn loan_voucher(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let vid = findb::funds::loan_voucher(&db, id, user.username())?;
+    let vid = findb::funds::loan_voucher(db, id, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -270,7 +270,7 @@ pub(super) async fn delete_cash_count(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::funds::cash_count_delete(&db, id)?;
+    findb::funds::cash_count_delete(db, id)?;
     db.log(user.username(), "资金", "删除盘点记录", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -283,7 +283,7 @@ pub(super) async fn confirm_cash_shift(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
     let db = &user.db;
-    findb::funds::cash_shift_confirm(&db, id, user.username())?;
+    findb::funds::cash_shift_confirm(db, id, user.username())?;
     db.log(user.username(), "资金", "交接班确认", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -296,7 +296,7 @@ pub(super) async fn cancel_cash_shift(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::CashierSign)?;
     let db = &user.db;
-    findb::funds::cash_shift_cancel(&db, id)?;
+    findb::funds::cash_shift_cancel(db, id)?;
     db.log(user.username(), "资金", "交接班取消", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -307,7 +307,7 @@ pub(super) async fn list_checks(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::funds::check_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::funds::check_list(db)? })))
 }
 
 /// 支票登记簿新增/修改（备查簿，不入账）
@@ -345,7 +345,7 @@ pub(super) async fn save_check(
         created_by: user.username().to_string(),
         created_at: String::new(),
     };
-    let id = findb::funds::check_save(&db, &mut c)?;
+    let id = findb::funds::check_save(db, &mut c)?;
     db.log(
         user.username(),
         "资金",
@@ -364,7 +364,7 @@ pub(super) async fn check_status(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     let status = req["status"].as_str().unwrap_or("");
-    findb::funds::check_set_status(&db, id, status)?;
+    findb::funds::check_set_status(db, id, status)?;
     db.log(
         user.username(),
         "资金",
@@ -381,7 +381,7 @@ pub(super) async fn delete_check(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::funds::check_delete(&db, id)?;
+    findb::funds::check_delete(db, id)?;
     db.log(user.username(), "资金", "删除支票", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -392,7 +392,7 @@ pub(super) async fn list_advances(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::funds::advance_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::funds::advance_list(db)? })))
 }
 
 /// 新增/修改借支单（建单即 approved；支付/核销走独立端点）
@@ -441,7 +441,7 @@ pub(super) async fn save_advance(
         created_by: user.username().to_string(),
         created_at: String::new(),
     };
-    let id = findb::funds::advance_save(&db, &mut a)?;
+    let id = findb::funds::advance_save(db, &mut a)?;
     db.log(
         user.username(),
         "资金",
@@ -461,7 +461,7 @@ pub(super) async fn pay_advance(
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
     let date = opt_body_date(&body)?.unwrap_or_else(|| chrono::Local::now().date_naive());
-    let vid = findb::funds::advance_pay(&db, id, date, user.username())?;
+    let vid = findb::funds::advance_pay(db, id, date, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -502,7 +502,7 @@ pub(super) async fn settle_advance(
     };
     let expense = parse_money_checked(&req.expense_amount)?;
     let vid =
-        findb::funds::advance_settle(&db, id, &expense_account, expense, date, user.username())?;
+        findb::funds::advance_settle(db, id, &expense_account, expense, date, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -522,7 +522,7 @@ pub(super) async fn delete_advance(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::funds::advance_delete(&db, id)?;
+    findb::funds::advance_delete(db, id)?;
     db.log(user.username(), "资金", "删除借支单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -534,7 +534,7 @@ pub(super) async fn delete_receipt(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::receipt::receipt_delete(&db, id)?;
+    findb::receipt::receipt_delete(db, id)?;
     db.log(user.username(), "资金", "删除收付款单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -550,7 +550,7 @@ pub(super) async fn audit_receipt(
     let db = &user.db;
     // 工作流优先：有流程 → 参与人/审核权由拦截器判定，终态才出凭证；
     // 无流程（默认流）→ 维持原审核权 VoucherAudit（出纳录单、审核人把关）
-    match findb::workflow::intercept(&db, findb::workflow::BIZ_RECEIPT, id, &user.user, true, "")? {
+    match findb::workflow::intercept(db, findb::workflow::BIZ_RECEIPT, id, &user.user, true, "")? {
         findb::workflow::Gate::Pending { next } => {
             db.log(
                 user.username(),
@@ -568,7 +568,7 @@ pub(super) async fn audit_receipt(
         }
         findb::workflow::Gate::Final { approved: true } => {}
     }
-    let (vid, settled) = findb::receipt::receipt_audit(&db, id, user.username())?;
+    let (vid, settled) = findb::receipt::receipt_audit(db, id, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -588,7 +588,7 @@ pub(super) async fn unaudit_receipt(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
     let db = &user.db;
-    findb::receipt::receipt_unaudit(&db, id)?;
+    findb::receipt::receipt_unaudit(db, id)?;
     db.log(
         user.username(),
         "资金",
@@ -607,7 +607,7 @@ pub(super) async fn audit_transfer(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
     let db = &user.db;
-    let vid = findb::transfer::transfer_audit(&db, id, user.username())?;
+    let vid = findb::transfer::transfer_audit(db, id, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -625,7 +625,7 @@ pub(super) async fn unaudit_transfer(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
     let db = &user.db;
-    findb::transfer::transfer_unaudit(&db, id)?;
+    findb::transfer::transfer_unaudit(db, id)?;
     db.log(
         user.username(),
         "资金",
@@ -642,7 +642,7 @@ pub(super) async fn delete_transfer(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::transfer::transfer_delete(&db, id)?;
+    findb::transfer::transfer_delete(db, id)?;
     db.log(user.username(), "资金", "删除资金调拨单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -654,7 +654,7 @@ pub(super) async fn delete_loan(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::funds::loan_delete(&db, id)?;
+    findb::funds::loan_delete(db, id)?;
     // 融资记录挂着结算凭证与还款凭证，是资金模块里审计最敏感的一类，
     // 删除必须留痕（与 save_loan / delete_bill / delete_advance / delete_receipt 同口径）。
     // 这里保留 `?`：删除动作本身幂等（重试不会二次产生业务写入），
@@ -675,7 +675,7 @@ pub(super) async fn get_funds_budget(
         .get("period")
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
-    let rows = findb::funds::funds_budget(&db, period)?;
+    let rows = findb::funds::funds_budget(db, period)?;
     Ok(Json(json!({ "rows": rows })))
 }
 
@@ -692,7 +692,7 @@ pub(super) async fn get_funds_daily_date(
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?,
         None => chrono::Local::now().date_naive(),
     };
-    let rows = findb::funds::funds_daily_by_date(&db, date)?;
+    let rows = findb::funds::funds_daily_by_date(db, date)?;
     Ok(Json(json!({
         "date": date.format("%Y-%m-%d").to_string(),
         "rows": rows
@@ -706,7 +706,7 @@ pub(super) async fn get_funds_daily(
     user.require(Perm::FinReport)?;
     let db = &user.db;
     let period = current_period(&state, &user);
-    let rows = findb::funds::funds_daily(&db, period)?;
+    let rows = findb::funds::funds_daily(db, period)?;
     Ok(Json(
         serde_json::json!({ "period": period.label(), "rows": rows }),
     ))
@@ -719,7 +719,7 @@ pub(super) async fn get_funds_forecast(
     user.require(Perm::FinReport)?;
     let db = &user.db;
     let period = current_period(&state, &user);
-    let fc = findb::funds::funds_forecast(&db, period)?;
+    let fc = findb::funds::funds_forecast(db, period)?;
     Ok(Json(
         serde_json::json!({ "period": period.label(), "forecast": fc }),
     ))
@@ -745,7 +745,7 @@ pub(super) async fn gen_bank_vouchers(
         return Err(AppError::bad_request("缺少银行科目 account"));
     }
     let db = &user.db;
-    let r = findb::bank::gen_vouchers(&db, period, &account, user.username())?;
+    let r = findb::bank::gen_vouchers(db, period, &account, user.username())?;
     db.log(
         user.username(),
         "银行对账",
@@ -787,9 +787,9 @@ pub(super) async fn get_bank(
         .and_then(|s| parse_period(s))
         .unwrap_or_else(|| current_period(&state, &user));
     let db = &user.db;
-    let statements = findb::bank::list(&*db, period, account.trim())?;
-    let book = findb::bank::book_side(&*db, period, account.trim())?;
-    let recon = findb::bank::reconcile(&*db, period, account.trim())?;
+    let statements = findb::bank::list(db, period, account.trim())?;
+    let book = findb::bank::book_side(db, period, account.trim())?;
+    let recon = findb::bank::reconcile(db, period, account.trim())?;
     Ok(Json(json!({
         "period": period_to_str(period),
         "account": account.trim(),
@@ -811,7 +811,7 @@ pub(super) async fn import_bank(
         return Err(AppError::bad_request("缺少银行科目 account"));
     }
     let db = &user.db;
-    let (n, warnings) = findb::bank::import_csv(&db, period, &account, &req.text)?;
+    let (n, warnings) = findb::bank::import_csv(db, period, &account, &req.text)?;
     db.log(
         user.username(),
         "银行对账",
@@ -833,7 +833,7 @@ pub(super) async fn auto_match_bank(
         return Err(AppError::bad_request("缺少银行科目 account"));
     }
     let db = &user.db;
-    let r = findb::bank::auto_match(&db, period, &account, req.tolerance, user.username())?;
+    let r = findb::bank::auto_match(db, period, &account, req.tolerance, user.username())?;
     db.log(
         user.username(),
         "银行对账",
@@ -856,7 +856,7 @@ pub(super) async fn link_bank(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::bank::link(&*db, req.stmt_id, req.entry_id, user.username())?;
+    findb::bank::link(db, req.stmt_id, req.entry_id, user.username())?;
     db.log(
         user.username(),
         "银行对账",
@@ -873,7 +873,7 @@ pub(super) async fn unlink_bank(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::bank::unlink(&db, req.stmt_id)?;
+    findb::bank::unlink(db, req.stmt_id)?;
     db.log(
         user.username(),
         "银行对账",
@@ -895,7 +895,7 @@ pub(super) async fn clear_bank(
         return Err(AppError::bad_request("缺少银行科目 account"));
     }
     let db = &user.db;
-    let n = findb::bank::clear(&db, period, &account)?;
+    let n = findb::bank::clear(db, period, &account)?;
     db.log(
         user.username(),
         "银行对账",
@@ -912,7 +912,7 @@ pub(super) async fn list_cash_counts(
     user.require(Perm::FinReport)?;
     let db = &user.db;
     Ok(Json(
-        serde_json::json!({ "rows": findb::funds::cash_count_list(&*db)? }),
+        serde_json::json!({ "rows": findb::funds::cash_count_list(db)? }),
     ))
 }
 
@@ -948,7 +948,7 @@ pub(super) async fn save_cash_count(
         created_by: user.username().to_string(),
         created_at: String::new(),
     };
-    let id = findb::funds::cash_count_save(&db, &mut c)?;
+    let id = findb::funds::cash_count_save(db, &mut c)?;
     db.log(
         user.username(),
         "资金",
@@ -978,7 +978,7 @@ pub(super) async fn cash_count_voucher(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    let vid = findb::funds::cash_count_voucher(&db, id, user.username())?;
+    let vid = findb::funds::cash_count_voucher(db, id, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -1001,7 +1001,7 @@ pub(super) async fn list_cash_shifts(
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(100);
     Ok(Json(
-        json!({ "rows": findb::funds::cash_shift_list(&db, limit)? }),
+        json!({ "rows": findb::funds::cash_shift_list(db, limit)? }),
     ))
 }
 
@@ -1020,13 +1020,13 @@ pub(super) async fn create_cash_shift(
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
     };
     let id = findb::funds::cash_shift_create(
-        &db,
+        db,
         date,
         user.username(),
         req.to_user.trim(),
         req.memo.trim(),
     )?;
-    let s = findb::funds::cash_shift_get(&db, id)?
+    let s = findb::funds::cash_shift_get(db, id)?
         .ok_or_else(|| AppError::from(fincore::FinError::msg("交班单创建失败")))?;
     db.log(
         user.username(),
@@ -1070,7 +1070,7 @@ pub(super) async fn list_day_clear(
     let today = chrono::Local::now().date_naive();
     let from = parse("from")?.unwrap_or(today);
     let to = parse("to")?.unwrap_or(today);
-    let dates = findb::funds::day_clear_dates(&db, &account, from, to)?;
+    let dates = findb::funds::day_clear_dates(db, &account, from, to)?;
     Ok(Json(json!({ "dates": dates })))
 }
 
@@ -1089,7 +1089,7 @@ pub(super) async fn set_day_clear(
     };
     let date = chrono::NaiveDate::parse_from_str(&req.date, "%Y-%m-%d")
         .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?;
-    findb::funds::day_clear_set(&db, &account, date, req.clear, user.username())?;
+    findb::funds::day_clear_set(db, &account, date, req.clear, user.username())?;
     db.log(
         user.username(),
         "资金",
@@ -1109,7 +1109,7 @@ pub(super) async fn list_receipts(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::receipt::receipt_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::receipt::receipt_list(db)? })))
 }
 
 /// 新增收付款单：同事务生成资金凭证 + FIFO 自动核销（对标金蝶收款单/付款单）
@@ -1134,7 +1134,7 @@ pub(super) async fn create_receipt(
     let amount = parse_money_checked(&req.amount)?;
     // 审核流：只落草稿单据；凭证与自动核销在「审核」（VoucherAudit）时生成
     let id = findb::receipt::receipt_create(
-        &db,
+        db,
         kind,
         date,
         &req.fund_account,
@@ -1169,9 +1169,7 @@ pub(super) async fn list_transfers(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::FinReport)?;
     let db = &user.db;
-    Ok(Json(
-        json!({ "rows": findb::transfer::transfer_list(&*db)? }),
-    ))
+    Ok(Json(json!({ "rows": findb::transfer::transfer_list(db)? })))
 }
 
 /// 新增资金调拨单：只落草稿单据；凭证在「审核」时生成（对标金蝶录单 → 审核）
@@ -1190,7 +1188,7 @@ pub(super) async fn create_transfer(
     };
     let amount = parse_money_checked(&req.amount)?;
     let id = findb::transfer::transfer_create(
-        &db,
+        db,
         date,
         &req.from_account,
         &req.to_account,
@@ -1231,7 +1229,7 @@ pub(super) async fn funds_forecast_rolling_ep(
         .unwrap_or(6);
     Ok(Json(json!({
         "from": period_to_str(from),
-        "rows": findb::funds::funds_forecast_rolling(&db, from, n)?,
+        "rows": findb::funds::funds_forecast_rolling(db, from, n)?,
     })))
 }
 

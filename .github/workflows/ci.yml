@@ -88,7 +88,7 @@ jobs:
       - name: 确认源码已还原（否则这条 job 自己就是个脏工作区）
         run: git diff --exit-code
 
-  # ── lint（记录型：fincore/findb 收窄允许项；UI 层允许既有 f32 警告） ────
+  # ── lint（闸门型：告警即失败，只留 5 类项目既定设计风格） ───────────────
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -100,11 +100,13 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: clippy（fincore/findb）
-        run: cargo clippy -p fincore -p findb --all-targets -- -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::should_implement_trait -A clippy::field_reassign_with_default
-      # 与上一条同口径：这几个 lint 是项目既定接受的设计风格（长参数表/复杂类型/
-      # 结构体 Default 外赋值），不是待修项。两处允许集保持一致，改一处记得改另一处。
+        run: cargo clippy -p fincore -p findb --all-targets -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::should_implement_trait -A clippy::field_reassign_with_default
+      # 与上一条同口径：`-D warnings` 让任何**新引入**的告警直接失败；
+      # 后面 5 个 `-A` 是项目既定接受的设计风格（长参数表/复杂类型/结构体
+      # Default 外赋值/大枚举变体/固有 neg 方法），不是待修项 —— 允许集必须与
+      # 上一条一致，改一处记得改另一处。
       - name: clippy（全 workspace）
-        run: cargo clippy --workspace --all-targets -- -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::should_implement_trait -A clippy::field_reassign_with_default
+        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::should_implement_trait -A clippy::field_reassign_with_default
 
   # ── 依赖漏洞扫描（cargo-audit 读 Cargo.lock，不编译，秒级） ───────────
   audit:

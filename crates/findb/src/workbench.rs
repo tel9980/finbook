@@ -905,126 +905,6 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
     Ok(todos)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::tests::mem;
-    use fincore::Role;
-
-    fn domains(out: &WbOut) -> Vec<&str> {
-        out.cards.iter().map(|c| c.domain.as_str()).collect()
-    }
-
-    /// 工作台的「本期发生额」必须与试算平衡一致。
-    ///
-    /// 回归两处：① `status<>'void'` 把草稿也算进发生额（与 H-3 口径的试算平衡
-    /// 对不上）；② `SUM(CAST(e.debit AS REAL))` 走二进制浮点累加，与 Decimal
-    /// 口径差分。这里直接构造「含分位尾数、且一半是草稿」的数据来卡这两点。
-    #[test]
-    fn turnover_matches_trial_balance_posted_only() {
-        use fincore::{Entry, Voucher};
-        let db = mem();
-        let p = Period::new(2026, 1).unwrap();
-        let d = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
-
-        // 借方合计 = 0.1 + 0.2 = 0.3 这类分位尾数，REAL 累加会现形
-        let mk = |no: i32, debit: &str| -> i64 {
-            let mut v = Voucher::new(p, d, "记", no);
-            v.push_entry(Entry {
-                debit: Money::parse(debit).unwrap(),
-                aux: fincore::AuxRef {
-                    customer: Some("C01".into()),
-                    ..Default::default()
-                },
-                ..Entry::new(1, "112201", "应收")
-            });
-            v.push_entry(Entry {
-                credit: Money::parse(debit).unwrap(),
-                aux: fincore::AuxRef {
-                    customer: Some("C01".into()),
-                    ..Default::default()
-                },
-                ..Entry::new(2, "112201", "应收冲减")
-            });
-            crate::vouchers::save(&db, &mut v).unwrap()
-        };
-        let posted_a = mk(1, "0.10");
-        let posted_b = mk(2, "0.20");
-        let draft = mk(3, "999.00"); // 草稿不得计入
-        crate::vouchers::post(&db, posted_a, "u").unwrap();
-        crate::vouchers::post(&db, posted_b, "u").unwrap();
-        let _ = draft;
-
-        // 期望 = 已记账两张的借方合计，Rust 侧 Decimal 累加
-        let expect = Money::parse("0.10").unwrap() + Money::parse("0.20").unwrap();
-        let got = sum_posted_debit(&db, p, p).unwrap();
-        assert_eq!(got, expect, "已记账发生额应为 0.30，草稿的 999.00 不得计入");
-
-        // 卡片上的「本期发生额」用的是同一个函数，且经 f64/2 位格式化后仍一致
-        let admin = User::new("a", "管理员", Role::Admin);
-        let out = collect(&db, &admin, p, 6).unwrap();
-        let card = out
-            .cards
-            .iter()
-            .find(|c| c.domain == "凭证" && c.key == "turnover")
-            .expect("应有本期发生额卡片");
-        assert_eq!(
-            card.value, "0.30",
-            "工作台本期发生额应为 0.30（含草稿会变成 999.30，REAL 累加会变成别的数）"
-        );
-    }
-
-    #[test]
-    fn role_domain_gating_and_series() {
-        let db = mem();
-        let p = Period::new(2026, 1).unwrap();
-
-        // 管理员：全域 + 趋势期数 = n
-        let admin = User::new("a", "管理员", Role::Admin);
-        let out = collect(&db, &admin, p, 6).unwrap();
-        let d = domains(&out);
-        for expect in [
-            "凭证", "资金", "销售", "采购", "仓管", "生产", "成本", "报销", "审批",
-        ] {
-            assert!(d.contains(&expect), "admin 应含 {expect} 域：{d:?}");
-        }
-        assert!(
-            out.trends.iter().all(|t| t.periods.len() == 6),
-            "趋势期数应为6"
-        );
-        assert_eq!(out.trends[0].periods[0], "2025-08", "序列从当期往前第6期");
-        assert_eq!(out.trends[0].periods[5], "2026-01");
-        // 待办结构存在
-        assert!(out.todos.iter().any(|t| t.key == "wf_pending"));
-
-        // 仓管：只有 仓管/报销/审批
-        let keeper = User::new("k", "仓管", Role::Keeper);
-        let out = collect(&db, &keeper, p, 12).unwrap();
-        let d = domains(&out);
-        assert!(d.contains(&"仓管"));
-        assert!(d.contains(&"报销"));
-        assert!(!d.contains(&"凭证"), "仓管不应有凭证域：{d:?}");
-        assert!(!d.contains(&"资金"));
-        assert!(!d.contains(&"销售"));
-        assert!(!d.contains(&"成本"));
-
-        // 订单专员：销售+采购，无仓管/凭证/资金
-        let clerk = User::new("c", "订单", Role::OrderClerk);
-        let out = collect(&db, &clerk, p, 12).unwrap();
-        let d = domains(&out);
-        assert!(d.contains(&"销售") && d.contains(&"采购"));
-        assert!(!d.contains(&"仓管") && !d.contains(&"凭证") && !d.contains(&"资金"));
-
-        // 只读：仅 报销 + 审批（报表域在 web 层注入）
-        let viewer = User::new("v", "只读", Role::Viewer);
-        let vout = collect(&db, &viewer, p, 12).unwrap();
-        let mut d = domains(&vout);
-        d.sort();
-        d.dedup();
-        assert_eq!(d, vec!["审批", "报销"], "Viewer 只见本人报销与审批");
-    }
-}
-
 /// 专用查询：一次性算出 12 期 × 5 个报表趋势值
 /// 避免 wb_report_domain 里 26 次完整报表渲染（每次都重扫 voucher_entry + 渲染）。
 ///
@@ -1188,4 +1068,124 @@ pub fn collect_report_trends(
     }
 
     Ok(m)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::mem;
+    use fincore::Role;
+
+    fn domains(out: &WbOut) -> Vec<&str> {
+        out.cards.iter().map(|c| c.domain.as_str()).collect()
+    }
+
+    /// 工作台的「本期发生额」必须与试算平衡一致。
+    ///
+    /// 回归两处：① `status<>'void'` 把草稿也算进发生额（与 H-3 口径的试算平衡
+    /// 对不上）；② `SUM(CAST(e.debit AS REAL))` 走二进制浮点累加，与 Decimal
+    /// 口径差分。这里直接构造「含分位尾数、且一半是草稿」的数据来卡这两点。
+    #[test]
+    fn turnover_matches_trial_balance_posted_only() {
+        use fincore::{Entry, Voucher};
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+
+        // 借方合计 = 0.1 + 0.2 = 0.3 这类分位尾数，REAL 累加会现形
+        let mk = |no: i32, debit: &str| -> i64 {
+            let mut v = Voucher::new(p, d, "记", no);
+            v.push_entry(Entry {
+                debit: Money::parse(debit).unwrap(),
+                aux: fincore::AuxRef {
+                    customer: Some("C01".into()),
+                    ..Default::default()
+                },
+                ..Entry::new(1, "112201", "应收")
+            });
+            v.push_entry(Entry {
+                credit: Money::parse(debit).unwrap(),
+                aux: fincore::AuxRef {
+                    customer: Some("C01".into()),
+                    ..Default::default()
+                },
+                ..Entry::new(2, "112201", "应收冲减")
+            });
+            crate::vouchers::save(&db, &mut v).unwrap()
+        };
+        let posted_a = mk(1, "0.10");
+        let posted_b = mk(2, "0.20");
+        let draft = mk(3, "999.00"); // 草稿不得计入
+        crate::vouchers::post(&db, posted_a, "u").unwrap();
+        crate::vouchers::post(&db, posted_b, "u").unwrap();
+        let _ = draft;
+
+        // 期望 = 已记账两张的借方合计，Rust 侧 Decimal 累加
+        let expect = Money::parse("0.10").unwrap() + Money::parse("0.20").unwrap();
+        let got = sum_posted_debit(&db, p, p).unwrap();
+        assert_eq!(got, expect, "已记账发生额应为 0.30，草稿的 999.00 不得计入");
+
+        // 卡片上的「本期发生额」用的是同一个函数，且经 f64/2 位格式化后仍一致
+        let admin = User::new("a", "管理员", Role::Admin);
+        let out = collect(&db, &admin, p, 6).unwrap();
+        let card = out
+            .cards
+            .iter()
+            .find(|c| c.domain == "凭证" && c.key == "turnover")
+            .expect("应有本期发生额卡片");
+        assert_eq!(
+            card.value, "0.30",
+            "工作台本期发生额应为 0.30（含草稿会变成 999.30，REAL 累加会变成别的数）"
+        );
+    }
+
+    #[test]
+    fn role_domain_gating_and_series() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+
+        // 管理员：全域 + 趋势期数 = n
+        let admin = User::new("a", "管理员", Role::Admin);
+        let out = collect(&db, &admin, p, 6).unwrap();
+        let d = domains(&out);
+        for expect in [
+            "凭证", "资金", "销售", "采购", "仓管", "生产", "成本", "报销", "审批",
+        ] {
+            assert!(d.contains(&expect), "admin 应含 {expect} 域：{d:?}");
+        }
+        assert!(
+            out.trends.iter().all(|t| t.periods.len() == 6),
+            "趋势期数应为6"
+        );
+        assert_eq!(out.trends[0].periods[0], "2025-08", "序列从当期往前第6期");
+        assert_eq!(out.trends[0].periods[5], "2026-01");
+        // 待办结构存在
+        assert!(out.todos.iter().any(|t| t.key == "wf_pending"));
+
+        // 仓管：只有 仓管/报销/审批
+        let keeper = User::new("k", "仓管", Role::Keeper);
+        let out = collect(&db, &keeper, p, 12).unwrap();
+        let d = domains(&out);
+        assert!(d.contains(&"仓管"));
+        assert!(d.contains(&"报销"));
+        assert!(!d.contains(&"凭证"), "仓管不应有凭证域：{d:?}");
+        assert!(!d.contains(&"资金"));
+        assert!(!d.contains(&"销售"));
+        assert!(!d.contains(&"成本"));
+
+        // 订单专员：销售+采购，无仓管/凭证/资金
+        let clerk = User::new("c", "订单", Role::OrderClerk);
+        let out = collect(&db, &clerk, p, 12).unwrap();
+        let d = domains(&out);
+        assert!(d.contains(&"销售") && d.contains(&"采购"));
+        assert!(!d.contains(&"仓管") && !d.contains(&"凭证") && !d.contains(&"资金"));
+
+        // 只读：仅 报销 + 审批（报表域在 web 层注入）
+        let viewer = User::new("v", "只读", Role::Viewer);
+        let vout = collect(&db, &viewer, p, 12).unwrap();
+        let mut d = domains(&vout);
+        d.sort();
+        d.dedup();
+        assert_eq!(d, vec!["审批", "报销"], "Viewer 只见本人报销与审批");
+    }
 }

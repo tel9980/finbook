@@ -204,12 +204,12 @@ pub fn transfer_audit(db: &Db, id: i64, who: &str) -> DbResult<i64> {
     // 借 转入账户 / 贷 转出账户：钱从 from 流向 to，两腿金额相等
     v.push_entry(Entry {
         debit: amount,
-        aux: crate::funds::fund_account_aux(&to, bank.as_deref()),
+        aux: crate::funds::fund_account_aux(&to, bank),
         ..Entry::new(1, to.as_str(), summary.as_str())
     });
     v.push_entry(Entry {
         credit: amount,
-        aux: crate::funds::fund_account_aux(&from, bank.as_deref()),
+        aux: crate::funds::fund_account_aux(&from, bank),
         ..Entry::new(2, from.as_str(), summary.as_str())
     });
     let vid = crate::vouchers::save_in(&tx, &mut v)?;

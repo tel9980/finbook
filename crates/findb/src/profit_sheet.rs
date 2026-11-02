@@ -180,7 +180,7 @@ pub fn list(db: &Db) -> DbResult<Vec<Row>> {
     let mut stmt = db
         .conn()
         .prepare(&format!("SELECT {COLS} FROM profit_sheet_row ORDER BY seq"))?;
-    let rows = stmt.query_map([], |r| map_row(r))?;
+    let rows = stmt.query_map([], map_row)?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r?);
@@ -192,7 +192,7 @@ pub fn get(db: &Db, id: i64) -> DbResult<Option<Row>> {
     let mut stmt = db
         .conn()
         .prepare(&format!("SELECT {COLS} FROM profit_sheet_row WHERE id=?1"))?;
-    let mut rows = stmt.query_map([id], |r| map_row(r))?;
+    let mut rows = stmt.query_map([id], map_row)?;
     match rows.next() {
         Some(r) => Ok(Some(r?)),
         None => Ok(None),
@@ -589,13 +589,11 @@ mod tests {
             "记",
             crate::vouchers::next_no(db, period, "记").unwrap(),
         );
-        let mut no = 1;
-        for (code, debit, credit) in lines {
-            let mut e = Entry::new(no, code, "利润分析表");
+        for (i, (code, debit, credit)) in lines.into_iter().enumerate() {
+            let mut e = Entry::new(i as i32 + 1, code, "利润分析表");
             e.debit = m(debit);
             e.credit = m(credit);
             v.entries.push(e);
-            no += 1;
         }
         let id = vouchers::save(db, &mut v).unwrap();
         vouchers::post(db, id, "t").unwrap();

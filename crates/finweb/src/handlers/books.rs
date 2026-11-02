@@ -594,7 +594,7 @@ pub(super) async fn get_doc_links(
         .get("id")
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| AppError::bad_request("缺少 id"))?;
-    let rows = findb::docflow::doc_chain(&db, &kind, id)?;
+    let rows = findb::docflow::doc_chain(db, &kind, id)?;
     Ok(Json(json!({ "rows": rows })))
 }
 
@@ -852,7 +852,7 @@ pub(super) async fn download_backup(
 
         // .fbk 主文件
         zip.start_file(format!("{key}.fbk"), options)
-            .map_err(&zerr)?;
+            .map_err(zerr)?;
         let mut f = File::open(&src)?;
         io::copy(&mut f, &mut zip)?;
 
@@ -867,12 +867,12 @@ pub(super) async fn download_backup(
                 continue;
             }
             let name = format!(".attachments/{rel}");
-            zip.start_file(name, options).map_err(&zerr)?;
+            zip.start_file(name, options).map_err(zerr)?;
             let mut f = File::open(&p)?;
             io::copy(&mut f, &mut zip)?;
         }
 
-        zip.finish().map_err(&zerr)?;
+        zip.finish().map_err(zerr)?;
         Ok(buf)
     })
     .await
@@ -880,14 +880,14 @@ pub(super) async fn download_backup(
     let buf = buf?; // -> Vec<u8> // buf: Vec<u8>
 
     let body = Body::from(buf);
-    Ok(Response::builder()
+    Response::builder()
         .header(header::CONTENT_TYPE, "application/zip")
         .header(
             header::CONTENT_DISPOSITION,
             format!("attachment; filename=\"{zip_name}\""),
         )
         .body(body)
-        .map_err(|e| AppError::Internal(format!("构建响应失败：{e}")))?)
+        .map_err(|e| AppError::Internal(format!("构建响应失败：{e}")))
 }
 
 pub(super) async fn opening_sheet_template(
@@ -998,7 +998,7 @@ pub(super) async fn import_opening_sheet(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Opening)?;
     let data = sheet_upload(multipart).await?;
-    let r = findb::opening_book::import_collection_sheet(&user.db, &data, &user.username())?;
+    let r = findb::opening_book::import_collection_sheet(&user.db, &data, user.username())?;
     Ok(Json(serde_json::json!({
         "ok": true,
         "ar": r.ar.ok,

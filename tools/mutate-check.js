@@ -12,8 +12,20 @@
 //      Promise settle（竞态）。猜错方向的检查永远通过。判据要钉机制。
 const fs = require("fs");
 const { execFileSync } = require("child_process");
-const p = "crates/finweb/static/app.js";
-const orig = fs.readFileSync(p, "utf8");
+const { readAppFiles } = require("./lib-app-src.js");
+
+// 前端是 16 份 app*.js（经典 script，按 index.html 顺序加载），不再是一个
+// app.js。所以每条变异都要**自己找到它落在哪个文件里**：拆分之后如果还硬编码
+// 单文件，一半变异会「匹配 0 次」被报成失效，剩下一半则永远不会被验证。
+const APP_FILES = readAppFiles();
+
+/** 换行不敏感地在某个文件里定位 from 串；返回命中的文件（找不到返回 null） */
+function locate(from) {
+  const hits = APP_FILES.filter((f) =>
+    ["\n", "\r\n"].some((nl) => f.src.includes(from.replace(/\n/g, nl)))
+  );
+  return hits.length === 1 ? hits[0] : hits.length === 0 ? null : { ambiguous: hits.map((h) => h.name) };
+}
 
 const cases = [
   [
@@ -147,19 +159,36 @@ function applyMut(src, from, to) {
 // 两层转义（`\\\\.`）必错——第一版就是这么写的，把一条有效变异误报成失效。
 // 让脚本自己导出真值，别在外部猜。
 if (process.argv.includes("--list")) {
-  process.stdout.write(JSON.stringify({ file: p, cases }, null, 1));
+  const listed = cases.map(([from, to, name]) => {
+    const at = locate(from);
+    return { from, to, name, file: at && !at.ambiguous ? at.name : null };
+  });
+  process.stdout.write(
+    JSON.stringify({ files: APP_FILES.map((f) => f.name), cases: listed }, null, 1)
+  );
   process.exit(0);
 }
 
 let escaped = 0;
 for (const [from, to, name] of cases) {
-  const { out: mod, ok } = applyMut(orig, from, to);
+  const at = locate(from);
+  if (!at || at.ambiguous) {
+    console.log(
+      "!! 变异未生效（源码已变，检查已失效）：" +
+        name +
+        (at && at.ambiguous ? "\n         from 串在多个文件里都能匹配：" + at.ambiguous.join(", ") : "")
+    );
+    escaped++;
+    continue;
+  }
+  const target = at.file;
+  const { out: mod, ok } = applyMut(at.src, from, to);
   if (!ok) {
     console.log("!! 变异未生效（源码已变，检查已失效）：" + name);
     escaped++;
     continue;
   }
-  fs.writeFileSync(p, mod);
+  fs.writeFileSync(target, mod);
   let out = "";
   try {
     out = execFileSync(process.execPath, ["tools/check-js.js"], {
@@ -169,6 +198,7 @@ for (const [from, to, name] of cases) {
   } catch (e) {
     out = (e.stdout || "") + (e.stderr || "");
   }
+  fs.writeFileSync(target, at.src);
   const caught = out.includes("FAIL");
   if (!caught) escaped++;
   console.log((caught ? "PASS 拦下了  " : "FAIL 放过了  ") + name);
@@ -177,10 +207,9 @@ for (const [from, to, name] of cases) {
     console.log("        " + (line || "").slice(0, 140));
   }
 }
-fs.writeFileSync(p, orig);
 console.log(
   escaped === 0
-    ? `\n全部 ${cases.length} 个变异都被拦下，app.js 已还原`
+    ? `\n全部 ${cases.length} 个变异都被拦下，前端脚本已还原`
     : `\n${escaped} 个变异没被拦下或没生效（共 ${cases.length} 个）`
 );
 process.exit(escaped === 0 ? 0 : 1);

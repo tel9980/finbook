@@ -17,7 +17,7 @@ pub(super) async fn list_arap_opening(
     user.require(Perm::Report)?;
     let db = &user.db;
     let kind = q.get("kind").map(String::as_str).filter(|k| !k.is_empty());
-    let rows = findb::settle::arap_opening_list(&db, kind)?;
+    let rows = findb::settle::arap_opening_list(db, kind)?;
     // 合计按 kind 显式分列：原来的 `if ar {…} else {ap += …}` 会把空串、大小写笔误
     // （"AR"）等一切非 "ar" 的行默默并进应付合计，让用户看到一个凭空变大的数。
     // 未知 kind 单独计数回报，既不混进 ar/ap 也不因此整页报错（行明细照常返回，
@@ -48,7 +48,7 @@ pub(super) async fn delete_arap_opening(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::settle::arap_opening_delete(&db, id)?;
+    findb::settle::arap_opening_delete(db, id)?;
     db.log(user.username(), "档案", "删除往来期初", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -79,7 +79,7 @@ pub(super) async fn list_customers(
         .get("page_size")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(50);
-    let result = findb::customers::list(&db, per, keyword, only_open, page, page_size)?;
+    let result = findb::customers::list(db, per, keyword, only_open, page, page_size)?;
     Ok(Json(json!({
         "rows": result.rows,
         "period": per.ymm(),
@@ -111,11 +111,11 @@ pub(super) async fn get_customer(
     if code.is_empty() {
         return Err(AppError::bad_request("缺少客户编码 code"));
     }
-    match findb::customers::detail(&db, &code, per)? {
+    match findb::customers::detail(db, &code, per)? {
         Some(d) => Ok(Json(json!({
             "customer": d,
             "period": per.ymm(),
-            "credit": findb::sales::credit_check(&db, &code, per)
+            "credit": findb::sales::credit_check(db, &code, per)
                 .map(|(recv, lim, over)| json!({
                     "receivable": recv.fmt_money(),
                     "limit": lim.fmt_money(),
@@ -145,7 +145,7 @@ pub(super) async fn get_customer_aging(
     // 账龄页与客户页对「客户不存在」的处理必须一致：一个不存在的客户，
     // 详情页报 404，账龄 Tab 也得报 404 —— 否则界面上会出现
     // 「有档案、明细有数据、账龄说此人没有未核销余额」这种自相矛盾的三件套。
-    if findb::auxs::get(&db, fincore::AuxKind::Customer, &code)?.is_none() {
+    if findb::auxs::get(db, fincore::AuxKind::Customer, &code)?.is_none() {
         return Err(AppError::not_found(format!("客户 {code} 未建档")));
     }
     // as_of 缺省用**期末**而不是今天：as_of 决定「账龄天数怎么算」，
@@ -162,7 +162,7 @@ pub(super) async fn get_customer_aging(
     } else {
         fincore::engine::aging::buckets_by_days()
     };
-    let a = findb::customers::aging_of(&db, &code, per, as_of, &buckets)?;
+    let a = findb::customers::aging_of(db, &code, per, as_of, &buckets)?;
     // 金额一律走 `fmt_money()`，与 `/api/settle/aging` **同一个格式化**。
     // 直接把 `Money` 序列化出去会得到 `"3000.00"` / `"0"`（无千分位、零值没有
     // 两位小数），而账龄页给的是 `"3,000.00"` / `"0.00"` —— 同一份数据两种长相，
@@ -201,7 +201,7 @@ pub(super) async fn get_customer_trade(
     if code.is_empty() {
         return Err(AppError::bad_request("缺少客户编码 code"));
     }
-    if findb::auxs::get(&db, fincore::AuxKind::Customer, &code)?.is_none() {
+    if findb::auxs::get(db, fincore::AuxKind::Customer, &code)?.is_none() {
         return Err(AppError::not_found(format!("客户 {code} 未建档")));
     }
     let per = period_from_query(&state, &user, q.get("period"));
@@ -215,7 +215,7 @@ pub(super) async fn get_customer_trade(
         Some(s) => Period::from_ymm_checked(period_checked_digits(s))
             .map_err(|_| AppError::bad_request(format!("from 不是合法期间：{s}")))?,
     };
-    let rows = findb::customers::trade(&db, &code, from, to)?;
+    let rows = findb::customers::trade(db, &code, from, to)?;
     Ok(Json(json!({
         "code": code,
         "from": from.ymm(),
@@ -250,10 +250,10 @@ pub(super) async fn get_customer_dunning(
     if code.is_empty() {
         return Err(AppError::bad_request("缺少客户编码 code"));
     }
-    if findb::auxs::get(&db, fincore::AuxKind::Customer, &code)?.is_none() {
+    if findb::auxs::get(db, fincore::AuxKind::Customer, &code)?.is_none() {
         return Err(AppError::not_found(format!("客户 {code} 未建档")));
     }
-    let rows = findb::customers::dunning_records(&db, &code)?;
+    let rows = findb::customers::dunning_records(db, &code)?;
     Ok(Json(json!({
         "code": code,
         "rows": rows
@@ -295,7 +295,7 @@ pub(super) async fn auto_settle_endpoint(
         parse_money_checked(&req.tolerance)?
     };
     let db = &user.db;
-    let r = findb::settle::auto_settle(&db, &account, upto, tolerance, user.username())?;
+    let r = findb::settle::auto_settle(db, &account, upto, tolerance, user.username())?;
     db.log(
         user.username(),
         "往来",
@@ -325,7 +325,7 @@ pub(super) async fn manual_settle_endpoint(
     let db = &user.db;
     // 差异为 0 时 settle_with_diff 内部退化成普通核销，不必分支
     let r = findb::settle::settle_with_diff(
-        &db,
+        db,
         req.from_entry,
         req.to_entry,
         amount,
@@ -383,7 +383,7 @@ pub(super) async fn cross_settle_endpoint(
     };
     let db = &user.db;
     let r = findb::settle::settle_cross(
-        &db,
+        db,
         req.debit_entry,
         req.credit_entry,
         amount,
@@ -414,7 +414,7 @@ pub(super) async fn list_offsets(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    Ok(Json(json!({ "rows": findb::offset::offset_list(&*db)? })))
+    Ok(Json(json!({ "rows": findb::offset::offset_list(db)? })))
 }
 
 /// 新增往来对冲单：只落草稿单据；凭证与两端 FIFO 核销在「审核」时生成
@@ -433,7 +433,7 @@ pub(super) async fn create_offset(
     };
     let amount = parse_money_checked(&req.amount)?;
     let id = findb::offset::offset_create(
-        &db,
+        db,
         date,
         &req.customer,
         &req.supplier,
@@ -466,7 +466,7 @@ pub(super) async fn audit_offset(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
     let db = &user.db;
-    let (vid, n) = findb::offset::offset_audit(&db, id, user.username())?;
+    let (vid, n) = findb::offset::offset_audit(db, id, user.username())?;
     db.log(
         user.username(),
         "往来",
@@ -484,7 +484,7 @@ pub(super) async fn unaudit_offset(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_fund_doc_gate(&user)?;
     let db = &user.db;
-    findb::offset::offset_unaudit(&db, id)?;
+    findb::offset::offset_unaudit(db, id)?;
     db.log(
         user.username(),
         "往来",
@@ -501,7 +501,7 @@ pub(super) async fn delete_offset(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    findb::offset::offset_delete(&db, id)?;
+    findb::offset::offset_delete(db, id)?;
     db.log(user.username(), "往来", "删除往来对冲单", &format!("#{id}"))?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -517,7 +517,7 @@ pub(super) async fn list_settle_records(
         return Err(AppError::bad_request("缺少往来科目 account"));
     }
     let db = &user.db;
-    let rows: Vec<serde_json::Value> = findb::settle::list(&db, account.trim())?
+    let rows: Vec<serde_json::Value> = findb::settle::list(db, account.trim())?
         .iter()
         .map(|r| {
             json!({
@@ -547,7 +547,7 @@ pub(super) async fn unsettle_endpoint(
     };
     match part {
         Some(amount) => {
-            let left = findb::settle::unsettle_part(&db, req.id, amount)?;
+            let left = findb::settle::unsettle_part(db, req.id, amount)?;
             db.log(
                 user.username(),
                 "往来",
@@ -557,7 +557,7 @@ pub(super) async fn unsettle_endpoint(
             Ok(Json(json!({ "ok": true, "left": left.fmt_plain() })))
         }
         None => {
-            findb::settle::unsettle(&db, req.id)?;
+            findb::settle::unsettle(db, req.id)?;
             db.log(
                 user.username(),
                 "往来",
@@ -607,13 +607,13 @@ pub(super) async fn get_settle_aging(
     if !user.user.can_see_account(account.trim()) {
         return Err(AppError::forbidden("无权查看该科目"));
     }
-    let lines = findb::settle::aging(&db, account.trim(), upto, as_of, &buckets, None)?;
+    let lines = findb::settle::aging(db, account.trim(), upto, as_of, &buckets, None)?;
     let labels: Vec<&str> = buckets.iter().map(|b| b.label).collect();
     // key 是**裸编码**（`C01`），名称另查 —— 页面上显示 `customer=C01` 是内部存储格式，
     // 对用户没有意义。以前 key 本身就是整条 aux_key，前端想显示名称也做不到。
-    let party = findb::settle::party_kind_in(&db, account.trim());
+    let party = findb::settle::party_kind_in(db, account.trim());
     let names: std::collections::HashMap<String, String> =
-        findb::auxs::list(&db, &fincore::AuxQuery::kind(party))?
+        findb::auxs::list(db, &fincore::AuxQuery::kind(party))?
             .into_iter()
             .map(|a| (a.code, a.name))
             .collect();
@@ -793,10 +793,10 @@ pub(super) async fn dunning_status_ep(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::VoucherNew)?;
     let db = &user.db;
-    if findb::settle::dunning_get(&db, id)?.is_none() {
+    if findb::settle::dunning_get(db, id)?.is_none() {
         return Err(AppError::not_found("催款单不存在"));
     }
-    findb::settle::dunning_status(&db, id, req.status.trim())?;
+    findb::settle::dunning_status(db, id, req.status.trim())?;
     db.log(
         user.username(),
         "应收",
@@ -833,7 +833,7 @@ pub(super) async fn list_begin(
     user.require(Perm::Opening)?;
     let db = &user.db;
     // 数据范围：科目区间外的期初不可见（与账簿/报表同口径）
-    let rows = balances::list_begin(&*db)?
+    let rows = balances::list_begin(db)?
         .into_iter()
         .filter(|r| user.user.can_see_account(&r.account_code))
         .collect::<Vec<_>>();
@@ -878,7 +878,7 @@ pub(super) async fn save_begin(
     if !codes.is_empty() {
         let mut missing: Vec<String> = Vec::new();
         for c in &codes {
-            if accounts::get(&db, c)?.is_none() && !missing.contains(c) {
+            if accounts::get(db, c)?.is_none() && !missing.contains(c) {
                 missing.push(c.clone());
             }
         }
@@ -958,7 +958,7 @@ pub(super) async fn bad_debt_provision_endpoint(
     let db = &user.db;
     let period = current_period(&state, &user);
     let date = chrono::Local::now().date_naive();
-    match findb::settle::bad_debt_provision_voucher(&db, period, date, user.username())? {
+    match findb::settle::bad_debt_provision_voucher(db, period, date, user.username())? {
         Some(id) => {
             db.log(
                 user.username(),
@@ -983,7 +983,7 @@ pub(super) async fn list_statements(
     user.require(Perm::Report)?;
     let db = &user.db;
     let kind = q.get("kind").map(|s| s.as_str()).filter(|s| !s.is_empty());
-    let rows = findb::statement::list(&db, kind, None)?;
+    let rows = findb::statement::list(db, kind, None)?;
     Ok(Json(json!({
         "rows": rows.iter().map(statement_json).collect::<Vec<_>>(),
     })))
@@ -1000,7 +1000,7 @@ pub(super) async fn create_statement(
     let from = period_checked(req.from)?;
     let to = period_checked(req.to)?;
     let s = findb::statement::create(
-        &db,
+        db,
         &req.kind,
         &req.account,
         &req.party_code,
@@ -1044,7 +1044,7 @@ pub(super) async fn statement_status_ep(
     } else {
         user.username()
     };
-    findb::statement::set_status(&db, id, &req.status, who)?;
+    findb::statement::set_status(db, id, &req.status, who)?;
     db.log(
         user.username(),
         "往来",
@@ -1056,7 +1056,7 @@ pub(super) async fn statement_status_ep(
             who
         ),
     )?;
-    let s = findb::statement::get(&db, id)?.ok_or_else(|| AppError::not_found("对账单"))?;
+    let s = findb::statement::get(db, id)?.ok_or_else(|| AppError::not_found("对账单"))?;
     Ok(Json(statement_json(&s)))
 }
 
@@ -1068,7 +1068,7 @@ pub(super) async fn list_dunnings(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let rows = findb::settle::dunning_list(&db, q.get("kind").map(String::as_str), None)?;
+    let rows = findb::settle::dunning_list(db, q.get("kind").map(String::as_str), None)?;
     Ok(Json(json!({ "rows": rows })))
 }
 
@@ -1087,7 +1087,7 @@ pub(super) async fn create_dunning(
             .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
     };
     let d = findb::settle::dunning_create(
-        &db,
+        db,
         &req.kind,
         &req.account,
         &req.party_code,
@@ -1124,7 +1124,7 @@ pub(super) async fn parse_begin_batch(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Report)?;
     let db = &user.db;
-    let (dirs, leaves) = chart_ctx(&*db)?;
+    let (dirs, leaves) = chart_ctx(db)?;
     let dir_of = |code: &str| -> Option<Direction> {
         match dirs.get(code).map(|s| s.as_str()) {
             Some("debit") => Some(Direction::Debit),
@@ -1133,7 +1133,7 @@ pub(super) async fn parse_begin_batch(
         }
     };
     // 库里已有期初数的编码 —— 别覆盖用户填过的
-    let existing: Vec<String> = balances::list_begin(&*db)?
+    let existing: Vec<String> = balances::list_begin(db)?
         .into_iter()
         .map(|r| r.account_code)
         .collect();
@@ -1187,7 +1187,7 @@ pub(super) async fn import_begin_batch(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::Opening)?;
     let db = &user.db;
-    let (dirs, leaves) = chart_ctx(&*db)?;
+    let (dirs, leaves) = chart_ctx(db)?;
     let mut seen: Vec<String> = Vec::new();
     let mut to_save: Vec<BeginRow> = Vec::new();
     let mut skipped: Vec<serde_json::Value> = Vec::new();
@@ -1241,7 +1241,7 @@ pub(super) async fn import_begin_batch(
 
     let n = to_save.len();
     for br in &to_save {
-        balances::upsert_begin(&db, br)?;
+        balances::upsert_begin(db, br)?;
     }
     db.log(
         user.username(),
@@ -1301,12 +1301,12 @@ pub(super) async fn get_settle_open(
         .filter(|s| !s.is_empty());
     let db = &user.db;
     let mut rows = findb::settle::open_entries_with(
-        &db,
+        db,
         account.trim(),
         upto,
         include_all,
         !include_draft,
-        party_filter.as_deref(),
+        party_filter,
     )?;
     if !include_all {
         rows.retain(|e| e.is_open());
@@ -1496,4 +1496,150 @@ pub(super) struct BeginBatchImportReq {
     /// 前端草稿里已有的行也要避开 —— 与桌面的 `existing` 口径一致
     #[serde(default)]
     existing: Vec<String>,
+}
+
+// ---------------- 收款认领（一笔钱 → 认给谁、认多少） ----------------
+
+#[derive(Deserialize)]
+pub(super) struct ClaimApplyReq {
+    /// 往来科目（应收 112201 等）
+    pub account: String,
+    /// 待认领的收款分录
+    pub inflow: i64,
+    /// 认领明细：把哪一笔挂账认掉多少
+    pub picks: Vec<ClaimPickReq>,
+    /// 过渡凭证日期（`YYYY-MM-DD`，缺省今天）
+    #[serde(default)]
+    pub date: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ClaimPickReq {
+    pub entry: i64,
+    pub amount: String,
+}
+
+/// 认领用的往来科目：必须给、而且必须在可见范围内。
+///
+/// 与「核销清单」同一个理由用 403 而不是空清单：空清单会让会计以为
+/// 「这户真的没欠款」，而真相是「你没有这个科目的权限」。
+fn claim_account(user: &CurrentUser, raw: Option<&String>) -> Result<String, AppError> {
+    let account = raw.map(|s| s.trim().to_string()).unwrap_or_default();
+    if account.is_empty() {
+        return Err(AppError::bad_request("缺少往来科目 account"));
+    }
+    if !user.user.can_see_account(&account) {
+        return Err(AppError::forbidden("无权查看该科目"));
+    }
+    // 科目得真实存在：认领一个不存在的科目只会「查半天没有东西」，
+    // 而会计会以为「这个科目真的没挂账」。
+    let db = &user.db;
+    if findb::accounts::get(db, &account)?.is_none() {
+        return Err(AppError::bad_request(format!("科目 {account} 不存在")));
+    }
+    Ok(account)
+}
+
+fn claim_inflow_json(i: &findb::claim::Inflow) -> serde_json::Value {
+    json!({
+        "entry": i.entry_id,
+        "voucher": i.voucher_id,
+        "date": i.date,
+        "summary": i.summary,
+        "party": i.party,
+        "amount": i.amount.fmt_money(),
+        "open": i.open.fmt_money(),
+    })
+}
+
+fn claim_candidate_json(c: &findb::claim::Candidate) -> serde_json::Value {
+    json!({
+        "entry": c.entry_id,
+        "voucher": c.voucher_id,
+        "date": c.date,
+        "summary": c.summary,
+        "party": c.party,
+        "amount": c.amount.fmt_money(),
+        "open": c.open.fmt_money(),
+    })
+}
+
+/// 认领工作台：收到的钱（还没认完的） + 挂着的单（还没收到钱的） + 建议
+pub(super) async fn get_claim(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let account = claim_account(&user, q.get("account"))?;
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
+    let db = &user.db;
+    let inflows = findb::claim::inflows(db, &account, period)?;
+    let candidates = findb::claim::candidates(db, &account, period)?;
+    // 建议只给前 20 笔收款算：认领是逐笔的人工判断，一次性算完几十笔只是白烧 CPU。
+    let suggestions: Vec<serde_json::Value> = inflows
+        .iter()
+        .take(20)
+        .map(|i| {
+            let picks: Vec<serde_json::Value> = findb::claim::suggest(i, &candidates)
+                .iter()
+                .map(|p| json!({ "entry": p.entry_id, "amount": p.amount.fmt_money() }))
+                .collect();
+            json!({ "inflow": i.entry_id, "picks": picks })
+        })
+        .collect();
+    Ok(Json(json!({
+        "account": account,
+        "period": period.ymm(),
+        "inflows": inflows.iter().map(claim_inflow_json).collect::<Vec<_>>(),
+        "candidates": candidates.iter().map(claim_candidate_json).collect::<Vec<_>>(),
+        "suggestions": suggestions,
+    })))
+}
+
+/// 落地认领：跨客户的那几条会自动出过渡凭证（并记账）
+pub(super) async fn post_claim(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<ClaimApplyReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::VoucherNew)?;
+    let account = claim_account(&user, Some(&req.account))?;
+    let date = if req.date.trim().is_empty() {
+        chrono::Local::now().date_naive()
+    } else {
+        chrono::NaiveDate::parse_from_str(req.date.trim(), "%Y-%m-%d")
+            .map_err(|_| AppError::bad_request("日期格式应为 YYYY-MM-DD"))?
+    };
+    let mut picks = Vec::with_capacity(req.picks.len());
+    for p in &req.picks {
+        picks.push(findb::claim::Pick {
+            entry_id: p.entry,
+            amount: parse_money_checked(&p.amount)?,
+        });
+    }
+    let db = &user.db;
+    let r = findb::claim::apply(db, &account, req.inflow, &picks, date, user.username())?;
+    db.log(
+        user.username(),
+        "往来",
+        "收款认领",
+        &format!(
+            "收款分录 #{} 认领 {}（{} 条核销，过渡凭证 {:?}，余 {})",
+            req.inflow,
+            r.amount.fmt_money(),
+            r.settles,
+            r.bridges,
+            r.leftover.fmt_money()
+        ),
+    )?;
+    Ok(Json(json!({
+        "amount": r.amount.fmt_money(),
+        "settles": r.settles,
+        "bridges": r.bridges,
+        "leftover": r.leftover.fmt_money(),
+    })))
 }

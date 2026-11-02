@@ -1,12 +1,13 @@
-// 在 Node 里跑 app.js 的**侧栏逻辑**，验证精简模式的三个不变量。
+// 在 Node 里跑前端源码（app*.js 拼接）的**侧栏逻辑**，验证精简模式的三个不变量。
 // 为什么不靠 Playwright：本机浏览器输入注入失效（page.fill 后 value 为空），
-// 而把 11k 行 app.js 搬进 jsdom 成本太高。这里只抽出侧栏相关的纯逻辑片段，
+// 而把 14k 行前端脚本搬进 jsdom 成本太高。这里只抽出侧栏相关的纯逻辑片段，
 // 用真实的 NAV_ITEMS 与真实的选择器表达式渲染，断言输出的 HTML。
 const fs = require("fs");
 const path = require("path");
 
-const SRC = fs.readFileSync(
-  path.join(__dirname, "..", "crates", "finweb", "static", "app.js"), "utf8");
+// 前端拆成 16 份 app*.js 之后，侧栏相关片段分散在 app.js（基础）与
+// app-shell.js（导航/侧栏）里，只有拼接后的整份源码才抽得到。
+const SRC = require("./lib-app-src.js").readAppBundle();
 
 // ---- 抽真实源码片段（抽不出来就报错，不许静默用副本）----
 function grab(re, what) {

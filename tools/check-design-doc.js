@@ -42,16 +42,16 @@ const doc = fs.readFileSync(docPath, "utf8");
 // 期望内容写死在这里：改了代码这里也要改，这是有意的 ——
 // 它逼着改动者确认「文档说的和代码做的是同一件事」。
 const REFS = [
-  { file: "crates/finweb/src/handlers/sales.rs", line: 492, re: /^\s+let id = findb::sales::so_payment_add\(/, why: "销售收款同时写 so_payment" },
-  { file: "crates/finweb/src/handlers/sales.rs", line: 493, re: /^\s+let doc_id = findb::receipt::receipt_create\(/, why: "同一笔钱写两张表" },
+  { file: "crates/finweb/src/handlers/sales.rs", line: 526, re: /^\s+let id = findb::sales::so_payment_add\(/, why: "销售收款同时写 so_payment" },
+  { file: "crates/finweb/src/handlers/sales.rs", line: 527, re: /^\s+let doc_id = findb::receipt::receipt_create\(/, why: "同一笔钱写两张表" },
   { file: "crates/findb/src/scm.rs", line: 1303, re: /credit_check\(db, &customer, period\)/, why: "订单流转时的信用拦截" },
   { file: "crates/findb/src/sales.rs", line: 790, re: /^pub fn customer_credit_limit/, why: "额度从 props_json 读" },
   { file: "crates/findb/src/sales.rs", line: 810, re: /^pub fn credit_check/, why: "占用/额度/是否超限" },
-  { file: "crates/findb/src/settle.rs", line: 707, re: /^pub fn open_entries\b/, why: "余额唯一口径" },
-  { file: "crates/findb/src/settle.rs", line: 726, re: /^pub fn open_entries_with\b/, why: "含子科目的 SQL" },
-  { file: "crates/findb/src/settle.rs", line: 747, re: /account_code LIKE/, why: "传一级科目即含子科目" },
-  { file: "crates/findb/src/settle.rs", line: 975, re: /^pub fn party_kind\b/, why: "往来维度按科目真实辅助核算取（取不到才按首位推）" },
-  { file: "crates/findb/src/settle.rs", line: 1013, re: /^pub fn aging\b/, why: "账龄桶" },
+  { file: "crates/findb/src/settle/open.rs", line: 105, re: /^pub fn open_entries\b/, why: "余额唯一口径" },
+  { file: "crates/findb/src/settle/open.rs", line: 124, re: /^pub fn open_entries_with\b/, why: "含子科目的 SQL" },
+  { file: "crates/findb/src/settle/open.rs", line: 145, re: /account_code LIKE/, why: "传一级科目即含子科目" },
+  { file: "crates/findb/src/settle/aging.rs", line: 16, re: /^pub fn party_kind\b/, why: "往来维度按科目真实辅助核算取（取不到才按首位推）" },
+  { file: "crates/findb/src/settle/aging.rs", line: 54, re: /^pub fn aging\b/, why: "账龄桶" },
   { file: "crates/findb/src/auxs.rs", line: 225, re: /^pub fn check_parent\b/, why: "档案分级环校验" },
 ];
 
