@@ -96,7 +96,7 @@ async function viewProfitSheet(main) {
     let revNo = 0;
     let expNo = 0;
     const body = rows.map((r) => {
-      const isRev = (r.label || "").startsWith("收入");
+      const isRev = !!r.is_revenue;
       const no = isRev ? ++revNo : ++expNo;
       const qty = r.qty ? `<span class="muted" style="margin-left:6px">产量 ${esc(r.qty)}</span>` : "";
       const unm = r.unmapped ? ` <span class="neg" title="这一行还没挂科目，金额取不到">未挂科目</span>` : "";
@@ -114,9 +114,16 @@ async function viewProfitSheet(main) {
         <tr><th colspan="3">净利润（亏损以「-」号填写）</th><th class="r ${profit < 0 ? "neg" : "pos"}">${esc(last.profit)}</th><th></th></tr>
       </tfoot></table>`;
     const n = last.unmapped || 0;
-    $("#ps-warn").innerHTML = n
-      ? `<span class="neg">有 ${n} 行还没挂科目</span>：你的账里这些费用记在哪个科目？点「自动挂科目」按现有科目名对一遍，或「按这张表生成科目」新建，也可以点「编辑行」手工填。`
+    const warn = n
+      ? `<span class="neg">有 ${n} 行还没挂科目</span>：你的账里这些费用记在哪个科目？点「自动挂科目」按现有科目名对一遍，或「按这张表生成科目」挂上／新建，也可以点「编辑行」手工填。`
       : "";
+    // 表外体检：账上的费用没落到任何一行，支出合计就会少算，而表看起来完全正常
+    const un = last.uncovered && String(last.uncovered).replace(/[,\s]/g, "") !== "0.00"
+      ? `<br><span class="neg">还有 ${esc(last.uncovered)} 元费用没落到表上任何一行</span>
+         （${(last.uncovered_rows || []).slice(0, 6).map((u) => `${esc(u.code)} ${esc(u.name)} ${esc(u.amount)}`).join("、")}）：
+         要看得见就加一行，挂上这些科目。`
+      : "";
+    $("#ps-warn").innerHTML = warn + un;
   };
 
   const run = async () => {
@@ -204,10 +211,10 @@ async function viewProfitSheet(main) {
     printPreview("利润分析表", el);
   });
   $("#ps-accounts").addEventListener("click", async () => {
-    if (!(await confirmDialog("给还没挂科目的行，在 5101 制造费用下各建一个同名末级科目？建完这张表就自动出数。", false))) return;
+    if (!(await confirmDialog("给还没挂科目的行挂上科目：账里已经有对得上的就先挂现成的，实在没有才在 5101 制造费用下新建一个同名末级科目。", false))) return;
     try {
       const r = await postJson("/profit-sheet/create-accounts", {});
-      toast(`新建 ${r.created} 个科目，回写 ${r.touched} 行`);
+      toast(`挂上 ${r.touched} 行（新建 ${r.created} 个科目，其余用的是账里已有的）`);
       await loadRows();
       await run();
     } catch (e) { toast(e.message, "err"); }

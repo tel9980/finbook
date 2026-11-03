@@ -184,8 +184,20 @@ pub(super) async fn profit_sheet_report(
                 "label": l.label,
                 "hint": l.hint,
                 "amount": l.amount.fmt_money(),
+                "is_revenue": l.is_revenue,
                 "qty": l.qty.map(|q| q.fmt_qty()),
                 "unmapped": l.unmapped,
+            })
+        })
+        .collect::<Vec<_>>();
+    let uncovered = sheet
+        .uncovered_rows
+        .iter()
+        .map(|u| {
+            json!({
+                "code": u.code,
+                "name": u.name,
+                "amount": u.amount.fmt_money(),
             })
         })
         .collect::<Vec<_>>();
@@ -196,5 +208,7 @@ pub(super) async fn profit_sheet_report(
         "expense": sheet.expense.fmt_money(),
         "profit": sheet.profit.fmt_money(),
         "unmapped": sheet.unmapped,
+        "uncovered": sheet.uncovered.fmt_money(),
+        "uncovered_rows": uncovered,
     })))
 }

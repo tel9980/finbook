@@ -36,7 +36,7 @@ async fn profit_sheet_rows_then_report_by_account() {
     assert_eq!(rent["accounts"], "", "支出行默认空着，等按表生成科目");
     assert_eq!(rent["hint"], "含宿租金及房东杂费");
 
-    // ② 一键给没挂科目的行建同名末级科目
+    // ② 一键挂科目：先认账里已有的，认不出才建同名末级
     let resp = handlers::router(state.clone())
         .oneshot(authed_post(
             "/api/profit-sheet/create-accounts",
@@ -47,22 +47,34 @@ async fn profit_sheet_rows_then_report_by_account() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
-    assert_eq!(v["created"], 15);
-    assert_eq!(v["touched"], 15);
+    assert_eq!(v["touched"], 15, "15 个支出行都该挂上");
+    let created = v["created"].as_u64().unwrap();
+    assert!(created > 0 && created < 15, "现成科目能用就别新建：{created}");
 
     // 回读：每行都挂上了科目
     let v = get_json(&state, &sid, "/api/profit-sheet").await;
     let rows = v["rows"].as_array().unwrap();
-    let code_of = |label: &str| {
+    let codes_of = |label: &str| -> Vec<String> {
         rows.iter().find(|r| r["label"] == label).unwrap()["accounts"]
             .as_str()
             .unwrap()
-            .to_string()
+            .split(',')
+            .filter(|c| !c.is_empty())
+            .map(|c| c.to_string())
+            .collect()
     };
-    let rent_code = code_of("厂租");
-    let power_code = code_of("电费");
-    assert!(!rent_code.is_empty());
-    assert_ne!(rent_code, power_code, "每行一个独立科目，不能共用");
+    let rent_codes = codes_of("厂租");
+    let power_codes = codes_of("电费");
+    assert!(!rent_codes.is_empty());
+    // 标准科目表里已经有「租赁费」「水电费」：这两行挂的是现成科目
+    assert!(rent_codes.iter().any(|c| c == "660108"), "{rent_codes:?}");
+    assert_eq!(power_codes, vec!["510103".to_string()]);
+    // 一行可以挂几个科目，但同一科目不许挂两行
+    for c in &rent_codes {
+        assert!(!power_codes.contains(c), "科目 {c} 挂了两行");
+    }
+    let rent_code = rent_codes[0].clone();
+    let power_code = power_codes[0].clone();
 
     // ③ 按这些科目记两笔账，看表出数
     let period: i32 = 202601;
@@ -128,6 +140,9 @@ async fn profit_sheet_rows_then_report_by_account() {
     assert_eq!(num(&v["expense"]), 3800.0);
     assert_eq!(num(&v["profit"]), 6200.0);
     assert_eq!(v["unmapped"], 0, "都挂上科目了，不该再有未挂的");
+    // 两笔费用都落在表上的行里：没有表外费用
+    assert_eq!(num(&v["uncovered"]), 0.0);
+    assert_eq!(v["uncovered_rows"].as_array().unwrap().len(), 0);
     let line = |label: &str| {
         v["rows"]
             .as_array()
@@ -144,8 +159,9 @@ async fn profit_sheet_rows_then_report_by_account() {
         0.0,
         "没记账的行是 0，不是报错"
     );
-    // 收入行带月总产量（数量列，不是金额）
-    assert!(line("收入：月总产量")["qty"].is_string());
+    // 没录生产工单：产量留空（不是假 0.00），但收入行要靠 is_revenue 认出来
+    assert!(line("收入：月总产量")["is_revenue"].as_bool().unwrap());
+    assert!(line("收入：月总产量")["qty"].is_null(), "没工单就别摆 0.00");
 
     // ④ 同一科目挂两行要被拦下：合计会翻倍
     let water_id = rows.iter().find(|r| r["label"] == "水费").unwrap()["id"]

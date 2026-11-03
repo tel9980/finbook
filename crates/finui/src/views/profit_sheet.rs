@@ -132,7 +132,11 @@ impl ProfitSheetView {
         match profit_sheet::create_accounts(ctx.db()) {
             Ok((created, touched)) => {
                 self.err.clear();
-                ctx.info(format!("新建 {created} 个科目，回写 {touched} 行"));
+                // 先认现有科目、认不出才新建：两个数都要说清，
+                // 不然用户以为又被造了一堆重复科目
+                ctx.info(format!(
+                    "挂上 {touched} 行（其中新建 {created} 个科目，其余用的是账里已有的）"
+                ));
                 self.dirty = true;
             }
             Err(e) => self.err = e.to_string(),
@@ -303,7 +307,7 @@ impl ProfitSheetView {
                     let mut rev = 0;
                     let mut exp = 0;
                     for l in &s.rows {
-                        let is_rev = l.qty.is_some();
+                        let is_rev = l.is_revenue;
                         let no = if is_rev {
                             rev += 1;
                             rev
@@ -363,8 +367,32 @@ impl ProfitSheetView {
                 ui.colored_label(
                     palette::WARN,
                     format!(
-                        "有 {} 行还没挂科目：你的账里这些费用记在哪个科目？点「按这张表生成科目」自动建，或在下面手工填。",
+                        "有 {} 行还没挂科目：你的账里这些费用记在哪个科目？点「按这张表生成科目」自动挂，或在下面手工填。",
                         s.unmapped
+                    ),
+                );
+            }
+            // 表外体检：账上还有费用没落到任何一行上。不提示的话，
+            // 支出合计少算了钱，表却看起来完全正常——这种错只有对账时才发现。
+            if !s.uncovered.is_zero() {
+                let names: Vec<String> = s
+                    .uncovered_rows
+                    .iter()
+                    .take(6)
+                    .map(|u| format!("{} {}", u.code, u.name))
+                    .collect();
+                let more = if s.uncovered_rows.len() > 6 {
+                    format!("等 {} 笔", s.uncovered_rows.len())
+                } else {
+                    String::new()
+                };
+                ui.colored_label(
+                    palette::WARN,
+                    format!(
+                        "还有 {} 元费用没落到表上任何一行（{}{}）：要看得见就加一行，挂上这些科目。",
+                        s.uncovered.fmt_money(),
+                        names.join("、"),
+                        more
                     ),
                 );
             }
@@ -401,7 +429,7 @@ impl ProfitSheetView {
         let mut exp_no = 0i64;
         let mut nos: Vec<i64> = Vec::with_capacity(lines.len());
         for l in &lines {
-            if l.qty.is_some() {
+            if l.is_revenue {
                 rev_no += 1;
                 nos.push(rev_no);
             } else {

@@ -1406,7 +1406,7 @@ const MUT = [
     // 自动挂科目不管科目是否已被别的行占用：同一科目挂两行，合计翻倍。
     name: "㊾ 自动挂科目不管科目已被占用",
     file: "crates/findb/src/profit_sheet.rs",
-    from: "            if used.contains(&a.code) {",
+    from: "        if used.contains(&a.code) {",
     to: "            if false {",
     cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::自动挂科目按现有科目名找末级科目且不重复"],
   },
@@ -1414,7 +1414,7 @@ const MUT = [
     // 支出行也认资产/负债类科目：「应付职工薪酬」会被「薪酬」两个字捞进来。
     name: "㊾ 自动挂科目把负债类科目挂到支出行",
     file: "crates/findb/src/profit_sheet.rs",
-    from: "                matches!(a.category, AcctCategory::Cost | AcctCategory::Expense)",
+    from: "            matches!(a.category, AcctCategory::Cost | AcctCategory::Expense)",
     to: "                true",
     cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::自动挂科目按现有科目名找末级科目且不重复"],
   },
@@ -1449,6 +1449,30 @@ const MUT = [
     from: "        let is_unmapped = codes.is_empty();",
     to: "        let is_unmapped = false && codes.is_empty();",
     cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::未挂科目的行会被标出来"],
+  },
+  {
+    // 结转不补回来：月末一结转，支出行全变 0，净利等于全部收入。
+    name: "㊽ 结转过账后支出行照旧被冲成 0",
+    file: "crates/findb/src/profit_sheet.rs",
+    from: "                r.debit - r.credit + carry_out_of(&carried, code)",
+    to: "                r.debit - r.credit",
+    cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::结转过账的月份支出行仍是本月实际花的钱"],
+  },
+  {
+    // 体检把上级科目也算一遍：同一笔钱报两次，人以为漏了双倍的。
+    name: "㊽ 表外体检把上级科目也算一遍",
+    file: "crates/findb/src/profit_sheet.rs",
+    from: "        if a.disabled || !chart.is_leaf(&a.code) {",
+    to: "        if a.disabled {",
+    cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::没落到行上的费用会被体检列出来"],
+  },
+  {
+    // 没录工单也摆一个 0.00：0 和「没录」分不开，用户以为软件算错了。
+    name: "㊽ 没录生产工单也摆一个 0.00",
+    file: "crates/findb/src/profit_sheet.rs",
+    from: "            qty: if row.is_revenue() && has_orders {",
+    to: "            qty: if row.is_revenue() {",
+    cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::利润分析表按行取数并算出净利润"],
   },
   {
     // 上月没账也硬做同比：新账套第一个月会显示一堆 0%，被读成「和上月持平」。
