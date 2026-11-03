@@ -107,7 +107,8 @@
 - `.github/workflows/ci.yml` 已含 **cargo-audit** 任务（读 Cargo.lock，发现未修复 RUSTSEC 漏洞公告即失败）。
 - 仓库 `.cargo/audit.toml` / `deny.toml` 记录**有据可依的忽略项**，每条都写明「为什么不可达」与「解除条件」，其余公告一律拦截：
   lopdf（仅写不读）、quick-xml 0.30（被 accesskit/zbus 上游锁死）、zbus/zvariant 系未维护（已并入 zbus 6.0）、
-  zip 的 4 条（0367/0368/0369/**0429**——全仓无 `extract()` 调用，补丁需 zip >= 9 而上游锁死在 < 9）。
+  zip 的 4 条（0367/0368/0369/**0429**——全仓无 `extract()` 调用，补丁需 zip >= 9；calamine 这一支已于 2026-11 升到 zip 9.3.0，其余实例被 rust_xlsxwriter 0.15/0.80 锁在旧版）。
   2026-11 新增 0429 时实测：`grep -rn '\.extract(' crates` 无命中。
+- 2026-11 依赖加固：calamine 0.36→0.38（CFB/OLE2 解析畸形输入 panic/OOM，RUSTSEC-2026-0436，xls 导入攻击面可达故升级而非忽略；连带 zip 8.6→9.3.0、quick-xml 0.42）；zip 那四条忽略仍因 rust_xlsxwriter 0.15/0.80 锁旧版而保留。
 - 2026-09 依赖加固：rust_decimal 1.42→1.43（rkyv 0.7 可选边移出锁，RUSTSEC-2026-0235 消除）；calamine 0.26→0.36（quick-xml 0.31 移除，xlsx 导入攻击面修复，RUSTSEC-2026-0194/0195 可达实例消除）。
 - 本地验证：fincore 99 / findb 172+21+7 / finweb 54 全部通过（2026-09）。
