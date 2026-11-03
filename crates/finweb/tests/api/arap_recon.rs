@@ -25,7 +25,8 @@ async fn mk_ar(state: &Arc<WebState>, sid: &str, no: i32, amt: &str) -> i64 {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK, "录应收凭证");
-    let id: i64 = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+    let id: i64 = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()
+        ["id"]
         .as_i64()
         .unwrap();
     let r = handlers::router(state.clone())
@@ -75,7 +76,10 @@ async fn recon_batch_confirm_turns_diff_into_draft_voucher() {
     assert_eq!(v["batch"]["account"], "1122");
     assert_eq!(v["batch"]["post_account"], "112201");
     assert_eq!(v["batch"]["status"], "open");
-    assert_eq!(v["batch"]["title"], "2026年01期 应收对账", "没起名字就自动取一个");
+    assert_eq!(
+        v["batch"]["title"], "2026年01期 应收对账",
+        "没起名字就自动取一个"
+    );
 
     // ② 按账面列名单：C01 的 1000 已经摆好，差额 0
     let r = handlers::router(state.clone())
@@ -108,7 +112,10 @@ async fn recon_batch_confirm_turns_diff_into_draft_voucher() {
     let d = get_json(&state, &sid, &format!("/api/arap-recon/batches/{id}")).await;
     assert_eq!(money_num(d["lines"][0]["diff"].as_str().unwrap()), 200.0);
     assert_eq!(d["summary"]["need_adjust"], 1);
-    assert_eq!(money_num(d["summary"]["diff_total"].as_str().unwrap()), 200.0);
+    assert_eq!(
+        money_num(d["summary"]["diff_total"].as_str().unwrap()),
+        200.0
+    );
     let before = get_json(&state, &sid, "/api/vouchers?period=202601").await;
     let n_before = before.as_array().map(|a| a.len()).unwrap_or(0);
 
@@ -248,6 +255,10 @@ async fn recon_paste_import_skips_header_and_bad_rows() {
         .iter()
         .find(|l| l["party_code"] == "C01")
         .expect("C01");
-    assert_eq!(money_num(c1["claim"].as_str().unwrap()), 1250.0, "后一次覆盖前一次");
+    assert_eq!(
+        money_num(c1["claim"].as_str().unwrap()),
+        1250.0,
+        "后一次覆盖前一次"
+    );
     assert_eq!(money_num(c1["diff"].as_str().unwrap()), 250.0);
 }

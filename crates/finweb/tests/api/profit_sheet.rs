@@ -49,7 +49,10 @@ async fn profit_sheet_rows_then_report_by_account() {
     let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
     assert_eq!(v["touched"], 15, "15 个支出行都该挂上");
     let created = v["created"].as_u64().unwrap();
-    assert!(created > 0 && created < 15, "现成科目能用就别新建：{created}");
+    assert!(
+        created > 0 && created < 15,
+        "现成科目能用就别新建：{created}"
+    );
 
     // 回读：每行都挂上了科目
     let v = get_json(&state, &sid, "/api/profit-sheet").await;

@@ -453,9 +453,18 @@ pub fn router(state: Arc<WebState>) -> Router {
             "/api/arap-recon/batches/:id/confirm",
             post(confirm_recon_batch),
         )
-        .route("/api/arap-recon/batches/:id/reopen", post(reopen_recon_batch))
-        .route("/api/arap-recon/batches/:id/cancel", post(cancel_recon_batch))
-        .route("/api/arap-recon/lines/:id", put(set_recon_line).delete(delete_recon_line))
+        .route(
+            "/api/arap-recon/batches/:id/reopen",
+            post(reopen_recon_batch),
+        )
+        .route(
+            "/api/arap-recon/batches/:id/cancel",
+            post(cancel_recon_batch),
+        )
+        .route(
+            "/api/arap-recon/lines/:id",
+            put(set_recon_line).delete(delete_recon_line),
+        )
         .route(
             "/api/reports/income-statement/print",
             get(print_income_statement),

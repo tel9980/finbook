@@ -3,6 +3,7 @@
 pub mod about;
 pub mod account;
 pub mod advanced;
+pub mod arap_recon;
 pub mod assets;
 pub mod automation;
 pub mod aux_batch;
@@ -34,7 +35,6 @@ pub mod overview;
 pub mod payroll;
 pub mod period_end;
 pub mod process;
-pub mod arap_recon;
 pub mod profit_sheet;
 pub mod reports;
 pub mod scm_deep;

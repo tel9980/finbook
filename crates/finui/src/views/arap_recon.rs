@@ -273,7 +273,11 @@ impl ArapReconView {
                     "{} {}（{}）：共 {} 户 —— 对上 {} 户，有差额 {} 户，争议 {} 户",
                     d.batch.period.label(),
                     d.batch.title,
-                    if d.batch.kind == KIND_AP { "应付" } else { "应收" },
+                    if d.batch.kind == KIND_AP {
+                        "应付"
+                    } else {
+                        "应收"
+                    },
                     s.party_count,
                     s.agreed,
                     s.need_adjust,
@@ -288,10 +292,13 @@ impl ArapReconView {
                 s.book_total.fmt_money()
             ));
             let diff = s.diff_total;
-            ui.label(
-                RichText::new(format!("差额 {}", diff.fmt_money()))
-                    .color(if diff.is_zero() { palette::OK } else { palette::CREDIT }),
-            );
+            ui.label(RichText::new(format!("差额 {}", diff.fmt_money())).color(
+                if diff.is_zero() {
+                    palette::OK
+                } else {
+                    palette::CREDIT
+                },
+            ));
             if let Some(v) = d.batch.voucher_id {
                 ui.separator();
                 ui.label(RichText::new(format!("差额凭证 #{v}（草稿）")).weak());
@@ -364,12 +371,12 @@ impl ArapReconView {
                             let r = ui.add(
                                 egui::TextEdit::singleline(buf)
                                     .desired_width(120.0)
-
                                     .hint_text("对方报的数"),
                             );
                             // 只有真改了才存：逐帧保存会把库写穿
                             if r.lost_focus() && claims.get(&l.id) != Some(&l.claim.fmt_plain()) {
-                                changed.push((l.id, claims.get(&l.id).cloned().unwrap_or_default()));
+                                changed
+                                    .push((l.id, claims.get(&l.id).cloned().unwrap_or_default()));
                             }
                         } else {
                             ui.label(l.claim.fmt_money());
@@ -380,13 +387,11 @@ impl ArapReconView {
                     }
                     4 => {
                         let t = l.diff.fmt_money();
-                        ui.label(
-                            RichText::new(t).color(if l.diff.is_zero() {
-                                palette::OK
-                            } else {
-                                palette::CREDIT
-                            }),
-                        );
+                        ui.label(RichText::new(t).color(if l.diff.is_zero() {
+                            palette::OK
+                        } else {
+                            palette::CREDIT
+                        }));
                     }
                     5 => {
                         if l.disputed {
@@ -403,7 +408,11 @@ impl ArapReconView {
                     _ => {
                         if open {
                             if ui
-                                .button(if l.disputed { "取消争议" } else { "标争议" })
+                                .button(if l.disputed {
+                                    "取消争议"
+                                } else {
+                                    "标争议"
+                                })
                                 .clicked()
                             {
                                 flag = Some(l.id);
@@ -468,7 +477,8 @@ impl ArapReconView {
                     let adjust = self.adjust.trim().to_string();
                     let need = !d.summary.diff_total.is_zero() && !adjust.is_empty();
                     if need || d.summary.diff_total.is_zero() {
-                        match arap_recon::confirm(ctx.db(), self.sel, &ctx.user().username, &adjust) {
+                        match arap_recon::confirm(ctx.db(), self.sel, &ctx.user().username, &adjust)
+                        {
                             Ok(r) => {
                                 self.err.clear();
                                 match r.voucher_id {
@@ -476,7 +486,8 @@ impl ArapReconView {
                                         "已确认：差额 {} 生成草稿凭证 #{v}，去凭证查询审核记账",
                                         r.diff_total.fmt_money()
                                     )),
-                                    None => ctx.info(format!("已确认：{} 户对得上，不用调账", r.adjusted)),
+                                    None => ctx
+                                        .info(format!("已确认：{} 户对得上，不用调账", r.adjusted)),
                                 }
                                 if r.skipped_disputed > 0 {
                                     ctx.info(format!(
@@ -522,21 +533,17 @@ impl ArapReconView {
                     match (code.is_empty(), amt) {
                         (true, _) => self.err = "编码要填".to_string(),
                         (_, Err(_)) => self.err = "金额格式不对".to_string(),
-                        (false, Ok(a)) => match arap_recon::upsert_line(
-                            ctx.db(),
-                            self.sel,
-                            &code,
-                            a,
-                            "",
-                        ) {
-                            Ok(_) => {
-                                self.err.clear();
-                                self.one_code.clear();
-                                self.one_amt.clear();
-                                self.load_detail(ctx);
+                        (false, Ok(a)) => {
+                            match arap_recon::upsert_line(ctx.db(), self.sel, &code, a, "") {
+                                Ok(_) => {
+                                    self.err.clear();
+                                    self.one_code.clear();
+                                    self.one_amt.clear();
+                                    self.load_detail(ctx);
+                                }
+                                Err(e) => self.err = e.to_string(),
                             }
-                            Err(e) => self.err = e.to_string(),
-                        },
+                        }
                     }
                 }
             });
@@ -553,7 +560,12 @@ impl ArapReconView {
                     .hint_text("C01,12000,11月加工费"),
             );
             if ui.button("导入这些数").clicked() {
-                match arap_recon::import_lines(ctx.db(), self.sel, &self.paste, &ctx.user().username) {
+                match arap_recon::import_lines(
+                    ctx.db(),
+                    self.sel,
+                    &self.paste,
+                    &ctx.user().username,
+                ) {
                     Ok(r) => {
                         self.err.clear();
                         ctx.info(format!(

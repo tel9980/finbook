@@ -146,7 +146,9 @@ pub(super) async fn create_recon_batch(
     )?;
     let b = findb::arap_recon::get_batch(db, id)?
         .ok_or_else(|| AppError::bad_request("批次创建失败".to_string()))?;
-    Ok(Json(json!({ "ok": true, "id": id, "batch": batch_json(&b) })))
+    Ok(Json(
+        json!({ "ok": true, "id": id, "batch": batch_json(&b) }),
+    ))
 }
 
 /// 批次详情：明细 + 体检数 + 账面有余额但没录进来的户

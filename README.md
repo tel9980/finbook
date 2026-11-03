@@ -289,6 +289,27 @@ cargo clean --profile dev             # 实测回收 47.2 GiB
 - **CI 上没有这个问题**：每个 job 都是干净环境，`Swatinem/rust-cache` 只缓存依赖。
 ---
 ## 8. 测试与质量
+
+### 8.0 分工：本地只做快检，编译和测试交给 CI
+
+```bash
+node tools/preflight.js          # 提交前跑这个，20 秒左右
+node tools/preflight.js --fast   # 改文档/前端时用，5 秒（跳过 cargo 两项）
+```
+
+这条规矩是 v1.8.79 定下来的，理由是三条账：
+
+| 做法 | 耗时 | 值不值 |
+|---|---|---|
+| 本地 `cargo test --workspace` | ~6 分钟 | **不值**：CI 里它和其它 15 个 job 并行，结论不比本地慢 |
+| 本地交叉编译 EXE | ~4 分钟 | **不值**：`release.yml` 只在 tag 上出产物，本地编出来的东西没人要，还容易误提交（v1.8.76 那次 `dist/` 事故就是这么来的） |
+| 本地 `tools/preflight.js` | ~20 秒 | **值**：挡的是「一提交就让整轮 CI 白跑」的低级错误 |
+
+`preflight.js` 只做秒级/十秒级的事：前端静态检查、仓库卫生、工具脚本可移植性、
+设计文档引用、`cargo fmt --check`、`cargo check --workspace`（只查类型）。
+**不含** `cargo test`、变异测试、E2E、打包 —— 那些一律在 GitHub 上跑。
+
+### 8.1 想手工跑全量时（排查 CI 红灯用）
 ```bash
 # 1. 前端静态检查（语法 + 同函数内重复 id + 行为约束 + nginx sub_filter 锚点
 #    + 视图函数给桩真渲染一次，引用了作用域外变量会当场抛 ReferenceError）
@@ -300,7 +321,7 @@ cargo test --workspace
 # 4. 端到端（需先 build）
 .\e2e\run-local.ps1
 ```
-### 8.1 CI 里哪些在 push 上跑、哪些只在 tag 上跑
+### 8.2 CI 里哪些在 push 上跑、哪些只在 tag 上跑
 | job | 触发 | 为什么这么分 |
 |-----|------|--------------|
 | Test / Clippy / Audit / Deny / Udeps / 4 片变异 / Coverage / E2E / Docker smoke | push + PR | 都是「错了要当场知道」的东西 |
@@ -317,7 +338,7 @@ cargo test --workspace
 （发行包由 `release.yml` 另建一遍）。现在 push 只 `cargo check`。
 代价说清：`check` 不覆盖**链接阶段**的错（缺 mingw 库、导出符号冲突）。那类错
 只在打 tag 时暴露。
-### 8.2 发版路径（tag 之后那 20 分钟花在哪）
+### 8.3 发版路径（tag 之后那 20 分钟花在哪）
 `release.yml` 一次跑四条 job：`Verify tag & tests` → 三个构建（Linux 桌面 / Windows
 桌面 / finweb）→ `Publish`。
 两个数（v1.8.38 实测，同一版修前修后）：
@@ -683,7 +704,22 @@ finbook/
   不要再把文件改回 `aux.rs`，否则会再次触发同一问题。对外 API 不变（`fincore::auxiliary::AuxEntity`、
   `fincore::auxiliary::validate_aux` 等），`findb::auxs` 模块名本就合法、未受影响。
 ---
-## 11. 重新交叉编译 Windows 包
+## 11. 出 Windows 包：发版时由 CI 编，本地不编
+
+**正式产物一律来自 GitHub**：推 `v*` tag 后 `release.yml` 在 Windows runner 上
+交叉编译、打包、算 SHA256、发 Release。本地编出来的 exe 不作为发版物。
+
+```bash
+# 正确的发版流程（四步，全程不本地编译）
+# 1) 改 Cargo.toml 版本 + 写 docs/releases/vX.Y.Z.md
+# 2) commit "chore(release): vX.Y.Z" → push main
+# 3) 等 CI 全绿（release.yml 的门禁要求「tag 指向的 SHA 必须 CI 全绿」）
+# 4) git tag vX.Y.Z && git push origin vX.Y.Z
+```
+
+只有一种情况值得本地编：**想亲眼看一眼 exe**（比如改了 `build.rs` 的子系统设置）。
+那时才用下面这套，**产物留在 `target/`，不要拷到 `dist/` 或仓库里**：
+
 ```bash
 sudo apt-get install mingw-w64
 rustup target add x86_64-pc-windows-gnu
@@ -691,6 +727,11 @@ cargo build --release --target x86_64-pc-windows-gnu -p finbook
 # 产物：target/x86_64-pc-windows-gnu/release/finbook.exe
 # GUI 子系统：由 crates/finbook/build.rs 注入 -mwindows，双击运行无黑色控制台窗口
 ```
+
+为什么本地不编，见 [§8.0](#80-分工本地只做快检编译和测试交给-ci)：
+本地编译不产生任何「只有本地能给」的信息，却带来过两次事故
+（`dist/` 被 `git add -A` 带进库、历史里 30MB 垃圾对象要 GitHub 侧 GC）。
+
 ---
 ## 12. 截图集
 | # | 页面 | 截图 |

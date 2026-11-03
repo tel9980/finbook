@@ -435,7 +435,11 @@ fn status_label(s: &str) -> &'static str {
 /// 余额方向统一成**正数 = 对方欠我（应收）/ 我欠对方（应付）**，与对账单、账龄
 /// 的展示口径一致。分录侧按科目真实方向归一（贷方性质科目取反），期初单据本来就
 /// 是按该方向存的正数，不再翻第二次——翻两次就回到负数、整张应付表变空白。
-pub fn book_balances(db: &Db, account: &str, upto: Period) -> DbResult<BTreeMap<String, (String, Money)>> {
+pub fn book_balances(
+    db: &Db,
+    account: &str,
+    upto: Period,
+) -> DbResult<BTreeMap<String, (String, Money)>> {
     let chart = crate::accounts::chart(db)?;
     let kind = crate::settle::party_kind_of(&chart, account);
     let flip = chart
@@ -448,7 +452,11 @@ pub fn book_balances(db: &Db, account: &str, upto: Period) -> DbResult<BTreeMap<
         if code.trim().is_empty() {
             continue;
         }
-        let signed = if flip { e.signed().negated() } else { e.signed() };
+        let signed = if flip {
+            e.signed().negated()
+        } else {
+            e.signed()
+        };
         let open = e.open();
         let v = if signed.is_negative() {
             open.negated()
@@ -458,7 +466,11 @@ pub fn book_balances(db: &Db, account: &str, upto: Period) -> DbResult<BTreeMap<
         *out.entry(code).or_insert(Money::ZERO) += v;
     }
     // 往来期初明细（老账搬迁的影子挂账）：与账龄同一规则计入
-    let want = if kind == AuxKind::Supplier { "ap" } else { "ar" };
+    let want = if kind == AuxKind::Supplier {
+        "ap"
+    } else {
+        "ar"
+    };
     for o in crate::settle::arap_opening_list(db, Some(want))? {
         if Period::from_date(
             chrono::NaiveDate::parse_from_str(&o.doc_date, "%Y-%m-%d").unwrap_or_else(|_| {
@@ -492,10 +504,7 @@ pub fn upsert_line(db: &Db, batch_id: i64, party: &str, claim: Money, note: &str
         return Err(fincore::FinError::validate("客商编码不能为空").into());
     }
     if claim.is_negative() {
-        return Err(fincore::FinError::validate(
-            "对账金额填正数；预付/预收不在这张表里对",
-        )
-        .into());
+        return Err(fincore::FinError::validate("对账金额填正数；预付/预收不在这张表里对").into());
     }
     let chart = crate::accounts::chart(db)?;
     let kind = crate::settle::party_kind_of(&chart, &b.account);
@@ -606,7 +615,8 @@ pub fn sync_book(db: &Db, batch_id: i64) -> DbResult<usize> {
     let b = open_batch(db, batch_id)?;
     let books = book_balances(db, &b.account, b.period)?;
     let conn = db.conn();
-    let mut st = conn.prepare("SELECT id,party_code,claim FROM arap_recon_line WHERE batch_id=?1")?;
+    let mut st =
+        conn.prepare("SELECT id,party_code,claim FROM arap_recon_line WHERE batch_id=?1")?;
     let rows = st.query_map([batch_id], |r| {
         Ok((
             r.get::<_, i64>(0)?,
@@ -617,10 +627,7 @@ pub fn sync_book(db: &Db, batch_id: i64) -> DbResult<usize> {
     let mut todo: Vec<(i64, Money, Money)> = Vec::new();
     for row in rows {
         let (id, code, claim) = row?;
-        let book = books
-            .get(&code)
-            .map(|(_, v)| *v)
-            .unwrap_or(Money::ZERO);
+        let book = books.get(&code).map(|(_, v)| *v).unwrap_or(Money::ZERO);
         todo.push((id, book, claim - book));
     }
     drop(st);
@@ -637,7 +644,12 @@ pub fn sync_book(db: &Db, batch_id: i64) -> DbResult<usize> {
 ///
 /// 表头（含「客商」「编码」等字样）自动跳过；同一户重复出现按最后一行为准（覆盖）。
 /// 编码不在档案里不拦——先把数录进来，档案可以随后补，否则一次导入会全被挡回去。
-pub fn import_lines(db: &Db, batch_id: i64, text: &str, who: &str) -> DbResult<crate::imports::ImportResult> {
+pub fn import_lines(
+    db: &Db,
+    batch_id: i64,
+    text: &str,
+    who: &str,
+) -> DbResult<crate::imports::ImportResult> {
     let b = open_batch(db, batch_id)?;
     let chart = crate::accounts::chart(db)?;
     let kind = crate::settle::party_kind_of(&chart, &b.account);
@@ -676,9 +688,8 @@ pub fn import_lines(db: &Db, batch_id: i64, text: &str, who: &str) -> DbResult<c
         let claim = match Money::parse(claim_s) {
             Ok(v) => v,
             Err(_) => {
-                res.warnings.push(format!(
-                    "第 {lines} 行：金额「{claim_s}」不是数字，已跳过"
-                ));
+                res.warnings
+                    .push(format!("第 {lines} 行：金额「{claim_s}」不是数字，已跳过"));
                 res.skipped += 1;
                 continue;
             }
@@ -761,10 +772,7 @@ pub fn confirm(db: &Db, batch_id: i64, who: &str, adjust_account: &str) -> DbRes
         return Err(fincore::FinError::not_found(format!("科目 {adjust}")).into());
     }
     if !chart.is_leaf(adjust) {
-        return Err(fincore::FinError::validate(format!(
-            "对方科目 {adjust} 不是末级科目"
-        ))
-        .into());
+        return Err(fincore::FinError::validate(format!("对方科目 {adjust} 不是末级科目")).into());
     }
     let ar = b.kind != KIND_AP;
     let summary_text = format!("{}对账调整（{}）", kind_label(&b.kind), b.title);
@@ -980,8 +988,10 @@ pub fn unknown_parties(db: &Db, batch_id: i64) -> DbResult<Vec<String>> {
 pub fn seed_from_book(db: &Db, batch_id: i64, who: &str) -> DbResult<usize> {
     let b = open_batch(db, batch_id)?;
     let books = book_balances(db, &b.account, b.period)?;
-    let have: std::collections::HashSet<String> =
-        lines_of(db, batch_id)?.into_iter().map(|l| l.party_code).collect();
+    let have: std::collections::HashSet<String> = lines_of(db, batch_id)?
+        .into_iter()
+        .map(|l| l.party_code)
+        .collect();
     let mut n = 0;
     for (code, (_, bal)) in books {
         if have.contains(&code) || bal.is_zero() {
@@ -1011,8 +1021,10 @@ pub fn book_only(db: &Db, batch_id: i64) -> DbResult<Vec<(String, String, Money)
         return Ok(Vec::new());
     };
     let books = book_balances(db, &b.account, b.period)?;
-    let listed: std::collections::HashSet<String> =
-        lines_of(db, batch_id)?.into_iter().map(|l| l.party_code).collect();
+    let listed: std::collections::HashSet<String> = lines_of(db, batch_id)?
+        .into_iter()
+        .map(|l| l.party_code)
+        .collect();
     let mut out: Vec<(String, String, Money)> = books
         .into_iter()
         .filter(|(code, (_, bal))| !listed.contains(code) && !bal.is_zero())
@@ -1047,8 +1059,11 @@ mod tests {
     /// 差额对方科目：干净的损益科目，不核算任何辅助维度
     fn ensure_adjust(db: &Db) -> &'static str {
         if crate::accounts::get(db, "660199").unwrap().is_none() {
-            crate::accounts::insert(db, &Account::new("660199", "对账差额", AcctCategory::Expense))
-                .unwrap();
+            crate::accounts::insert(
+                db,
+                &Account::new("660199", "对账差额", AcctCategory::Expense),
+            )
+            .unwrap();
         }
         "660199"
     }
@@ -1176,7 +1191,11 @@ mod tests {
         )
         .unwrap();
         let books = book_balances(&db, "1122", p()).unwrap();
-        assert_eq!(books.get("C01").unwrap().1, m_("1500"), "期初单据要算进账面");
+        assert_eq!(
+            books.get("C01").unwrap().1,
+            m_("1500"),
+            "期初单据要算进账面"
+        );
     }
 
     #[test]
@@ -1239,7 +1258,11 @@ mod tests {
         assert!(v.balanced());
         // 草稿不进账面
         assert_eq!(
-            book_balances(&db, "1122", p()).unwrap().get("C01").unwrap().1,
+            book_balances(&db, "1122", p())
+                .unwrap()
+                .get("C01")
+                .unwrap()
+                .1,
             m_("1000")
         );
         let b = get_batch(&db, id).unwrap().unwrap();
@@ -1255,7 +1278,9 @@ mod tests {
         let id = create(&db, KIND_AP, p(), "", "", "", "u").unwrap();
         upsert_line(&db, id, "S01", m_("1200"), "").unwrap(); // 供应商说我欠 1200
         let r = confirm(&db, id, "u", adj).unwrap();
-        let v = crate::vouchers::get(&db, r.voucher_id.unwrap()).unwrap().unwrap();
+        let v = crate::vouchers::get(&db, r.voucher_id.unwrap())
+            .unwrap()
+            .unwrap();
         assert_eq!(v.entries[0].account_code, "220201");
         assert_eq!(v.entries[0].credit, m_("200"), "应付多了要贷记应付");
         assert_eq!(v.entries[0].aux.supplier.as_deref(), Some("S01"));
@@ -1313,7 +1338,10 @@ mod tests {
         let vid = confirm(&db, id, "u", adj).unwrap().voucher_id.unwrap();
         let before = db.stats().unwrap().0;
         reopen(&db, id, "u").unwrap();
-        assert!(crate::vouchers::get(&db, vid).unwrap().is_none(), "草稿凭证要删掉");
+        assert!(
+            crate::vouchers::get(&db, vid).unwrap().is_none(),
+            "草稿凭证要删掉"
+        );
         assert_eq!(db.stats().unwrap().0, before - 1);
         let b = get_batch(&db, id).unwrap().unwrap();
         assert_eq!(b.status, ST_OPEN);

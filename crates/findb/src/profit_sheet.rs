@@ -721,7 +721,10 @@ pub fn report(db: &Db, period: Period) -> DbResult<Sheet> {
         if !COVER_SCOPE.iter().any(|p| a.code.starts_with(p)) {
             continue;
         }
-        if mapped.iter().any(|m| a.code == *m || a.code.starts_with(m.as_str())) {
+        if mapped
+            .iter()
+            .any(|m| a.code == *m || a.code.starts_with(m.as_str()))
+        {
             continue;
         }
         let r = snap.for_account(&a.code, None);
@@ -1002,7 +1005,12 @@ mod tests {
         // 月末结转进生产成本：这是做账的分摊动作，不是又花了一笔钱。
         // 老口径取「借方 − 贷方」，这一笔一结转，厂租行就变 0 了——
         // 演示账 202611 就是这样整张表变空、净利等于全部收入。
-        post(&db, p, 28, vec![("500103", "3000", "0"), (&rent, "0", "3000")]);
+        post(
+            &db,
+            p,
+            28,
+            vec![("500103", "3000", "0"), (&rent, "0", "3000")],
+        );
         let s = report(&db, p).unwrap();
         assert_eq!(line(&s, "厂租").amount, m("3000"), "结转过账不等于没花钱");
         assert_eq!(s.expense, m("3000"));
@@ -1036,8 +1044,18 @@ mod tests {
         let p = Period::from_ymm(202601);
         create_accounts(&db).unwrap();
         // 折旧费、手续费：厂里那张表上没有对应行
-        post(&db, p, 8, vec![("510102", "6000", "0"), ("1001", "0", "6000")]);
-        post(&db, p, 9, vec![("660303", "100", "0"), ("1001", "0", "100")]);
+        post(
+            &db,
+            p,
+            8,
+            vec![("510102", "6000", "0"), ("1001", "0", "6000")],
+        );
+        post(
+            &db,
+            p,
+            9,
+            vec![("660303", "100", "0"), ("1001", "0", "100")],
+        );
         let s = report(&db, p).unwrap();
         // 不计进支出合计（合计就是各行之和），但要让人看见「还有这些没在表上」
         assert_eq!(s.expense, m("0"));

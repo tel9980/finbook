@@ -42,6 +42,11 @@ jobs:
       # 对不上 —— 那样脚本会报「未生效」，守护的检查从此再没人验证，而 CI 全绿。
       - name: CI 配置与变异清单自检
         run: node tools/check-ci.js
+      # 一行命令、两个数量级的性价比：rustfmt --check 两秒，而「格式不一致」
+      # 恰好是最容易在本地拦住、最不值得占一轮 CI 的东西。
+      # 与 tools/preflight.js 里那一步同一条命令，本地预检不过这里必红。
+      - name: Rust 格式（cargo fmt --check）
+        run: cargo fmt --all -- --check
 
   # ── 变异测试：验证上面那些检查/测试**不是永远通过的** ───────────────────
   #
