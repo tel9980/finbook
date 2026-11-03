@@ -42,6 +42,7 @@ pub(crate) use tower_http::compression::predicate::{NotForContentType, Predicate
 pub(crate) use tower_http::compression::CompressionLayer;
 
 // ---- 按域拆出去的子模块（v1.8.57）----
+pub(crate) mod arap_recon;
 pub(crate) mod assets;
 pub(crate) mod auth;
 pub(crate) mod books;
@@ -65,6 +66,7 @@ pub(crate) mod sales;
 pub(crate) mod settle;
 pub(crate) mod voucher;
 
+use self::arap_recon::*;
 use self::assets::*;
 use self::auth::*;
 use self::books::*;
@@ -431,6 +433,29 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/profit-sheet/auto-map", post(auto_map_profit_sheet))
         .route("/api/profit-sheet/reset", post(reset_profit_sheet))
         .route("/api/profit-sheet/:id", delete(delete_profit_sheet_row))
+        // 应收应付对账批次（先录对方金额、对好账再落账）
+        .route(
+            "/api/arap-recon/batches",
+            get(list_recon_batches).post(create_recon_batch),
+        )
+        .route(
+            "/api/arap-recon/batches/:id",
+            get(get_recon_batch).delete(delete_recon_batch),
+        )
+        .route(
+            "/api/arap-recon/batches/:id/import",
+            post(import_recon_lines),
+        )
+        .route("/api/arap-recon/batches/:id/lines", post(upsert_recon_line))
+        .route("/api/arap-recon/batches/:id/seed", post(seed_recon_batch))
+        .route("/api/arap-recon/batches/:id/sync", post(sync_recon_batch))
+        .route(
+            "/api/arap-recon/batches/:id/confirm",
+            post(confirm_recon_batch),
+        )
+        .route("/api/arap-recon/batches/:id/reopen", post(reopen_recon_batch))
+        .route("/api/arap-recon/batches/:id/cancel", post(cancel_recon_batch))
+        .route("/api/arap-recon/lines/:id", put(set_recon_line).delete(delete_recon_line))
         .route(
             "/api/reports/income-statement/print",
             get(print_income_statement),

@@ -451,6 +451,7 @@ async fn create_book_with_key(state: &Arc<WebState>, sid: &str, key: &str) -> St
 }
 
 // ===== 用例按域拆到 `tests/api/`（v1.8.59）；本文件只留共享夹具 =====
+mod arap_recon;
 mod assets;
 mod auth;
 mod books;

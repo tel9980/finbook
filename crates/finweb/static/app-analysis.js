@@ -262,6 +262,312 @@ async function viewProfitSheet(main) {
   run();
 }
 
+// ===========================================================================
+// 应收应付对账（先录对方金额，对好了再落账）
+//
+// 老办法：让对方把对账单发来，财务拿纸单一户户核，核完再手工做调整凭证。
+// 这里把中间那段搬进系统，但守住三条：
+//   ① 对账过程完全不进报表 —— 批次停在「对账中」时账上一分钱都没动；
+//   ② 只有差额才生成凭证，而且一定是**草稿**，记不记账由人决定；
+//   ③ 名单按账面自动列（有余额的户先摆出来），人只需要把对方报的数改上去，
+//      差额自己就冒出来 —— 少一户、多一户，一眼能看出来。
+async function viewArapRecon(main) {
+  main.innerHTML = `<h2>应收应付对账</h2>
+    <div class="toolbar">
+      <label>对哪一边
+        <select id="ar-kind">
+          <option value="ar">应收（客户欠我）</option>
+          <option value="ap">应付（我欠供应商）</option>
+        </select>
+      </label>
+      <label>期间 <input id="ar-period" value="${esc(state.current)}" style="width:90px" /></label>
+      <button class="btn primary" id="ar-new">新建这次对账</button>
+      <label>这一次 <select id="ar-batch" style="min-width:220px"></select></label>
+      <button class="btn ghost sm" id="ar-refresh">刷新</button>
+    </div>
+    <div class="muted" style="margin:6px 0">对账不改账。对方报来的数先记在这张单子上，
+      对好了点「确认这一批」，<b>只有差额</b>才生成一张草稿凭证——要不要记账你说了算。</div>
+    <div id="ar-sum" style="margin:8px 0"></div>
+    <div id="ar-body" class="muted">先「新建这次对账」，名单会自动按账面列出来。</div>
+    <div id="ar-extra"></div>`;
+  let cur = null;      // 当前批次详情
+  let batches = [];
+
+  const loadBatches = async (keep) => {
+    const kind = $("#ar-kind").value;
+    const r = await api(`/arap-recon/batches?kind=${encodeURIComponent(kind)}`);
+    batches = r.batches || [];
+    const sel = $("#ar-batch");
+    sel.innerHTML = batches.length
+      ? batches.map((b) => `<option value="${b.id}">${esc(b.period)} ${esc(b.title)}（${esc(statusText(b.status))}·${b.party_count}户）</option>`).join("")
+      : `<option value="">还没有对账批次</option>`;
+    const want = keep || (batches[0] && batches[0].id);
+    if (want) { sel.value = String(want); }
+    return want;
+  };
+
+  const statusText = (s) => (s === "confirmed" ? "已确认" : s === "cancelled" ? "已撤销" : "对账中");
+  const money = (s) => Number(String(s ?? "0").replace(/,/g, "")) || 0;
+
+  const loadDetail = async (id) => {
+    if (!id) { cur = null; render(); return; }
+    cur = await api(`/arap-recon/batches/${id}`);
+    render();
+  };
+
+  const render = () => {
+    const box = $("#ar-body");
+    const sum = $("#ar-sum");
+    if (!cur) {
+      sum.innerHTML = "";
+      box.className = "muted";
+      box.innerHTML = "先「新建这次对账」，名单会自动按账面列出来。";
+      return;
+    }
+    const b = cur.batch;
+    const s = cur.summary || {};
+    const lines = cur.lines || [];
+    const open = b.status === "open";
+    const diff = money(s.diff_total);
+    sum.innerHTML = `<div class="panel" style="padding:8px 10px">
+      <b>${esc(b.period)} ${esc(b.title)}</b>
+      <span class="muted">（${b.kind === "ap" ? "应付" : "应收"}·${esc(statusText(b.status))}）</span>
+      &nbsp;共 <b>${s.party_count || 0}</b> 户：
+      对上 <b class="pos">${s.agreed || 0}</b> 户，
+      有差额 <b class="neg">${s.need_adjust || 0}</b> 户，
+      标了争议 <b>${s.disputed || 0}</b> 户
+      &nbsp;|&nbsp;对方合计 <b>${esc(s.claim_total)}</b>，
+      账面合计 <b>${esc(s.book_total)}</b>，
+      差额 <b class="${diff < 0 ? "neg" : "pos"}">${esc(s.diff_total)}</b>
+      ${b.voucher_id ? `&nbsp;|&nbsp;差额凭证 #${b.voucher_id}（草稿）` : ""}
+    </div>`;
+    box.className = "";
+    box.innerHTML = `<table class="grid">
+      <thead><tr><th style="width:90px">客商编码</th><th>名称</th>
+        <th class="r" style="width:150px">对方报来的数</th><th class="r" style="width:130px">账面</th>
+        <th class="r" style="width:120px">差额</th><th style="width:90px">状态</th>
+        <th>备注</th><th style="width:150px">操作</th></tr></thead>
+      <tbody>${lines.map((l) => {
+        const d = money(l.diff);
+        const tag = l.disputed ? `<span class="neg">有争议</span>` : d === 0 ? `<span class="pos">对上了</span>` : `<span class="neg">差 ${esc(l.diff)}</span>`;
+        return `<tr>
+          <td class="mono">${esc(l.party_code)}</td>
+          <td>${esc(l.party_name || "")}</td>
+          <td class="r">${open
+            ? `<input class="ar-claim" data-line="${l.id}" value="${esc(l.claim)}" style="width:120px;text-align:right" />`
+            : esc(l.claim)}</td>
+          <td class="r">${esc(l.book)}</td>
+          <td class="r ${d < 0 ? "neg" : ""}">${esc(l.diff)}</td>
+          <td>${tag}</td>
+          <td class="muted">${esc(l.note || "")}</td>
+          <td>${open ? `<button class="btn ghost sm" data-ar-flag="${l.id}">${l.disputed ? "取消争议" : "标争议"}</button>
+            <button class="btn ghost sm" data-ar-del="${l.id}">删</button>` : ""}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="8" class="muted">这一批还没有户。点下面「按账面列名单」，或粘贴导入。</td></tr>`}</tbody>
+    </table>`;
+
+    // 账面有余额但这一批没录的户——对账最常见的漏项
+    const bo = cur.book_only || [];
+    // 档案里找不到的编码（可能打错了字）
+    const unk = cur.unknown_parties || [];
+    const tail = [];
+    if (bo.length) {
+      tail.push(`<div class="panel" style="margin-top:10px">
+        <div class="neg" style="margin-bottom:6px">账面还有 ${bo.length} 户没录进这一批</div>
+        <table class="grid"><thead><tr><th style="width:90px">编码</th><th>名称</th><th class="r" style="width:140px">账面余额</th><th style="width:90px">操作</th></tr></thead>
+        <tbody>${bo.map((x) => `<tr><td class="mono">${esc(x.party_code)}</td><td>${esc(x.party_name || "")}</td>
+          <td class="r">${esc(x.book)}</td>
+          <td>${open ? `<button class="btn ghost sm" data-ar-add="${esc(x.party_code)}" data-ar-amt="${esc(x.book)}">加进来</button>` : ""}</td></tr>`).join("")}</tbody></table></div>`);
+    }
+    if (unk.length) {
+      tail.push(`<div class="muted" style="margin-top:8px">这些编码在档案里没有，确认一下是不是打错了：${unk.map(esc).join("、")}</div>`);
+    }
+    $("#ar-extra").innerHTML = tail.join("");
+
+    if (open) {
+      box.innerHTML += `<div class="toolbar" style="margin-top:10px">
+        <button class="btn ghost sm" id="ar-seed">按账面列名单</button>
+        <button class="btn ghost sm" id="ar-sync">重算账面</button>
+        <button class="btn primary" id="ar-confirm">确认这一批</button>
+        <button class="btn ghost sm" id="ar-cancel">撤销这一批</button>
+      </div>
+      <div class="panel" style="margin-top:10px">
+        <div class="muted" style="margin-bottom:6px">粘贴导入：从对方发来的对账单上抄下来，一行一户 —— <span class="mono">客商编码,金额[,备注]</span>（编码不知道就在下面「加进来」里按名字找）</div>
+        <textarea id="ar-paste" rows="5" style="width:100%" placeholder="C01,12000,11月加工费&#10;C02,8300"></textarea>
+        <div class="toolbar" style="margin-top:6px">
+          <button class="btn ghost sm" id="ar-import">导入这些数</button>
+          <span class="grow"></span>
+          <input id="ar-one-code" placeholder="客商编码" style="width:110px" />
+          <input id="ar-one-amt" placeholder="金额" style="width:110px" />
+          <button class="btn ghost sm" id="ar-one-add">加一户</button>
+        </div>
+      </div>`;
+    } else {
+      box.innerHTML += `<div class="toolbar" style="margin-top:10px">
+        <button class="btn ghost sm" id="ar-reopen">打回重对</button>
+      </div>`;
+    }
+
+    // —— 行内改金额：改完失焦就存，页面重算差额 ——
+    $all(".ar-claim").forEach((el) => el.addEventListener("change", async () => {
+      const line = lines.find((x) => String(x.id) === el.dataset.line);
+      try {
+        await api(`/arap-recon/lines/${el.dataset.line}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ claim: el.value.trim(), disputed: !!line.disputed, note: line.note || "" }),
+        });
+        await loadDetail(b.id);
+      } catch (e) { toast(e.message, "err"); }
+    }));
+    $all("[data-ar-flag]").forEach((el) => el.addEventListener("click", async () => {
+      const line = lines.find((x) => String(x.id) === el.dataset.arFlag);
+      try {
+        await api(`/arap-recon/lines/${el.dataset.arFlag}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ claim: line.claim, disputed: !line.disputed, note: line.note || "" }),
+        });
+        await loadDetail(b.id);
+      } catch (e) { toast(e.message, "err"); }
+    }));
+    $all("[data-ar-del]").forEach((el) => el.addEventListener("click", async () => {
+      if (!(await confirmDialog("把这一户从这次对账里删掉？账上不动。", true))) return;
+      try {
+        await api(`/arap-recon/lines/${el.dataset.arDel}`, { method: "DELETE" });
+        await loadDetail(b.id);
+      } catch (e) { toast(e.message, "err"); }
+    }));
+    $all("[data-ar-add]").forEach((el) => el.addEventListener("click", async () => {
+      try {
+        await postJson(`/arap-recon/batches/${b.id}/lines`, { party: el.dataset.arAdd, claim: el.dataset.arAmt, note: "按账面补录" });
+        await loadDetail(b.id);
+      } catch (e) { toast(e.message, "err"); }
+    }));
+
+    if (!open) {
+      $("#ar-reopen").addEventListener("click", async () => {
+        if (!(await confirmDialog("打回重对？会删掉确认时生成的那张草稿凭证（已记账的要先反记账）。", true))) return;
+        try {
+          await api(`/arap-recon/batches/${b.id}/reopen`, { method: "POST" });
+          toast("已打回，可以接着改");
+          await loadDetail(b.id);
+          await loadBatches(b.id);
+        } catch (e) { toast(e.message, "err"); }
+      });
+      return;
+    }
+
+    $("#ar-seed").addEventListener("click", async () => {
+      try {
+        const r = await api(`/arap-recon/batches/${b.id}/seed`, { method: "POST" });
+        toast(r.seeded ? `按账面补了 ${r.seeded} 户` : "账面有余额的户都在这了");
+        await loadDetail(b.id);
+      } catch (e) { toast(e.message, "err"); }
+    });
+    $("#ar-sync").addEventListener("click", async () => {
+      try {
+        const r = await api(`/arap-recon/batches/${b.id}/sync`, { method: "POST" });
+        toast(`重算了 ${r.synced} 户的账面数（你填的数不动）`);
+        await loadDetail(b.id);
+      } catch (e) { toast(e.message, "err"); }
+    });
+    $("#ar-import").addEventListener("click", async () => {
+      const text = $("#ar-paste").value;
+      if (!text.trim()) return toast("先粘贴几行", "err");
+      try {
+        const r = await postJson(`/arap-recon/batches/${b.id}/import`, { text });
+        toast(`导入 ${r.imported} 行${r.skipped ? `，跳过 ${r.skipped} 行` : ""}`);
+        if ((r.warnings || []).length) toast(r.warnings.slice(0, 3).join("；"), "err");
+        $("#ar-paste").value = "";
+        await loadDetail(b.id);
+        await loadBatches(b.id);
+      } catch (e) { toast(e.message, "err"); }
+    });
+    $("#ar-one-add").addEventListener("click", async () => {
+      const party = $("#ar-one-code").value.trim();
+      const claim = $("#ar-one-amt").value.trim();
+      if (!party || !claim) return toast("编码和金额都要填", "err");
+      try {
+        await postJson(`/arap-recon/batches/${b.id}/lines`, { party, claim, note: "" });
+        $("#ar-one-code").value = "";
+        $("#ar-one-amt").value = "";
+        await loadDetail(b.id);
+        await loadBatches(b.id);
+      } catch (e) { toast(e.message, "err"); }
+    });
+    $("#ar-cancel").addEventListener("click", async () => {
+      if (!(await confirmDialog("撤销这一批？撤销后不再参与任何计算（明细会留着备查）。", true))) return;
+      try {
+        await api(`/arap-recon/batches/${b.id}/cancel`, { method: "POST" });
+        toast("已撤销");
+        await loadBatches();
+        await loadDetail($("#ar-batch").value);
+      } catch (e) { toast(e.message, "err"); }
+    });
+    $("#ar-confirm").addEventListener("click", async () => {
+      const need = money(s.diff_total) - 0;
+      const acct = await askAdjustAccount(need, b);
+      if (acct === null) return;
+      try {
+        const r = await postJson(`/arap-recon/batches/${b.id}/confirm`, { adjust_account: acct });
+        if (r.voucher_id) {
+          toast(`已确认：差额 ${r.diff_total} 生成了一张草稿凭证 #${r.voucher_id}，去「凭证查询」审核记账`);
+        } else {
+          toast(`已确认：${r.adjusted} 户对得上，不用调账`);
+        }
+        if (r.skipped_disputed) toast(`有 ${r.skipped_disputed} 户标了争议，这次先跳过`, "err");
+        await loadBatches(b.id);
+        await loadDetail(b.id);
+      } catch (e) { toast(e.message, "err"); }
+    });
+  };
+
+  // 确认前问一次差额记到哪：只有真金白银的差额才需要科目
+  const askAdjustAccount = (diff, b) => new Promise((resolve) => {
+    if (!diff) { resolve(""); return; }
+    modal(`<h3>确认这次对账</h3>
+      <div class="muted" style="margin-bottom:8px">差额合计 <b>${esc(b.diff_total)}</b> 会汇总成<b>一张草稿凭证</b>
+        （不会自动记账）。请指定差额记到哪个科目 —— 通常用「财务费用-其他」这类科目。</div>
+      <div class="form"><label>差额科目 <input id="ar-adjust" value="${esc(b.adjust_account || "660305")}" placeholder="660305" style="width:140px" /></label></div>
+      <div class="toolbar" style="margin-top:12px;justify-content:flex-end">
+        <button class="btn ghost" id="ar-adjust-cancel">先不确认</button>
+        <button class="btn primary" id="ar-adjust-ok">确认并生成草稿</button>
+      </div>`);
+    $("#ar-adjust-cancel").addEventListener("click", () => { closeModal(); resolve(null); });
+    $("#ar-adjust-ok").addEventListener("click", () => {
+      const v = $("#ar-adjust").value.trim();
+      if (!v) return toast("填一个差额科目", "err");
+      closeModal();
+      resolve(v);
+    });
+  });
+
+  $("#ar-new").addEventListener("click", async () => {
+    const kind = $("#ar-kind").value;
+    const ymm = $("#ar-period").value.trim();
+    try {
+      const r = await postJson("/arap-recon/batches", { kind, ymm: Number(ymm) || 0, title: "" });
+      toast("建好了，名单按账面列一遍");
+      await api(`/arap-recon/batches/${r.id}/seed`, { method: "POST" });
+      await loadBatches(r.id);
+      await loadDetail(r.id);
+    } catch (e) { toast(e.message, "err"); }
+  });
+  $("#ar-refresh").addEventListener("click", async () => {
+    const id = await loadBatches($("#ar-batch").value);
+    await loadDetail(id);
+  });
+  $("#ar-batch").addEventListener("change", () => loadDetail($("#ar-batch").value));
+  $("#ar-kind").addEventListener("change", async () => {
+    const id = await loadBatches();
+    await loadDetail(id);
+  });
+
+  try {
+    const id = await loadBatches();
+    await loadDetail(id);
+  } catch (e) { toast(e.message, "err"); }
+}
+
 async function viewMonthBrief(main) {
   main.innerHTML = `<h2>月度简报</h2>
     <div class="toolbar">

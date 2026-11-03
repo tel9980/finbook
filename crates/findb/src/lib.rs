@@ -11,6 +11,7 @@
 
 pub mod accounts;
 pub mod advanced;
+pub mod arap_recon;
 pub mod assets;
 pub mod attach;
 pub mod automation;

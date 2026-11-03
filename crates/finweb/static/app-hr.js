@@ -1394,6 +1394,7 @@ const VIEWS = {
   "dim-profit": viewDimProfit,
   "month-brief": viewMonthBrief,
   "profit-sheet": viewProfitSheet,
+  "arap-recon": viewArapRecon,
   "consign": viewConsign,
   "tool-ledger": viewToolLedger,
   "rework": viewRework,

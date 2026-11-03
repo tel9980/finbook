@@ -60,6 +60,8 @@ pub enum NavItem {
     MonthBrief,
     /// 利润分析表（照抄厂里那张表的行）
     ProfitSheet,
+    /// 应收应付对账（先录对方金额、对好账再落账）
+    ArapRecon,
     /// 资金管理（日报/票据/融资/盘点/支票簿/日记账/借支/预算/预测）
     Funds,
     /// 预算分析（年度逐月 vs 实际，含部门维度）
@@ -138,6 +140,7 @@ impl NavItem {
             NavItem::DimProfit => "多维损益".to_string(),
             NavItem::MonthBrief => "月度简报".to_string(),
             NavItem::ProfitSheet => "利润分析表".to_string(),
+            NavItem::ArapRecon => "应收应付对账".to_string(),
             NavItem::Funds => "资金管理".to_string(),
             NavItem::BudgetAnalysis => "预算分析".to_string(),
             NavItem::Cost => "成本核算".to_string(),
@@ -222,6 +225,7 @@ impl NavItem {
             | NavItem::Assets
             | NavItem::BankRec
             | NavItem::Settle
+            | NavItem::ArapRecon
             | NavItem::Invoice
             | NavItem::Automation => "期末",
             NavItem::Inventory
@@ -267,6 +271,7 @@ impl NavItem {
             }
             NavItem::BankRec
             | NavItem::Settle
+            | NavItem::ArapRecon
             | NavItem::Invoice
             | NavItem::Payroll
             | NavItem::Claims => Some(Perm::VoucherNew),
@@ -331,6 +336,7 @@ impl NavItem {
             NavItem::Assets,
             NavItem::BankRec,
             NavItem::Settle,
+            NavItem::ArapRecon,
             NavItem::Invoice,
             NavItem::Automation,
             NavItem::Inventory,

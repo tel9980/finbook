@@ -1475,6 +1475,46 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "profit_sheet::tests::利润分析表按行取数并算出净利润"],
   },
   {
+    // 全对上时也造凭证：一分钱差额都没有却凭空多一张调整凭证，账面就被改坏了。
+    name: "㊾ 全部对上时也造一张阴阳凭证",
+    file: "crates/findb/src/arap_recon.rs",
+    from: "    if need.is_empty() {",
+    to: "    if false && need.is_empty() {",
+    cmd: ["test", "-p", "findb", "--lib", "arap_recon::tests::全部对上时不生成凭证也照样确认"],
+  },
+  {
+    // 应付差额也往借方调：付钱的一方被记成收钱，应付账款越调越离谱。
+    name: "㊾ 应付差额往借方调",
+    file: "crates/findb/src/arap_recon.rs",
+    from: "        let on_debit = if ar { d.is_positive() } else { d.is_negative() };",
+    to: "        let on_debit = d.is_positive();",
+    cmd: ["test", "-p", "findb", "--lib", "arap_recon::tests::应付差额往贷方调"],
+  },
+  {
+    // 按账面列名单把已录的户也覆盖掉：用户辛苦敲的对方金额被账面数冲平，差额全变 0。
+    name: "㊾ 按账面列名单覆盖用户已录的数",
+    file: "crates/findb/src/arap_recon.rs",
+    from: "        if have.contains(&code) || bal.is_zero() {",
+    to: "        if bal.is_zero() {",
+    cmd: ["test", "-p", "findb", "--lib", "arap_recon::tests::按账面列名单只补缺的户"],
+  },
+  {
+    // 往来期初的旧账不计入账面：系统上线前的欠款一律对不上，逼着人整个月手工找。
+    name: "㊾ 对账不算往来期初的老账",
+    file: "crates/findb/src/arap_recon.rs",
+    from: "        *out.entry(o.party_code.clone()).or_insert(Money::ZERO) += o.amount;",
+    to: "        let _ = o;",
+    cmd: ["test", "-p", "findb", "--lib", "arap_recon::tests::往来期初的旧账也计入账面余额"],
+  },
+  {
+    // 已确认的批次还能改：账面数和已生成的调整凭证就对不上了。
+    name: "㊾ 已确认的批次还能接着改",
+    file: "crates/findb/src/arap_recon.rs",
+    from: "    if b.status != ST_OPEN {",
+    to: "    if false && b.status != ST_OPEN {",
+    cmd: ["test", "-p", "findb", "--lib", "arap_recon::tests::已确认的批次不许改数"],
+  },
+  {
     // 上月没账也硬做同比：新账套第一个月会显示一堆 0%，被读成「和上月持平」。
     name: "㊼ 简报上月没账也硬做同比",
     file: "crates/findb/src/brief.rs",

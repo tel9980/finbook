@@ -26,13 +26,14 @@ use crate::DbError;
 /// v17：用户权限逐项覆盖（user.deny_perms_json）
 /// v34：凭证更正链（voucher.amends_id / amended_by / amend_reason）
 /// v35：收货分行（po_receipt.item_code / warehouse）
+/// v48：应收应付对账批次（arap_recon_batch / arap_recon_line）
 ///
 /// 抬版本号不是形式主义：`init` 的早退条件是
 /// `version >= SCHEMA_VERSION && tables_complete`，而 `tables_complete`
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 47;
+pub const SCHEMA_VERSION: i64 = 48;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -723,6 +724,42 @@ CREATE TABLE IF NOT EXISTS ar_statement (
 );
 CREATE INDEX IF NOT EXISTS idx_ar_statement_party
     ON ar_statement(kind, party_code, period_to, status);
+
+-- 应收应付对账批次（v48：先录对方金额、对好账再落账）
+-- 与 ar_statement（我方发给对方的对账单）不同：这里放的是**对方回给我们的数**。
+-- 一个批次 = 一次月度/季度对账作业，明细逐户存「对方金额 / 账面余额 / 差额」。
+-- 「对账中」的批次完全不进报表；确认后只生成一张**草稿**调整凭证。
+CREATE TABLE IF NOT EXISTS arap_recon_batch (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind           TEXT NOT NULL DEFAULT 'ar',   -- ar 应收 / ap 应付
+    account        TEXT NOT NULL DEFAULT '',     -- 算账面余额用的科目（可非末级，如 1122）
+    post_account   TEXT NOT NULL DEFAULT '',     -- 调账凭证用的末级科目（如 112201）
+    title          TEXT NOT NULL DEFAULT '',
+    period         INTEGER NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'open', -- open / confirmed / cancelled
+    memo           TEXT NOT NULL DEFAULT '',
+    adjust_account TEXT NOT NULL DEFAULT '',     -- 差额对方科目
+    voucher_id     INTEGER,                      -- 确认时生成的调整凭证（草稿）
+    created_by     TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL DEFAULT '',
+    confirmed_by   TEXT NOT NULL DEFAULT '',
+    confirmed_at   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_arap_recon_batch
+    ON arap_recon_batch(kind, period, status);
+
+CREATE TABLE IF NOT EXISTS arap_recon_line (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id   INTEGER NOT NULL,
+    party_code TEXT NOT NULL DEFAULT '',
+    party_name TEXT NOT NULL DEFAULT '',
+    claim      TEXT NOT NULL DEFAULT '0',        -- 对方对账单上的金额
+    book       TEXT NOT NULL DEFAULT '0',        -- 账面余额（已记账凭证 + 往来期初）
+    diff       TEXT NOT NULL DEFAULT '0',        -- claim − book
+    disputed   INTEGER NOT NULL DEFAULT 0,       -- 1 = 有争议，确认时跳过
+    note       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_arap_recon_line ON arap_recon_line(batch_id, party_code);
 
 -- 导出计划任务（v32：每日定时写 CSV 到 books_dir/exports/）
 CREATE TABLE IF NOT EXISTS export_schedule (

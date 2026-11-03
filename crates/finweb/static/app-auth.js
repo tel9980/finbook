@@ -395,6 +395,7 @@ const NAV_ITEMS = [
   { id: "assets", label: "固定资产", perm: "account_edit", group: "期末" },
   { id: "bank", label: "银行对账", perm: "voucher_new", group: "期末" },
   { id: "settle", label: "往来核销", perm: "voucher_new", group: "期末" },
+  { id: "arap-recon", label: "应收应付对账", perm: "voucher_new", group: "期末" },
   { id: "reconcile", label: "期末对账", perm: "fin_report", group: "期末" },
   { id: "mrp", label: "MRP 运算", perm: "production_ops", production: true, group: "生产制造" },
   { id: "mps", label: "MPS 排产", perm: "production_ops", production: true, group: "生产制造" },

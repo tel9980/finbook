@@ -34,6 +34,7 @@ pub mod overview;
 pub mod payroll;
 pub mod period_end;
 pub mod process;
+pub mod arap_recon;
 pub mod profit_sheet;
 pub mod reports;
 pub mod scm_deep;
@@ -93,6 +94,7 @@ pub struct Views {
     pub dim_profit: dim_profit::DimProfitView,
     pub month_brief: month_brief::MonthBriefView,
     pub profit_sheet: profit_sheet::ProfitSheetView,
+    pub arap_recon: arap_recon::ArapReconView,
     pub multi_column: advanced::MultiColumnView,
     pub summary_table: advanced::SummaryTableView,
     pub ratios: advanced::RatiosView,
@@ -154,6 +156,7 @@ impl Views {
         self.dim_profit.invalidate();
         self.month_brief.invalidate();
         self.profit_sheet.invalidate();
+        self.arap_recon.invalidate();
         self.multi_column.invalidate();
         self.summary_table.invalidate();
         self.ratios.invalidate();
@@ -186,6 +189,7 @@ impl Views {
                 self.dim_profit.invalidate();
                 self.month_brief.invalidate();
                 self.profit_sheet.invalidate();
+                self.arap_recon.invalidate();
                 self.multi_column.invalidate();
                 self.summary_table.invalidate();
                 self.ratios.invalidate();
@@ -272,6 +276,7 @@ impl Views {
                 NavItem::DimProfit => self.dim_profit.enter(ctx),
                 NavItem::MonthBrief => self.month_brief.enter(ctx),
                 NavItem::ProfitSheet => self.profit_sheet.enter(ctx),
+                NavItem::ArapRecon => self.arap_recon.enter(ctx),
                 NavItem::MultiColumn => self.multi_column.enter(ctx),
                 NavItem::SummaryTable => self.summary_table.enter(ctx),
                 NavItem::Ratios => self.ratios.enter(ctx),
@@ -339,6 +344,7 @@ impl Views {
             NavItem::DimProfit => self.dim_profit.show(ctx, ui),
             NavItem::MonthBrief => self.month_brief.show(ctx, ui),
             NavItem::ProfitSheet => self.profit_sheet.show(ctx, ui),
+            NavItem::ArapRecon => self.arap_recon.show(ctx, ui),
             NavItem::MultiColumn => self.multi_column.show(ctx, ui),
             NavItem::SummaryTable => self.summary_table.show(ctx, ui),
             NavItem::Ratios => self.ratios.show(ctx, ui),
