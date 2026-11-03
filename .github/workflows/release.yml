@@ -102,7 +102,7 @@ jobs:
       - name: package
         run: |
           mkdir -p dist/pack
-          cp target/release/finbook docs/新手使用说明.txt docs/小白日常操作教程.md dist/示例账套.fbk dist/pack/
+          cp target/release/finbook docs/新手使用说明.txt docs/小白日常操作教程.md docs/老账搬迁操作步骤.md dist/示例账套.fbk dist/pack/
           # 发布说明随包一起上传：Publish job 只下载 artifact、不 checkout
           # 仓库，工作目录里没有 docs/，说明文件必须搭这个便车。
           mkdir -p dist/docs-releases
@@ -166,7 +166,8 @@ jobs:
         run: |
           mkdir -p dist/pack
           cp target/x86_64-pc-windows-gnu/release/finbook.exe \
-             docs/新手使用说明.txt docs/小白日常操作教程.md dist/示例账套.fbk dist/pack/
+             docs/新手使用说明.txt docs/小白日常操作教程.md docs/老账搬迁操作步骤.md \
+             dist/示例账套.fbk dist/pack/
           # 说明文件跟着走（Publish 靠它生成 Release 正文，见 Linux job 同处注释）
           mkdir -p dist/docs-releases
           cp "docs/releases/${GITHUB_REF_NAME}.md" dist/docs-releases/ 2>/dev/null || true
