@@ -37,7 +37,8 @@ pub struct Dashboard {
     net_profit_prev: Money,
     /// 成本构成 Top（科目名, 金额），按金额降序
     cost_top: Vec<(String, Money)>,
-    /// 未记账凭证张数（数据完整性提示：有未记账凭证时利润不完整）
+    /// 未记账凭证张数（凑数与 `verdict()` 共用；有未记账凭证时利润一定偏小）
+    #[allow(dead_code)]
     unposted_count: i64,
     /// 钱在哪：应收应付合到一起看
     money: Option<findb::advanced::MoneyPosition>,
@@ -236,6 +237,73 @@ impl Dashboard {
         self.todos = todos;
     }
 
+    /// 一句话结论：「这个月该怎么看」。
+    ///
+    /// 只挑**最该先处理的那一件**说。原来首屏摆着「本期凭证 / 待处理 / 本期发生额 /
+    /// 期末余额」四张卡，那是财务自检用的四个数（账平不平、几张没记账），老板扫一眼
+    /// 仍然不知道这一个月到底怎么样。卡片挪到下面的「账目概况」里（一个都没少），
+    /// 首屏让给这一句话 + 净利润 + 钱在哪。
+    ///
+    /// 优先级：账没记完 > 钱压在客户手里 > 一切正常。
+    /// 为什么先提"没记账"：没记账的凭证不计入利润，此时说的"赚了多少"是偏小的，
+    /// 老板拿这个数去做决定就会错——这比催款更紧急。
+    fn verdict(&self) -> String {
+        let np = self.net_profit.fmt_money();
+        let unposted = self.draft + self.audited;
+        if unposted > 0 {
+            return format!(
+                "⚠ 还有 {unposted} 张凭证没记账，下面的 {np} 是「已记账部分」的利润，可能偏小。\
+                 去「凭证查询」勾选后批量记账，数字才是完整的。"
+            );
+        }
+        if let Some(m) = &self.money {
+            if m.overdue_90_count > 0 {
+                return format!(
+                    "⚠ 账面这个月{}，但 {} 家客户的钱超过 90 天没收回、共 {}。\
+                     小厂最常见的死法就是赚的钱全压在客户手里 —— 先去催这几笔。",
+                    if self.net_profit.is_negative() {
+                        "是亏的"
+                    } else {
+                        "是赚的"
+                    },
+                    m.overdue_90_count,
+                    m.overdue_90.fmt_money()
+                );
+            }
+            if !m.net().is_zero() && m.net().is_negative() && !m.payable.is_zero() {
+                return format!(
+                    "这个月净利润 {np}，但净欠外面 {}（欠供应商多于别人欠你），\
+                     手头现金 {}，留意付款节奏。",
+                    m.net().abs().fmt_money(),
+                    m.cash.fmt_money()
+                );
+            }
+        }
+        if self.revenue.is_zero() {
+            return "本月还没有收入凭证 —— 是不是还没开始录？到「填制凭证」记第一笔加工费。"
+                .to_string();
+        }
+        format!(
+            "本月净利润 {np}，收支正常，暂无卡住的事。月底记得：记账 → 结转损益 → 结账 → 备份。"
+        )
+    }
+
+    fn credit_end_hint(&self) -> String {
+        self.end_credit.fmt_money()
+    }
+
+    fn verdict_color(&self) -> Color32 {
+        if self.draft + self.audited > 0 {
+            return palette::WARN;
+        }
+        if let Some(m) = &self.money {
+            if m.overdue_90_count > 0 {
+                return palette::CREDIT;
+            }
+        }
+        palette::OK
+    }
+
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
         self.reload(ctx);
 
@@ -247,48 +315,6 @@ impl Dashboard {
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.add_space(4.0);
-
-            // ---- 指标卡 ----
-            ui.columns(4, |cols| {
-                stat_card(
-                    &mut cols[0],
-                    "本期凭证",
-                    &format!("{}", self.draft + self.audited + self.posted + self.void),
-                    &format!("已记账 {}", self.posted),
-                    palette::PRIMARY,
-                );
-                stat_card(
-                    &mut cols[1],
-                    "待处理",
-                    &format!("{}", self.draft + self.audited),
-                    "未记账凭证，核对后点「记账」",
-                    if self.draft + self.audited > 0 {
-                        palette::WARN
-                    } else {
-                        palette::OK
-                    },
-                );
-                stat_card(
-                    &mut cols[2],
-                    "本期发生额",
-                    &self.debit.fmt_money(),
-                    &format!("贷方 {}", self.credit.fmt_money()),
-                    palette::PRIMARY,
-                );
-                stat_card(
-                    &mut cols[3],
-                    "期末余额",
-                    &self.end_debit.fmt_money(),
-                    &format!("贷方 {}", self.end_credit.fmt_money()),
-                    if (self.end_debit - self.end_credit).round2().is_zero() {
-                        palette::OK
-                    } else {
-                        palette::CREDIT
-                    },
-                );
-            });
-
-            ui.add_space(12.0);
 
             // ---- 经营结果：这个月赚没赚钱 ----
             //
@@ -398,21 +424,18 @@ impl Dashboard {
                         cols[1].label(RichText::new(cost_detail).weak().size(11.0));
                     });
 
-                    // ---- 数据完整性提示 ----
+                    // ---- 一句话结论：该怎么看这个月 ----
                     //
-                    // 有未记账凭证时利润一定是偏小的，但界面上看不出来。
-                    // 老板拿着这个数做决定就会错，所以必须明说。
-                    if self.unposted_count > 0 {
-                        ui.add_space(6.0);
-                        ui.colored_label(
-                            palette::WARN,
-                            RichText::new(format!(
-                                "⚠ {} 张凭证还没记账，未计入上面的数字",
-                                self.unposted_count
-                            ))
-                            .size(12.0),
-                        );
-                    }
+                    // 上面那排数字（凭证数、发生额、借贷平衡）回答的是"账记对没有"，
+                    // 老板扫一眼还是不知道这一个月到底怎么样。这里给一句人话——
+                    // 说三件事里最该先处理的那一件：没记账 > 钱压在外面 > 正常。
+                    // 只给一条：给三条等于没给，他会一条都不看。
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(self.verdict())
+                            .size(12.5)
+                            .color(self.verdict_color()),
+                    );
                 });
 
             ui.add_space(12.0);
@@ -734,14 +757,64 @@ impl Dashboard {
                     _ => {}
                 }
             });
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new(format!(
-                    "账套共 {} 个科目、{} 条分录",
-                    self.accounts, self.entries
-                ))
-                .weak(),
-            );
+            // ---- 账目概况：原来摆在首屏的四张卡挪到这里 ----
+            //
+            // 首屏要回答的是"这个月赚没赚、钱在哪、该先办哪件事"，而
+            // 「本期凭证 / 待处理 / 本期发生额 / 期末余额」是财务自检用的四个数
+            // （账平不平、几张没记账）。它们很有用，但不是老板每天打开软件要先看的，
+            // 折叠起来一屏就够；数一个都没少，试算平衡也仍在上面那张卡里。
+            egui::CollapsingHeader::new("账目概况（凭证数、发生额、期末余额）")
+                .id_salt("dash_overview")
+                .show(ui, |ui| {
+                    let balanced = (self.end_debit - self.end_credit).round2().is_zero();
+                    ui.columns(4, |cols| {
+                        stat_card(
+                            &mut cols[0],
+                            "本期凭证",
+                            &format!("{}", self.draft + self.audited + self.posted + self.void),
+                            &format!("已记账 {}", self.posted),
+                            palette::PRIMARY,
+                        );
+                        stat_card(
+                            &mut cols[1],
+                            "待处理",
+                            &format!("{}", self.draft + self.audited),
+                            "未记账凭证，核对后点「记账」",
+                            if self.draft + self.audited > 0 {
+                                palette::WARN
+                            } else {
+                                palette::OK
+                            },
+                        );
+                        stat_card(
+                            &mut cols[2],
+                            "本期发生额",
+                            &self.debit.fmt_money(),
+                            &format!("贷方 {}", self.credit.fmt_money()),
+                            palette::PRIMARY,
+                        );
+                        stat_card(
+                            &mut cols[3],
+                            "期末余额",
+                            &self.end_debit.fmt_money(),
+                            &format!("贷方 {}", self.credit_end_hint()),
+                            if balanced {
+                                palette::OK
+                            } else {
+                                palette::CREDIT
+                            },
+                        );
+                    });
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "账套共 {} 个科目、{} 条分录",
+                            self.accounts, self.entries
+                        ))
+                        .weak()
+                        .size(11.0),
+                    );
+                });
 
             // ---- 还没用上的模块：一句话说清楚，别让人以为功能没了 ----
             //
