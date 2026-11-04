@@ -41,6 +41,11 @@ pub struct Dashboard {
     unposted_count: i64,
     /// 钱在哪：应收应付合到一起看
     money: Option<findb::advanced::MoneyPosition>,
+    /// 本账套启用过的业务域（与网页版工作台同一份判定，见 findb::workbench::domain_active）。
+    /// 桌面这里只有凭证/资金/报表/待办/最近凭证，销售等业务域本来就画不到，
+    /// 但「本月有没有进过销售单」这件事老板需要知道——用来提示他去菜单里用，
+    /// 免得以为软件没这个功能。
+    active: Vec<String>,
 }
 
 impl Default for Dashboard {
@@ -69,6 +74,7 @@ impl Default for Dashboard {
             cost_top: Vec::new(),
             unposted_count: 0,
             money: None,
+            active: Vec::new(),
         }
     }
 }
@@ -157,6 +163,10 @@ impl Dashboard {
             })
             .unwrap_or_else(|| chrono::Local::now().date_naive());
         self.money = findb::advanced::money_position(db, p, as_of, None).ok();
+        // 与网页版工作台同一份判定（findb::workbench::domain_active）：
+        // 口径是**历史累计有没有单据**，不是本月有没有，也不是按权限——
+        // 小厂只有一个全权限账号，按权限过滤等于不过滤。
+        self.active = findb::workbench::domain_active(db).unwrap_or_default();
         self.begin_debit = tb.begin_debit;
         self.begin_credit = tb.begin_credit;
         self.debit = tb.period_debit;
@@ -732,6 +742,30 @@ impl Dashboard {
                 ))
                 .weak(),
             );
+
+            // ---- 还没用上的模块：一句话说清楚，别让人以为功能没了 ----
+            //
+            // 网页版工作台会把没用过的域整块藏掉（小厂老板是全权限账号，按权限
+            // 过滤等于什么都不过滤，「生产在产 0 份」会一直挂在首屏）。桌面首页
+            // 本来就只画凭证/资金/报表，藏无可藏，但同样需要交代一句：
+            // 这些模块是**有**的，只是这个账套还没录入过单据。
+            let unused: Vec<&str> = findb::workbench::OPTIONAL_DOMAINS
+                .iter()
+                .copied()
+                .filter(|d| !self.active.iter().any(|a| a == d))
+                .collect();
+            if !unused.is_empty() {
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!(
+                        "ℹ {} 这些模块本账套还没有用过（左侧菜单里都能打开）。\
+                         录入第一张单据后，首页和网页版工作台就会把它显示出来。",
+                        unused.join("、")
+                    ))
+                    .size(11.0)
+                    .color(palette::GRID),
+                );
+            }
         });
     }
 }

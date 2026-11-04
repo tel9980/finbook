@@ -120,16 +120,27 @@ async function viewDashboard(main) {
     [6, 12, 24].map((n) => `<option value="${n}" ${Number(state.wbPeriods || 12) === n ? "selected" : ""}>${n} 期</option>`).join("")
   }</select></label>`;
   const group = (arr) => { const m = {}; (arr || []).forEach((x) => { (m[x.domain] = m[x.domain] || []).push(x); }); return m; };
-  let wbHtml = { todo: "", cards: "", trend: "", nSel: "" };
+  let wbHtml = { todo: "", cards: "", trend: "", nSel: "", hint: "" };
   if (wb) {
-    const cg = group(wb.cards);
-    const tg = group(wb.trends);
+    // 只渲染账套「用过」的业务域（`active` 由后端 findb::workbench::domain_active
+    // 给出，桌面端读同一份）。小工厂只有一个人、一个全权限账号，按权限过滤等于
+    // 什么都过滤不掉，「生产在产 0 份」「临期批次 0 个」会一直挂在首屏把真正要
+    // 看的挤下去。判定口径是**历史累计有没有单据**，不是本月有没有——后者会让
+    // 同一块区域时有时无，比一直显示更糊涂。
+    const active = Array.isArray(wb.active) ? wb.active : null;
+    const keep = (dom) => !active || active.includes(dom);
+    const cg = group((wb.cards || []).filter((c) => keep(c.domain)));
+    const tg = group((wb.trends || []).filter((t) => keep(t.domain)));
+    // 被藏起来的域：与其让老板以为功能坏了，不如明说「没启用，要用去这里」
+    const hidden = active
+      ? [...new Set((wb.cards || []).map((c) => c.domain))].filter((d) => !active.includes(d))
+      : [];
     const cardsHtml = Object.keys(cg).map((dom) => `
       <div class="wb-sec"><h4 class="sec-title">${esc(dom)}</h4>
         <div class="cards">${cg[dom].map((c) => `<div class="card"><div class="k">${esc(c.label)}</div><div class="v">${esc(c.value)}${c.unit === "元" || c.unit === "件" ? `<span style="font-size:12px;font-weight:400;opacity:.65"> ${esc(c.unit)}</span>` : ""}</div></div>`).join("")}</div>
       </div>`).join("");
     // 待办提到工作台最上面（原来排在两排卡片之后，要往下滚才看到）
-    const todos = wb.todos || [];
+    const todos = (wb.todos || []).filter((t) => keep(t.domain));
     const todoHtml = todos.length ? `
       <div class="wb-sec"><h4 class="sec-title">我的待办</h4>
         <div class="u-row wrap">${todos.map((t) => `
@@ -145,9 +156,16 @@ async function viewDashboard(main) {
           </div>`).join("")}
         </div>
       </div>`).join("");
+    // 藏起来的域给一句说明：小厂最怕「昨天还在的东西今天不见了」，
+    // 而这些模块本来就不在它的业务范围里（没仓管、没有生产工单、不做报销审批）。
+    const hintHtml = hidden.length ? `
+      <div class="wb-sec"><div class="u-dim u-sm">
+        ${esc(hidden.join("、"))} 这一块本账套还没有用过，所以先不显示。
+        要用的话照常去左侧菜单操作，录入第一张单据后这里就会出来。
+      </div></div>` : "";
     // 分三块返回：待办（首屏）→ 账套参考值 → 业务卡与趋势。
     // 原来是一坨 wbHtml 顺序拼接，待办被两排参考卡片压在下面。
-    wbHtml = { todo: todoHtml, cards: cardsHtml, trend: trendHtml, nSel };
+    wbHtml = { todo: todoHtml, cards: cardsHtml, trend: trendHtml, nSel, hint: hintHtml };
   }
   const firstRun = Number(d.vouchers) === 0 ? `
     <div class="panel first-run">
@@ -182,6 +200,7 @@ async function viewDashboard(main) {
     </details>
     <div class="toolbar" style="border:0;padding:6px 0">${wbHtml.nSel}</div>
     ${wbHtml.cards}
+    ${wbHtml.hint}
     ${wbHtml.trend}`;
   if ($("#wb-n")) $("#wb-n").onchange = (e) => { state.wbPeriods = Number(e.target.value); viewDashboard(main); };
   $all("[data-wb-go]").forEach((b) => b.onclick = () => goView(b.dataset.wbGo));

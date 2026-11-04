@@ -86,6 +86,54 @@ pub struct WbOut {
     pub cards: Vec<WbCard>,
     pub todos: Vec<WbTodo>,
     pub trends: Vec<WbTrend>,
+    /// 本账套**启用过**的业务域（见 `domain_active`）。
+    ///
+    /// 前端只渲染这个清单里的域；不在里面的连标题都不出现。放在 WbOut 里而不是
+    /// 让前端各自判断，是为了桌面端与网页版用同一份答案——否则会出现
+    /// 「网页版藏了仓管、桌面端还在显示一列 0」。
+    pub active: Vec<String>,
+}
+
+/// 需要「用过才显示」的业务域（凭证/资金/报表不在此列：记账本身就是主线）
+pub const OPTIONAL_DOMAINS: &[&str] = &["销售", "采购", "仓管", "生产", "成本", "报销", "审批"];
+
+/// 各域「用过」的判定表：历史累计有任何一张单据即算启用。
+///
+/// 口径刻意是**历史累计**而不是本期：小厂可能这个月没开销售单，但上个月开过，
+/// 卡片就应该还在。反过来「本月有没有」会让同一块区域时有时无，比一直显示更糊涂。
+const DOMAIN_TABLES: &[(&str, &[&str])] = &[
+    ("销售", &["sales_order", "quotation"]),
+    ("采购", &["purchase_order", "purchase_req"]),
+    ("仓管", &["stock_batch", "stock_move", "stock_count"]),
+    ("生产", &["production_order", "prod_cost"]),
+    // 成本域没有自己的单表，在产品来自生产订单归集的料工费 —— 与生产同生共死
+    ("成本", &["production_order", "prod_cost"]),
+    ("报销", &["expense_claim"]),
+    ("审批", &["workflow_instance"]),
+];
+
+/// 这个账套哪些业务域「用过」（历史累计有任何单据）。
+///
+/// 为什么不按权限判定：小工厂通常只有一个全权限的管理员账号，按 `Perm` 过滤
+/// 等于什么都过滤不掉，工作台上会长期挂着「生产在产 0 份」「临期批次 0 个」
+/// 这类跟他毫无关系的卡片，把真正要看的东西挤出首屏。
+///
+/// 表不存在时（老账套 schema 未迁移到位）按「未启用」处理：宁可少显示一块，
+/// 也不让工作台直接 500。
+pub fn domain_active(db: &Db) -> DbResult<Vec<String>> {
+    let mut out = Vec::new();
+    for (domain, tables) in DOMAIN_TABLES {
+        for t in *tables {
+            let sql = format!("SELECT COUNT(*) FROM \"{t}\" LIMIT 1");
+            if let Ok(n) = db.conn().query_row(&sql, [], |r| r.get::<_, i64>(0)) {
+                if n > 0 {
+                    out.push((*domain).to_string());
+                    break;
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn card(domain: &str, key: &str, label: &str, value: String, unit: &str) -> WbCard {
@@ -164,6 +212,7 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
         cards: Vec::new(),
         todos: Vec::new(),
         trends: Vec::new(),
+        active: domain_active(db)?,
     };
 
     // ---- 凭证（财务操作/审核岗）----
@@ -1187,5 +1236,37 @@ mod tests {
         d.sort();
         d.dedup();
         assert_eq!(d, vec!["审批", "报销"], "Viewer 只见本人报销与审批");
+    }
+    /// 小工厂的账套里，没启用过的业务域不该出现在 `active` 里。
+    ///
+    /// 这是「工作台别再挂一堆 0 卡」的判定源：只录凭证的小厂，销售/采购/仓管/
+    /// 生产/成本/报销/审批 七个域一个都不该出现。回归点在于——**判定口径是
+    /// 「历史累计有没有单据」而不是「本月有没有」**，也不是按权限：小厂老板
+    /// 通常是全权限管理员，按 Perm 过滤等于什么都没过滤。
+    #[test]
+    fn active_domains_only_lists_used_modules() {
+        let db = mem();
+        let a = domain_active(&db).unwrap();
+        assert!(a.is_empty(), "空账套不该有任何可选业务域，实际 {a:?}");
+
+        // 随便塞一条单据，对应域就该出现
+        db.conn()
+            .execute(
+                "INSERT INTO sales_order (period, no, date, customer_code, customer_name, status, total_amount, total_tax, shipped_amount)
+                 VALUES (202601, 'SO1', '2026-01-05', 'C01', '客户一', 'draft', '100.00', '0.00', '0.00')",
+                [],
+            )
+            .unwrap();
+        let a = domain_active(&db).unwrap();
+        assert_eq!(a, vec!["销售"], "只有销售域该出现，实际 {a:?}");
+
+        // collect 必须把同一份答案带出去（前端与桌面端共用）
+        let u = User::new("boss", "老板", Role::Admin);
+        let out = collect(&db, &u, Period::new(2026, 1).unwrap(), 6).unwrap();
+        assert_eq!(
+            out.active,
+            vec!["销售"],
+            "WbOut.active 应与 domain_active 一致"
+        );
     }
 }

@@ -1647,6 +1647,24 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "meter::tests::close_books_recharge_to_cost"],
   },
   {
+    // 按权限而不是「用过没用过」判定业务域：小厂老板通常只有一个全权限账号，
+    // 按 Perm 过滤等于什么都不过滤，首屏又回到「生产在产 0 份」那一堆空卡。
+    name: "㊿ 工作台按权限判定业务域（等于没过滤）",
+    file: "crates/findb/src/workbench.rs",
+    from: "    let mut out = Vec::new();\n    for (domain, tables) in DOMAIN_TABLES {",
+    to: "    let mut out: Vec<String> = OPTIONAL_DOMAINS.iter().map(|d| d.to_string()).collect();\n    for (domain, tables) in DOMAIN_TABLES {",
+    cmd: ["test", "-p", "findb", "--lib", "workbench::tests::active_domains_only_lists_used_modules"],
+  },
+  {
+    // 只看本期有没有单据：这个月没开销售单，整块就消失；下个月开了一张又冒出来。
+    // 同一块区域时有时无，比一直显示更让人糊涂。
+    name: "㊿ 业务域只看本期有没有单据",
+    file: "crates/findb/src/workbench.rs",
+    from: "            let sql = format!(\"SELECT COUNT(*) FROM \\\"{t}\\\" LIMIT 1\");",
+    to: "            let sql = format!(\"SELECT COUNT(*) FROM \\\"{t}\\\" WHERE period=?1 LIMIT 1\");\n            let _ = crate::periods::current_period(db);",
+    cmd: ["test", "-p", "findb", "--lib", "workbench::tests::active_domains_only_lists_used_modules"],
+  },
+  {
     // 已结转的台账行允许删除：凭证还在，删了就是账证不符
     name: "㊾ 已结转的台账行允许删除",
     file: "crates/findb/src/meter.rs",
