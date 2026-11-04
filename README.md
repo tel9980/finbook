@@ -717,6 +717,10 @@ finbook/
 # 4) git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
+**Release job 红了怎么办**：见 [docs/releases/README-发版.md](docs/releases/README-发版.md)。
+里面是「清掉半截 draft Release → 从 CI artifact 取产物 → 组包 → 建 Release 传附件」的
+完整手工流程。v1.8.81 用过一次（GitHub 的 releases 接口连续 500/502）。
+
 只有一种情况值得本地编：**想亲眼看一眼 exe**（比如改了 `build.rs` 的子系统设置）。
 那时才用下面这套，**产物留在 `target/`，不要拷到 `dist/` 或仓库里**：
 

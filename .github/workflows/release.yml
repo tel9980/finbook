@@ -268,26 +268,59 @@ jobs:
             NOTES_ARGS=(--generate-notes)
           fi
 
-          # 先 create 再 upload，不用 `gh release view` 探测。
-          # 原因：v1.1.0 第二次发布踩过——删除 tag 会连带删掉它指向的
-          # Release，而 `gh release view` 在「tag 存在但 Release 不存在」
-          # 时的退出码并不可靠，于是走进了 upload 分支。upload **不会创建**
-          # Release，于是 job 显示 success，Release 却根本没建出来
-          # （API 查 tag 得到 404）。这种「绿但没产物」比直接报错更难查。
+          # ── 先建「只有正文、没有附件」的空 Release，再逐个 upload ──────
           #
-          # create 撞上已存在的 Release 会失败，此时再退回 upload 覆盖。
+          # v1.8.81 踩过的坑：`gh release create` 带上 4 个附件时，内部是「先建
+          # Release，再逐个上传」。碰上 GitHub 接口不稳（那次 releases/assets 连续
+          # 500/502），建出来的 Release 卡在半截——只剩 1 个附件、且一直是 draft，
+          # 后续 `gh release upload` 也 500。更麻烦的是：这时 tag 已被这个半截
+          # Release 占住，`gh release create` 每次都失败 → 脚本转去 upload 分支 →
+          # upload 又失败，**一重跑就红，怎么重试都过不去**。
+          #
+          # 拆成两步就没有这个死结：
+          #   create 只发正文（不碰附件）——失败就是干净的失败，不会留下半截状态；
+          #   upload 逐个附件重试，已传上去的用 --clobber 覆盖。
+          #
+          # 判「Release 已存在」不看 `gh release view` 的退出码（v1.1.0 踩过：
+          # 「tag 存在但 Release 不存在」时退出码不可靠，会静默走进 upload 分支，
+          # job 显示 success 而 Release 根本没建出来），直接看 create 的报错文字。
           if gh release create "$GITHUB_REF_NAME" \
                --repo "$GITHUB_REPOSITORY" \
                --verify-tag \
                --title "FinBook ${GITHUB_REF_NAME}" \
-               "${NOTES_ARGS[@]}" \
-               "${ASSETS[@]}"; then
+               "${NOTES_ARGS[@]}" 2>create-err.log; then
             echo "已创建 Release $GITHUB_REF_NAME"
+          elif grep -qi "already_exists" create-err.log; then
+            echo "Release 已存在，改为更新正文"
+            gh release edit "$GITHUB_REF_NAME" "${NOTES_ARGS[@]}" --repo "$GITHUB_REPOSITORY"
           else
-            echo "Release 已存在，改为覆盖上传产物"
-            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber --repo "$GITHUB_REPOSITORY"
-            # 正文也一并更新（upload 只换附件，不改正文）
-            if [ -n "$NOTES" ]; then
-              gh release edit "$GITHUB_REF_NAME" --notes-file "$NOTES" --repo "$GITHUB_REPOSITORY"
+            echo "::error::创建 Release 失败（报错不是「已存在」，是接口或权限问题）："
+            cat create-err.log
+            exit 1
+          fi
+
+          # 逐个附件重试：一个失败不影响已成功的
+          for f in "${ASSETS[@]}"; do
+            ok=0
+            for i in 1 2 3; do
+              if gh release upload "$GITHUB_REF_NAME" "$f" --clobber --repo "$GITHUB_REPOSITORY"; then
+                ok=1; break
+              fi
+              echo "上传 $f 失败（第 $i 次），20 秒后重试"
+              sleep 20
+            done
+            if [ $ok -ne 1 ]; then
+              echo "::error::附件 $f 三次都传不上去——GitHub 接口不稳，重跑本 job 即可（--clobber 会覆盖已传的）"
+              exit 1
             fi
+          done
+
+          # 最后核对：必须是已发布状态、附件数对得上。
+          # 「绿但没产物」比报错更难查，所以这一步不省。
+          DRAFT=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)
+          N=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets | length')
+          echo "Release 状态：draft=$DRAFT，附件 $N 个"
+          if [ "$DRAFT" != "false" ] || [ "$N" -lt ${#ASSETS[@]} ]; then
+            echo "::error::Release 状态不对（draft=$DRAFT，附件 $N/${#ASSETS[@]}），别当成功"
+            exit 1
           fi
