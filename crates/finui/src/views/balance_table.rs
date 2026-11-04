@@ -400,10 +400,11 @@ impl BalanceTableView {
                 let ok1 = (bd - bc).round2().is_zero();
                 let ok2 = (ed - ec).round2().is_zero();
                 ui.label(
+                    // 「试算平衡」是会计术语，这里直接说结论：账对不对得上
                     RichText::new(if ok1 && ok2 {
-                        "✔ 试算平衡"
+                        "✔ 借贷合计相等，账是对的"
                     } else {
-                        "✖ 试算不平衡"
+                        "✖ 借贷合计不相等，有凭证记错了"
                     })
                     .color(if ok1 && ok2 {
                         palette::OK

@@ -627,54 +627,73 @@ impl Dashboard {
 
             ui.add_space(12.0);
 
-            // ---- 试算平衡 ----
+            // ---- 账平不平（原来叫「试算平衡」）----
+            //
+            // 「试算平衡」「借 / 贷」「期初/本期/期末」是会计术语。小厂老板不是不会
+            // 而是**不需要**：他要的只有一句话——"账有没有记错"。借方贷方那六个数
+            // 留在下面明细里（ accountants 对账时用），上面先给结论。
             ui.columns(2, |cols| {
                 egui::Frame::NONE
                     .stroke(egui::Stroke::new(1.0_f32, palette::GRID))
                     .corner_radius(6.0)
                     .inner_margin(12.0)
                     .show(&mut cols[0], |ui| {
-                        ui.label(RichText::new("试算平衡").strong());
+                        ui.label(RichText::new("账有没有记错").strong());
                         ui.separator();
                         let balanced = (self.end_debit - self.end_credit).round2().is_zero();
-                        ui.horizontal(|ui| {
-                            ui.label("期初：");
-                            ui.label(RichText::new(format!(
-                                "借 {} / 贷 {}",
-                                self.begin_debit.fmt_money(),
-                                self.begin_credit.fmt_money()
-                            )));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("本期：");
-                            ui.label(RichText::new(format!(
-                                "借 {} / 贷 {}",
-                                self.debit.fmt_money(),
-                                self.credit.fmt_money()
-                            )));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("期末：");
-                            ui.label(RichText::new(format!(
-                                "借 {} / 贷 {}",
-                                self.end_debit.fmt_money(),
-                                self.end_credit.fmt_money()
-                            )));
-                        });
-                        ui.add_space(4.0);
-                        ui.label(
-                            RichText::new(if balanced {
-                                "✔ 借贷平衡"
-                            } else {
-                                "✖ 借贷不平衡，请检查凭证"
-                            })
-                            .color(if balanced {
-                                palette::OK
-                            } else {
-                                palette::CREDIT
-                            })
-                            .strong(),
-                        );
+                        if balanced {
+                            ui.label(
+                                RichText::new("✔ 账是平的，没有记错的凭证")
+                                    .color(palette::OK)
+                                    .strong(),
+                            );
+                            ui.label(
+                                RichText::new("每一笔借方都有对应的贷方，可以放心出报表。")
+                                    .weak()
+                                    .size(12.0),
+                            );
+                        } else {
+                            ui.label(
+                                RichText::new("✖ 账不平，有凭证记错了")
+                                    .color(palette::CREDIT)
+                                    .strong(),
+                            );
+                            ui.label(
+                                RichText::new(format!(
+                                    "差 {}，去「凭证查询」逐张看。",
+                                    (self.end_debit - self.end_credit).fmt_money()
+                                ))
+                                .color(palette::CREDIT)
+                                .size(12.0),
+                            );
+                        }
+                        // 明细收起来：老板不用，会计算账时才展开
+                        egui::CollapsingHeader::new("逐项数字（借方 / 贷方）")
+                            .id_salt("dash_tb_detail")
+                            .show(ui, |ui| {
+                                for (name, d, c, note) in [
+                                    (
+                                        "期初",
+                                        self.begin_debit,
+                                        self.begin_credit,
+                                        "年初结转过来的",
+                                    ),
+                                    ("本期", self.debit, self.credit, "这个月记的"),
+                                    ("期末", self.end_debit, self.end_credit, "现在的账上数"),
+                                ] {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{name}：借方 {} / 贷方 {}",
+                                                d.fmt_money(),
+                                                c.fmt_money()
+                                            ))
+                                            .size(12.0),
+                                        );
+                                        ui.label(RichText::new(note).weak().size(11.0));
+                                    });
+                                }
+                            });
                     });
 
                 egui::Frame::NONE
@@ -763,7 +782,7 @@ impl Dashboard {
             // 「本期凭证 / 待处理 / 本期发生额 / 期末余额」是财务自检用的四个数
             // （账平不平、几张没记账）。它们很有用，但不是老板每天打开软件要先看的，
             // 折叠起来一屏就够；数一个都没少，试算平衡也仍在上面那张卡里。
-            egui::CollapsingHeader::new("账目概况（凭证数、发生额、期末余额）")
+            egui::CollapsingHeader::new("账目概况（几张凭证、多少钱进出、余额）")
                 .id_salt("dash_overview")
                 .show(ui, |ui| {
                     let balanced = (self.end_debit - self.end_credit).round2().is_zero();
@@ -788,14 +807,14 @@ impl Dashboard {
                         );
                         stat_card(
                             &mut cols[2],
-                            "本期发生额",
+                            "本期借方合计",
                             &self.debit.fmt_money(),
                             &format!("贷方 {}", self.credit.fmt_money()),
                             palette::PRIMARY,
                         );
                         stat_card(
                             &mut cols[3],
-                            "期末余额",
+                            "期末借方合计",
                             &self.end_debit.fmt_money(),
                             &format!("贷方 {}", self.credit_end_hint()),
                             if balanced {

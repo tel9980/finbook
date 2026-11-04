@@ -600,8 +600,16 @@ function renderBegin(main, rows) {
       cell("借方累计合计", fmt(t.sumAd.toFixed(2))) +
       cell("贷方累计合计", fmt(t.sumAc.toFixed(2))) +
       cell(
-        "试算平衡",
-        t.balanced ? "✓ 平衡" : "✗ 不平衡（差 " + fmt(Math.abs((t.sumYbDebit + t.sumAd) - (t.sumYbCredit + t.sumAc)).toFixed(2)) + "）",
+        // 「试算平衡」是会计术语，小厂老板看不懂；这里说结论就行。
+        // id="bg-balance" 不能动：E2E 靠它断言「不平衡 + 差额」
+        "账对不对",
+        // 保留「平衡 / 不平衡」这两个词：E2E（e2e/tests/admin.spec.js）按
+        // 「不平衡」和「✓ 平衡」断言实时刷新，改字会让闸门失效。术语在标题上
+        // 已经换成「账对不对」，正文这半句老板也读得懂，就不再动。
+        t.balanced
+          ? "✓ 平衡"
+          : "✗ 不平衡，借方比贷方多 " +
+            fmt(Math.abs((t.sumYbDebit + t.sumAd) - (t.sumYbCredit + t.sumAc)).toFixed(2)),
         t.balanced ? "var(--ok)" : "var(--err)",
         // id 要留着：E2E 靠 #bg-balance 断言"不平衡 + 差额"，
         // 抽成 cell() 时顺手丢掉的正是这个锚点
@@ -699,8 +707,8 @@ function renderBegin(main, rows) {
       const hasAny = draft.some((r) => num(r.yb) || num(r.ad) || num(r.ac));
       if (hasAny && !t.balanced) {
         const diff = Math.abs((t.sumYbDebit + t.sumAd) - (t.sumYbCredit + t.sumAc)).toFixed(2);
-        if (!(await confirmDialog(`期初试算不平衡，差额 ${diff}。\n\n` +
-          `借贷不平的期初会让后面所有报表都带着这个差额走。仍要保存吗？`, true))) return;
+        if (!(await confirmDialog(`期初的借方和贷方对不上，差 ${diff}。\n\n` +
+          `期初不平，后面每张报表都会带着这个差额走。仍要保存吗？`, true))) return;
       }
       try {
         const r = await api("/begin", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rows: payload, delete_ids: deleteIds }) });

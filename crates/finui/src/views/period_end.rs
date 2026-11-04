@@ -227,8 +227,11 @@ impl PeriodEndView {
     // ------------------------- 期末对账 -------------------------
     fn show_reconcile(&mut self, ui: &mut Ui) {
         ui.label(
-            RichText::new("期末对账：检查试算平衡、余额方向、银行未达账项与未生成凭证的业务单据。")
-                .weak(),
+            RichText::new(
+                "结账前先体检：账平不平、余额方向对不对、银行有没有未达账项、\
+                     有没有业务单据还没生成凭证。",
+            )
+            .weak(),
         );
         ui.add_space(6.0);
 
