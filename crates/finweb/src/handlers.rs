@@ -351,7 +351,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/import/analyze", post(import_analyze))
         .route("/api/import/template", get(import_template))
         .route("/api/arap-opening", get(list_arap_opening))
-        .route("/api/arap-opening/:id", delete(delete_arap_opening))
+        .route(
+            "/api/arap-opening/:id",
+            put(update_arap_opening).delete(delete_arap_opening),
+        )
         // 客户视图（只读；余额口径由 findb::customers 保证走 open_entries）
         .route("/api/customers", get(list_customers))
         .route("/api/customers/:code", get(get_customer))

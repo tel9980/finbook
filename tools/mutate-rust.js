@@ -1696,6 +1696,40 @@ const MUT = [
     to: "    let mut same: Vec<&Candidate> = cands.iter().filter(|c| c.party != inflow.party).collect();",
     cmd: ["test", "-p", "findb", "--lib", "claim::tests::claim_splits_one_receipt_across_customers"],
   },
+  // v1.8.83 往来期初明细「修改」：改一行老账最容易悄悄放宽口径，
+  // 这四条盯着「改完不校验」「改完把原始录入人冲掉」「改完撞了单据号」「谁都能改」。
+  {
+    // 允许零/负数金额：和 CSV 导入口径分家，影子挂账会出现负数欠款
+    name: "53 修改往来期初不校验金额正数",
+    file: "crates/findb/src/settle/opening.rs",
+    from: "    if !o.amount.is_positive() {",
+    to: "    if false {",
+    cmd: FSETTLE("arap_opening_update_validates_and_keeps_creator"),
+  },
+  {
+    // 把原始录入人一并覆盖：审计痕迹被表单冲掉，看不出这行原本是谁导进来的
+    name: "54 修改往来期初冲掉原始录入人",
+    file: "crates/finweb/src/handlers/settle.rs",
+    from: "        created_by: cur.created_by,",
+    to: "        created_by: format!(\"web_{}\", cur.created_by),",
+    cmd: API("arap_opening_update_api_writes_and_rejects_bad_input"),
+  },
+  {
+    // 允许单据号撞上另一行：下次 CSV 重导按三元组幂等跳过，会静悄悄漏一笔老账
+    name: "55 修改往来期初允许单据号撞车",
+    file: "crates/findb/src/settle/opening.rs",
+    from: "    if dup > 0 {",
+    to: "    if false {",
+    cmd: FSETTLE("arap_opening_update_validates_and_keeps_creator"),
+  },
+  {
+    // 只查不改权：viewer 也能改老账，等于绕开删除按钮的会计权限
+    name: "56 修改往来期初不查会计权限",
+    file: "crates/finweb/src/handlers/settle.rs",
+    from: "    user.require(Perm::VoucherNew)?;\n    let db = &user.db;\n    // 先确认目标还在",
+    to: "    let db = &user.db;\n    // 先确认目标还在",
+    cmd: API("arap_opening_update_requires_voucher_new"),
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

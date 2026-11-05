@@ -53,6 +53,35 @@ pub(super) async fn delete_arap_opening(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// 修改往来期初明细（导错可直接改，不必删掉重录；与删除同权）
+pub(super) async fn update_arap_opening(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Json(req): Json<ArapOpeningUpdateReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::VoucherNew)?;
+    let db = &user.db;
+    // 先确认目标还在：删掉之后浏览器上残留的旧表格再点「改」，要报 404 而不是
+    // 静默 200（会计会以为改成功了）。同时保留原始录入人，不让表单把它冲掉。
+    let cur = findb::settle::arap_opening_get(db, id)?
+        .ok_or_else(|| AppError::not_found("往来期初明细不存在"))?;
+    let o = findb::settle::ArapOpening {
+        id,
+        kind: req.kind,
+        party_code: req.party_code,
+        party_name: req.party_name,
+        doc_no: req.doc_no,
+        doc_date: req.doc_date,
+        amount: parse_money_checked(&req.amount)?,
+        memo: req.memo,
+        created_by: cur.created_by,
+    };
+    findb::settle::arap_opening_update(db, id, &o)?;
+    db.log(user.username(), "档案", "修改往来期初", &format!("#{id}"))?;
+    Ok(Json(json!({ "ok": true })))
+}
+
 /// 存货档案一站式列表（独立存货档案页：档案+计划参数+现量+主单位）
 // ---- 客户视图 ----------------------------------------------------------
 //
@@ -1367,6 +1396,26 @@ pub(super) async fn get_settle_open(
 }
 
 // ===== 本域的请求/响应结构（从 handlers.rs 收进来，v1.8.59）=====
+
+/// 往来期初明细「修改」请求（v1.8.83）。字段全部可缺省，由 findb 层统一校验，
+/// 避免前端漏传一个字段就得到 422 而不是看得懂的中文提示。
+#[derive(Deserialize, Default)]
+pub(super) struct ArapOpeningUpdateReq {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub party_code: String,
+    #[serde(default)]
+    pub party_name: String,
+    #[serde(default)]
+    pub doc_no: String,
+    #[serde(default)]
+    pub doc_date: String,
+    #[serde(default)]
+    pub amount: String,
+    #[serde(default)]
+    pub memo: String,
+}
 
 #[derive(Deserialize, Default)]
 pub(super) struct SettleAutoReq {

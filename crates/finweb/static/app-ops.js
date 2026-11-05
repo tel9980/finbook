@@ -1205,7 +1205,37 @@ async function viewSettle(main) {
     } catch (e) { $("#st-sum", main).textContent = e.message; }
   }
 
-  // 往来期初明细（迁移数据）：列表 + 合计 + 删除；「账龄分析」自动包含期初行（影子挂账）
+  // 往来期初明细（迁移数据）：列表 + 合计 + 修改 / 删除；「账龄分析」自动包含期初行（影子挂账）
+  // v1.8.83：导错不必删掉重录，点「改」直接改。校验口径与 CSV 导入一致，全在服务端。
+  const openArapEditor = (o) => {
+    const m = modal(`<h3>修改往来期初明细</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <label>类型 <select id="ao-kind"><option value="ar" ${o.kind === "ar" ? "selected" : ""}>应收</option><option value="ap" ${o.kind === "ap" ? "selected" : ""}>应付</option></select></label>
+        <label>客商编码 <input id="ao-party" value="${esc(o.party_code)}" /></label>
+        <label>客商名称 <input id="ao-name" value="${esc(o.party_name || "")}" /></label>
+        <label>单据号 <input id="ao-doc" value="${esc(o.doc_no)}" /></label>
+        <label>单据日期 <input id="ao-date" value="${esc(o.doc_date)}" placeholder="YYYY-MM-DD" /></label>
+        <label>金额 <input id="ao-amount" value="${esc(o.amount)}" /></label>
+        <label>备注 <input id="ao-memo" value="${esc(o.memo || "")}" /></label>
+      </div>
+      <div class="foot"><button class="btn primary" id="ao-save">保存</button><button class="btn ghost" id="ao-cancel">取消</button></div>`);
+    $("#ao-cancel", m).onclick = closeModal;
+    $("#ao-save", m).onclick = async () => {
+      const body = {
+        kind: $("#ao-kind", m).value,
+        party_code: $("#ao-party", m).value.trim(),
+        party_name: $("#ao-name", m).value.trim(),
+        doc_no: $("#ao-doc", m).value.trim(),
+        doc_date: $("#ao-date", m).value.trim(),
+        amount: $("#ao-amount", m).value.trim(),
+        memo: $("#ao-memo", m).value.trim(),
+      };
+      try {
+        await api(`/arap-opening/${o.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        toast("已保存", "ok"); closeModal(); loadArap();
+      } catch (e) { toast(e.message, "err"); }
+    };
+  };
   const loadArap = async () => {
     try {
       const r = await api("/arap-opening");
@@ -1213,9 +1243,10 @@ async function viewSettle(main) {
       $("#arap-total").textContent = arows.length ? `应收合计 ${r.total_ar} · 应付合计 ${r.total_ap}` : "";
       $("#arap-list").innerHTML = arows.length
         ? `<table class="grid"><thead><tr><th>类型</th><th>客商</th><th>名称</th><th>单据号</th><th>单据日期</th><th class="num">金额</th><th>备注</th><th>录入</th><th></th></tr></thead><tbody>${arows.map((o) => `<tr><td>${o.kind === "ar" ? '<span class="tag">应收</span>' : '<span class="tag warn">应付</span>'}</td><td>${esc(o.party_code)}</td><td>${esc(o.party_name || "—")}</td><td>${esc(o.doc_no)}</td><td>${esc(o.doc_date)}</td><td class="num">${fmt(o.amount)}</td><td>${esc(o.memo || "")}</td><td>${esc(o.created_by)}</td>
-            <td class="row-actions">${can("voucher_new") ? `<button class="btn ghost sm" data-arap-del="${o.id}">删</button>` : ""}</td></tr>`).join("")}</tbody></table>
+            <td class="row-actions">${can("voucher_new") ? `<button class="btn ghost sm" data-arap-edit="${o.id}">改</button><button class="btn ghost sm" data-arap-del="${o.id}">删</button>` : ""}</td></tr>`).join("")}</tbody></table>
           <p class="muted" style="font-size:12px;margin-top:6px">期初明细为影子挂账：进入「账龄分析」（单据号标「期初」），暂不参与自动核销（核销 v2）；金额总额仍以科目期初为准。</p>`
         : `<div class="muted">暂无往来期初（点「去导入」按单据批量迁移）</div>`;
+      $all("[data-arap-edit]", main).forEach((b) => b.onclick = () => openArapEditor(arows.find((o) => String(o.id) === b.dataset.arapEdit)));
       $all("[data-arap-del]", main).forEach((b) => b.onclick = async () => {
         if (!(await confirmDialog("删除该期初明细行？", true))) return;
         try { await api(`/arap-opening/${b.dataset.arapDel}`, { method: "DELETE" }); toast("已删除", "ok"); loadArap(); } catch (e) { toast(e.message, "err"); }

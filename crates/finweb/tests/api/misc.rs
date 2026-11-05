@@ -2466,3 +2466,211 @@ async fn carry_forward_twice_explains_it_was_already_carried() {
         "本期有 1,000 费用，说「损益发生额均为零」是错的：{b}"
     );
 }
+
+/// v1.8.83 往来期初明细「修改」：PUT 真改、坏输入 400、不存在的行 404。
+///
+/// 这条盯的是「界面上明明有『改』按钮，点保存却什么都没变 / 报错看不懂」：
+/// 服务端必须把和 CSV 导入一样的校验挡在前面，并且返回人能看懂的中文。
+#[tokio::test]
+async fn arap_opening_update_api_writes_and_rejects_bad_input() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let db = state.db_for("b1").expect("打开 b1");
+    let mk = |kind: &str, doc: &str, party: &str, amt: &str| findb::settle::ArapOpening {
+        id: 0,
+        kind: kind.to_string(),
+        party_code: party.to_string(),
+        party_name: party.to_string(),
+        doc_no: doc.to_string(),
+        doc_date: "2025-12-31".to_string(),
+        amount: fincore::Money::parse(amt).unwrap(),
+        memo: String::new(),
+        created_by: "boss".to_string(),
+    };
+    let id =
+        findb::settle::arap_opening_insert(&db, &mk("ar", "XSQ-1", "Q01", "5000"), "boss").unwrap();
+    let other =
+        findb::settle::arap_opening_insert(&db, &mk("ap", "CGQ-1", "S01", "3000.5"), "boss")
+            .unwrap();
+
+    let put = |uri: String, body: serde_json::Value| {
+        let state = state.clone();
+        let sid = sid.clone();
+        async move {
+            let resp = handlers::router(state.clone())
+                .oneshot(authed_put(&uri, &sid, body))
+                .await
+                .unwrap();
+            let st = resp.status();
+            (st, body_string(resp).await)
+        }
+    };
+    let good = serde_json::json!({
+        "kind": "ap", "party_code": "S02", "party_name": "乙供应商",
+        "doc_no": "CGQ-9", "doc_date": "2025-11-30", "amount": "1234.56", "memo": "改过了"
+    });
+    let (st, b) = put(format!("/api/arap-opening/{id}"), good.clone()).await;
+    assert_eq!(st, StatusCode::OK, "合法修改应成功：{b}");
+
+    // 列表里真改了，且原始录入人没被冲掉、另一行没被动
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/arap-opening", &sid))
+        .await
+        .unwrap();
+    let b = body_string(resp).await;
+    let r: serde_json::Value = serde_json::from_str(&b).unwrap();
+    let row = r["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == id)
+        .unwrap();
+    assert_eq!(row["kind"], "ap", "类型应改：{b}");
+    assert_eq!(row["party_code"], "S02", "客商应改：{b}");
+    assert_eq!(row["party_name"], "乙供应商", "名称应改：{b}");
+    assert_eq!(row["doc_no"], "CGQ-9", "单据号应改：{b}");
+    assert_eq!(row["doc_date"], "2025-11-30", "日期应改：{b}");
+    assert_eq!(
+        money_num(row["amount"].as_str().unwrap()),
+        1234.56,
+        "金额应改：{b}"
+    );
+    assert_eq!(row["memo"], "改过了", "备注应改：{b}");
+    assert_eq!(row["created_by"], "boss", "原始录入人不该被表单冲掉：{b}");
+    let other_row = r["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == other)
+        .unwrap();
+    assert_eq!(other_row["doc_no"], "CGQ-1", "另一行不该被动：{b}");
+
+    // 坏输入一律 400，且原行保持不变
+    for (tag, patch) in [
+        ("类型", serde_json::json!({ "kind": "AR" })),
+        ("空客商", serde_json::json!({ "party_code": "  " })),
+        ("空单据号", serde_json::json!({ "doc_no": "" })),
+        ("坏日期", serde_json::json!({ "doc_date": "2025/11/30" })),
+        ("零金额", serde_json::json!({ "amount": "0" })),
+        ("负金额", serde_json::json!({ "amount": "-5" })),
+        ("坏金额格式", serde_json::json!({ "amount": "abc" })),
+    ] {
+        let mut body = good.clone();
+        let obj = body.as_object_mut().unwrap();
+        for (k, v) in patch.as_object().unwrap() {
+            obj.insert(k.clone(), v.clone());
+        }
+        let (st, b) = put(format!("/api/arap-opening/{id}"), body).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{tag} 应被拒：{b}");
+    }
+    // 撞单据号（改成另一行已有的 kind+客商+单据号）也要 400
+    let mut dup = good.clone();
+    dup["kind"] = serde_json::json!("ap");
+    dup["party_code"] = serde_json::json!("S01");
+    dup["doc_no"] = serde_json::json!("CGQ-1");
+    let (st, b) = put(format!("/api/arap-opening/{id}"), dup).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "撞单据号应被拒：{b}");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/arap-opening", &sid))
+        .await
+        .unwrap();
+    let b = body_string(resp).await;
+    let r: serde_json::Value = serde_json::from_str(&b).unwrap();
+    let row = r["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["id"] == id)
+        .unwrap();
+    assert_eq!(row["doc_no"], "CGQ-9", "坏输入不该把原行改坏：{b}");
+    assert_eq!(
+        money_num(row["amount"].as_str().unwrap()),
+        1234.56,
+        "坏输入不该改金额：{b}"
+    );
+
+    // 改已删掉 / 根本不存在的行：404，而不是静默 200
+    let (st, b) = put("/api/arap-opening/999999".to_string(), good).await;
+    assert_eq!(st, StatusCode::NOT_FOUND, "不存在的行应 404：{b}");
+}
+
+/// 修改与删除同权：只读角色不能改往来期初明细（否则导入错了谁都能改）。
+#[tokio::test]
+async fn arap_opening_update_requires_voucher_new() {
+    let (state, _bd, _dir) = test_state();
+    let (_, boss_sid) = login(&state, "boss", "Admin!2026").await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/platform/users",
+            &boss_sid,
+            serde_json::json!({ "username": "view_ao", "display_name": "view_ao", "password": "Init@123456" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "开通平台账号");
+    assert_eq!(select_book(&state, &boss_sid, "b1").await, StatusCode::OK);
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/users",
+            &boss_sid,
+            serde_json::json!({
+                "username": "view_ao", "display_name": "view_ao", "password": "Init@123456",
+                "role": "viewer", "must_change_pwd": false,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "邀请只读角色");
+    let (st, sid0) = login(&state, "view_ao", "Init@123456").await;
+    assert_eq!(st, StatusCode::OK, "平台登录");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/change-password",
+            &sid0,
+            serde_json::json!({ "old": "Init@123456", "new": "Pass123456" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "首登改密");
+    let (st, sid) = login(&state, "view_ao", "Pass123456").await;
+    assert_eq!(st, StatusCode::OK, "改密后重登");
+    assert_eq!(select_book(&state, &sid, "b1").await, StatusCode::OK);
+
+    let db = state.db_for("b1").expect("打开 b1");
+    let id = findb::settle::arap_opening_insert(
+        &db,
+        &findb::settle::ArapOpening {
+            id: 0,
+            kind: "ar".into(),
+            party_code: "Q01".into(),
+            party_name: "甲客户".into(),
+            doc_no: "XSQ-1".into(),
+            doc_date: "2025-12-31".into(),
+            amount: fincore::Money::parse("5000").unwrap(),
+            memo: String::new(),
+            created_by: "boss".into(),
+        },
+        "boss",
+    )
+    .unwrap();
+    let body = serde_json::json!({
+        "kind": "ar", "party_code": "Q01", "party_name": "甲客户",
+        "doc_no": "XSQ-1", "doc_date": "2025-12-31", "amount": "9999", "memo": ""
+    });
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_put(&format!("/api/arap-opening/{id}"), &sid, body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "只读角色不该能改");
+    let row = findb::settle::arap_opening_list(&db, None)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == id)
+        .unwrap();
+    assert_eq!(
+        row.amount,
+        fincore::Money::parse("5000").unwrap(),
+        "被拒的修改不该落库"
+    );
+}

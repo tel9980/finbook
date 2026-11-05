@@ -1627,3 +1627,100 @@ fn unsettle_part_rejects_more_than_the_record() {
     assert!(err.contains("超过"), "期望提示超过记录金额，实际：{err}");
     assert_eq!(list(&db, "112201").unwrap()[0].amount, m("3000"));
 }
+
+/// v1.8.83 往来期初明细「修改」：改完要真的改对，且不能把导入校验绕过去。
+///
+/// 盯的失效形态：只改了金额没改别的（或反过来）、把原始录入人冲掉、
+/// 允许把单据号改成撞上另一行（下次 CSV 重导会被幂等判重误跳过）、
+/// 允许空客商/坏日期/负数金额（和导入口径不一致）、改不存在的行却报成功。
+#[test]
+fn arap_opening_update_validates_and_keeps_creator() {
+    let db = tmpdb("arap_opening_update");
+    let mk = |kind: &str, party: &str, doc: &str, amt: &str| ArapOpening {
+        id: 0,
+        kind: kind.to_string(),
+        party_code: party.to_string(),
+        party_name: "甲客户".to_string(),
+        doc_no: doc.to_string(),
+        doc_date: "2025-12-31".to_string(),
+        amount: Money::parse(amt).unwrap(),
+        memo: "老账".to_string(),
+        created_by: String::new(),
+    };
+    let id = arap_opening_insert(&db, &mk("ar", "C01", "Q-001", "5000"), "importer").unwrap();
+    let other = arap_opening_insert(&db, &mk("ar", "C01", "Q-002", "3000"), "importer").unwrap();
+
+    // 正常修改：类型/客商/名称/单据号/日期/金额/备注全都落库
+    let mut o = mk("ap", "S02", "Q-003", "1234.56");
+    o.party_name = "乙供应商".to_string();
+    o.doc_date = "2025-11-30".to_string();
+    o.memo = "改过了".to_string();
+    arap_opening_update(&db, id, &o).unwrap();
+    let rows = arap_opening_list(&db, None).unwrap();
+    let got = rows.iter().find(|r| r.id == id).unwrap();
+    assert_eq!(got.kind, "ap");
+    assert_eq!(got.party_code, "S02");
+    assert_eq!(got.party_name, "乙供应商");
+    assert_eq!(got.doc_no, "Q-003");
+    assert_eq!(got.doc_date, "2025-11-30");
+    assert_eq!(got.amount, Money::parse("1234.56").unwrap());
+    assert_eq!(got.memo, "改过了");
+    assert_eq!(got.created_by, "importer", "原始录入人不该被表单冲掉");
+    // 另一行不受影响
+    assert_eq!(rows.iter().find(|r| r.id == other).unwrap().doc_no, "Q-002");
+
+    // 改单据号不能撞上另一行（导入按 kind+客商+单据号幂等判重）
+    let mut dup = mk("ap", "S02", "Q-003", "1234.56");
+    dup.doc_no = "Q-002".to_string();
+    dup.party_code = "C01".to_string();
+    dup.kind = "ar".to_string();
+    let err = arap_opening_update(&db, id, &dup).unwrap_err().to_string();
+    assert!(err.contains("单据号"), "期望提示单据号重复，实际：{err}");
+
+    // 逐条拒绝坏输入（与 CSV 导入同口径）
+    let bad_kind = mk("AR", "C01", "Q-001", "5000");
+    assert!(
+        arap_opening_update(&db, id, &bad_kind).is_err(),
+        "kind 只允许 ar/ap"
+    );
+    let mut bad_party = mk("ar", "C01", "Q-001", "5000");
+    bad_party.party_code = "  ".to_string();
+    assert!(
+        arap_opening_update(&db, id, &bad_party).is_err(),
+        "客商编码不能空"
+    );
+    let mut bad_doc = mk("ar", "C01", "Q-001", "5000");
+    bad_doc.doc_no = String::new();
+    assert!(
+        arap_opening_update(&db, id, &bad_doc).is_err(),
+        "单据号不能空"
+    );
+    let mut bad_date = mk("ar", "C01", "Q-001", "5000");
+    bad_date.doc_date = "2025/12/31".to_string();
+    assert!(
+        arap_opening_update(&db, id, &bad_date).is_err(),
+        "日期须 YYYY-MM-DD"
+    );
+    let bad_amount = mk("ar", "C01", "Q-001", "0");
+    assert!(
+        arap_opening_update(&db, id, &bad_amount).is_err(),
+        "金额须正数"
+    );
+    let bad_negative = mk("ar", "C01", "Q-001", "-5");
+    assert!(
+        arap_opening_update(&db, id, &bad_negative).is_err(),
+        "负数金额不允许"
+    );
+
+    // 坏输入不能把原来那行改坏
+    let after = arap_opening_list(&db, None).unwrap();
+    let still = after.iter().find(|r| r.id == id).unwrap();
+    assert_eq!(still.amount, Money::parse("1234.56").unwrap());
+    assert_eq!(still.doc_no, "Q-003");
+
+    // 不存在的行要报错，不能静默成功
+    let err = arap_opening_update(&db, 999_999, &mk("ar", "C09", "Q-999", "1"))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("未找到"), "期望提示未找到，实际：{err}");
+}
