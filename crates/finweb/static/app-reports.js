@@ -27,6 +27,11 @@ async function viewReports(main) {
       <button class="btn ghost sm" id="r-pdf">导出 PDF</button>` : `<span class="tag warn" title="无导出权限">无导出权限，仅可打印</span>`}
       <button class="btn ghost sm" id="r-print">打印预览</button>
     </div>
+    <div class="muted" style="font-size:12px;margin:2px 0 8px;line-height:1.7">
+      这张表一行一个科目。借方和贷方是记账的两个方向，不用背 ——
+      想知道「月底还剩多少」直接看 <b>期末</b> 这一列；想知道「年初到现在一共多少」看 <b>本年累计</b> 两列。
+      <b>方向</b> 只是说明这个科目的余额通常在哪一边（资产在借、欠款在贷）。
+    </div>
     <div class="panel"><table class="grid" id="r-table"><thead><tr>
       <th>科目编码</th><th>科目名称</th><th>方向</th><th class="num">期初</th><th class="num">本期借方</th><th class="num">本期贷方</th><th class="num">期末</th><th class="num">本年累计借方</th><th class="num">本年累计贷方</th>
     </tr></thead><tbody><tr><td colspan="9" class="muted">点击「生成科目余额表」</td></tr></tbody></table></div>

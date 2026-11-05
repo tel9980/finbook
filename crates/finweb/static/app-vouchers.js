@@ -607,6 +607,11 @@ async function openVoucherEditor(id, seedEntries) {
       <tbody></tbody>
     </table>
     ${editable ? `<button class="btn ghost sm" id="v-add">+ 增加分录</button>` : ""}
+    ${editable ? `<div class="muted" style="font-size:12px;margin-top:6px;line-height:1.7">
+      怎么填：一笔业务拆两行 —— 钱花到哪去（或谁欠你）写一行，钱从哪来（或你还欠谁）写另一行，
+      两边钱数必须一样，下面「差额」变成 0.00 才能保存。<br/>
+      科目是下拉选的，拿不准就按业务里的词找：电费、房租、收款、原材料、工资。
+    </div>` : ""}
     <div style="margin-top:10px" class="muted">合计：借 <b id="v-dt">0.00</b> 　贷 <b id="v-ct">0.00</b> 　差额 <b id="v-diff">0.00</b></div>
     <div id="v-attach" class="muted" style="margin-top:8px">附件加载中…</div>
     <div class="foot">

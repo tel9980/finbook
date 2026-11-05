@@ -319,6 +319,11 @@ async function viewLedger(main) {
   await ensureAccounts();
   main.innerHTML = `
     <h2>账簿查询</h2>
+    <div class="muted" style="font-size:12px;margin:2px 0 8px;line-height:1.7">
+      三个页签的区别：<b>明细账</b> 把每一笔都列出来（对账用）；
+      <b>总账</b> 一个月只出一行合计数（看走势用）；
+      <b>日记账</b> 按日期排的流水（银行、现金对账用）。
+    </div>
     <div class="toolbar">
       <label>科目 <input id="l-code" list="acct-list" placeholder="科目编码，如 1002" style="width:160px" /></label>
       <datalist id="acct-list">${(state.accounts || []).map((a) => `<option value="${esc(a.code)}">${esc(a.name)}</option>`).join("")}</datalist>

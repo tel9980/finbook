@@ -170,6 +170,16 @@ impl BalanceTableView {
         widgets::page_header(ui, mode_title, |ui| {
             ui.label(RichText::new(format!("{} 行", row_count)).weak());
         });
+        // 借方/贷方是方向的名称，不用背：想知道结果直接读「期末」（月底还剩多少）
+        // 和「本年累计」（年初到现在一共多少）。
+        ui.label(
+            RichText::new(
+                "借方、贷方是记账的两个方向，不用背 —— 看结果直接读「期末」这一列（月底还剩多少），\
+                 看全年读「本年累计」两列",
+            )
+            .weak()
+            .size(12.0),
+        );
 
         widgets::toolbar(ui, |ui| {
             ui.label("期间");

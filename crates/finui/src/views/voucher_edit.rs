@@ -1024,6 +1024,18 @@ impl VoucherEdit {
         ui.separator();
 
         // ---------------- 分录表 ----------------
+        // 借方/贷方是这张表最劝退的两个词。一句话说清「怎么拆、怎么才能存」，
+        // 但不改列名 —— 会计要看的还是「借方金额」。
+        if !readonly {
+            ui.label(
+                RichText::new(
+                    "一笔业务拆两行：钱花到哪去（或谁欠你）写一行，钱从哪来（或你还欠谁）写另一行；\
+                     两边钱数必须一样，合计平衡了才能保存",
+                )
+                .weak()
+                .size(12.0),
+            );
+        }
         let n = self.rows.len();
         let chart = ctx.chart();
         let aux_names = &ctx.st.aux_names;

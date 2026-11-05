@@ -167,6 +167,16 @@ impl LedgerView {
         widgets::page_header(ui, "账簿查询", |ui| {
             ui.label(RichText::new(format!("{} {}", self.code, acct_name)).weak());
         });
+        // 三个页签的专业名词，一句话讲清区别 —— 老板不需要背「总账/明细账」，
+        // 只需要知道「对账看哪个、看走势看哪个」。
+        ui.label(
+            RichText::new(
+                "明细账＝每一笔都列出来（对账用）；总账＝一个月一行合计数（看走势）；\
+                 日记账＝按日期排的流水（银行、现金对账用）",
+            )
+            .weak()
+            .size(12.0),
+        );
         if self.scope_blocked {
             ui.colored_label(
                 crate::theme::palette::CREDIT,
