@@ -1707,12 +1707,15 @@ const MUT = [
     cmd: FSETTLE("arap_opening_update_validates_and_keeps_creator"),
   },
   {
-    // 把原始录入人一并覆盖：审计痕迹被表单冲掉，看不出这行原本是谁导进来的
+    // 把原始录入人一并覆盖：审计痕迹被 UPDATE 冲掉，看不出这行原本是谁导进来的。
+    // 落点必须在 findb 的 UPDATE SQL —— handler 里传 created_by 是没用的（SQL 不写这列，
+    // 改 handler 根本破坏不了数据，测试会假阳性放过）。findb 单测里 o.created_by 是空串，
+    // 一旦把它加进 SET，断言「仍是 importer」立刻红。
     name: "54 修改往来期初冲掉原始录入人",
-    file: "crates/finweb/src/handlers/settle.rs",
-    from: "        created_by: cur.created_by,",
-    to: "        created_by: format!(\"web_{}\", cur.created_by),",
-    cmd: API("arap_opening_update_api_writes_and_rejects_bad_input"),
+    file: "crates/findb/src/settle/opening.rs",
+    from: "    let n = db.conn().execute(\n        \"UPDATE arap_opening SET kind=?2,party_code=?3,party_name=?4,doc_no=?5,doc_date=?6,amount=?7,memo=?8 WHERE id=?1\",\n        rusqlite::params![\n            id,\n            o.kind,\n            o.party_code,\n            o.party_name,\n            o.doc_no,\n            o.doc_date,\n            crate::exact_param(o.amount),\n            o.memo\n        ],\n    )?;",
+    to: "    let n = db.conn().execute(\n        \"UPDATE arap_opening SET kind=?2,party_code=?3,party_name=?4,doc_no=?5,doc_date=?6,amount=?7,memo=?8,created_by=?9 WHERE id=?1\",\n        rusqlite::params![\n            id,\n            o.kind,\n            o.party_code,\n            o.party_name,\n            o.doc_no,\n            o.doc_date,\n            crate::exact_param(o.amount),\n            o.memo,\n            o.created_by\n        ],\n    )?;",
+    cmd: FSETTLE("arap_opening_update_validates_and_keeps_creator"),
   },
   {
     // 允许单据号撞上另一行：下次 CSV 重导按三元组幂等跳过，会静悄悄漏一笔老账
