@@ -1733,6 +1733,16 @@ const MUT = [
     to: "    let db = &user.db;\n    // 先确认目标还在",
     cmd: API("arap_opening_update_requires_voucher_new"),
   },
+  {
+    // 负数金额的提示讲错方向：应收行被教去填 1123 预付账款。
+    // 账仍然是平的（这一行本来就被跳过），所以只有提示文案错 —— 用户照着做就把
+    // 客户预交的钱记成「我先付给供应商」，科目和方向双错，事后极难发现。
+    name: "57 往来期初导入负数提示讲错方向",
+    file: "crates/findb/src/imports.rs",
+    from: "            let tip = if kind == \"ar\" {",
+    to: "            let tip = if kind == \"customer\" {",
+    cmd: FIMPORT("import_arap_opening_negative_amount_tip_matches_direction"),
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

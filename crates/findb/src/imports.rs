@@ -1347,7 +1347,10 @@ fn import_arap_opening_rows(db: &Db, rows: &[Vec<String>], who: &str) -> DbResul
             // 负数不是「填错了」，是「填错了地方」：客户预交、先付定金都很常见，
             // 但它们属于预收/预付，不进应收/应付台账。只说「必须大于 0」，用户会去
             // 改成正数蒙过去，于是应收虚增一笔、预收彻底消失。
-            let tip = if kind == "customer" {
+            // 这里判断的必须是 arap_kind_of 的产物（"ar"/"ap"），不是 "customer"。
+            // 曾经写成 `kind == "customer"` 恒为假，于是应收行的负数也拿到「预付」提示，
+            // 客户预交的钱被教去填 1123 预付账款 —— 科目和方向双错。
+            let tip = if kind == "ar" {
                 "客户预交的钱属于预收，请填在「③ 账户余额」的 2203 预收账款，并写上客户编码；\
                  「① 客户应收」只填客户欠你的正数"
             } else {
@@ -2923,5 +2926,48 @@ mod tests {
                 .sum();
             assert_eq!(d, c, "凭证 #{id} 借贷不平衡（半张凭证落库）");
         }
+    }
+    /// 负数金额的提示必须分清「谁欠谁」：应收行的负数讲预收（2203），
+    /// 应付行的负数讲预付（1123）。
+    ///
+    /// 加这条的起因：判断写成了 `kind == "customer"`，而 `arap_kind_of` 只会返回
+    /// "ar"/"ap"，条件恒为假 —— 应收行的负数也被教去填 1123 预付账款，
+    /// 客户预交的钱记成了「我先付给供应商」，科目和方向双错，而且账还平，
+    /// 不看提示根本发现不了。
+    #[test]
+    fn import_arap_opening_negative_amount_tip_matches_direction() {
+        let db = mem();
+        let csv = "\u{feff}类型,客商编码,单据号,单据日期,金额,客商名称,备注\n\
+                   应收,C01,AR-1,2025-12-31,-100,甲客户,\n\
+                   应付,S01,AP-1,2025-12-31,-200,乙供应商,\n";
+        let res = import_arap_opening(&db, csv, "u1").unwrap();
+        assert_eq!(res.ok, 0, "负数都不该进台账：{:?}", res.warnings);
+        assert_eq!(res.skipped, 2, "两行都应跳过：{:?}", res.warnings);
+        let ar_warn = res
+            .warnings
+            .iter()
+            .find(|w| w.contains("第 2 行"))
+            .unwrap_or_else(|| panic!("缺应收行提示：{:?}", res.warnings));
+        assert!(
+            ar_warn.contains("预收") && ar_warn.contains("2203"),
+            "应收行的负数应指向预收 2203，实际：{ar_warn}"
+        );
+        assert!(
+            !ar_warn.contains("预付"),
+            "应收行的负数不该讲预付，实际：{ar_warn}"
+        );
+        let ap_warn = res
+            .warnings
+            .iter()
+            .find(|w| w.contains("第 3 行"))
+            .unwrap_or_else(|| panic!("缺应付行提示：{:?}", res.warnings));
+        assert!(
+            ap_warn.contains("预付") && ap_warn.contains("1123"),
+            "应付行的负数应指向预付 1123，实际：{ap_warn}"
+        );
+        assert!(
+            !ap_warn.contains("预收"),
+            "应付行的负数不该讲预收，实际：{ap_warn}"
+        );
     }
 }
