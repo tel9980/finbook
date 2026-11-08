@@ -1294,6 +1294,9 @@ fn home_brief(
         both: !p.also.is_zero(),
     };
     let net = mp.net();
+    // 「还有几张没记账」在首页出现两次（概览字段 + 一句话结论），算一次、用两处：
+    // 两处各写一遍 `draft + audited` 时，改一处漏一处就是「上面说有 3 张、下面说都记完了」。
+    let unposted = draft + audited;
     // 「账有没有记错」：小白只需要一句结论，逐项数字去「报表 → 试算平衡」看。
     //
     // 这里**不带**数据范围，与桌面端一致：按人裁开之后同一条凭证的对方分录
@@ -1328,7 +1331,7 @@ fn home_brief(
     let v = findb::verdict::verdict(&findb::verdict::Facts {
         net_profit: t.net_profit,
         revenue: t.revenue,
-        unposted: draft + audited,
+        unposted,
         overdue_90: mp.overdue_90,
         overdue_90_count: mp.overdue_90_count,
         payable: mp.payable,
@@ -1345,7 +1348,7 @@ fn home_brief(
         net_profit_diff: (nc - prev_np).fmt_money(),
         margin,
         cost_top,
-        unposted: draft + audited,
+        unposted,
         money: HomeMoney {
             receivable: mp.receivable.fmt_money(),
             payable: mp.payable.fmt_money(),

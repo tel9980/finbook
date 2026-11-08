@@ -423,8 +423,8 @@ const MUT = [
     // 没记账的凭证不再提示 → 老板看到"这个月只赚这么点"却不知道是自己没记账
     name: "⑰ 首页不提示未记账凭证",
     file: "crates/finweb/src/handlers.rs",
-    from: "        unposted: draft + audited,",
-    to: "        unposted: 0,",
+    from: "    let unposted = draft + audited;",
+    to: "    let unposted = 0;",
     cmd: HOME("draft_vouchers_warn_but_do_not_count"),
   },
   {

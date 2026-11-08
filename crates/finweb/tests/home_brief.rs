@@ -237,6 +237,14 @@ async fn draft_vouchers_warn_but_do_not_count() {
     let b = brief(&state, &sid).await;
     assert_eq!(b["unposted"], 1, "应有 1 张没记账的凭证：{b}");
     assert_eq!(b["revenue"], "0.00", "草稿不该算进收入：{b}");
+    // 首屏那行字也得说这件事。只守 `unposted` 的话，把这个数藏起来
+    // （或者只拿去填概览、不喂给一句话结论）测试照样绿。
+    assert_eq!(b["verdict"]["kind"], "unposted", "首页该先提醒去记账：{b}");
+    assert_eq!(b["verdict"]["urgent"], true, "没记账属于急事：{b}");
+    assert_eq!(
+        b["verdict"]["view"], "vouchers",
+        "「去处理」该跳到凭证查询：{b}"
+    );
 }
 
 /// 同一家既是客户又是供应商（宏源那种）：两行都要能轧出净额
