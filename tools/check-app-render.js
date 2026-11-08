@@ -58,6 +58,10 @@ function extractFn(src, name) {
  * 既有一条正常行、也有一条停用的，模板里两个分支都会被求值）。
  * stubs 里是这段函数体引用到的外部名字 —— 给**函数**还是给常量都行。
  */
+// 「一句话结论」的配色表在前端是模块级常量，函数体里引用它；抽函数时它不在作用域内，
+// 所以这里按**原样**给一份（改配色表时这里要同步，否则检查会报「未定义」而不是假绿）。
+const VERDICT_CLASS = { unposted: "warn", overdue: "alert", net_debt: "note", no_revenue: "note", ok: "ok" };
+
 const CASES = [
   {
     fn: "renderAux",
@@ -104,6 +108,64 @@ const CASES = [
       downloadUrl: () => {},
     },
   },
+  // 首屏「一句话结论」：文案与判定在后端（findb::verdict），前端只负责显示。
+  // 这里守两件前端自己的事：颜色/跳转看 kind 不看文字；没权限时不给「去处理」按钮
+  // （只读用户点过去只会看到「无权限」，不如把话留给他转告会计）。
+  {
+    fn: "homeVerdict",
+    args: [
+      {
+        verdict: {
+          kind: "unposted",
+          text: "⚠ 还有 3 张凭证没记账，下面的 8,000.00 是「已记账部分」的利润，可能偏小。",
+          view: "vouchers",
+          urgent: true,
+        },
+      },
+    ],
+    stubs: { VERDICT_CLASS, esc: (s) => String(s == null ? "" : s), can: () => true },
+    expect: ["home-verdict warn", 'data-vd-go="vouchers"', "还有 3 张凭证没记账"],
+  },
+  {
+    fn: "homeVerdict",
+    args: [
+      { verdict: { kind: "ok", text: "本月净利润 0.00，收支正常，暂无卡住的事。", view: "", urgent: false } },
+    ],
+    stubs: { VERDICT_CLASS, esc: (s) => String(s == null ? "" : s), can: () => true },
+    expect: ["home-verdict ok"],
+    absent: ["data-vd-go"],
+  },
+  {
+    fn: "homeVerdict",
+    args: [
+      { verdict: { kind: "overdue", text: "⚠ 3 家客户的钱超过 90 天没收回。", view: "settle", urgent: true } },
+    ],
+    stubs: { VERDICT_CLASS, esc: (s) => String(s == null ? "" : s), can: () => false },
+    expect: ["home-verdict alert"],
+    absent: ["data-vd-go"],
+  },
+  // 「账有没有记错」：balanced 为 null 时**不能**说「账是平的」——
+  // 那是首页最不能出错的一句话。
+  {
+    fn: "homeTrial",
+    args: [{ trial: { balanced: true, diff: "0.00" } }],
+    stubs: { esc: (s) => String(s == null ? "" : s) },
+    expect: ["home-trial ok", "账是平的"],
+  },
+  {
+    fn: "homeTrial",
+    args: [{ trial: { balanced: false, diff: "100.00" } }],
+    stubs: { esc: (s) => String(s == null ? "" : s) },
+    expect: ["home-trial bad", "100.00", "账不平"],
+    absent: ["账是平的"],
+  },
+  {
+    fn: "homeTrial",
+    args: [{ trial: { balanced: null, diff: "0.00" } }],
+    stubs: { esc: (s) => String(s == null ? "" : s) },
+    expect: ["暂时算不出来"],
+    absent: ["账是平的", "home-trial ok"],
+  },
 ];
 
 function main() {
@@ -132,7 +194,18 @@ function main() {
       // eslint-disable-next-line no-new-func
       const factory = new Function("__stubs", `${decl}\n${body}\nreturn ${c.fn};`);
       const f = factory(c.stubs);
-      f(...JSON.parse(JSON.stringify(c.args)));
+      const out = f(...JSON.parse(JSON.stringify(c.args)));
+      // 只验「不抛错」是不够的：模板里少写一个 class 或少了权限判断，照样不抛错。
+      // 需要守具体输出的用例，用 expect/absent 写明必须出现/必须不出现的片段。
+      const html = typeof out === "string" ? out : "";
+      const missing = (c.expect || []).filter((t) => !html.includes(t));
+      const leaked = (c.absent || []).filter((t) => html.includes(t));
+      if (missing.length || leaked.length) {
+        if (missing.length) console.log(`FAIL ${c.fn} 输出里缺少：${missing.join(" / ")}`);
+        if (leaked.length) console.log(`FAIL ${c.fn} 输出里不该出现：${leaked.join(" / ")}`);
+        bad++;
+        continue;
+      }
       console.log(`OK   ${c.fn} 渲染通过`);
     } catch (e) {
       console.log(`FAIL ${c.fn} 渲染抛错：${e.constructor.name}: ${e.message}`);
