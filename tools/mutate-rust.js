@@ -1743,6 +1743,43 @@ const MUT = [
     to: "            let tip = if kind == \"customer\" {",
     cmd: FIMPORT("import_arap_opening_negative_amount_tip_matches_direction"),
   },
+  // v1.8.86 首屏「一句话结论」+「账有没有记错」：判定搬到 findb 给两端共用，
+  // 失效形态是「话还在、但挑错了那一件」——用户照着做，先办的事是错的。
+  {
+    // 把「有凭证没记账」这一条漏掉：这句 PR 优先级最高的提醒一消失，老板就会
+    // 拿着偏小的利润去做报价、发工资，而且看不出哪里不对。
+    name: "58 首屏漏掉「没记账」这条最急的提醒",
+    file: "crates/findb/src/verdict.rs",
+    from: "    if f.unposted > 0 {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "verdict::tests::有凭证没记账排在最前面"],
+  },
+  {
+    // 净欠外面时不看应付：客户预交的钱（预收）也会被说成「欠供应商」，
+    // 让老板去安排一笔根本不该付的款。
+    name: "59 净欠外面不看应付款（预收被当成欠供应商）",
+    file: "crates/findb/src/verdict.rs",
+    from: "    if !f.net.is_zero() && f.net.is_negative() && !f.payable.is_zero() {",
+    to: "    if !f.net.is_zero() && f.net.is_negative() {",
+    cmd: ["test", "-p", "findb", "--lib", "verdict::tests::没有应付款就不算净欠外面"],
+  },
+  {
+    // 账平不平只看期末：本期记错 + 期初恰好反向，期末看着就是平的，
+    // 于是首页说「✔ 账是平的」，用户放心出报表。
+    name: "60 账平不平只看期末（本期错账看不见）",
+    file: "crates/findb/src/verdict.rs",
+    from: "        balanced: tb.is_balanced(),",
+    to: "        balanced: tb.end_balanced(),",
+    cmd: ["test", "-p", "findb", "--lib", "verdict::tests::期末看着平但本期记错也不能算平"],
+  },
+  {
+    // 差额报错地方：本期不平却拿期初的差额去报，用户按这个数一查就对不上。
+    name: "61 账不平的差额报错那一处",
+    file: "crates/findb/src/verdict.rs",
+    from: "    } else if !period_diff.is_zero() {",
+    to: "    } else if false {",
+    cmd: ["test", "-p", "findb", "--lib", "verdict::tests::期末看着平但本期记错也不能算平"],
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

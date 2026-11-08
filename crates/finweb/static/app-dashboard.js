@@ -14,6 +14,40 @@
 // 小厂常见的死法是账面赚钱、钱全压在客户手里 —— 只看净利润看不出来。
 // 数据全部来自 /api/dashboard 的 brief 字段（后端复用报表那条取数路径）。
 // ---------------------------------------------------------------------------
+// 一句话结论：打开软件最该先办哪件事。
+//
+// 判定（含优先级和文案）在后端 `findb::verdict`，桌面端首屏读的是**同一份**——
+// 两端各写一套迟早会说成两种话（这边让先记账、那边让先催款）。
+// 这里只负责显示：颜色和跳转都看 `kind`，不去匹配文字（文案会改，类型不会）。
+const VERDICT_CLASS = { unposted: "warn", overdue: "alert", net_debt: "note", no_revenue: "note", ok: "ok" };
+function homeVerdict(b) {
+  const v = b && b.verdict;
+  if (!v || !v.text) return "";
+  const cls = VERDICT_CLASS[v.kind] || "note";
+  // 有明确去处才给按钮：兜底那句「收支正常」点进去也没事可办。
+  // 还要有权限 —— 只读用户点过去只会看到「无权限」，不如把话留给他转告会计。
+  const go = v.view && can("voucher_new")
+    ? `<button class="btn ghost sm" data-vd-go="${esc(v.view)}">去处理</button>`
+    : "";
+  return `<div class="home-verdict ${cls}"><div class="hv-text">${esc(v.text)}</div>${go}</div>`;
+}
+
+// 「账有没有记错」：小白只看结论，逐项数字去「报表 → 试算平衡」。
+// balanced 为 null 表示后端没算出来 —— 这时候**不假装是平的**，
+// 「账是平的」是首页最不能出错的一句话。
+function homeTrial(b) {
+  const t = b && b.trial;
+  if (!t) return "";
+  if (t.balanced === true) {
+    return `<div class="home-trial ok">✔ 账是平的，没有记错的凭证，可以放心出报表。</div>`;
+  }
+  if (t.balanced === false) {
+    return `<div class="home-trial bad">✖ 账不平，有凭证记错了。差 <b>${esc(t.diff)}</b>，
+      去「凭证查询」逐张看 —— 通常是某张凭证只填了借方没填贷方。</div>`;
+  }
+  return `<div class="home-trial">账平不平暂时算不出来，到「报表 → 试算平衡」看。</div>`;
+}
+
 function homeHero(d) {
   const b = d && d.brief;
   if (!b) return "";
@@ -185,7 +219,9 @@ async function viewDashboard(main) {
     <h2>我的工作台</h2>
     ${adminBanner}
     ${firstRun}
+    ${homeVerdict(d.brief)}
     ${homeHero(d)}
+    ${homeTrial(d.brief)}
     ${wbHtml.todo}
     <details class="wb-ref" ${firstRun ? "" : "open"}>
       <summary class="u-dim u-sm">账套概况</summary>
@@ -205,6 +241,7 @@ async function viewDashboard(main) {
   if ($("#wb-n")) $("#wb-n").onchange = (e) => { state.wbPeriods = Number(e.target.value); viewDashboard(main); };
   $all("[data-wb-go]").forEach((b) => b.onclick = () => goView(b.dataset.wbGo));
   $all("[data-fr-go]").forEach((b) => b.onclick = () => goView(b.dataset.frGo));
+  $all("[data-vd-go]").forEach((b) => b.onclick = () => goView(b.dataset.vdGo));
 }
 
 // ===========================================================================

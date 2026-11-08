@@ -421,6 +421,37 @@ pub struct HomeBrief {
     /// 没记账的凭证张数（草稿 + 已审未记）—— 这些没算进上面任何数字
     pub unposted: i64,
     pub money: HomeMoney,
+    /// 一句话结论：打开软件最该先办哪件事
+    ///
+    /// 文案与优先级由 `findb::verdict` 统一给出，桌面端首屏读的是同一份——
+    /// 两端各写一套就会出现「网页版让先催款、桌面端让先记账」。
+    pub verdict: HomeVerdict,
+    /// 账有没有记错（试算平衡的结论层）
+    pub trial: HomeTrial,
+}
+
+/// 首屏「一句话结论」：一句人话 + 机器能识别的类型
+#[derive(Serialize)]
+pub struct HomeVerdict {
+    /// 结论类型：unposted / overdue / net_debt / no_revenue / ok
+    ///
+    /// 前端按它配色和跳转，**不要**去匹配文字——文案会改，类型不会。
+    pub kind: String,
+    /// 屏幕上原样显示的那句话
+    pub text: String,
+    /// 点这句话该去的视图 id（空串 = 不用跳）
+    pub view: String,
+    /// 是不是"要马上处理"的那一类（决定用警示色还是正常色）
+    pub urgent: bool,
+}
+
+/// 「账有没有记错」：结论给小白，逐项数字去「报表 → 试算平衡」看
+#[derive(Serialize)]
+pub struct HomeTrial {
+    /// 借贷是否平；null = 算不出来（**不**假装是平的）
+    pub balanced: Option<bool>,
+    /// 不平时的差额（借 − 贷）；平或算不出来时是 "0.00"
+    pub diff: String,
 }
 
 #[derive(Serialize)]

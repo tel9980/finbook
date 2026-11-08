@@ -244,48 +244,41 @@ impl Dashboard {
     /// 仍然不知道这一个月到底怎么样。卡片挪到下面的「账目概况」里（一个都没少），
     /// 首屏让给这一句话 + 净利润 + 钱在哪。
     ///
-    /// 优先级：账没记完 > 钱压在客户手里 > 一切正常。
-    /// 为什么先提"没记账"：没记账的凭证不计入利润，此时说的"赚了多少"是偏小的，
-    /// 老板拿这个数去做决定就会错——这比催款更紧急。
-    fn verdict(&self) -> String {
-        let np = self.net_profit.fmt_money();
-        let unposted = self.draft + self.audited;
-        if unposted > 0 {
-            return format!(
-                "⚠ 还有 {unposted} 张凭证没记账，下面的 {np} 是「已记账部分」的利润，可能偏小。\
-                 去「凭证查询」勾选后批量记账，数字才是完整的。"
-            );
-        }
+    /// **判定本身不在这里**：文案与优先级都在 `findb::verdict`，网页版首屏读的是
+    /// 同一份。两端各写一套的话，同一本账会出现两种说法（这边让先记账、那边让先催款）。
+    fn verdict_facts(&self) -> findb::verdict::Facts {
+        let mut f = findb::verdict::Facts {
+            net_profit: self.net_profit,
+            revenue: self.revenue,
+            unposted: self.draft + self.audited,
+            ..Default::default()
+        };
+        // 「钱在哪」取不到（新账套/查询失败）时按没有应收应付处理：
+        // 只剩"没记账 / 没收入 / 一切正常"三种结论，不会凭空喊"去催款"。
         if let Some(m) = &self.money {
-            if m.overdue_90_count > 0 {
-                return format!(
-                    "⚠ 账面这个月{}，但 {} 家客户的钱超过 90 天没收回、共 {}。\
-                     小厂最常见的死法就是赚的钱全压在客户手里 —— 先去催这几笔。",
-                    if self.net_profit.is_negative() {
-                        "是亏的"
-                    } else {
-                        "是赚的"
-                    },
-                    m.overdue_90_count,
-                    m.overdue_90.fmt_money()
-                );
-            }
-            if !m.net().is_zero() && m.net().is_negative() && !m.payable.is_zero() {
-                return format!(
-                    "这个月净利润 {np}，但净欠外面 {}（欠供应商多于别人欠你），\
-                     手头现金 {}，留意付款节奏。",
-                    m.net().abs().fmt_money(),
-                    m.cash.fmt_money()
-                );
-            }
+            f.overdue_90 = m.overdue_90;
+            f.overdue_90_count = m.overdue_90_count;
+            f.payable = m.payable;
+            f.cash = m.cash;
+            f.net = m.net();
         }
-        if self.revenue.is_zero() {
-            return "本月还没有收入凭证 —— 是不是还没开始录？到「填制凭证」记第一笔加工费。"
-                .to_string();
+        f
+    }
+
+    fn verdict(&self) -> String {
+        findb::verdict::verdict(&self.verdict_facts()).text
+    }
+
+    /// 试算平衡的六个数：桌面端存成六个字段，判定要的是一整个 `TrialBalance`。
+    fn trial_balance(&self) -> fincore::TrialBalance {
+        fincore::TrialBalance {
+            begin_debit: self.begin_debit,
+            begin_credit: self.begin_credit,
+            period_debit: self.debit,
+            period_credit: self.credit,
+            end_debit: self.end_debit,
+            end_credit: self.end_credit,
         }
-        format!(
-            "本月净利润 {np}，收支正常，暂无卡住的事。月底记得：记账 → 结转损益 → 结账 → 备份。"
-        )
     }
 
     fn credit_end_hint(&self) -> String {
@@ -293,15 +286,12 @@ impl Dashboard {
     }
 
     fn verdict_color(&self) -> Color32 {
-        if self.draft + self.audited > 0 {
-            return palette::WARN;
+        // 颜色跟着结论类型走，不跟着文字走——文案随时会改，类型稳定。
+        match findb::verdict::verdict(&self.verdict_facts()).kind {
+            findb::verdict::VerdictKind::Unposted => palette::WARN,
+            findb::verdict::VerdictKind::Overdue => palette::CREDIT,
+            _ => palette::OK,
         }
-        if let Some(m) = &self.money {
-            if m.overdue_90_count > 0 {
-                return palette::CREDIT;
-            }
-        }
-        palette::OK
     }
 
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
@@ -640,8 +630,11 @@ impl Dashboard {
                     .show(&mut cols[0], |ui| {
                         ui.label(RichText::new("账有没有记错").strong());
                         ui.separator();
-                        let balanced = (self.end_debit - self.end_credit).round2().is_zero();
-                        if balanced {
+                        // 判定与网页版共用一份：三期都平才算平。
+                        // 只看期末会被「期初借多、本期贷多」这种正好抵消的错账骗过去，
+                        // 网页版说「不平」、这里说「✔ 是平的」，用户会以为其中一个算错了。
+                        let tv = findb::verdict::trial(&self.trial_balance());
+                        if tv.balanced {
                             ui.label(
                                 RichText::new("✔ 账是平的，没有记错的凭证")
                                     .color(palette::OK)
@@ -661,7 +654,7 @@ impl Dashboard {
                             ui.label(
                                 RichText::new(format!(
                                     "差 {}，去「凭证查询」逐张看。",
-                                    (self.end_debit - self.end_credit).fmt_money()
+                                    tv.diff.fmt_money()
                                 ))
                                 .color(palette::CREDIT)
                                 .size(12.0),

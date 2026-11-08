@@ -354,3 +354,76 @@ async fn selecting_a_book_lands_on_current_period_not_start_period() {
         "首页应显示当前期间（2026-02）的数，不是建账首月的：{txt}"
     );
 }
+
+/// 一句话结论 + 「账有没有记错」：这是「打开软件第一眼」的两块
+///
+/// 判定只有一份（`findb::verdict`），桌面端首屏读的也是它。这里从 HTTP 层
+/// 断言三件事：① 空账套说的是「还没开始录」而不是「一切正常」；
+/// ② 有凭证没记账时这句话**压过**其他所有情况（那是最紧急的，因为此时利润偏小）；
+/// ③ 试算结论由后端算，前端不自己猜。
+#[tokio::test]
+async fn dashboard_carries_verdict_and_trial_conclusion() {
+    let (state, _books, _tmp) = test_state();
+    let sid = boss_in_b1(&state).await;
+    paste_aux(&state, &sid, "customer", "C001\t奇园江门\n").await;
+
+    // ① 空账套：让先去记第一笔；账本身是平的
+    let b = brief(&state, &sid).await;
+    assert_eq!(
+        b["verdict"]["kind"], "no_revenue",
+        "空账套该说「本月还没有收入凭证」：{b}"
+    );
+    assert_eq!(b["verdict"]["view"], "vouchers", "点这句话该去凭证页：{b}");
+    assert_eq!(
+        b["verdict"]["urgent"], false,
+        "「还没开始录」不是紧急事项，不该用警示色：{b}"
+    );
+    assert!(
+        b["verdict"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("本月还没有收入凭证"),
+        "文案要直说没收入：{b}"
+    );
+    assert_eq!(b["trial"]["balanced"], true, "空账套借贷是平的：{b}");
+    assert_eq!(b["trial"]["diff"], "0.00", "平的时候差额是 0.00：{b}");
+
+    // ② 有凭证没记账 → 这句话必须排第一（此时利润偏小，拿去做决定会错）
+    let v1 = voucher(
+        &state,
+        &sid,
+        202601,
+        "2026-01-10",
+        1,
+        serde_json::json!([
+            {"line":0,"summary":"卖货","account_code":"112201","debit":"100000","credit":"0","aux":{"customer":"C001"}},
+            {"line":1,"summary":"卖货","account_code":"600101","debit":"0","credit":"100000"}
+        ]),
+    )
+    .await;
+    let b = brief(&state, &sid).await;
+    assert_eq!(b["verdict"]["kind"], "unposted", "先记账排最前：{b}");
+    assert_eq!(b["verdict"]["urgent"], true, "这是要马上处理的：{b}");
+    assert_eq!(b["verdict"]["view"], "vouchers", "{b}");
+    assert!(
+        b["verdict"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("还有 1 张凭证没记账"),
+        "要说清有几张：{b}"
+    );
+
+    // ③ 记账之后：本月有收入、没人超期 → 兜底那句（不用跳转）
+    post_voucher(&state, &sid, v1).await;
+    let b = brief(&state, &sid).await;
+    assert_eq!(b["verdict"]["kind"], "ok", "一切正常：{b}");
+    assert_eq!(b["verdict"]["view"], "", "兜底那句没有地方可去：{b}");
+    assert!(
+        b["verdict"]["text"]
+            .as_str()
+            .unwrap_or("")
+            .contains("收支正常"),
+        "{b}"
+    );
+    assert_eq!(b["trial"]["balanced"], true, "记完账还是平的：{b}");
+}

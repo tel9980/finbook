@@ -1661,6 +1661,29 @@ details.wb-ref .card .v { font-size: 14px; }
   border: 1px solid rgba(180, 83, 9, .15); border-radius: var(--r-md);
   padding: 7px 10px; line-height: 1.6;
 }
+
+/* 一句话结论：打开软件最该先办哪件事。
+   样式跟着后端给的 kind 走（warn / alert / note / ok），前端不猜语气。 */
+.home-verdict {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 14px 0 0; padding: 12px 16px;
+  background: var(--panel); border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg); box-shadow: var(--shadow);
+  font-size: 14.5px; line-height: 1.7; color: var(--text-dim);
+}
+.home-verdict .hv-text { flex: 1; min-width: 240px; }
+.home-verdict.warn { color: var(--warn); background: var(--warn-bg); border-color: rgba(180, 83, 9, .18); }
+.home-verdict.alert { color: var(--err); background: var(--err-bg); border-color: rgba(220, 38, 38, .18); }
+.home-verdict.ok { color: var(--ok); background: var(--ok-bg); border-color: rgba(13, 122, 63, .15); }
+
+/* 「账有没有记错」：结论层（逐项数字去「报表 → 试算平衡」看） */
+.home-trial {
+  margin: 0 0 18px; padding: 9px 14px;
+  font-size: 13px; line-height: 1.7; color: var(--text-dim);
+  border: 1px dashed var(--z-200); border-radius: var(--r-md);
+}
+.home-trial.ok { color: var(--ok); border-color: rgba(13, 122, 63, .25); background: var(--ok-bg); }
+.home-trial.bad { color: var(--err); border-color: rgba(220, 38, 38, .3); background: var(--err-bg); }
 .hm-grid {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px;
 }

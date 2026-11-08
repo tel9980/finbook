@@ -1294,6 +1294,47 @@ fn home_brief(
         both: !p.also.is_zero(),
     };
     let net = mp.net();
+    // 「账有没有记错」：小白只需要一句结论，逐项数字去「报表 → 试算平衡」看。
+    //
+    // 这里**不带**数据范围，与桌面端一致：按人裁开之后同一条凭证的对方分录
+    // 往往不在这个人的范围里，本来平的账会算成不平。首页要回答的是
+    // 「账本身有没有记错」，不是「我这一亩三分地平不平」。
+    // 结论只给平衡与否 + 差额，不给总额——总额才是数据范围该管的东西。
+    let trial = match BalanceSnapshot::load(db, &BalanceQuery::period(cur)) {
+        Ok(snap) => match accounts::chart(db) {
+            Ok(chart) => {
+                // 结论层（平不平、差多少）由 `findb::verdict::trial` 判，和桌面端同一份：
+                // 只看期末是不够的——本期记错了、期初又恰好反向，期末看着就是平的。
+                let tv = findb::verdict::trial(&snap.trial_balance(&chart));
+                HomeTrial {
+                    balanced: Some(tv.balanced),
+                    diff: tv.diff.fmt_money(),
+                }
+            }
+            Err(_) => HomeTrial {
+                balanced: None,
+                diff: fincore::Money::ZERO.fmt_money(),
+            },
+        },
+        // 算不出来就不下结论：宁可说「暂时算不出来」，也不能凭空写一句
+        // 「账是平的」——那是首页最不能出错的一句话。
+        Err(_) => HomeTrial {
+            balanced: None,
+            diff: fincore::Money::ZERO.fmt_money(),
+        },
+    };
+
+    // 一句话结论：去哪一页、什么颜色，全由 `findb::verdict` 统一决定。
+    let v = findb::verdict::verdict(&findb::verdict::Facts {
+        net_profit: t.net_profit,
+        revenue: t.revenue,
+        unposted: draft + audited,
+        overdue_90: mp.overdue_90,
+        overdue_90_count: mp.overdue_90_count,
+        payable: mp.payable,
+        cash: mp.cash,
+        net,
+    });
     Ok(HomeBrief {
         period: period_to_str(cur),
         revenue: t.revenue.fmt_money(),
@@ -1318,6 +1359,13 @@ fn home_brief(
             top_customers: mp.top_customers.iter().map(&party).collect(),
             top_suppliers: mp.top_suppliers.iter().map(&party).collect(),
         },
+        verdict: HomeVerdict {
+            kind: v.key().to_string(),
+            text: v.text.clone(),
+            view: v.view().to_string(),
+            urgent: v.kind.is_urgent(),
+        },
+        trial,
     })
 }
 

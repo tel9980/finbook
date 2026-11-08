@@ -65,6 +65,7 @@ pub mod taxprecheck;
 pub mod template;
 pub mod transfer;
 pub mod users;
+pub mod verdict;
 pub mod vouchers;
 pub mod warehouse;
 pub mod workbench;
