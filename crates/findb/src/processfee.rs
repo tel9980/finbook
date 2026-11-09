@@ -349,7 +349,7 @@ fn is_head(f0: &str) -> bool {
 }
 
 /// 第几列（越界给空串）
-fn col<'a>(f: &'a [String], i: usize) -> &'a str {
+fn col(f: &[String], i: usize) -> &str {
     f.get(i).map(|s| s.trim()).unwrap_or("")
 }
 

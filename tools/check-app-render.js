@@ -204,6 +204,18 @@ const CASES = [
     absent: ["没设系数"],
   },
   {
+    // 客户发来的价表是按客户报的，矩阵却停在「全部客户」—— 不提一句，
+    // 用户会看到满屏「未定价」，以为没导进去
+    fn: "importResultHtml",
+    args: [
+      { created: 2, updated: 0, skipped: 0, warnings: [] },
+      "上面的价如果挂在客户名下，右上角「客户编码」填上客户再看，才知道这个客户卖多少。",
+    ],
+    stubs: CELL_STUBS,
+    expect: ["新增 <b>2</b> 条", "右上角「客户编码」"],
+    absent: ["一行都没读到"],
+  },
+  {
     // 一行都没读到（粘错地方 / 空文本）：必须说人话，不能显示「新增 0 条」让人以为成功了
     fn: "importResultHtml",
     args: [{ created: 0, updated: 0, skipped: 0, warnings: [] }],

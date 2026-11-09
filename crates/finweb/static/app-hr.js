@@ -715,7 +715,7 @@ function priceCellHtml(row, c, canEdit) {
 
 // 导入结果说人话。抽成顶层函数是为了让 tools/check-app-render.js 能真调用它 ——
 // 这段文案是用户判断「到底导进去没有」的唯一依据，写错了没人看得见。
-function importResultHtml(r) {
+function importResultHtml(r, hint) {
   const created = Number(r.created) || 0;
   const updated = Number(r.updated) || 0;
   const skipped = Number(r.skipped) || 0;
@@ -728,11 +728,15 @@ function importResultHtml(r) {
   if (updated) parts.push(`覆盖 <b>${updated}</b> 条`);
   if (skipped) parts.push(`跳过 <b>${skipped}</b> 行`);
   const head = `<div style="color:${skipped ? "var(--warn)" : "var(--ok)"}">${parts.join("、")}</div>`;
-  if (!warns.length) return head;
+  // 导进来的价可能挂在客户名下（客户发来的价目表就是按客户报的）。
+  // 此时矩阵还停在「全部客户」，格子会显示「未定价」—— 用户会以为没导进去，
+  // 所以在结果里提一句「右上角填客户编码」。
+  const hintHtml = hint ? `<div class="muted" style="font-size:12px;margin-top:4px">${esc(hint)}</div>` : "";
+  if (!warns.length) return head + hintHtml;
   // 只列前 10 条：一次导 500 行时把每一行都摊出来，用户反而找不到重点
   const shown = warns.slice(0, 10).map((w) => `<li>${esc(w)}</li>`).join("");
   const more = warns.length > 10 ? `<li>…… 还有 ${warns.length - 10} 行没列出来</li>` : "";
-  return `${head}<ul style="margin:6px 0 0 18px;padding:0;font-size:12px;line-height:1.6">${shown}${more}</ul>`;
+  return `${head}<ul style="margin:6px 0 0 18px;padding:0;font-size:12px;line-height:1.6">${shown}${more}</ul>${hintHtml}`;
 }
 
 async function viewPriceRules(main) {
@@ -1051,7 +1055,13 @@ async function viewPriceRules(main) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-        out.innerHTML = importResultHtml(r);
+        const noCust = !$("#pr-cust", main).value.trim();
+        out.innerHTML = importResultHtml(
+          r,
+          noCust && r.created + r.updated > 0
+            ? "上面的价如果挂在客户名下，右上角「客户编码」填上客户再看，才知道这个客户卖多少。"
+            : "",
+        );
         if (r.created + r.updated > 0) {
           toast(`已导入 ${r.created + r.updated} 条`, "ok");
           loadMatrix();

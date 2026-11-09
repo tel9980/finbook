@@ -147,6 +147,9 @@ test("批量导入单价：粘一张表进来（表头跳过、坏行只跳自�
   await page.click('.nav-item[data-view="price-rules"]');
   await expect(page.locator("#pr-matrix")).toContainText("还没有任何单价", { timeout: 15_000 });
 
+  // 客户发来的价目表是按客户报的，所以矩阵也要按这个客户看 —— 输入客户再看，
+  // 导入完成后 loadMatrix() 会带着这个客户重新拉一次。
+  await page.fill("#pr-cust", "C01");
   await page.click("#pr-import");
   // 模拟「从 Excel 里复制三行粘进来」：带表头 + 两行正常 + 一行坏数据
   await page.fill(
