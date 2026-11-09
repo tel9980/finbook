@@ -1125,7 +1125,7 @@ impl RealmDb {
         let mut st = conn
             .prepare("SELECT * FROM realm_api_key")
             .expect("准备 dump 失败");
-        let cols: Vec<String> = st.column_names().iter().map(|s| s.to_string()).collect();
+        let cols: Vec<String> = st.column_names().map(|s| s.to_string()).collect();
         let mut out = cols.join("|");
         out.push('\n');
         let mut rows = st.query([]).expect("查询密钥表失败");

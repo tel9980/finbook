@@ -351,8 +351,6 @@ pub fn unit_import_template() -> String {
     out
 }
 
-/// 一行是不是表头：第一格出现「物料」「编码」「item」这类字样就跳过
-
 /// 第几列（越界给空串）
 fn col(f: &[String], i: usize) -> &str {
     f.get(i).map(|s| s.trim()).unwrap_or("")
