@@ -1139,8 +1139,10 @@ const MUT = [
     // 规则匹配取最差：物料+客户的专属规则被通配规则顶掉，报价按错单价算。
     name: "㊳ 加工费规则匹配取到最差的那条",
     file: "crates/findb/src/processfee.rs",
-    from: '            Some((r0, _)) => rank < *r0,',
-    to: '            Some((r0, _)) => rank > *r0,',
+    // v49 起匹配改成「按精度 0→3 依次挑，挑到就返回」（同一个循环里还要比生效日），
+    // 所以「取最差」等于把这个循环倒过来走。
+    from: "    for rank in 0..=3u8 {",
+    to: "    for rank in (0..=3u8).rev() {",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::规则匹配优先级与停用"],
   },
   {
@@ -1779,6 +1781,73 @@ const MUT = [
     from: "    } else if !period_diff.is_zero() {",
     to: "    } else if false {",
     cmd: ["test", "-p", "findb", "--lib", "verdict::tests::期末看着平但本期记错也不能算平"],
+  },
+  // v1.8.87 加工费多口径计价：一个工件同时按 只 / 米 / kg / ㎡ 报价。
+  // 失效形态基本都是「数字算错了但看着挺像」—— 单子照样出，钱就是错的。
+  {
+    // 折算不按口径位数抹平：300 只 × 0.0234 = 7.019999…，单上写 7.02，
+    // 客户拿计算器按一遍是 68.75 而不是 68.80，一句「你怎么算的」说不清。
+    name: "62 折算不按口径位数抹平（乘出来带一长串小数）",
+    file: "crates/findb/src/processfee.rs",
+    from: "    (qty * c.factor).round_dp(c.scale.clamp(0, SCALE_MAX) as u32)",
+    to: "    qty * c.factor",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::折算先按位数抹平再乘单价"],
+  },
+  {
+    // 报价不认口径：12 元/㎡ 的价拿去乘「300 只」，等于把面积价按只算，
+    // 一张 300 只的加工单能多算几百倍，而且单子上看不出错。
+    name: "63 报价不认口径（面积价乘只数）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        if !want_unit.is_empty() && r.unit.trim() != want_unit {",
+    to: "        if false {",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::单价必须同口径才认"],
+  },
+  {
+    // 只有未来价时干脆说「没有规则」：老板明明录过价，系统说没录，
+    // 于是他去重录一遍，两条价并存，下次调价更乱。
+    name: "64 只录了未来价就说「没有规则」",
+    file: "crates/findb/src/processfee.rs",
+    from: "            return Ok(Some((r.clone(), true)));",
+    to: "            return Ok(None);",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::只有未来价时也报价但标明未生效"],
+  },
+  {
+    // 同精度不比生效日：提前录的下一版价永远排在后面，到了生效日也不会自动换过来，
+    // 「提前录价」这个功能等于没做。
+    name: "65 同精度不比生效日（新价永远轮不到）",
+    file: "crates/findb/src/processfee.rs",
+    // 把「比生效日」改成跟它自己比（永远相等），于是同精度退回按建的先后 ——
+    // 先录的旧价赢，新价永远轮不到。
+    from: "            b.effective_from",
+    to: "            a.effective_from",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::同精度取生效日更晚的那条"],
+  },
+  {
+    // 生效日格式不校验：2026-3-1 这种也能存进去，而判定是字符串比较，
+    // 「2026-3-1」永远小于「2026-03-01」，那条价可能一辈子不生效。
+    name: "66 生效日期格式不校验（2026-3-1 混进来）",
+    file: "crates/findb/src/processfee.rs",
+    from: '        .map(|d| d.format("%Y-%m-%d").to_string() == effective_from)',
+    to: "        .map(|_| true)",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::同精度取生效日更晚的那条"],
+  },
+  {
+    // 矩阵不看客户：给 A 客户谈的专属价会显示在 B 客户那一列，
+    // 照着报价就是拿别人的底价去谈。
+    name: "67 单价矩阵不分客户（别人的专属价漏出来）",
+    file: "crates/findb/src/processfee.rs",
+    from: '                best_for_cell(pick(customer), today).or_else(|| best_for_cell(pick(""), today))',
+    to: '                best_for_cell(pick(""), today)',
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::矩阵按物料行_口径列摆开"],
+  },
+  {
+    // 系数不校验正数：填 0 或者负数，折算出来是 0 或负数，
+    // 报价变成 0 元或倒找钱，单子照样能存。
+    name: "68 折算系数允许 0 或负数",
+    file: "crates/findb/src/processfee.rs",
+    from: "    if !c.factor.is_positive() {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::系数与口径的字段校验"],
   },
 ];
 

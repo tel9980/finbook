@@ -679,68 +679,254 @@ async function viewConsign(main) {
 }
 
 // ===========================================================================
-// 加工费规则（按面积/件计价 + 最低收费 + 加急费）
+// 加工费单价（单价矩阵 + 折算系数）
 // ===========================================================================
+// 金额进输入框：去掉多余的小数零，7.0200 → 7.02，0.00 → 0
+function priceIn(v) {
+  return String(v == null ? "" : v)
+    .replace(/(\.\d*?)0+$/, "$1")
+    .replace(/\.$/, "");
+}
+
+/// 单价矩阵里的一格
+///
+/// 两条边界，错了就会报出一个不存在的价：
+/// ① 没有折算系数 → 这一格根本不能报价（不是「0 元」），只给一句「没设系数」；
+/// ② 有系数但没定价 → 输入框空着写「未定价」，不能预填 0，否则一路确下去就是白送。
+function priceCellHtml(row, c, canEdit) {
+  if (c.factor == null) {
+    return `<td class="muted" style="text-align:center;font-size:11px"${canEdit ? ` data-cell-none="${esc(row.item_code)}|${esc(c.unit)}"` : ""}>没设系数</td>`;
+  }
+  return `<td style="white-space:nowrap">
+      <input class="pr-cell" style="width:64px;text-align:right" data-item="${esc(row.item_code)}" data-unit="${esc(c.unit)}"
+        value="${c.rule_id ? priceIn(c.unit_price) : ""}" placeholder="未定价" ${canEdit ? "" : "disabled"} />
+      ${canEdit ? `<button class="btn ghost sm" style="padding:0 4px" data-cell-edit="${esc(row.item_code)}|${esc(c.unit)}" title="改起步价 / 提前录下一版价">调</button>` : ""}
+      ${c.future ? `<div style="font-size:10px;color:var(--warn)">${esc(c.effective_from || "")} 起</div>` : ""}
+      ${num(c.min_charge) > 0 ? `<div style="font-size:10px" class="muted">起步 ${fmt(c.min_charge)}</div>` : ""}
+    </td>`;
+}
+
 async function viewPriceRules(main) {
-  main.innerHTML = `<h2>加工费规则</h2>
+  main.innerHTML = `<h2>加工费单价</h2>
     <div class="toolbar">
-      <button class="btn ghost sm" id="pr-reload">刷新</button>
-      ${can("price_edit") ? `<button class="btn primary sm" id="pr-new">新增规则</button>` : ""}
-      <span class="muted" style="font-size:12px">匹配顺序：物料+客户 > 只限物料 > 只限客户 > 通配；不足最低收费补到最低收费，加急另加固定费 + 按比例加价</span>
+      <label>客户 <input id="pr-cust" style="width:120px" placeholder="留空 = 通用价" /></label>
+      <button class="btn primary sm" id="pr-load">看这个客户的价</button>
+      ${can("price_edit") ? `<button class="btn ghost sm" id="pr-new-unit">录折算系数</button>
+      <button class="btn ghost sm" id="pr-new">新增规则（高级）</button>` : ""}
+      <button class="btn ghost sm" id="pr-clear">清空客户</button>
     </div>
-    <div class="panel"><div id="pr-list" class="muted">加载中…</div></div>
+    <div class="muted" style="font-size:12px;margin:-4px 0 10px">
+      一行一个工件，一列一种算法 —— 按只、按米、按 kg、按 ㎡ 各自一个价。格子里直接改单价，改完即生效。
+      「调」里能改起步价，也能把下一版价提前录进去（写 2026-03-01，到那天自动换过来，旧单仍按旧价）。
+      格子里写「没设系数」的，是还没告诉系统「1 只折合多少 ㎡」—— 先录折算系数，开单时填只数就能自动折算。
+    </div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">单价矩阵</h3>
+      <div id="pr-matrix" class="muted">加载中…</div></div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">折算系数（1 个库存单位 = 多少计价单位）</h3>
+      <div id="pr-units" class="muted">加载中…</div></div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">试算报价</h3>
       <div class="toolbar">
         <label>物料 <input id="pr-q-item" style="width:110px" /></label>
-        <label>客户 <input id="pr-q-cust" style="width:110px" /></label>
         <label>数量 <input id="pr-q-qty" style="width:80px" value="1" /></label>
+        <label>口径 <select id="pr-q-unit" style="width:130px"></select></label>
         <label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="pr-q-rush" /> 加急</label>
         <button class="btn primary sm" id="pr-q-run">试算</button>
       </div>
-      <div id="pr-q-out" class="muted">填好物料/数量后试算</div>
+      <div class="muted" style="font-size:12px">口径留「（不折算）」时，数量按计价单位直接算（老算法）。</div>
+      <div id="pr-q-out" class="muted">填好物料和数量后试算</div>
     </div>`;
-  let rules = [];
-  const load = async () => {
+
+  let mx = { customer: "", units: [], rows: [] };
+  let unitsAll = [];
+
+  const loadMatrix = async () => {
+    const cust = $("#pr-cust", main).value.trim();
     try {
-      const r = await api("/price-rules");
-      rules = r.rules || [];
-      $("#pr-list", main).innerHTML = rules.length
-        ? `<table class="grid"><thead><tr><th>名称</th><th>物料</th><th>客户</th><th>单位</th><th>单价</th><th>最低收费</th><th>加急</th><th>状态</th><th></th></tr></thead><tbody>${rules.map((x) => `<tr>
-            <td>${esc(x.name)}</td><td>${esc(x.item_code || "任意")}</td><td>${esc(x.customer_code || "任意")}</td>
-            <td>${esc(x.unit)}</td><td class="num">${fmt(x.unit_price)}</td><td class="num">${fmt(x.min_charge)}</td>
-            <td>${fmt(x.rush_fee)} + ${fmt(x.rush_rate)}%</td>
-            <td>${x.disabled ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>'}</td>
-            <td class="row-actions">${can("price_edit") ? `<button class="btn ghost sm" data-pr-edit="${x.id}">编辑</button><button class="btn danger sm" data-pr-del="${x.id}">删</button>` : ""}</td></tr>`).join("")}</tbody></table>`
-        : `<div class="muted">还没有加工费规则</div>`;
-      $all("[data-pr-edit]", main).forEach((b) => (b.onclick = () => openEditor(rules.find((x) => String(x.id) === b.dataset.prEdit))));
-      $all("[data-pr-del]", main).forEach((b) => (b.onclick = async () => {
-        if (!(await confirmDialog("删除这条加工费规则？", true))) return;
-        try { await api(`/price-rules/${b.dataset.prDel}`, { method: "DELETE" }); toast("已删除", "ok"); load(); }
-        catch (e) { toast(e.message, "err"); }
-      }));
-    } catch (e) { $("#pr-list", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+      const [m, u] = await Promise.all([
+        api(`/price-matrix?customer=${encodeURIComponent(cust)}`),
+        api("/calc-units"),
+      ]);
+      mx = m || { customer: cust, units: [], rows: [] };
+      unitsAll = u.units || [];
+      renderMatrix();
+      renderUnits();
+      renderUnitSelect();
+    } catch (e) {
+      $("#pr-matrix", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
+    }
   };
-  const openEditor = (r) => {
-    const c = r || { id: 0, name: "", item_code: "", customer_code: "", unit: "件", unit_price: "0", min_charge: "0", rush_fee: "0", rush_rate: "0", disabled: false, memo: "" };
-    const m = modal(`<h3>${r ? "编辑" : "新增"}加工费规则</h3>
+
+  const renderMatrix = () => {
+    const box = $("#pr-matrix", main);
+    if (!mx.rows || !mx.rows.length) {
+      box.innerHTML = `<div class="muted">这个客户名下还没有任何单价 —— 点右上「录折算系数」给物料挂一个口径，矩阵里就会出现它那一行</div>`;
+      return;
+    }
+    const head = mx.units.map((u) => `<th class="num">按${esc(u)}</th>`).join("");
+    const body = mx.rows
+      .map((row) => {
+        const label = row.item_code
+          ? `${esc(row.item_code)} <span class="muted" style="font-size:11px">${esc(row.item_name || "")}${row.stock_unit ? " · 库存单位 " + esc(row.stock_unit) : ""}</span>`
+          : `<span class="muted">${esc(row.item_name)}</span>`;
+        return `<tr><td>${label}</td>${row.cells.map((c) => priceCellHtml(row, c, can("price_edit"))).join("")}</tr>`;
+      })
+      .join("");
+    box.innerHTML = `<table class="grid"><thead><tr><th>物料</th>${head}</tr></thead><tbody>${body}</tbody></table>`;
+
+    $all(".pr-cell", main).forEach((el) => {
+      el.onchange = async () => {
+        const v = el.value.trim();
+        if (!v) return;
+        await putCell(el.dataset.item, el.dataset.unit, { unit_price: v });
+      };
+    });
+    $all("[data-cell-edit]", main).forEach((b) => {
+      b.onclick = () => {
+        const [item, unit] = b.dataset.cellEdit.split("|");
+        const row = mx.rows.find((r) => r.item_code === item);
+        const c = row && row.cells.find((x) => x.unit === unit);
+        if (c) openCell(row, c);
+      };
+    });
+    $all("[data-cell-none]", main).forEach((td) => {
+      td.onclick = () => {
+        const [item, unit] = td.dataset.cellNone.split("|");
+        openUnit({ item_code: item, calc_unit: unit, scale: 2 });
+      };
+    });
+  };
+
+  const putCell = async (item, unit, extra) => {
+    const row = mx.rows.find((r) => r.item_code === item);
+    const c = row && row.cells.find((x) => x.unit === unit);
+    const body = Object.assign(
+      { customer_code: mx.customer || "", item_code: item, calc_unit: unit, unit_price: "", min_charge: "0", effective_from: "" },
+      c ? { unit_price: c.unit_price, min_charge: c.min_charge, effective_from: c.effective_from || "" } : {},
+      extra,
+    );
+    try {
+      await api("/price-matrix", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      toast("已保存", "ok");
+      loadMatrix();
+    } catch (e) {
+      toast(e.message, "err");
+    }
+  };
+
+  const openCell = (row, c) => {
+    const m = modal(`<h3>${esc(row.item_code || "任意物料")} 按${esc(c.unit)}</h3>
+      <div class="field"><label>单价（${esc(c.unit)}）</label><input id="pc-price" value="${priceIn(c.unit_price)}" /></div>
+      <div class="field"><label>起步价（不足补到）</label><input id="pc-min" value="${priceIn(c.min_charge)}" /></div>
+      <div class="field"><label>生效日期（留空 = 立刻；提前录下一版价写 2026-03-01）</label><input id="pc-from" value="${esc(c.effective_from || "")}" placeholder="YYYY-MM-DD" /></div>
+      <div class="muted" style="font-size:12px">1 ${esc(row.stock_unit || "库存单位")} = ${priceIn(c.factor)} ${esc(c.unit)}（在下面的折算系数里改）</div>
+      <div class="foot"><button class="btn primary" id="pc-save">保存</button><button class="btn ghost" id="pc-cancel">取消</button></div>`);
+    $("#pc-cancel", m).onclick = closeModal;
+    $("#pc-save", m).onclick = async () => {
+      await putCell(row.item_code, c.unit, {
+        unit_price: $("#pc-price", m).value.trim(),
+        min_charge: $("#pc-min", m).value.trim() || "0",
+        effective_from: $("#pc-from", m).value.trim(),
+      });
+      closeModal();
+    };
+  };
+
+  const renderUnits = () => {
+    const box = $("#pr-units", main);
+    box.innerHTML = unitsAll.length
+      ? `<table class="grid"><thead><tr><th>物料</th><th>口径</th><th>折算</th><th>保留位</th><th>状态</th><th></th></tr></thead><tbody>${unitsAll
+          .map(
+            (u) => `<tr><td>${esc(u.item_code)}</td><td>${esc(u.calc_unit)}</td>
+            <td class="num">1 ${esc(u.item_code)} = ${priceIn(u.factor)} ${esc(u.calc_unit)}</td>
+            <td class="num">${u.scale}</td>
+            <td>${u.disabled ? '<span class="tag err">停用</span>' : '<span class="tag ok">启用</span>'}</td>
+            <td class="row-actions">${can("price_edit") ? `<button class="btn ghost sm" data-unit-edit="${u.id}">改</button><button class="btn danger sm" data-unit-del="${u.id}">删</button>` : ""}</td></tr>`,
+          )
+          .join("")}</tbody></table>`
+      : `<div class="muted">还没有折算系数。一个物料可以挂好几个口径（只 / 米 / kg / ㎡），每个口径一条。</div>`;
+    $all("[data-unit-edit]", main).forEach((b) => {
+      b.onclick = () => openUnit(unitsAll.find((u) => String(u.id) === b.dataset.unitEdit));
+    });
+    $all("[data-unit-del]", main).forEach((b) => {
+      b.onclick = async () => {
+        if (!(await confirmDialog("删除这条折算系数？删掉后这个口径就不能报价了", true))) return;
+        try {
+          await api(`/calc-units/${b.dataset.unitDel}`, { method: "DELETE" });
+          toast("已删除", "ok");
+          loadMatrix();
+        } catch (e) {
+          toast(e.message, "err");
+        }
+      };
+    });
+  };
+
+  const openUnit = (u) => {
+    const c = u || { id: 0, item_code: "", calc_unit: "", factor: "0", scale: 2, disabled: false, memo: "" };
+    const m = modal(`<h3>${u && u.id ? "修改" : "新增"}折算系数</h3>
+      <div class="field"><label>物料编码 *</label><input id="pu-item" value="${esc(c.item_code)}" placeholder="MB01" /></div>
+      <div class="field"><label>计价口径 *</label><input id="pu-unit" value="${esc(c.calc_unit)}" placeholder="㎡ / 米 / kg / 只" /></div>
+      <div class="field"><label>1 个库存单位 = 多少计价单位 *</label><input id="pu-factor" value="${priceIn(c.factor)}" placeholder="0.0234" /></div>
+      <div class="field"><label>折算后保留几位小数（0-4）</label><input id="pu-scale" value="${c.scale}" /></div>
+      <div class="field"><label>备注</label><input id="pu-memo" value="${esc(c.memo || "")}" /></div>
+      <div class="muted" style="font-size:12px">例：300 只工件每只 0.0234 ㎡，就填「㎡ / 0.0234 / 2」—— 开单填 300 只，自动算成 7.02 ㎡。</div>
+      <div class="foot"><button class="btn primary" id="pu-save">保存</button><button class="btn ghost" id="pu-cancel">取消</button></div>`);
+    $("#pu-cancel", m).onclick = closeModal;
+    $("#pu-save", m).onclick = async () => {
+      const body = {
+        id: c.id || 0,
+        item_code: $("#pu-item", m).value.trim(),
+        calc_unit: $("#pu-unit", m).value.trim(),
+        factor: $("#pu-factor", m).value.trim(),
+        scale: Number($("#pu-scale", m).value.trim() || 2),
+        disabled: !!c.disabled,
+        memo: $("#pu-memo", m).value.trim(),
+      };
+      if (!body.item_code || !body.calc_unit) {
+        toast("物料和口径都要填", "err");
+        return;
+      }
+      try {
+        await api("/calc-units", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        toast("已保存", "ok");
+        closeModal();
+        loadMatrix();
+      } catch (e) {
+        toast(e.message, "err");
+      }
+    };
+  };
+
+  const renderUnitSelect = () => {
+    const sel = $("#pr-q-unit", main);
+    const keep = sel.value;
+    sel.innerHTML = `<option value="">（不折算，按计价数量）</option>${mx.units.map((u) => `<option value="${esc(u)}">${esc(u)}</option>`).join("")}`;
+    if (keep) sel.value = keep;
+  };
+
+  const openRule = (r) => {
+    const c = r || { id: 0, name: "", item_code: "", customer_code: "", unit: "件", unit_price: "0", min_charge: "0", rush_fee: "0", rush_rate: "0", disabled: false, memo: "", effective_from: "" };
+    const m = modal(`<h3>${r ? "编辑" : "新增"}加工费规则（高级）</h3>
+      <div class="muted" style="font-size:12px">日常改价直接用矩阵就行；这里是给「一条规则管很多物料」或者设加急费的场合。</div>
       <div class="field"><label>名称 *</label><input id="pr-name" value="${esc(c.name)}" /></div>
       <div class="field"><label>物料（留空=任意）</label><input id="pr-item" value="${esc(c.item_code)}" /></div>
-      <div class="field"><label>客户（留空=任意）</label><input id="pr-cust" value="${esc(c.customer_code)}" /></div>
-      <div class="field"><label>计价单位</label><input id="pr-unit" value="${esc(c.unit)}" placeholder="㎡ / 件 / kg" /></div>
+      <div class="field"><label>客户（留空=任意）</label><input id="pr-cust2" value="${esc(c.customer_code)}" /></div>
+      <div class="field"><label>计价口径</label><input id="pr-unit" value="${esc(c.unit)}" placeholder="㎡ / 件 / kg / 只" /></div>
       <div class="field"><label>单价 *</label><input id="pr-price" value="${esc(c.unit_price)}" /></div>
-      <div class="field"><label>最低收费</label><input id="pr-min" value="${esc(c.min_charge)}" /></div>
+      <div class="field"><label>起步价（最低收费）</label><input id="pr-min" value="${esc(c.min_charge)}" /></div>
       <div class="field"><label>加急固定费</label><input id="pr-rfee" value="${esc(c.rush_fee)}" /></div>
       <div class="field"><label>加急加价率 %</label><input id="pr-rrate" value="${esc(c.rush_rate)}" /></div>
+      <div class="field"><label>生效日期（留空 = 立刻）</label><input id="pr-from" value="${esc(c.effective_from || "")}" placeholder="YYYY-MM-DD" /></div>
       <div class="field"><label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="pr-dis" ${c.disabled ? "checked" : ""}/> 停用</label></div>
       <div class="field"><label>备注</label><input id="pr-memo" value="${esc(c.memo || "")}" /></div>
-      <div class="foot"><button class="btn primary" id="pr-save">保存</button><button class="btn ghost" id="pr-cancel">取消</button></div>`);
-    $("#pr-cancel", m).onclick = closeModal;
+      <div class="foot"><button class="btn primary" id="pr-save">保存</button><button class="btn ghost" id="pr-cancel2">取消</button></div>`);
+    $("#pr-cancel2", m).onclick = closeModal;
     $("#pr-save", m).onclick = async () => {
       const body = {
         id: c.id || 0,
         name: $("#pr-name", m).value.trim(),
         item_code: $("#pr-item", m).value.trim(),
-        customer_code: $("#pr-cust", m).value.trim(),
+        customer_code: $("#pr-cust2", m).value.trim(),
         unit: $("#pr-unit", m).value.trim(),
         unit_price: $("#pr-price", m).value.trim(),
         min_charge: $("#pr-min", m).value.trim(),
@@ -748,31 +934,60 @@ async function viewPriceRules(main) {
         rush_rate: $("#pr-rrate", m).value.trim(),
         disabled: $("#pr-dis", m).checked,
         memo: $("#pr-memo", m).value.trim(),
+        effective_from: $("#pr-from", m).value.trim(),
       };
-      if (!body.name) { toast("名称必填", "err"); return; }
+      if (!body.name) {
+        toast("名称必填", "err");
+        return;
+      }
       try {
         await api("/price-rules", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-        toast("已保存", "ok"); closeModal(); load();
-      } catch (e) { toast(e.message, "err"); }
+        toast("已保存", "ok");
+        closeModal();
+        loadMatrix();
+      } catch (e) {
+        toast(e.message, "err");
+      }
     };
   };
-  $("#pr-reload", main).onclick = load;
-  if ($("#pr-new", main)) $("#pr-new").onclick = () => openEditor(null);
-  $("#pr-q-run", main).onclick = async () => {
-    const qty = $("#pr-q-qty", main).value.trim();
-    const rush = $("#pr-q-rush", main).checked ? "1" : "0";
-    try {
-      const r = await api(`/price-rules/quote?item=${encodeURIComponent($("#pr-q-item", main).value.trim())}&customer=${encodeURIComponent($("#pr-q-cust", main).value.trim())}&qty=${encodeURIComponent(qty)}&rush=${rush}`);
-      const q = r.quote;
-      $("#pr-q-out", main).innerHTML = `<table class="grid"><tbody>
-        <tr><td>规则</td><td>${esc(q.rule_name)}</td></tr>
-        <tr><td>数量 × 单价</td><td class="num">${fmt(q.qty)} ${esc(q.unit)} × ${fmt(q.unit_price)} = ${fmt(q.base)}</td></tr>
-        <tr><td>最低收费补差</td><td class="num">${fmt(q.floor_extra)}（起步 ${fmt(q.min_charge)}）</td></tr>
-        <tr><td>加急加价</td><td class="num">${fmt(q.rush_extra)}（固定 ${fmt(q.rush_fee)} + ${fmt(q.rush_rate)}%）</td></tr>
-        <tr><td><b>合计</b></td><td class="num"><b>${fmt(q.total)}</b></td></tr></tbody></table>`;
-    } catch (e) { $("#pr-q-out", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`; }
+
+  $("#pr-load", main).onclick = loadMatrix;
+  $("#pr-clear", main).onclick = () => {
+    $("#pr-cust", main).value = "";
+    loadMatrix();
   };
-  load();
+  if ($("#pr-new", main)) $("#pr-new", main).onclick = () => openRule(null);
+  if ($("#pr-new-unit", main)) $("#pr-new-unit", main).onclick = () => openUnit(null);
+
+  $("#pr-q-run", main).onclick = async () => {
+    const item = $("#pr-q-item", main).value.trim();
+    const qty = $("#pr-q-qty", main).value.trim();
+    const unit = $("#pr-q-unit", main).value.trim();
+    const rush = $("#pr-q-rush", main).checked ? "1" : "0";
+    const cust = $("#pr-cust", main).value.trim();
+    const q = unit
+      ? `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&stock_qty=${encodeURIComponent(qty)}&calc_unit=${encodeURIComponent(unit)}&rush=${rush}`
+      : `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&qty=${encodeURIComponent(qty)}&rush=${rush}`;
+    try {
+      const r = await api(q);
+      const x = r.quote;
+      const conv = r.conv
+        ? `<tr><td>折算</td><td class="num">${fmt(r.conv.stock_qty)} ${esc(r.conv.stock_unit || "")} × ${priceIn(r.conv.factor)} = ${fmt(r.conv.calc_qty)} ${esc(r.conv.calc_unit)}</td></tr>`
+        : "";
+      const fut = x.future
+        ? `<tr><td colspan="2" style="color:var(--warn)">注意：这条价 ${esc(x.effective_from)} 才生效，现在报的是提前录的下一版价。</td></tr>`
+        : "";
+      $("#pr-q-out", main).innerHTML = `<table class="grid"><tbody>${conv}
+        <tr><td>规则</td><td>${esc(x.rule_name)}</td></tr>
+        <tr><td>数量 × 单价</td><td class="num">${fmt(x.qty)} ${esc(x.unit)} × ${fmt(x.unit_price)} = ${fmt(x.base)}</td></tr>
+        <tr><td>起步价补差</td><td class="num">${fmt(x.floor_extra)}（起步 ${fmt(x.min_charge)}）</td></tr>
+        <tr><td>加急加价</td><td class="num">${fmt(x.rush_extra)}（固定 ${fmt(x.rush_fee)} + ${fmt(x.rush_rate)}%）</td></tr>
+        ${fut}<tr><td><b>合计</b></td><td class="num"><b>${fmt(x.total)}</b></td></tr></tbody></table>`;
+    } catch (e) {
+      $("#pr-q-out", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
+    }
+  };
+  loadMatrix();
 }
 
 // ===========================================================================

@@ -33,7 +33,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 48;
+pub const SCHEMA_VERSION: i64 = 49;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1632,8 +1632,25 @@ CREATE TABLE IF NOT EXISTS price_rule (
     min_charge    TEXT NOT NULL DEFAULT '0',         -- 最低收费，0 = 不设
     rush_fee      TEXT NOT NULL DEFAULT '0',         -- 加急固定加价
     rush_rate     TEXT NOT NULL DEFAULT '0',         -- 加急加价率（%）
+    effective_from TEXT NOT NULL DEFAULT '',         -- v49: 生效日期（'' = 立即）
     disabled      INTEGER NOT NULL DEFAULT 0,
     memo          TEXT NOT NULL DEFAULT ''
+);
+
+-- 物料计价口径与折算系数（v49）：1 个库存单位 = factor 个计价单位
+--
+-- 为什么不能塞进 item_unit：那张表是「1 主单位 = factor 辅助单位」的**一对**关系，
+-- 而氧化厂的现实是同一个工件同时要按 只 / 米 / kg / ㎡ 报价 ——
+-- 300 只 = 300 × 0.0234 ㎡，1 米型材 = 1.85 kg。四五个口径并存是常态。
+CREATE TABLE IF NOT EXISTS item_calc_unit (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_code   TEXT NOT NULL,
+    calc_unit   TEXT NOT NULL,                       -- ㎡ / 米 / kg / 只 …（与 price_rule.unit 对应）
+    factor      TEXT NOT NULL DEFAULT '0',           -- 1 库存单位 = factor 计价单位
+    scale       INTEGER NOT NULL DEFAULT 2,          -- 折算后保留几位（0-4）
+    disabled    INTEGER NOT NULL DEFAULT 0,
+    memo        TEXT NOT NULL DEFAULT '',
+    UNIQUE(item_code, calc_unit)
 );
 
 -- 计件单价（工序报工的完工量 × 单价）
@@ -1895,6 +1912,13 @@ const MIGRATE_V41: &[(&str, &str, &str)] = &[
 /// 选了哪一版，工序清单就按哪一版生成、报工流水的版本也跟着定下来。不记这一列，
 /// 事后重生成工序只能退回默认版本，报工记的版本就与当初排产的那一版对不上。
 /// v44：返工单补「原因分类」与「责任部门」，让返工成本能按原因/部门汇总
+/// **v49 新增的列**：单价生效日期。
+///
+/// 加这一列是为了「提前录下一版价」：客户 3 月 1 日调价，2 月里就能录进去，
+/// 旧单仍按旧价 —— 判定靠 `effective_from`，不靠人去记住改回来。
+const MIGRATE_V49: &[(&str, &str, &str)] =
+    &[("price_rule", "effective_from", "TEXT NOT NULL DEFAULT ''")];
+
 const MIGRATE_V45: &[(&str, &str, &str)] = &[
     ("consign_doc", "so_id", "INTEGER NOT NULL DEFAULT 0"),
     ("consign_doc", "so_no", "TEXT NOT NULL DEFAULT ''"),
@@ -2444,6 +2468,8 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_generic(conn, MIGRATE_V42)?;
             migrate_generic(conn, MIGRATE_V44)?;
             migrate_generic(conn, MIGRATE_V45)?;
+            // v49：单价生效日期（纯加列，没有索引引用它）
+            migrate_generic(conn, MIGRATE_V49)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：

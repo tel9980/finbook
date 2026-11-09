@@ -62,6 +62,17 @@ function extractFn(src, name) {
 // 所以这里按**原样**给一份（改配色表时这里要同步，否则检查会报「未定义」而不是假绿）。
 const VERDICT_CLASS = { unposted: "warn", overdue: "alert", net_debt: "note", no_revenue: "note", ok: "ok" };
 
+// 单价矩阵格子的桩（v49）。`priceIn` 与源码同名函数逻辑一致 —— 另有独立用例守它本身。
+const CELL_STUBS = {
+  esc: (s) => String(s == null ? "" : s),
+  num: (v) => Number(v == null ? 0 : v),
+  fmt: (v) => Number(v == null ? 0 : v).toFixed(2),
+  priceIn: (v) =>
+    String(v == null ? "" : v)
+      .replace(/(\.\d*?)0+$/, "$1")
+      .replace(/\.$/, ""),
+};
+
 const CASES = [
   {
     fn: "renderAux",
@@ -166,6 +177,56 @@ const CASES = [
     expect: ["暂时算不出来"],
     absent: ["账是平的", "home-trial ok"],
   },
+  // 单价矩阵里的格子（v49）。守两条最会出事的边界：
+  // 没折算系数的那一格**不能**变成「0 元」输入框；有系数没定价的要空着写「未定价」。
+  {
+    fn: "priceCellHtml",
+    args: [
+      { item_code: "MB01" },
+      { unit: "㎡", rule_id: 0, factor: null, future: false, min_charge: "0.00", effective_from: "", scale: 2 },
+      true,
+    ],
+    stubs: CELL_STUBS,
+    expect: ["没设系数", "data-cell-none"],
+    absent: ["<input", "未定价"],
+  },
+  {
+    fn: "priceCellHtml",
+    args: [
+      { item_code: "MB01" },
+      { unit: "㎡", rule_id: 0, factor: "0.0234", future: false, min_charge: "0.00", effective_from: "", scale: 2, unit_price: "0.00" },
+      true,
+    ],
+    stubs: CELL_STUBS,
+    expect: ['placeholder="未定价"', 'value=""'],
+    absent: ['value="0"'],
+  },
+  {
+    fn: "priceCellHtml",
+    args: [
+      { item_code: "MB01" },
+      { unit: "㎡", rule_id: 7, factor: "0.0234", future: true, min_charge: "30.00", effective_from: "2999-03-01", scale: 2, unit_price: "12.00" },
+      true,
+    ],
+    stubs: CELL_STUBS,
+    expect: ['value="12"', "2999-03-01 起", "起步 30.00", "data-cell-edit"],
+  },
+  {
+    // 只读用户：价格能看，但不给按钮、输入框锁死
+    fn: "priceCellHtml",
+    args: [
+      { item_code: "MB01" },
+      { unit: "㎡", rule_id: 7, factor: "0.0234", future: false, min_charge: "0.00", effective_from: "", scale: 2, unit_price: "12.00" },
+      false,
+    ],
+    stubs: CELL_STUBS,
+    expect: ["disabled", 'value="12"'],
+    absent: ["data-cell-edit", "data-cell-none"],
+  },
+  // 金额进输入框要去掉多余的零，否则格子里写着 7.0200 没人愿意改
+  { fn: "priceIn", args: ["7.0200"], stubs: {}, expect: ["7.02"], absent: ["7.0200"] },
+  { fn: "priceIn", args: ["0.00"], stubs: {}, expect: ["0"], absent: ["0.00"] },
+  { fn: "priceIn", args: ["300.00"], stubs: {}, expect: ["300"], absent: ["300.00"] },
 ];
 
 function main() {

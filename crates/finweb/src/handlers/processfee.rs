@@ -24,6 +24,9 @@ pub struct PriceRuleReq {
     pub disabled: bool,
     #[serde(default)]
     pub memo: String,
+    /// 生效日期 `YYYY-MM-DD`（空 = 立即）
+    #[serde(default)]
+    pub effective_from: String,
 }
 
 fn money_or_zero(s: &str) -> Result<Money, AppError> {
@@ -63,6 +66,7 @@ pub(super) async fn save_price_rule(
         rush_rate: money_or_zero(&req.rush_rate)?,
         disabled: req.disabled,
         memo: req.memo,
+        effective_from: req.effective_from.trim().to_string(),
     };
     let id = findb::processfee::rule_save(db, &mut r)?;
     db.log(
@@ -100,6 +104,187 @@ pub(super) async fn quote_fee(
     let get = |k: &str| q.get(k).map(|s| s.trim()).unwrap_or("");
     let qty = parse_money_checked(get("qty"))?;
     let rush = matches!(get("rush"), "1" | "true" | "yes" | "on");
+    // 新口径：给「库存单位数量 + 计价口径」，系统自己折算（300 只 → 7.02 ㎡）
+    if !get("calc_unit").is_empty() {
+        let stock_qty = parse_money_checked(get("stock_qty"))?;
+        let uq = findb::processfee::quote_with_units(
+            &user.db,
+            get("item"),
+            get("customer"),
+            stock_qty,
+            get("calc_unit"),
+            rush,
+        )?;
+        return Ok(Json(json!({ "quote": uq.quote, "conv": uq })));
+    }
     let quote = findb::processfee::quote_by(&user.db, get("item"), get("customer"), qty, rush)?;
     Ok(Json(json!({ "quote": quote })))
+}
+
+// ---------------------------------------------------------------------------
+// 计价口径与折算系数（v49）
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct CalcUnitReq {
+    #[serde(default)]
+    pub id: i64,
+    pub item_code: String,
+    pub calc_unit: String,
+    pub factor: String,
+    #[serde(default)]
+    pub scale: Option<i32>,
+    #[serde(default)]
+    pub disabled: bool,
+    #[serde(default)]
+    pub memo: String,
+}
+
+/// 折算系数列表（`?item=` 空 = 全部物料）
+pub(super) async fn list_calc_units(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceView)?;
+    let item = q.get("item").map(|s| s.trim()).unwrap_or("");
+    let units = findb::processfee::calc_unit_list(&user.db, item)?;
+    Ok(Json(json!({ "units": units })))
+}
+
+/// 保存一条折算系数
+pub(super) async fn save_calc_unit(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<CalcUnitReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceEdit)?;
+    let db = &user.db;
+    let mut c = findb::processfee::CalcUnit {
+        id: req.id,
+        item_code: req.item_code.trim().to_string(),
+        calc_unit: req.calc_unit.trim().to_string(),
+        factor: parse_money_checked(&req.factor)?,
+        scale: req.scale.unwrap_or(2),
+        disabled: req.disabled,
+        memo: req.memo,
+    };
+    let id = findb::processfee::calc_unit_save(db, &mut c)?;
+    db.log(
+        user.username(),
+        "销售",
+        "折算系数",
+        &format!(
+            "{}：1 {} = {} {}",
+            c.item_code, c.item_code, c.factor, c.calc_unit
+        ),
+    )?;
+    Ok(Json(json!({ "ok": true, "id": id })))
+}
+
+/// 删除一条折算系数
+pub(super) async fn delete_calc_unit(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceEdit)?;
+    let db = &user.db;
+    findb::processfee::calc_unit_delete(db, id)?;
+    db.log(user.username(), "销售", "删除折算系数", &id.to_string())?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// 单价矩阵：行 = 物料，列 = 计价口径，格 = 单价
+pub(super) async fn get_price_matrix(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceView)?;
+    let customer = q.get("customer").map(|s| s.trim()).unwrap_or("");
+    let mx = findb::processfee::matrix(&user.db, customer)?;
+    Ok(Json(json!(mx)))
+}
+
+#[derive(Deserialize)]
+pub struct MatrixCellReq {
+    #[serde(default)]
+    pub customer_code: String,
+    #[serde(default)]
+    pub item_code: String,
+    pub calc_unit: String,
+    pub unit_price: String,
+    #[serde(default)]
+    pub min_charge: String,
+    #[serde(default)]
+    pub effective_from: String,
+}
+
+/// 改矩阵里的一格：没有规则就建一条，有就改价
+///
+/// 名字自动生成（`MB01 ㎡（C01）`）——老板填矩阵时只想输数字，
+/// 让他先起名字是最容易放弃的一步。
+pub(super) async fn set_matrix_cell(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<MatrixCellReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceEdit)?;
+    let db = &user.db;
+    let item = req.item_code.trim();
+    let customer = req.customer_code.trim();
+    let unit = req.calc_unit.trim();
+    if unit.is_empty() {
+        return Err(AppError::BadRequest("计价口径必填".into()));
+    }
+    let price = parse_money_checked(&req.unit_price)?;
+    let min_charge = money_or_zero(&req.min_charge)?;
+    let effective_from = req.effective_from.trim().to_string();
+
+    // 先找现成的同格规则（同物料 + 同客户 + 同口径 + 同生效日）
+    //
+    // 生效日也是身份的一部分：3 月起的新价要和现在的价并存，
+    // 只按「物料+客户+口径」找的话，第二版价会把第一版覆盖掉，
+    // 「提前录下一版价」这件事就做不成了。
+    let existing = findb::processfee::rule_list(db)?.into_iter().find(|r| {
+        r.item_code.trim() == item
+            && r.customer_code.trim() == customer
+            && r.unit.trim() == unit
+            && r.effective_from.trim() == effective_from
+    });
+    let mut r = match existing {
+        Some(r) => r,
+        None => {
+            let item_label = if item.is_empty() {
+                "任意物料"
+            } else {
+                item
+            };
+            let name = if customer.is_empty() {
+                format!("{item_label} 按{unit}")
+            } else {
+                format!("{item_label} 按{unit}（{customer}）")
+            };
+            findb::processfee::PriceRule {
+                name,
+                item_code: item.to_string(),
+                customer_code: customer.to_string(),
+                unit: unit.to_string(),
+                ..Default::default()
+            }
+        }
+    };
+    r.unit_price = price;
+    r.min_charge = min_charge;
+    r.effective_from = effective_from;
+    r.disabled = false;
+    let id = findb::processfee::rule_save(db, &mut r)?;
+    db.log(
+        user.username(),
+        "销售",
+        "加工费规则",
+        &format!("矩阵改价 {} 按{} = {}", r.name, unit, price),
+    )?;
+    Ok(Json(json!({ "ok": true, "id": id })))
 }

@@ -688,6 +688,9 @@ pub struct RuleBuf {
     pub rush_rate: String,
     pub disabled: bool,
     pub memo: String,
+    /// 生效日期 `YYYY-MM-DD`（空 = 立即）。网页端「单价矩阵」里提前录的下一版价，
+    /// 在这里编辑时必须原样带回来 —— 丢了就等于把「什么时候调价」删了。
+    pub effective_from: String,
 }
 
 impl RuleBuf {
@@ -716,6 +719,7 @@ impl RuleBuf {
             },
             disabled: r.disabled,
             memo: r.memo.clone(),
+            effective_from: r.effective_from.clone(),
         }
     }
 
@@ -732,6 +736,7 @@ impl RuleBuf {
             rush_rate: widgets::parse_money(&self.rush_rate),
             disabled: self.disabled,
             memo: self.memo.trim().to_string(),
+            effective_from: self.effective_from.trim().to_string(),
         }
     }
 }
@@ -874,7 +879,18 @@ impl PriceRulesView {
                             r.unit.clone()
                         },
                     ),
-                    4 => txt(ui, r.unit_price.fmt_qty()),
+                    4 => txt(
+                        ui,
+                        if r.effective_from.trim().is_empty() {
+                            r.unit_price.fmt_qty()
+                        } else {
+                            format!(
+                                "{}（{} 起）",
+                                r.unit_price.fmt_qty(),
+                                r.effective_from.trim()
+                            )
+                        },
+                    ),
                     5 => txt(
                         ui,
                         if r.min_charge.is_zero() {
@@ -962,7 +978,9 @@ impl PriceRulesView {
         });
         ui.horizontal(|ui| {
             txt(ui, "备注");
-            widgets::text_input(ui, &mut self.ed.memo, 300.0, "选填");
+            widgets::text_input(ui, &mut self.ed.memo, 240.0, "选填");
+            txt(ui, "生效日");
+            widgets::text_input(ui, &mut self.ed.effective_from, 100.0, "留空=立即");
             ui.separator();
             if ui
                 .add_enabled(editable, egui::Button::new("保存"))
