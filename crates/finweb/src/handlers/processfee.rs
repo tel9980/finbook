@@ -95,6 +95,61 @@ pub(super) async fn delete_price_rule(
 }
 
 /// 报价：按物料/客户匹配规则，算出基础价、起步补差、加急加价与合计
+/// 「按规格算单价」请求体：一个费率 + 一串规格
+#[derive(serde::Deserialize)]
+pub struct SpecCalcReq {
+    pub rate: String,
+    #[serde(default)]
+    pub unit: String,
+    #[serde(default)]
+    pub density: String,
+    #[serde(default)]
+    pub specs: Vec<String>,
+}
+
+/// 按一个费率把一批规格折成每件单价。
+///
+/// 这是「2.5 元一米，规格 1200*80 / 920*60 各多少钱一件」的直接答案：
+/// 不落库、不改单价表，就是一个算价器 —— 客户发来一张规格清单，粘进来就出价。
+pub(super) async fn calc_spec_prices(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<SpecCalcReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceView)?;
+    let rate = parse_money_checked(&req.rate)?;
+    if !rate.is_positive() {
+        return Err(AppError::BadRequest("单价要大于 0".to_string()));
+    }
+    let unit = if req.unit.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "先选口径（按米还是按 ㎡）".to_string(),
+        ));
+    } else {
+        req.unit.trim().to_string()
+    };
+    let density = money_or_zero(&req.density)?;
+    if req.specs.len() > 500 {
+        return Err(AppError::BadRequest("一次最多算 500 个规格".to_string()));
+    }
+    let rows = findb::processfee::spec_prices(rate, &unit, &req.specs, density);
+    let out: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "spec": r.spec,
+                "dims": r.dims,
+                "factor": r.factor.fmt_dp(4),
+                "price": r.price.fmt_money(),
+                "note": r.note,
+            })
+        })
+        .collect();
+    Ok(Json(
+        json!({ "unit": unit, "rate": rate.fmt_money(), "rows": out }),
+    ))
+}
+
 pub(super) async fn quote_fee(
     State(_state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -105,6 +160,37 @@ pub(super) async fn quote_fee(
     let qty = parse_money_checked(get("qty"))?;
     let rush = matches!(get("rush"), "1" | "true" | "yes" | "on");
     // 新口径：给「库存单位数量 + 计价口径」，系统自己折算（300 只 → 7.02 ㎡）
+    //
+    // 带规格（`spec=1250*250*3`）时走按规格折算：没录过折算系数的工件也能报价 ——
+    // 「80 元/㎡，规格 1250×250×3」这类问法在小厂里是日常，不该逼人先算好 0.3125 再录进去。
+    if !get("calc_unit").is_empty() && !get("spec").is_empty() {
+        let stock_qty = parse_money_checked(get("stock_qty"))?;
+        let density = money_or_zero(get("density"))?;
+        let sq = findb::processfee::quote_with_spec(
+            &user.db,
+            get("item"),
+            get("customer"),
+            get("spec"),
+            stock_qty,
+            get("calc_unit"),
+            density,
+            rush,
+        )?;
+        return Ok(Json(json!({
+            "quote": sq.quote,
+            "conv": {
+                "stock_qty": sq.stock_qty.fmt_money(),
+                "stock_unit": sq.stock_unit,
+                // 折合量保留 4 位：1250×250 的板是 0.3125 ㎡，按金额口径取 2 位会显示成 0.31，
+                // 而金额明明是按 0.3125 算的 —— 单子上「0.31 × 80 = 25.00」自己就对不上
+                "factor": sq.factor.fmt_dp(4),
+                "calc_qty": sq.calc_qty.fmt_money(),
+                "calc_unit": sq.calc_unit,
+                "dims": sq.dims,
+                "basis": sq.basis,
+            },
+        })));
+    }
     if !get("calc_unit").is_empty() {
         let stock_qty = parse_money_checked(get("stock_qty"))?;
         let uq = findb::processfee::quote_with_units(

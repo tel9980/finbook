@@ -543,6 +543,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/price-rules/import", post(import_price_rules))
         .route("/api/calc-units/import", post(import_calc_units))
         .route("/api/price-import/template", get(price_import_template))
+        .route("/api/price-specs/calc", post(calc_spec_prices))
         .route(
             "/api/piece-rates",
             get(list_piece_rates).post(save_piece_rate),

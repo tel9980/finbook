@@ -216,6 +216,34 @@ const CASES = [
     absent: ["一行都没读到"],
   },
   {
+    // 「2.5 元一米」+ 两个规格：每件多少钱要一眼看到，还要看到折合量怎么来的
+    fn: "specRowsHtml",
+    args: [[
+      { spec: "1200*80", dims: "1200×80", factor: "1.2000", price: "3.00", note: "" },
+      { spec: "920*60", dims: "920×60", factor: "0.9200", price: "2.30", note: "" },
+    ]],
+    stubs: CELL_STUBS,
+    expect: ["1200×80", "1.2", "3.00", "920×60", "2.3", "2.30"],
+    absent: ["还没有结果"],
+  },
+  {
+    // 坏规格：整行说要怎么写，金额列打「—」而不是 0 元（0 元看着像免费加工）
+    fn: "specRowsHtml",
+    args: [[
+      { spec: "坏行", dims: "", factor: "0.00", price: "0.00", note: "看不懂这个规格 —— 写成 1250*250*3 这样（毫米）" },
+    ]],
+    stubs: CELL_STUBS,
+    expect: ["看不懂这个规格", "—"],
+    absent: ["0.00"],
+  },
+  {
+    fn: "specRowsHtml",
+    args: [[]],
+    stubs: CELL_STUBS,
+    expect: ["还没有结果"],
+    absent: ["<table"],
+  },
+  {
     // 一行都没读到（粘错地方 / 空文本）：必须说人话，不能显示「新增 0 条」让人以为成功了
     fn: "importResultHtml",
     args: [{ created: 0, updated: 0, skipped: 0, warnings: [] }],

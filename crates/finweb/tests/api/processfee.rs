@@ -413,3 +413,98 @@ async fn price_import_overwrites_same_cell_and_reports_bad_rows() {
     assert!(body.starts_with('\u{feff}'), "CSV 要带 BOM，Excel 才不乱码");
     assert!(body.contains("物料编码,计价口径,系数,保留位数"));
 }
+
+/// 按规格算单价：客户报「2.5 元一米」「80 元一个平方」，工件报规格 —— 中间那步不该让人按计算器
+#[tokio::test]
+async fn spec_turns_a_rate_into_a_piece_price() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 一、批量算价器：一个费率 + 一串规格 → 每件多少钱
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-specs/calc",
+            &sid,
+            serde_json::json!({
+                "rate": "2.5",
+                "unit": "米",
+                "specs": ["1200*80", "920*60", "坏行"],
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0]["dims"], "1200×80");
+    assert_eq!(rows[0]["factor"].as_str().unwrap(), "1.2000", "折合量 4 位");
+    assert_eq!(
+        money_num(rows[0]["price"].as_str().unwrap()),
+        3.00,
+        "1.2 米 × 2.5"
+    );
+    assert_eq!(
+        money_num(rows[1]["price"].as_str().unwrap()),
+        2.30,
+        "0.92 米 × 2.5"
+    );
+    assert!(
+        rows[2]["note"].as_str().unwrap().contains("看不懂"),
+        "坏规格要给话说，不能算成 0 元：{:?}",
+        rows[2]
+    );
+
+    // 二、平方：1250×250×3 的板 0.3125 ㎡ × 80 = 25.00
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-specs/calc",
+            &sid,
+            serde_json::json!({ "rate": "80", "unit": "㎡", "specs": ["1250*250*3"] }),
+        ))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(money_num(v["rows"][0]["price"].as_str().unwrap()), 25.00);
+
+    // 三、没录折算系数，填规格也能报价（300 块板 = 93.75 ㎡）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({ "name": "按平方", "item_code": "MB01", "unit": "㎡", "unit_price": "80" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/price-rules/quote?item=MB01&stock_qty=300&calc_unit=%E3%8E%A1&spec=1250*250*3",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["conv"]["basis"], "spec", "没系数时按规格算");
+    assert_eq!(v["conv"]["dims"], "1250×250×3");
+    assert_eq!(
+        v["conv"]["factor"].as_str().unwrap(),
+        "0.3125",
+        "折合量要留 4 位 —— 显示成 0.31 会和金额对不上"
+    );
+    assert_eq!(money_num(v["quote"]["total"].as_str().unwrap()), 7500.00);
+
+    // 四、连规格都没有 → 报错说清楚下一步做什么
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/price-rules/quote?item=MB01&stock_qty=1&calc_unit=%E3%8E%A1&spec=1250",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_string(resp).await;
+    assert!(body.contains("看不懂"), "实际：{body}");
+}

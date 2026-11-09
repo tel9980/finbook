@@ -1890,6 +1890,43 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导入单价_坏行只跳过那一行"],
   },
 
+  // ── v1.8.89 按规格算单价 ──────────────────────────────────────────────
+  {
+    // 只有一维也硬算：客户写「1200」本意可能是 1200*80 只写了长度，也可能是一根
+    // 1200 长的管。猜成「1200 × 1」会给出一个看着正常、实际差几十倍的价。
+    name: "73 规格看不懂也照算（缺一维就按 1 补）",
+    file: "crates/findb/src/processfee.rs",
+    from: "    if out.len() < 2 {\n        return None;\n    }\n    Some(out)",
+    to: "    if out.len() < 2 {\n        out.push(Money::ONE);\n    }\n    Some(out)",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::规格写法宽容但看不懂就不猜"],
+  },
+  {
+    // 手录系数被规格盖掉：老板特意为某个件录了「1 只 = 0.0234 ㎡」（实测值），
+    // 系统却按规格重算，把人工核对过的数顶掉 —— 这种「帮忙」最招人烦。
+    name: "74 手录系数被规格盖掉",
+    file: "crates/findb/src/processfee.rs",
+    from: "        Some(cu) if cu.factor.is_positive() => (cu.factor, cu.scale, \"manual\", String::new()),",
+    to: "        Some(_cu) if false => (Money::ZERO, 2, \"manual\", String::new()),",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::手录系数优先于规格"],
+  },
+  {
+    // 折合量只留 2 位：0.3125 ㎡ 的板显示成 0.31，而金额仍按 0.3125 算 ——
+    // 单子上「0.31 × 80 = 25.00」自己就对不上算盘，客户当场就要怀疑。
+    name: "75 折合量只显示 2 位（单子自己乘不上）",
+    file: "crates/finweb/src/handlers/processfee.rs",
+    from: "                \"factor\": sq.factor.fmt_dp(4),",
+    to: "                \"factor\": sq.factor.fmt_money(),",
+    cmd: API("processfee::spec_turns_a_rate_into_a_piece_price"),
+  },
+  {
+    // 按重量算不看密度：密度为 0 时折合量是 0，报价变 0 元，单子看着正常。
+    name: "76 按重量算不看密度（密度 0 也照算）",
+    file: "crates/findb/src/processfee.rs",
+    from: "            if n < SPEC_MAX_DIM || !density.is_positive() {",
+    to: "            if n < SPEC_MAX_DIM {",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::规格算重量要密度"],
+  },
+
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

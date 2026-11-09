@@ -751,8 +751,16 @@ pub struct PriceRulesView {
     pub q_item: String,
     pub q_customer: String,
     pub q_qty: String,
+    /// 规格（毫米）：`1250*250*3`。没录折算系数的工件靠它算折合量
+    pub q_spec: String,
+    /// 计价口径（空 = 老算法：数量就是计价数量）
+    pub q_unit: String,
+    /// 密度（只有按 kg 算才用；钢 7.85）
+    pub q_density: String,
     pub q_rush: bool,
     pub quote: Option<FeeQuote>,
+    /// 折算过程的说明（口径为空时为 None）
+    pub conv_text: Option<String>,
 }
 
 impl Default for PriceRulesView {
@@ -769,8 +777,12 @@ impl Default for PriceRulesView {
             q_item: String::new(),
             q_customer: String::new(),
             q_qty: String::new(),
+            q_spec: String::new(),
+            q_unit: String::new(),
+            q_density: "7.85".to_string(),
             q_rush: false,
             quote: None,
+            conv_text: None,
         }
     }
 }
@@ -1003,27 +1015,84 @@ impl PriceRulesView {
             txt(ui, "数量");
             widgets::money_input(ui, &mut self.q_qty, 90.0);
             ui.checkbox(&mut self.q_rush, "加急");
+        });
+        ui.horizontal(|ui| {
+            txt(ui, "规格");
+            widgets::text_input(ui, &mut self.q_spec, 120.0, "1250*250*3（毫米）");
+            txt(ui, "口径");
+            widgets::text_input(ui, &mut self.q_unit, 60.0, "㎡ / 米 / kg");
+            txt(ui, "密度");
+            widgets::text_input(ui, &mut self.q_density, 50.0, "7.85");
             if ui.button("算一下").clicked() {
                 run = true;
             }
         });
+        txt(
+            ui,
+            RichText::new(
+                "口径留空的按老算法（数量就是计价数量）。填口径 + 规格的，没录折算系数也能算 —— \
+                 1250×250×3 的板一块 0.3125 ㎡；密度只有按 kg 算才用（钢 7.85、铝 2.70）。",
+            )
+            .size(11.0)
+            .color(palette::GRID),
+        );
         if run {
             let qty = widgets::parse_money(&self.q_qty);
-            match processfee::quote_by(
-                ctx.db(),
-                self.q_item.trim(),
-                self.q_customer.trim(),
-                qty,
-                self.q_rush,
-            ) {
-                Ok(q) => {
+            let unit = self.q_unit.trim().to_string();
+            let res = if unit.is_empty() {
+                processfee::quote_by(
+                    ctx.db(),
+                    self.q_item.trim(),
+                    self.q_customer.trim(),
+                    qty,
+                    self.q_rush,
+                )
+                .map(|q| (q, None))
+            } else {
+                let density = widgets::parse_money(&self.q_density);
+                processfee::quote_with_spec(
+                    ctx.db(),
+                    self.q_item.trim(),
+                    self.q_customer.trim(),
+                    &self.q_spec,
+                    qty,
+                    &unit,
+                    density,
+                    self.q_rush,
+                )
+                .map(|sq| (sq.quote.clone(), Some(sq)))
+            };
+            match res {
+                Ok((q, conv)) => {
                     self.quote = Some(q);
+                    self.conv_text = conv.map(|sq| {
+                        let basis = if sq.basis == "spec" {
+                            format!("按规格 {}）", sq.dims)
+                        } else {
+                            "按折算系数）".to_string()
+                        };
+                        format!(
+                            "折算（{}：{} {} × {} = {} {}",
+                            basis,
+                            sq.stock_qty.fmt_qty(),
+                            sq.stock_unit,
+                            sq.factor.fmt_qty(),
+                            sq.calc_qty.fmt_qty(),
+                            sq.calc_unit
+                        )
+                    });
                     self.err.clear();
                 }
                 Err(e) => {
                     self.quote = None;
+                    self.conv_text = None;
                     self.err = e.to_string();
                 }
+            }
+        }
+        if let Some(cv) = self.conv_text.clone() {
+            if self.quote.is_some() {
+                txt(ui, RichText::new(cv).size(11.5).color(palette::GRID));
             }
         }
         if let Some(q) = self.quote.clone() {

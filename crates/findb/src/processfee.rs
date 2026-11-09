@@ -1074,6 +1074,260 @@ fn unit_rank(u: &str) -> (u8, String) {
 ///
 /// 一屏看全「这个客户，每个物料按每种口径各多少钱」——这正是老板问
 /// 「单价怎么高效管理」时真正要的那张表：不是一长串规则，是矩阵。
+// ── 按规格折算（v1.8.89） ──────────────────────────────────────────────
+//
+// 氧化厂报价最常听见的两句话：「这个件 2.5 元一米」「这个件 80 元一个平方」。
+// 客户报的是**费率**，工件给的是**规格**，中间的「1 件折合多少米 / 多少平方」
+// 不该让人拿计算器按一遍再抄进折算系数 —— 抄错一次就差几百块，而且单子看着没问题。
+//
+// 口径与规格的对应关系（这张表就是全部规则）：
+//   只 / 条 / 件 / 个 / 支 / 片 / 套 → 1（数件，规格不影响）
+//   米 / 米长                        → 第一个尺寸 ÷ 1000（毫米 → 米）
+//   ㎡ / 平方 / 平方米 / 平米         → 前两个尺寸相乘 ÷ 1e6
+//   kg / 公斤 / 千克                 → 三个尺寸相乘 ÷ 1e6 × 密度（g/cm³）
+//
+// 密度只对重量口径有意义，默认按钢 7.85 g/cm³；客户送来的若是铝件（2.70）、
+// 铜件（8.90），在「密度」那一格改掉即可。
+
+/// 规格里能出现的分隔符：客户表里 `*`、`×`、`x`、全角 `＊`、逗号混着写是常态。
+const SPEC_SEPS: [char; 9] = ['*', '×', 'x', 'X', '＊', ',', '，', ';', '；'];
+
+/// 一条规格最多认几维（长 × 宽 × 厚）。
+const SPEC_MAX_DIM: usize = 3;
+
+/// 解析规格：`1250*250*3` → `[1250, 250, 3]`（单位统一按毫米）。
+///
+/// 宽进：`1250×250×3`、`1200 x 80`、`1250mm*250mm`、`1200,80` 都认；
+/// 严出：**看不懂就给 `None`，绝不按 0 或按第一维猜** —— 猜错的代价是报价单上
+/// 一个看着正常、实际差几倍的单价。少于两维（只有一个长度）也算看不懂。
+pub fn parse_spec(s: &str) -> Option<Vec<Money>> {
+    let mut out: Vec<Money> = Vec::new();
+    for raw in s.split(|c: char| SPEC_SEPS.contains(&c)) {
+        // 去掉客户顺手写上的单位（mm/cm/MM），数字本身必须还在
+        let t = raw.trim().trim_end_matches(|c: char| {
+            c.is_ascii_alphabetic() || matches!(c, 'ｍ' | 'Ｍ' | '㎜' | '㎝')
+        });
+        let t = t.trim();
+        if t.is_empty() {
+            continue;
+        }
+        let v = Money::parse(t).ok()?;
+        if !v.is_positive() || out.len() >= SPEC_MAX_DIM {
+            return None;
+        }
+        out.push(v);
+    }
+    if out.len() < 2 {
+        return None;
+    }
+    Some(out)
+}
+
+/// 规格的展示写法：`1250×250×3`（去掉没意义的小数尾巴）。
+pub fn spec_label(dims: &[Money]) -> String {
+    dims.iter()
+        .map(|d| {
+            let s = d.fmt_plain();
+            if s.contains('.') {
+                s.trim_end_matches('0').trim_end_matches('.').to_string()
+            } else {
+                s
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("×")
+}
+
+/// 1 件折合多少计价单位。看不懂的口径 / 尺寸不够 / 密度缺失 → `None`。
+///
+/// 返回 4 位小数：1250×250 的板一块是 0.3125 ㎡，只留 2 位就变 0.31，
+/// 80 元/㎡ 会从 25.00 变成 24.80 —— 一块板差两毛，一万块就是两千。
+pub fn spec_factor(dims: &[Money], unit: &str, density: Money) -> Option<Money> {
+    let u = unit.trim();
+    let n = dims.len();
+    match u {
+        "只" | "条" | "件" | "个" | "支" | "片" | "套" | "根" => Some(Money::ONE),
+        "米" | "米长" | "m" => dims[0].checked_div(1000i64).map(|v| v.round_dp(4)),
+        "㎡" | "平方" | "平方米" | "平米" => dims[0]
+            .checked_mul(dims[1])
+            .and_then(|v| v.checked_div(1_000_000i64))
+            .map(|v| v.round_dp(4)),
+        "kg" | "公斤" | "千克" => {
+            if n < SPEC_MAX_DIM || !density.is_positive() {
+                return None;
+            }
+            dims[0]
+                .checked_mul(dims[1])
+                .and_then(|v| v.checked_mul(dims[2]))
+                .and_then(|v| v.checked_div(1_000_000i64))
+                .and_then(|v| v.checked_mul(density))
+                .map(|v| v.round_dp(4))
+        }
+        _ => None,
+    }
+}
+
+/// 一行「规格 → 单件价」的结果。`note` 非空表示这一行有话说（看不懂 / 口径不适用）。
+#[derive(Debug)]
+pub struct SpecPrice {
+    pub spec: String,
+    pub dims: String,
+    /// 1 件折合多少计价单位
+    pub factor: Money,
+    /// 单件价 = 费率 × 折合量
+    pub price: Money,
+    pub note: String,
+}
+
+/// 按一个费率把一批规格折成单件价（就是不落库的算价器）。
+///
+/// 空行自动跳过（从 Excel 复制过来常带空行）；看不懂的规格不猜，原样子返回并带上说明。
+pub fn spec_prices(rate: Money, unit: &str, specs: &[String], density: Money) -> Vec<SpecPrice> {
+    let mut out = Vec::new();
+    for raw in specs {
+        let spec = raw.trim();
+        if spec.is_empty() {
+            continue;
+        }
+        let Some(dims) = parse_spec(spec) else {
+            out.push(SpecPrice {
+                spec: spec.to_string(),
+                dims: String::new(),
+                factor: Money::ZERO,
+                price: Money::ZERO,
+                note: "看不懂这个规格 —— 写成 1250*250*3 这样（毫米）".to_string(),
+            });
+            continue;
+        };
+        let label = spec_label(&dims);
+        let Some(factor) = spec_factor(&dims, unit, density) else {
+            out.push(SpecPrice {
+                spec: spec.to_string(),
+                dims: label,
+                factor: Money::ZERO,
+                price: Money::ZERO,
+                note: if matches!(unit.trim(), "kg" | "公斤" | "千克") {
+                    "按重量算要三维尺寸 + 密度（钢 7.85、铝 2.70、铜 8.90）".to_string()
+                } else {
+                    format!("「{unit}」这个口径按规格算不了（只 / 条 / 米 / ㎡ / kg 才行）")
+                },
+            });
+            continue;
+        };
+        let price = factor
+            .checked_mul(rate)
+            .map(|v| v.round2())
+            .unwrap_or(Money::ZERO);
+        out.push(SpecPrice {
+            spec: spec.to_string(),
+            dims: label,
+            factor,
+            price,
+            note: String::new(),
+        });
+    }
+    out
+}
+
+/// 带规格的报价结果：比 [`UnitQuote`] 多一句「这个折算量是哪来的」。
+#[derive(Debug)]
+pub struct SpecQuote {
+    pub item_code: String,
+    pub spec: String,
+    /// 规格的规范写法（`1250×250×3`）；手录系数时报空串
+    pub dims: String,
+    /// `"manual"` 用折算系数 / `"spec"` 按规格算出来
+    pub basis: &'static str,
+    pub factor: Money,
+    pub stock_qty: Money,
+    pub stock_unit: String,
+    pub calc_qty: Money,
+    pub calc_unit: String,
+    pub quote: FeeQuote,
+}
+
+/// 报价：有折算系数就用系数，没有就按规格算。
+///
+/// 顺序是刻意的 —— 系数是人手工核过的（比如客户认的「1 只 = 0.0234 ㎡」），
+/// 规格是几何算的；两者都在时**听人的**，规格只在缺系数时兜底。
+pub fn quote_with_spec(
+    db: &Db,
+    item: &str,
+    customer: &str,
+    spec: &str,
+    stock_qty: Money,
+    calc_unit: &str,
+    density: Money,
+    rush: bool,
+) -> DbResult<SpecQuote> {
+    let item = item.trim();
+    let unit = calc_unit.trim();
+    if !stock_qty.is_positive() {
+        return Err(FinError::msg("数量必须大于 0").into());
+    }
+    if item.is_empty() {
+        return Err(FinError::msg("先选物料：不同物料的单价不一样").into());
+    }
+    if unit.is_empty() {
+        return Err(FinError::msg("先选计价口径（按 ㎡ 还是按只）").into());
+    }
+    let (factor, scale, basis, dims_txt) = match calc_unit_of(db, item, unit)? {
+        Some(cu) if cu.factor.is_positive() => (cu.factor, cu.scale, "manual", String::new()),
+        _ => {
+            let spec = spec.trim();
+            let dims = parse_spec(spec).ok_or_else(|| {
+                FinError::msg(format!(
+                    "物料 {item} 没设「1 {item} = ? {unit}」的折算系数；填了规格也能算，但「{spec}」看不懂 —— 写成 1250*250*3 这样（毫米）"
+                ))
+            })?;
+            let f = spec_factor(&dims, unit, density).ok_or_else(|| {
+                FinError::msg(format!(
+                    "规格 {} 按「{unit}」算不出折合量：{}",
+                    spec_label(&dims),
+                    if matches!(unit, "kg" | "公斤" | "千克") {
+                        "按重量算要三维尺寸，还要填密度（钢 7.85、铝 2.70、铜 8.90）".to_string()
+                    } else {
+                        format!("「{unit}」这个口径要 {} 个尺寸", 2)
+                    }
+                ))
+            })?;
+            (f, 4i32, "spec", spec_label(&dims))
+        }
+    };
+    let calc_qty = (stock_qty * factor).round_dp(scale.clamp(0, SCALE_MAX) as u32);
+    if !calc_qty.is_positive() {
+        return Err(FinError::msg(format!(
+            "折算后只有 {calc_qty} {unit}（折合量 {factor} 太小或数量太少），请核对规格/系数"
+        ))
+        .into());
+    }
+    let (rule, _future) = match_rule_for(db, item, customer, unit)?.ok_or_else(|| {
+        FinError::msg(format!(
+            "没有按「{unit}」计的单价（物料 {item}／客户 {}）——单价表里这一格还是空的",
+            if customer.trim().is_empty() {
+                "任意"
+            } else {
+                customer.trim()
+            }
+        ))
+    })?;
+    let mut q = quote_on(&rule, calc_qty, rush, &today());
+    q.effective_from = rule.effective_from.clone();
+    let stock_unit = stock_unit_of(db, item)?;
+    Ok(SpecQuote {
+        item_code: item.to_string(),
+        spec: spec.trim().to_string(),
+        dims: dims_txt,
+        basis,
+        factor,
+        stock_qty,
+        stock_unit,
+        calc_qty,
+        calc_unit: unit.to_string(),
+        quote: q,
+    })
+}
+
 pub fn matrix(db: &Db, customer: &str) -> DbResult<PriceMatrix> {
     let customer = customer.trim();
     let today = today();
@@ -1645,5 +1899,173 @@ MB03,米,x,2
         assert_eq!(quote_by(&db, "", "", m("2"), false).unwrap().total, m("20"));
         // 数量 0 直接拦
         assert!(quote_by(&db, "", "", Money::ZERO, false).is_err());
+    }
+
+    // ── v1.8.89 按规格折算 ──────────────────────────────────────────────
+
+    #[test]
+    fn 规格算米长和面积() {
+        let d = parse_spec("1200*80").unwrap();
+        assert_eq!(spec_label(&d), "1200×80");
+        assert_eq!(
+            spec_factor(&d, "米", Money::ZERO),
+            Some(m("1.2")),
+            "1200mm = 1.2 米"
+        );
+        assert_eq!(
+            spec_factor(&d, "㎡", Money::ZERO),
+            Some(m("0.0960")),
+            "1200×80mm = 0.096 ㎡"
+        );
+
+        // 板料：1250×250×3
+        let d = parse_spec("1250*250*3").unwrap();
+        assert_eq!(
+            spec_factor(&d, "㎡", Money::ZERO),
+            Some(m("0.3125")),
+            "面积 0.3125 ㎡ 必须留 4 位 —— 只留 2 位就变 0.31"
+        );
+        assert_eq!(spec_factor(&d, "米", Money::ZERO), Some(m("1.25")));
+        // 数件的口径跟规格无关
+        assert_eq!(spec_factor(&d, "只", Money::ZERO), Some(Money::ONE));
+    }
+
+    #[test]
+    fn 规格算重量要密度() {
+        let d = parse_spec("1250*250*3").unwrap();
+        // 钢 7.85 g/cm³：1250×250×3mm 的板一块 7.36 kg
+        assert_eq!(
+            spec_factor(&d, "kg", m("7.85")),
+            Some(m("7.3594")),
+            "0.9375 × 7.85"
+        );
+        // 铝件密度不同，同一块板轻得多
+        assert_eq!(spec_factor(&d, "kg", m("2.70")), Some(m("2.5313")));
+        // 没密度就不猜
+        assert_eq!(spec_factor(&d, "kg", Money::ZERO), None);
+        // 两维算不了重量
+        let two = parse_spec("1250*250").unwrap();
+        assert_eq!(spec_factor(&two, "kg", m("7.85")), None);
+    }
+
+    #[test]
+    fn 规格写法宽容但看不懂就不猜() {
+        for s in [
+            "1250*250*3",
+            "1250×250×3",
+            "1250 x 250 x 3",
+            "1250mm*250mm*3mm",
+            "1250,250,3",
+            "  1250 ＊ 250 ＊ 3  ",
+        ] {
+            assert_eq!(
+                parse_spec(s).map(|d| spec_label(&d)),
+                Some("1250×250×3".to_string()),
+                "这个写法该认：{s}"
+            );
+        }
+        // 只有一维 / 空 / 有非数字 / 有 0 —— 一律不猜
+        for s in ["", "1200", "1250*abc", "1250*0", "1250*-5", "1250*250*3*4"] {
+            assert!(parse_spec(s).is_none(), "这个不该认：{s}");
+        }
+        // 认不出的口径也不猜
+        let d = parse_spec("1250*250*3").unwrap();
+        assert_eq!(spec_factor(&d, "吨", Money::ZERO), None);
+    }
+
+    #[test]
+    fn 按费率把一批规格折成单件价() {
+        // 「2.5 元一米」：1200mm 的件 1.2 米 → 3.00 元
+        let rows = spec_prices(
+            m("2.5"),
+            "米",
+            &["1200*80".to_string(), "920*60".to_string()],
+            Money::ZERO,
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].dims, "1200×80");
+        assert_eq!(rows[0].factor, m("1.2"));
+        assert_eq!(rows[0].price, m("3"), "1.2 米 × 2.5");
+        assert_eq!(rows[1].price, m("2.3"), "0.92 米 × 2.5");
+        assert!(rows[0].note.is_empty());
+
+        // 「80 元一个平方」：1250×250mm 的板 0.3125 ㎡ → 25.00 元
+        let rows = spec_prices(m("80"), "㎡", &["1250*250*3".to_string()], Money::ZERO);
+        assert_eq!(rows[0].factor, m("0.3125"));
+        assert_eq!(rows[0].price, m("25"), "0.3125 ㎡ × 80");
+
+        // 空行跳过、坏行原样带回来并说明
+        let rows = spec_prices(
+            m("80"),
+            "㎡",
+            &["".to_string(), "坏行".to_string(), "1200*80".to_string()],
+            Money::ZERO,
+        );
+        assert_eq!(rows.len(), 2, "空行不占结果");
+        assert!(
+            rows[0].note.contains("看不懂"),
+            "坏行要说明：{}",
+            rows[0].note
+        );
+        assert_eq!(rows[1].price, m("7.68"), "0.096 ㎡ × 80");
+    }
+
+    #[test]
+    fn 没录系数也能按规格报价() {
+        let db = crate::tests::mem();
+        let mut r = rule("按平方", "㎡", "80", "0", "0", "0");
+        r.item_code = "MB01".to_string();
+        rule_save(&db, &mut r).unwrap();
+
+        // 一块 1250×250×3 的板 = 0.3125 ㎡，300 块 = 93.75 ㎡ → 7500 元
+        let q = quote_with_spec(
+            &db,
+            "MB01",
+            "",
+            "1250*250*3",
+            m("300"),
+            "㎡",
+            Money::ZERO,
+            false,
+        )
+        .unwrap();
+        assert_eq!(q.basis, "spec");
+        assert_eq!(q.dims, "1250×250×3");
+        assert_eq!(q.factor, m("0.3125"));
+        assert_eq!(q.calc_qty, m("93.75"));
+        assert_eq!(q.quote.total, m("7500"));
+
+        // 规格看不懂就报错，别按 0 算
+        let err = quote_with_spec(&db, "MB01", "", "1250", m("1"), "㎡", Money::ZERO, false)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("看不懂"), "实际：{err}");
+    }
+
+    #[test]
+    fn 手录系数优先于规格() {
+        let db = crate::tests::mem();
+        let mut c = cu("MB01", "㎡", "0.0234", 2);
+        calc_unit_save(&db, &mut c).unwrap();
+        let mut r = rule("按平方", "㎡", "12", "0", "0", "0");
+        r.item_code = "MB01".to_string();
+        rule_save(&db, &mut r).unwrap();
+
+        // 系数是人核过的（客户认的 1 只 = 0.0234 ㎡），规格只是兜底
+        let q = quote_with_spec(
+            &db,
+            "MB01",
+            "",
+            "1250*250*3",
+            m("300"),
+            "㎡",
+            Money::ZERO,
+            false,
+        )
+        .unwrap();
+        assert_eq!(q.basis, "manual", "有系数就该用系数");
+        assert_eq!(q.factor, m("0.0234"));
+        assert_eq!(q.calc_qty, m("7.02"), "按系数折算，规格不参与");
+        assert!(q.dims.is_empty());
     }
 }

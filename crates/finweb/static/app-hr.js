@@ -715,6 +715,24 @@ function priceCellHtml(row, c, canEdit) {
 
 // 导入结果说人话。抽成顶层函数是为了让 tools/check-app-render.js 能真调用它 ——
 // 这段文案是用户判断「到底导进去没有」的唯一依据，写错了没人看得见。
+function specRowsHtml(rows) {
+  if (!rows || !rows.length) {
+    return `<div class="muted">还没有结果 —— 先把规格粘到上面的框里。</div>`;
+  }
+  const body = rows
+    .map((r) => {
+      const bad = !!r.note;
+      const dims = r.dims ? esc(r.dims) : "—";
+      const factor = bad || !Number(r.factor) ? "—" : priceIn(r.factor);
+      const price = bad || !Number(r.price) ? "—" : fmt(r.price);
+      // 坏行整行黄字说明，不要在金额列里写 0 —— 0 元看着像「免费加工」
+      const note = bad ? `<span style="color:var(--warn)">${esc(r.note)}</span>` : "";
+      return `<tr><td>${esc(r.spec)}</td><td>${dims}</td><td class="num">${factor}</td><td class="num">${price}</td><td>${note}</td></tr>`;
+    })
+    .join("");
+  return `<table class="grid"><thead><tr><th>规格（毫米）</th><th>规范写法</th><th>1 件折合</th><th>单件价</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function importResultHtml(r, hint) {
   const created = Number(r.created) || 0;
   const updated = Number(r.updated) || 0;
@@ -762,12 +780,29 @@ async function viewPriceRules(main) {
       <div class="toolbar">
         <label>物料 <input id="pr-q-item" style="width:110px" /></label>
         <label>数量 <input id="pr-q-qty" style="width:80px" value="1" /></label>
+        <label>规格 <input id="pr-q-spec" style="width:120px" placeholder="1250*250*3" title="毫米。没录折算系数时按规格算折合量" /></label>
         <label>口径 <select id="pr-q-unit" style="width:130px"></select></label>
         <label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="pr-q-rush" /> 加急</label>
         <button class="btn primary sm" id="pr-q-run">试算</button>
       </div>
-      <div class="muted" style="font-size:12px">口径留「（不折算）」时，数量按计价单位直接算（老算法）。</div>
+      <div class="muted" style="font-size:12px">口径留「（不折算）」时，数量按计价单位直接算（老算法）。
+        填了规格但没录折算系数的，系统按规格算折合量（1250×250×3 的板一块 0.3125 ㎡）。</div>
       <div id="pr-q-out" class="muted">填好物料和数量后试算</div>
+    </div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">按规格算单价（客户报「2.5 元一米」「80 元一个平方」的时候）</h3>
+      <div class="toolbar">
+        <label>单价 <input id="pr-sp-rate" style="width:80px" placeholder="2.5" /></label>
+        <label>口径 <select id="pr-sp-unit" style="width:110px">
+          <option value="米">米</option><option value="㎡">平方</option>
+          <option value="kg">公斤</option><option value="只">只（数件）</option>
+        </select></label>
+        <label title="只有按公斤算才用：钢 7.85、铝 2.70、铜 8.90（g/cm³）">密度 <input id="pr-sp-density" style="width:64px" value="7.85" /></label>
+        <button class="btn primary sm" id="pr-sp-run">算单价</button>
+      </div>
+      <div class="muted" style="font-size:12px">一行一个规格，单位毫米 —— 从 Excel 整列复制过来就行。算出来的只是每件多少钱，<b>不改单价表</b>。</div>
+      <textarea id="pr-sp-text" rows="5" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px"
+        placeholder="1200*80&#10;920*60&#10;1250*250*3"></textarea>
+      <div id="pr-sp-out"></div>
     </div>`;
 
   let mx = { customer: "", units: [], rows: [] };
@@ -1079,20 +1114,51 @@ async function viewPriceRules(main) {
   if ($("#pr-new", main)) $("#pr-new", main).onclick = () => openRule(null);
   if ($("#pr-new-unit", main)) $("#pr-new-unit", main).onclick = () => openUnit(null);
 
+  $("#pr-sp-run", main).onclick = async () => {
+    const rate = $("#pr-sp-rate", main).value.trim();
+    const unit = $("#pr-sp-unit", main).value;
+    const density = $("#pr-sp-density", main).value.trim();
+    const specs = $("#pr-sp-text", main)
+      .value.split(/\r?\n/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const out = $("#pr-sp-out", main);
+    if (!rate) {
+      out.innerHTML = `<div style="color:var(--warn)">先填单价 —— 客户报的是多少钱一米/一平方。</div>`;
+      return;
+    }
+    if (!specs.length) {
+      out.innerHTML = `<div class="muted">先把规格粘到上面的框里（一行一个）。</div>`;
+      return;
+    }
+    try {
+      const r = await api("/price-specs/calc", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rate, unit, density, specs }),
+      });
+      out.innerHTML = specRowsHtml(r.rows);
+    } catch (e) {
+      out.innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
+    }
+  };
+
   $("#pr-q-run", main).onclick = async () => {
     const item = $("#pr-q-item", main).value.trim();
     const qty = $("#pr-q-qty", main).value.trim();
     const unit = $("#pr-q-unit", main).value.trim();
     const rush = $("#pr-q-rush", main).checked ? "1" : "0";
     const cust = $("#pr-cust", main).value.trim();
+    const spec = $("#pr-q-spec", main).value.trim();
+    const density = $("#pr-sp-density", main).value.trim();
     const q = unit
-      ? `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&stock_qty=${encodeURIComponent(qty)}&calc_unit=${encodeURIComponent(unit)}&rush=${rush}`
+      ? `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&stock_qty=${encodeURIComponent(qty)}&calc_unit=${encodeURIComponent(unit)}&density=${encodeURIComponent(density)}&spec=${encodeURIComponent(spec)}&rush=${rush}`
       : `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&qty=${encodeURIComponent(qty)}&rush=${rush}`;
     try {
       const r = await api(q);
       const x = r.quote;
       const conv = r.conv
-        ? `<tr><td>折算</td><td class="num">${fmt(r.conv.stock_qty)} ${esc(r.conv.stock_unit || "")} × ${priceIn(r.conv.factor)} = ${fmt(r.conv.calc_qty)} ${esc(r.conv.calc_unit)}</td></tr>`
+        ? `<tr><td>折算${r.conv.basis === "spec" ? `（按规格 ${esc(r.conv.dims)}）` : ""}</td><td class="num">${fmt(r.conv.stock_qty)} ${esc(r.conv.stock_unit || "")} × ${priceIn(r.conv.factor)} = ${fmt(r.conv.calc_qty)} ${esc(r.conv.calc_unit)}</td></tr>`
         : "";
       const fut = x.future
         ? `<tr><td colspan="2" style="color:var(--warn)">注意：这条价 ${esc(x.effective_from)} 才生效，现在报的是提前录的下一版价。</td></tr>`
