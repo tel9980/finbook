@@ -42,6 +42,11 @@ pub struct PriceRule {
     pub rush_rate: Money,
     /// 生效日期（`YYYY-MM-DD`，空 = 立即生效）。提前录下一版价用
     pub effective_from: String,
+    /// 工艺档（普通氧化 / 硬质氧化 / 导电氧化 / 本色 / 黑色……）。空 = 不分档
+    ///
+    /// 同一物料、同一客户、同一口径，换个表面处理就是另一个价。没有这一列，
+    /// 只能靠规则名称区分 —— 矩阵里看着像重复录入，报价时还挑不出来。
+    pub process: String,
     pub disabled: bool,
     pub memo: String,
 }
@@ -59,6 +64,7 @@ impl Default for PriceRule {
             rush_fee: Money::ZERO,
             rush_rate: Money::ZERO,
             effective_from: String::new(),
+            process: String::new(),
             disabled: false,
             memo: String::new(),
         }
@@ -91,7 +97,7 @@ pub struct FeeQuote {
 }
 
 const COLS: &str = "id,name,item_code,customer_code,unit,unit_price,min_charge,rush_fee,\
-                    rush_rate,disabled,memo,effective_from";
+                    rush_rate,disabled,memo,effective_from,process";
 
 fn map_rule(r: &rusqlite::Row) -> rusqlite::Result<PriceRule> {
     Ok(PriceRule {
@@ -107,6 +113,7 @@ fn map_rule(r: &rusqlite::Row) -> rusqlite::Result<PriceRule> {
         disabled: r.get::<_, i64>(9)? != 0,
         memo: r.get(10)?,
         effective_from: r.get(11)?,
+        process: r.get(12)?,
     })
 }
 
@@ -218,12 +225,13 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
         ))
         .into());
     }
+    let process = r.process.trim().to_string();
     let tx = db.write_tx()?;
     let id = if r.id > 0 {
         let n = tx.execute(
             "UPDATE price_rule SET name=?2,item_code=?3,customer_code=?4,unit=?5,
              unit_price=?6,min_charge=?7,rush_fee=?8,rush_rate=?9,disabled=?10,memo=?11,
-             effective_from=?12
+             effective_from=?12,process=?13
              WHERE id=?1",
             rusqlite::params![
                 r.id,
@@ -237,7 +245,8 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
                 crate::exact_param(r.rush_rate),
                 r.disabled as i64,
                 r.memo,
-                effective_from
+                effective_from,
+                process
             ],
         )?;
         if n == 0 {
@@ -247,8 +256,8 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
     } else {
         tx.execute(
             "INSERT INTO price_rule(name,item_code,customer_code,unit,unit_price,
-             min_charge,rush_fee,rush_rate,disabled,memo,effective_from)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+             min_charge,rush_fee,rush_rate,disabled,memo,effective_from,process)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             rusqlite::params![
                 name,
                 r.item_code.trim(),
@@ -260,7 +269,8 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
                 crate::exact_param(r.rush_rate),
                 r.disabled as i64,
                 r.memo,
-                effective_from
+                effective_from,
+                process
             ],
         )?;
         tx.last_insert_rowid()
@@ -270,6 +280,7 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
     r.name = name;
     r.unit = unit;
     r.effective_from = effective_from;
+    r.process = process;
     Ok(id)
 }
 
@@ -301,7 +312,7 @@ pub struct PriceImport {
 }
 
 /// 单价表的导入列头（模板与解析器共用一份，改一处就都改）
-pub const RULE_HEAD: [&str; 10] = [
+pub const RULE_HEAD: [&str; 11] = [
     "物料编码",
     "客户编码",
     "计价口径",
@@ -312,6 +323,7 @@ pub const RULE_HEAD: [&str; 10] = [
     "生效日期",
     "名称",
     "备注",
+    "工艺档",
 ];
 
 /// 折算系数的导入列头
@@ -322,9 +334,10 @@ pub fn rule_import_template() -> String {
     let mut out = String::new();
     out.push_str(&RULE_HEAD.join(","));
     out.push('\n');
-    // 两行示例覆盖两种典型口径：按㎡（要配折算系数）和按只（数量就是只数）
-    out.push_str("MB01,,㎡,12.00,30.00,20.00,10,,\"氧化-按平方（通配）\"\n");
-    out.push_str("MB02,C01,只,0.45,0,,,2026-12-01,\"给客户C01的按只价\",\n");
+    // 三行示例：按㎡ 不分档、按只 + 工艺档、按㎡ + 工艺档（同一物料同一口径的两个档位）
+    out.push_str("MB01,,㎡,12.00,30.00,20.00,10,,\"氧化-按平方（通配）\",,\n");
+    out.push_str("MB02,C01,只,0.45,0,,,2026-12-01,\"给客户C01的按只价\",,硬质氧化\n");
+    out.push_str("MB01,,㎡,18.00,50.00,,,,,\"氧化-硬质\",,硬质氧化\n");
     out
 }
 
@@ -339,14 +352,6 @@ pub fn unit_import_template() -> String {
 }
 
 /// 一行是不是表头：第一格出现「物料」「编码」「item」这类字样就跳过
-fn is_head(f0: &str) -> bool {
-    let t = f0.trim().to_ascii_lowercase();
-    t.contains("物料")
-        || t.contains("编码")
-        || t.contains("item")
-        || t == "code"
-        || t.contains("客商")
-}
 
 /// 第几列（越界给空串）
 fn col(f: &[String], i: usize) -> &str {
@@ -362,8 +367,28 @@ fn col(f: &[String], i: usize) -> &str {
 /// 同「物料 + 客户 + 口径 + 生效日」已有价的，覆盖那一格并计入 `updated`：
 /// 这是调价表最常见的用法 —— 客户发来一张新价目表，整张导进去，没变的那些也照抄一遍。
 /// 靠生效日区分版本，所以「提前录下个月的新价」不会被今天这张表冲掉。
+/// 这一行像不像表头。
+///
+/// 不能只看第一格：客户从金蝶/用友导出的表，第一行是列名，但数据行的第一格
+/// 也可能带「物料」二字。这里数命中：一行里出现两个以上的列名关键词才算表头。
+fn looks_like_head(f: &[String]) -> bool {
+    const WORDS: [&str; 18] = [
+        "物料", "客户", "客商", "口径", "单位", "单价", "起步", "加急", "生效", "名称", "备注",
+        "工艺", "系数", "位数", "item", "price", "unit", "code",
+    ];
+    let hits = f
+        .iter()
+        .filter(|c| {
+            let c = c.trim().to_lowercase();
+            !c.is_empty() && WORDS.iter().any(|w| c.contains(w))
+        })
+        .count();
+    hits >= 2
+}
+
 pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
     let mut res = PriceImport::default();
+    let mut head: Vec<String> = Vec::new();
     let mut line_no = 0usize;
     for raw in text.lines() {
         let line = raw.trim().trim_start_matches('\u{feff}');
@@ -372,24 +397,42 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
         }
         line_no += 1;
         let f = crate::imports::split_csv(line);
-        let (f0, f3) = (col(&f, 0), col(&f, 3));
-        // 表头：第一格是「物料编码」这类列名，且单价那一格不是数字。
-        // 只认「第一格像列名」不够 —— 客户从金蝶导出的表头就叫「物料编码」，行的第一格同样可能带「物料」二字。
-        if is_head(f0) && Money::parse(f3).is_err() {
+        if looks_like_head(&f) {
+            head = f.clone();
             continue;
         }
-        if f.len() < 4 {
+        // 有表头就按列名对齐（客户表里列的顺序爱怎么排怎么排，也能只贴五列）；
+        // 没表头按固定顺序 —— 老模板、老脚本照旧能导。
+        let at = |aliases: &[&str], fallback: usize| -> String {
+            // 有表头就**完全**按列名：表里没这一列就是没给（空），
+            // 不能退回「第 N 格」—— 客户的表把工艺档放在第五列时，
+            // 按位置读会把「硬质氧化」当成起步价，报一句「起步价不是数字」就完事，
+            // 用户根本想不到是列错位。
+            let i = if head.is_empty() {
+                fallback
+            } else {
+                match head.iter().position(|h| {
+                    let h = h.trim();
+                    !h.is_empty() && aliases.iter().any(|a| h.contains(a))
+                }) {
+                    Some(i) => i,
+                    None => return String::new(),
+                }
+            };
+            col(&f, i).trim().to_string()
+        };
+        let item = at(&["物料"], 0);
+        let cust = at(&["客户", "客商"], 1);
+        let unit = at(&["口径", "单位"], 2);
+        let price_s = at(&["单价"], 3);
+        if price_s.is_empty() {
             res.skipped += 1;
             res.warnings.push(format!(
-                "第 {line_no} 行：至少要有「物料编码,客户编码,计价口径,单价」四列，这一行只有 {} 列",
+                "第 {line_no} 行：找不到「单价」这一列（这一行只有 {} 列）",
                 f.len()
             ));
             continue;
         }
-        let item = f0;
-        let cust = col(&f, 1);
-        let unit = col(&f, 2);
-        let price_s = f3;
         if unit.is_empty() {
             res.skipped += 1;
             res.warnings.push(format!(
@@ -397,7 +440,7 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
             ));
             continue;
         }
-        let price = match Money::parse(price_s) {
+        let price = match Money::parse(&price_s) {
             Ok(v) => v,
             Err(_) => {
                 res.skipped += 1;
@@ -407,12 +450,12 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
                 continue;
             }
         };
-        let money_or_zero = |i: usize, what: &str, res: &mut PriceImport| -> Option<Money> {
-            let s = col(&f, i);
+        let money_of = |aliases: &[&str], fallback: usize, what: &str, res: &mut PriceImport| {
+            let s = at(aliases, fallback);
             if s.is_empty() {
                 return Some(Money::ZERO);
             }
-            match Money::parse(s) {
+            match Money::parse(&s) {
                 Ok(v) => Some(v),
                 Err(_) => {
                     res.skipped += 1;
@@ -423,47 +466,55 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
                 }
             }
         };
-        let min_charge = match money_or_zero(4, "起步价", &mut res) {
+        let min_charge = match money_of(&["起步", "最低"], 4, "起步价", &mut res) {
             Some(v) => v,
             None => continue,
         };
-        let rush_fee = match money_or_zero(5, "加急固定费", &mut res) {
+        let rush_fee = match money_of(&["加急固定", "加急费"], 5, "加急固定费", &mut res)
+        {
             Some(v) => v,
             None => continue,
         };
-        let rush_rate = match money_or_zero(6, "加急率", &mut res) {
+        let rush_rate = match money_of(&["加急率", "加急%"], 6, "加急率", &mut res) {
             Some(v) => v,
             None => continue,
         };
-        let effective_from = col(&f, 7).to_string();
-        let name = col(&f, 8).to_string();
-        let memo = col(&f, 9).to_string();
-        // 名称留空就按四件事拼一个，免得矩阵里一整列都是空名字
+        let effective_from = at(&["生效"], 7);
+        let name = at(&["名称"], 8);
+        let memo = at(&["备注"], 9);
+        // 工艺档（普通氧化 / 硬质氧化 …）：放最后一列，老模板没有这一列就是空 = 不分档
+        let proc_s = at(&["工艺", "表面处理"], 10);
+        // 名称留空就按几件事拼一个，免得矩阵里一整列都是空名字
         let auto_name = format!(
-            "{} {unit}（{}）",
+            "{} {unit}（{}）{}",
             if item.is_empty() {
                 "任意物料"
             } else {
-                item
+                &item
             },
-            if cust.is_empty() { "通用" } else { cust }
+            if cust.is_empty() { "通用" } else { &cust },
+            if proc_s.is_empty() {
+                String::new()
+            } else {
+                format!("·{proc_s}")
+            }
         );
         let exist: Option<i64> = db
             .conn()
             .query_row(
                 "SELECT id FROM price_rule WHERE item_code=?1 AND customer_code=?2
-                 AND unit=?3 AND effective_from=?4
+                 AND unit=?3 AND effective_from=?4 AND process=?5
                  ORDER BY id LIMIT 1",
-                rusqlite::params![item, cust, unit, effective_from.trim()],
+                rusqlite::params![item, cust, unit, effective_from, proc_s],
                 |r| r.get(0),
             )
             .ok();
         let mut r = PriceRule {
             id: exist.unwrap_or(0),
             name: if name.is_empty() { auto_name } else { name },
-            item_code: item.to_string(),
-            customer_code: cust.to_string(),
-            unit: unit.to_string(),
+            item_code: item,
+            customer_code: cust,
+            unit,
             unit_price: price,
             min_charge,
             rush_fee,
@@ -471,6 +522,7 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
             disabled: false,
             memo,
             effective_from,
+            process: proc_s,
         };
         match rule_save(db, &mut r) {
             Ok(_) => {
@@ -501,12 +553,9 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
     Ok(res)
 }
 
-/// 批量导入折算系数
-///
-/// 列顺序见 [`UNIT_HEAD`]：`物料编码,计价口径,系数,保留位数`（位数留空 = 2）。
-/// 同「物料 + 口径」已有系数的覆盖，计入 `updated`。
 pub fn import_calc_units(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
     let mut res = PriceImport::default();
+    let mut head: Vec<String> = Vec::new();
     let mut line_no = 0usize;
     for raw in text.lines() {
         let line = raw.trim().trim_start_matches('\u{feff}');
@@ -515,20 +564,31 @@ pub fn import_calc_units(db: &Db, text: &str, who: &str) -> DbResult<PriceImport
         }
         line_no += 1;
         let f = crate::imports::split_csv(line);
-        let (f0, f2) = (col(&f, 0), col(&f, 2));
-        if is_head(f0) && Money::parse(f2).is_err() {
+        if looks_like_head(&f) {
+            head = f.clone();
             continue;
         }
-        if f.len() < 3 {
-            res.skipped += 1;
-            res.warnings.push(format!(
-                "第 {line_no} 行：至少要有「物料编码,计价口径,系数」三列，这一行只有 {} 列",
-                f.len()
-            ));
-            continue;
-        }
-        let item = f0;
-        let unit = col(&f, 1);
+        let at = |aliases: &[&str], fallback: usize| -> String {
+            // 有表头就**完全**按列名：表里没这一列就是没给（空），
+            // 不能退回「第 N 格」—— 客户的表把工艺档放在第五列时，
+            // 按位置读会把「硬质氧化」当成起步价，报一句「起步价不是数字」就完事，
+            // 用户根本想不到是列错位。
+            let i = if head.is_empty() {
+                fallback
+            } else {
+                match head.iter().position(|h| {
+                    let h = h.trim();
+                    !h.is_empty() && aliases.iter().any(|a| h.contains(a))
+                }) {
+                    Some(i) => i,
+                    None => return String::new(),
+                }
+            };
+            col(&f, i).trim().to_string()
+        };
+        let item = at(&["物料"], 0);
+        let unit = at(&["口径", "单位"], 1);
+        let factor_s = at(&["系数"], 2);
         if item.is_empty() || unit.is_empty() {
             res.skipped += 1;
             res.warnings.push(format!(
@@ -536,17 +596,17 @@ pub fn import_calc_units(db: &Db, text: &str, who: &str) -> DbResult<PriceImport
             ));
             continue;
         }
-        let factor = match Money::parse(f2) {
+        let factor = match Money::parse(&factor_s) {
             Ok(v) => v,
             Err(_) => {
                 res.skipped += 1;
                 res.warnings.push(format!(
-                    "第 {line_no} 行：系数「{f2}」不是数字，这一行导不了"
+                    "第 {line_no} 行：系数「{factor_s}」不是数字，这一行导不了"
                 ));
                 continue;
             }
         };
-        let scale_s = col(&f, 3);
+        let scale_s = at(&["位数"], 3);
         let scale = if scale_s.is_empty() {
             2
         } else {
@@ -571,8 +631,8 @@ pub fn import_calc_units(db: &Db, text: &str, who: &str) -> DbResult<PriceImport
             .ok();
         let mut c = CalcUnit {
             id: exist.unwrap_or(0),
-            item_code: item.to_string(),
-            calc_unit: unit.to_string(),
+            item_code: item,
+            calc_unit: unit,
             factor,
             scale,
             disabled: false,
@@ -639,11 +699,27 @@ pub fn match_rule_for(
     customer: &str,
     calc_unit: &str,
 ) -> DbResult<Option<(PriceRule, bool)>> {
+    match_rule_for_process(db, item, customer, calc_unit, "")
+}
+
+/// 带工艺档的匹配。`process` 空 = 只认「不分档」的价。
+///
+/// 档位优先于「不分档」，但低于物料/客户的精度：
+/// 「这个客户的硬质氧化」>「这个客户的通用价」>「不分档的硬质氧化」>「全部通用」。
+/// 换句话说，先按规矩（物料/客户）筛，再看档，最后按生效日挑最新的一条。
+pub fn match_rule_for_process(
+    db: &Db,
+    item: &str,
+    customer: &str,
+    calc_unit: &str,
+    process: &str,
+) -> DbResult<Option<(PriceRule, bool)>> {
+    let want_proc = process.trim();
     let item = item.trim();
     let customer = customer.trim();
     let want_unit = calc_unit.trim();
     let today = today();
-    let mut cands: Vec<(u8, PriceRule)> = Vec::new();
+    let mut cands: Vec<(u8, u8, PriceRule)> = Vec::new();
     for r in rule_list(db)? {
         if r.disabled {
             continue;
@@ -651,6 +727,15 @@ pub fn match_rule_for(
         if !want_unit.is_empty() && r.unit.trim() != want_unit {
             continue;
         }
+        // 档位：给了档就只认「这一档」和「不分档」；没给档只认「不分档」——
+        // 否则没选档位的报价会随手抓到「硬质氧化」的价，客户拿普通氧化的单子来对账说不清。
+        let proc_rank = if r.process.trim() == want_proc {
+            0u8
+        } else if r.process.trim().is_empty() && !want_proc.is_empty() {
+            1u8
+        } else {
+            continue;
+        };
         let rank = if item.is_empty() && customer.is_empty() {
             // 没给物料也没给客户：只有通配规则能报价
             if r.item_code.is_empty() && r.customer_code.is_empty() {
@@ -689,25 +774,27 @@ pub fn match_rule_for(
                 continue;
             }
         };
-        cands.push((rank, r));
+        cands.push((rank, proc_rank, r));
     }
     // 精度优先，其次「现在该用哪一条」：已生效的价里挑生效日最晚的。
     // 不这么做的话，提前录的下一版价永远排在后面 —— 到了生效日也不会自动换过来，
     // 老板还得记得回来删旧价，那就等于没这个功能。
     for rank in 0..=3u8 {
-        let pool: Vec<&PriceRule> = cands
-            .iter()
-            .filter(|(k, _)| *k == rank)
-            .map(|(_, r)| r)
-            .collect();
-        if pool.is_empty() {
-            continue;
-        }
-        if let Some(r) = best_active(&pool, &today) {
-            return Ok(Some((r.clone(), false)));
-        }
-        if let Some(r) = best_next(&pool, &today) {
-            return Ok(Some((r.clone(), true)));
+        for proc_rank in 0..=1u8 {
+            let pool: Vec<&PriceRule> = cands
+                .iter()
+                .filter(|(k, p, _)| *k == rank && *p == proc_rank)
+                .map(|(_, _, r)| r)
+                .collect();
+            if pool.is_empty() {
+                continue;
+            }
+            if let Some(r) = best_active(&pool, &today) {
+                return Ok(Some((r.clone(), false)));
+            }
+            if let Some(r) = best_next(&pool, &today) {
+                return Ok(Some((r.clone(), true)));
+            }
         }
     }
     Ok(None)
@@ -966,6 +1053,7 @@ pub fn quote_with_units(
     customer: &str,
     stock_qty: Money,
     calc_unit: &str,
+    process: &str,
     rush: bool,
 ) -> DbResult<UnitQuote> {
     let item = item.trim();
@@ -992,16 +1080,17 @@ pub fn quote_with_units(
         ))
         .into());
     }
-    let (rule, _future) = match_rule_for(db, item, customer, unit)?.ok_or_else(|| {
-        FinError::msg(format!(
-            "没有按「{unit}」计的单价（物料 {item}／客户 {}）——单价表里这一格还是空的",
-            if customer.trim().is_empty() {
-                "任意"
-            } else {
-                customer.trim()
-            }
-        ))
-    })?;
+    let (rule, _future) =
+        match_rule_for_process(db, item, customer, unit, process)?.ok_or_else(|| {
+            FinError::msg(format!(
+                "没有按「{unit}」计的单价（物料 {item}／客户 {}）——单价表里这一格还是空的",
+                if customer.trim().is_empty() {
+                    "任意"
+                } else {
+                    customer.trim()
+                }
+            ))
+        })?;
     let mut q = quote_on(&rule, calc_qty, rush, &today());
     let stock_unit = stock_unit_of(db, item)?;
     q.effective_from = rule.effective_from.clone();
@@ -1041,6 +1130,8 @@ pub struct MatrixCell {
     /// 该物料这个口径的系数（`None` = 没录系数，这一格不能报价）
     pub factor: Option<Money>,
     pub scale: i32,
+    /// 这个价是从「不分档」的通用价借来的（当前选的档位没单独定价）
+    pub fallback: bool,
 }
 
 /// 单价矩阵的一行
@@ -1056,6 +1147,8 @@ pub struct MatrixRow {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PriceMatrix {
     pub customer: String,
+    /// 当前看的是哪一档（空 = 不分档）
+    pub process: String,
     pub units: Vec<String>,
     pub rows: Vec<MatrixRow>,
 }
@@ -1074,8 +1167,9 @@ fn unit_rank(u: &str) -> (u8, String) {
 ///
 /// 一屏看全「这个客户，每个物料按每种口径各多少钱」——这正是老板问
 /// 「单价怎么高效管理」时真正要的那张表：不是一长串规则，是矩阵。
-pub fn matrix(db: &Db, customer: &str) -> DbResult<PriceMatrix> {
+pub fn matrix(db: &Db, customer: &str, process: &str) -> DbResult<PriceMatrix> {
     let customer = customer.trim();
+    let process = process.trim();
     let today = today();
     let units_all = calc_unit_list(db, "")?;
     let rules = rule_list(db)?;
@@ -1127,19 +1221,22 @@ pub fn matrix(db: &Db, customer: &str) -> DbResult<PriceMatrix> {
             item_code: String::new(),
             item_name: "任意物料（通配价）".to_string(),
             stock_unit: String::new(),
-            cells: build_cells("", customer, &unit_set, &units_all, &rules, &today),
+            cells: build_cells("", customer, process, &unit_set, &units_all, &rules, &today),
         });
     }
     for code in codes {
         rows.push(MatrixRow {
             item_name: names.get(&code).cloned().unwrap_or_else(|| code.clone()),
             stock_unit: stock_unit_of(db, &code)?,
-            cells: build_cells(&code, customer, &unit_set, &units_all, &rules, &today),
+            cells: build_cells(
+                &code, customer, process, &unit_set, &units_all, &rules, &today,
+            ),
             item_code: code,
         });
     }
     Ok(PriceMatrix {
         customer: customer.to_string(),
+        process: process.to_string(),
         units: unit_set,
         rows,
     })
@@ -1148,6 +1245,7 @@ pub fn matrix(db: &Db, customer: &str) -> DbResult<PriceMatrix> {
 fn build_cells(
     item: &str,
     customer: &str,
+    process: &str,
     units: &[String],
     calc_units: &[CalcUnit],
     rules: &[PriceRule],
@@ -1161,7 +1259,7 @@ fn build_cells(
                 .find(|c| !c.disabled && c.item_code == item && c.calc_unit == *u);
             // 同一格可能有好几条（专属价/通用价，以及不同生效日）：专属优先，
             // 再按「现在生效的最新一条」
-            let pick = |want_cust: &str| -> Vec<&PriceRule> {
+            let pick = |want_cust: &str, want_proc: &str| -> Vec<&PriceRule> {
                 rules
                     .iter()
                     .filter(|r| {
@@ -1169,14 +1267,28 @@ fn build_cells(
                             && r.item_code == item
                             && r.unit.trim() == u.as_str()
                             && r.customer_code.trim() == want_cust
+                            && r.process.trim() == want_proc
                     })
                     .collect()
             };
-            let rule = if customer.is_empty() {
-                best_for_cell(pick(""), today)
-            } else {
-                best_for_cell(pick(customer), today).or_else(|| best_for_cell(pick(""), today))
+            // 一格的价格优先级：客户+档 > 客户+通用档 > 通用客户+档 > 通用客户+通用档。
+            // 后两种借来的价标 fallback，界面上要说清楚「这是通用档的价」——
+            // 不标的话，老板以为这一档定过价，实际开单时按的是别的档。
+            let try_pair = |want_cust: &str| -> Option<(&PriceRule, bool)> {
+                if let Some(r) = best_for_cell(pick(want_cust, process), today) {
+                    return Some((r, false));
+                }
+                if process.is_empty() {
+                    return None;
+                }
+                best_for_cell(pick(want_cust, ""), today).map(|r| (r, true))
             };
+            let hit = if customer.is_empty() {
+                try_pair("")
+            } else {
+                try_pair(customer).or_else(|| try_pair(""))
+            };
+            let (rule, fallback) = (hit.map(|(r, _f)| r), hit.map(|(_r, f)| f).unwrap_or(false));
             MatrixCell {
                 unit: u.clone(),
                 rule_id: rule.map(|r| r.id).unwrap_or(0),
@@ -1186,6 +1298,7 @@ fn build_cells(
                 future: rule.map(|r| is_future(r, today)).unwrap_or(false),
                 factor: cu.map(|c| c.factor),
                 scale: cu.map(|c| c.scale).unwrap_or(2),
+                fallback,
             }
         })
         .collect()
@@ -1375,6 +1488,7 @@ pub fn quote_with_spec(
     stock_qty: Money,
     calc_unit: &str,
     density: Money,
+    process: &str,
     rush: bool,
 ) -> DbResult<SpecQuote> {
     let item = item.trim();
@@ -1418,16 +1532,17 @@ pub fn quote_with_spec(
         ))
         .into());
     }
-    let (rule, _future) = match_rule_for(db, item, customer, unit)?.ok_or_else(|| {
-        FinError::msg(format!(
-            "没有按「{unit}」计的单价（物料 {item}／客户 {}）——单价表里这一格还是空的",
-            if customer.trim().is_empty() {
-                "任意"
-            } else {
-                customer.trim()
-            }
-        ))
-    })?;
+    let (rule, _future) =
+        match_rule_for_process(db, item, customer, unit, process)?.ok_or_else(|| {
+            FinError::msg(format!(
+                "没有按「{unit}」计的单价（物料 {item}／客户 {}）——单价表里这一格还是空的",
+                if customer.trim().is_empty() {
+                    "任意"
+                } else {
+                    customer.trim()
+                }
+            ))
+        })?;
     let mut q = quote_on(&rule, calc_qty, rush, &today());
     q.effective_from = rule.effective_from.clone();
     let stock_unit = stock_unit_of(db, item)?;
@@ -1507,7 +1622,7 @@ MB02,C01,只,0.45,,,,2026-12-01,
         assert!(names.contains(&"MB01 ㎡（通用）".to_string()), "{names:?}");
         assert!(names.contains(&"MB02 只（C01）".to_string()), "{names:?}");
         // 通配行 + MB02 行；C01 的专属价不会串到别的客户
-        let mx = matrix(&db, "").unwrap();
+        let mx = matrix(&db, "", "").unwrap();
         assert!(mx.rows.iter().any(|r| r.item_code == "MB01"));
     }
 
@@ -1723,7 +1838,7 @@ MB03,米,x,2
     #[test]
     fn 没设系数就报错并说清缺哪一条() {
         let db = crate::tests::mem();
-        let err = quote_with_units(&db, "MB09", "", m("300"), "㎡", false)
+        let err = quote_with_units(&db, "MB09", "", m("300"), "㎡", "", false)
             .unwrap_err()
             .to_string();
         assert!(err.contains("折算系数"), "实际：{err}");
@@ -1745,11 +1860,11 @@ MB03,米,x,2
         calc_unit_save(&db, &mut piece_cu).unwrap();
 
         // 300 只按平方：7.02 × 12 = 84.24，超过起步价 30 不补
-        let q = quote_with_units(&db, "MB01", "", m("300"), "㎡", false).unwrap();
+        let q = quote_with_units(&db, "MB01", "", m("300"), "㎡", "", false).unwrap();
         assert_eq!(q.calc_qty, m("7.02"));
         assert_eq!(q.quote.total, m("84.24"));
         // 同一批货按只算：300 × 0.8 = 240
-        let q2 = quote_with_units(&db, "MB01", "", m("300"), "只", false).unwrap();
+        let q2 = quote_with_units(&db, "MB01", "", m("300"), "只", "", false).unwrap();
         assert_eq!(q2.calc_qty, m("300"));
         assert_eq!(q2.quote.total, m("240"));
         assert_eq!(q2.quote.unit, "只", "不能拿面积的价按只算");
@@ -1770,7 +1885,7 @@ MB03,米,x,2
         calc_unit_save(&db, &mut c).unwrap();
 
         // 今天：先用已生效的旧价
-        let q = quote_with_units(&db, "MB01", "", m("1"), "㎡", false).unwrap();
+        let q = quote_with_units(&db, "MB01", "", m("1"), "㎡", "", false).unwrap();
         assert_eq!(q.quote.total, m("10"));
         assert!(!q.quote.future);
         // 新价标明「还没生效」，而不是从表里消失
@@ -1828,7 +1943,7 @@ MB03,米,x,2
         r2.item_code = "MB01".to_string();
         rule_save(&db, &mut r2).unwrap();
 
-        let mx = matrix(&db, "C01").unwrap();
+        let mx = matrix(&db, "C01", "").unwrap();
         assert_eq!(
             mx.units,
             vec!["只".to_string(), "㎡".to_string()],
@@ -1844,7 +1959,7 @@ MB03,米,x,2
         let piece = row.cells.iter().find(|c| c.unit == "只").unwrap();
         assert_eq!(piece.unit_price, m("0.8"), "没有专属价时退回通用价");
         // 别的客户看不到 C01 的专属价
-        let other = matrix(&db, "C02").unwrap();
+        let other = matrix(&db, "C02", "").unwrap();
         let area2 = other.rows[0].cells.iter().find(|c| c.unit == "㎡").unwrap();
         assert_eq!(
             area2.unit_price,
@@ -2026,6 +2141,7 @@ MB03,米,x,2
             m("300"),
             "㎡",
             Money::ZERO,
+            "",
             false,
         )
         .unwrap();
@@ -2036,9 +2152,19 @@ MB03,米,x,2
         assert_eq!(q.quote.total, m("7500"));
 
         // 规格看不懂就报错，别按 0 算
-        let err = quote_with_spec(&db, "MB01", "", "1250", m("1"), "㎡", Money::ZERO, false)
-            .unwrap_err()
-            .to_string();
+        let err = quote_with_spec(
+            &db,
+            "MB01",
+            "",
+            "1250",
+            m("1"),
+            "㎡",
+            Money::ZERO,
+            "",
+            false,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.contains("看不懂"), "实际：{err}");
     }
 
@@ -2060,6 +2186,7 @@ MB03,米,x,2
             m("300"),
             "㎡",
             Money::ZERO,
+            "",
             false,
         )
         .unwrap();
@@ -2067,5 +2194,131 @@ MB03,米,x,2
         assert_eq!(q.factor, m("0.0234"));
         assert_eq!(q.calc_qty, m("7.02"), "按系数折算，规格不参与");
         assert!(q.dims.is_empty());
+    }
+    #[test]
+    fn 工艺档不同价不同() {
+        let db = crate::tests::mem();
+        let mut plain = rule("MB01 普通氧化", "㎡", "12", "30", "0", "0");
+        plain.item_code = "MB01".to_string();
+        plain.customer_code = "C01".to_string();
+        plain.process = "普通氧化".to_string();
+        rule_save(&db, &mut plain).unwrap();
+        let mut hard = rule("MB01 硬质氧化", "㎡", "18", "50", "0", "0");
+        hard.item_code = "MB01".to_string();
+        hard.customer_code = "C01".to_string();
+        hard.process = "硬质氧化".to_string();
+        rule_save(&db, &mut hard).unwrap();
+
+        let (r, _) = match_rule_for_process(&db, "MB01", "C01", "㎡", "硬质氧化")
+            .unwrap()
+            .expect("硬质氧化有价");
+        assert_eq!(r.unit_price, m("18"), "选中哪一档就报哪一档的价");
+        let (r, _) = match_rule_for_process(&db, "MB01", "C01", "㎡", "普通氧化")
+            .unwrap()
+            .expect("普通氧化有价");
+        assert_eq!(r.unit_price, m("12"));
+
+        // 没填档位就不拿档位价：客户拿普通氧化的单子来对账，报成硬质价要赔钱
+        assert!(
+            match_rule_for_process(&db, "MB01", "C01", "㎡", "")
+                .unwrap()
+                .is_none(),
+            "没选档位时不能随手抓一个档位价"
+        );
+    }
+
+    #[test]
+    fn 档位价优先于不分档的通用价() {
+        let db = crate::tests::mem();
+        let mut any = rule("MB01 通用", "㎡", "12", "0", "0", "0");
+        any.item_code = "MB01".to_string();
+        rule_save(&db, &mut any).unwrap();
+        let mut hard = rule("MB01 硬质", "㎡", "18", "0", "0", "0");
+        hard.item_code = "MB01".to_string();
+        hard.process = "硬质氧化".to_string();
+        rule_save(&db, &mut hard).unwrap();
+
+        let (r, _) = match_rule_for_process(&db, "MB01", "", "㎡", "硬质氧化")
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.unit_price, m("18"), "这一档有价就用这一档的");
+        let (r, _) = match_rule_for_process(&db, "MB01", "", "㎡", "")
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.unit_price, m("12"), "不分档时用通用价");
+        // 别的档位没有单独定价 → 退回通用价（不是报「没有规则」）
+        let (r, _) = match_rule_for_process(&db, "MB01", "", "㎡", "导电氧化")
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.unit_price, m("12"), "没单独定价的档位退回通用价");
+    }
+
+    #[test]
+    fn 矩阵按档显示并标出借来的通用价() {
+        let db = crate::tests::mem();
+        let mut hard = rule("MB01 硬质", "㎡", "18", "0", "0", "0");
+        hard.item_code = "MB01".to_string();
+        hard.process = "硬质氧化".to_string();
+        rule_save(&db, &mut hard).unwrap();
+        let mut mb02 = rule("MB02 通用", "㎡", "12", "0", "0", "0");
+        mb02.item_code = "MB02".to_string();
+        rule_save(&db, &mut mb02).unwrap();
+
+        let mx = matrix(&db, "", "硬质氧化").unwrap();
+        assert_eq!(mx.process, "硬质氧化");
+        assert_eq!(mx.rows.len(), 2, "换档后行不变，工件还是那些工件");
+        let mb01 = mx.rows.iter().find(|r| r.item_code == "MB01").unwrap();
+        let c = mb01.cells.iter().find(|c| c.unit == "㎡").unwrap();
+        assert_eq!(c.unit_price, m("18"));
+        assert!(!c.fallback, "这一档自己定的价，不是借的");
+        let mb02 = mx.rows.iter().find(|r| r.item_code == "MB02").unwrap();
+        let c = mb02.cells.iter().find(|c| c.unit == "㎡").unwrap();
+        assert_eq!(c.unit_price, m("12"));
+        assert!(c.fallback, "这一档没定价，借的是通用价 —— 界面要说清楚");
+    }
+
+    #[test]
+    fn 导入能带工艺档且同档重导算覆盖() {
+        let db = crate::tests::mem();
+        let text =
+            "物料编码,客户编码,计价口径,单价,工艺档\nMB01,C01,㎡,18,硬质氧化\nMB01,C01,㎡,12,\n";
+        let r = import_rules(&db, text, "t").unwrap();
+        assert_eq!((r.created, r.updated, r.skipped), (2, 0, 0), "{:?}", r);
+
+        let all = rule_list(&db).unwrap();
+        let hard = all
+            .iter()
+            .find(|x| x.process == "硬质氧化")
+            .expect("导进来了");
+        assert_eq!(hard.unit_price, m("18"));
+        assert!(
+            hard.name.contains("硬质氧化"),
+            "自动名带上档位：{}",
+            hard.name
+        );
+
+        // 同一格（同物料/客户/口径/生效日/档位）重导 = 覆盖，不是再加一条
+        let again = import_rules(
+            &db,
+            "物料编码,客户编码,计价口径,单价,工艺档\nMB01,C01,㎡,19,硬质氧化\n",
+            "t",
+        )
+        .unwrap();
+        assert_eq!((again.created, again.updated), (0, 1), "{:?}", again);
+        assert_eq!(rule_list(&db).unwrap().len(), 2);
+    }
+    #[test]
+    fn 导入时按列名对齐_列顺序随便排() {
+        let db = crate::tests::mem();
+        // 客户把表和我们的模板顺序完全不一样：单价在最前，口径在最后
+        let text = "单价,单价（元）,物料编码,工艺档,计价口径\n12,12,MB01,硬质氧化,㎡\n";
+        let r = import_rules(&db, text, "t").unwrap();
+        assert_eq!((r.created, r.updated, r.skipped), (1, 0, 0), "{:?}", r);
+        let all = rule_list(&db).unwrap();
+        assert_eq!(all.len(), 1, "别把同一张表的两列当成两条价");
+        assert_eq!(all[0].unit_price, m("12"));
+        assert_eq!(all[0].process, "硬质氧化");
+        assert_eq!(all[0].unit, "㎡");
+        assert_eq!(all[0].item_code, "MB01");
     }
 }

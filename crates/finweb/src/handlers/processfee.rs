@@ -27,6 +27,9 @@ pub struct PriceRuleReq {
     /// 生效日期 `YYYY-MM-DD`（空 = 立即）
     #[serde(default)]
     pub effective_from: String,
+    /// 工艺档（如「硬质氧化」，空 = 不分档）
+    #[serde(default)]
+    pub process: String,
 }
 
 fn money_or_zero(s: &str) -> Result<Money, AppError> {
@@ -67,6 +70,7 @@ pub(super) async fn save_price_rule(
         disabled: req.disabled,
         memo: req.memo,
         effective_from: req.effective_from.trim().to_string(),
+        process: req.process.trim().to_string(),
     };
     let id = findb::processfee::rule_save(db, &mut r)?;
     db.log(
@@ -74,8 +78,18 @@ pub(super) async fn save_price_rule(
         "销售",
         "加工费规则",
         &format!(
-            "{} 单价 {}/{} 起步 {} 加急 {}+{}%",
-            r.name, r.unit_price, r.unit, r.min_charge, r.rush_fee, r.rush_rate
+            "{} 单价 {}/{}{} 起步 {} 加急 {}+{}%",
+            r.name,
+            r.unit_price,
+            r.unit,
+            if r.process.is_empty() {
+                String::new()
+            } else {
+                format!("（{}）", r.process)
+            },
+            r.min_charge,
+            r.rush_fee,
+            r.rush_rate
         ),
     )?;
     Ok(Json(json!({ "ok": true, "id": id })))
@@ -174,6 +188,7 @@ pub(super) async fn quote_fee(
             stock_qty,
             get("calc_unit"),
             density,
+            get("process"),
             rush,
         )?;
         return Ok(Json(json!({
@@ -199,11 +214,38 @@ pub(super) async fn quote_fee(
             get("customer"),
             stock_qty,
             get("calc_unit"),
+            get("process"),
             rush,
         )?;
         return Ok(Json(json!({ "quote": uq.quote, "conv": uq })));
     }
-    let quote = findb::processfee::quote_by(&user.db, get("item"), get("customer"), qty, rush)?;
+    // 老路径（只给计价数量、不给口径）：本来走 quote_by，但它不认工艺档 ——
+    // 带了 process 就必须按档位匹配，否则「硬质 18 元」会被普通档的 12 元顶掉。
+    if get("process").is_empty() {
+        let quote = findb::processfee::quote_by(&user.db, get("item"), get("customer"), qty, rush)?;
+        return Ok(Json(json!({ "quote": quote })));
+    }
+    let rule = findb::processfee::match_rule_for_process(
+        &user.db,
+        get("item"),
+        get("customer"),
+        "",
+        get("process"),
+    )?
+    .map(|(r, _)| r)
+    .ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "没有「{}」这一档的单价（物料 {}／客户 {}）——先在单价表里给它单开一格",
+            get("process"),
+            get("item"),
+            if get("customer").is_empty() {
+                "任意"
+            } else {
+                get("customer")
+            }
+        ))
+    })?;
+    let quote = findb::processfee::quote_on(&rule, qty, rush, &findb::processfee::today());
     Ok(Json(json!({ "quote": quote })))
 }
 
@@ -289,7 +331,8 @@ pub(super) async fn get_price_matrix(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::PriceView)?;
     let customer = q.get("customer").map(|s| s.trim()).unwrap_or("");
-    let mx = findb::processfee::matrix(&user.db, customer)?;
+    let process = q.get("process").map(|s| s.trim()).unwrap_or("");
+    let mx = findb::processfee::matrix(&user.db, customer, process)?;
     Ok(Json(json!(mx)))
 }
 
@@ -305,6 +348,9 @@ pub struct MatrixCellReq {
     pub min_charge: String,
     #[serde(default)]
     pub effective_from: String,
+    /// 工艺档（空 = 不分档）
+    #[serde(default)]
+    pub process: String,
 }
 
 /// 改矩阵里的一格：没有规则就建一条，有就改价
@@ -327,6 +373,7 @@ pub(super) async fn set_matrix_cell(
     let price = parse_money_checked(&req.unit_price)?;
     let min_charge = money_or_zero(&req.min_charge)?;
     let effective_from = req.effective_from.trim().to_string();
+    let process = req.process.trim().to_string();
 
     // 先找现成的同格规则（同物料 + 同客户 + 同口径 + 同生效日）
     //
@@ -338,6 +385,7 @@ pub(super) async fn set_matrix_cell(
             && r.customer_code.trim() == customer
             && r.unit.trim() == unit
             && r.effective_from.trim() == effective_from
+            && r.process.trim() == process
     });
     let mut r = match existing {
         Some(r) => r,
@@ -347,16 +395,22 @@ pub(super) async fn set_matrix_cell(
             } else {
                 item
             };
-            let name = if customer.is_empty() {
-                format!("{item_label} 按{unit}")
+            let proc_label = if process.is_empty() {
+                String::new()
             } else {
-                format!("{item_label} 按{unit}（{customer}）")
+                format!("·{process}")
+            };
+            let name = if customer.is_empty() {
+                format!("{item_label} 按{unit}{proc_label}")
+            } else {
+                format!("{item_label} 按{unit}（{customer}）{proc_label}")
             };
             findb::processfee::PriceRule {
                 name,
                 item_code: item.to_string(),
                 customer_code: customer.to_string(),
                 unit: unit.to_string(),
+                process: process.clone(),
                 ..Default::default()
             }
         }
@@ -370,7 +424,17 @@ pub(super) async fn set_matrix_cell(
         user.username(),
         "销售",
         "加工费规则",
-        &format!("矩阵改价 {} 按{} = {}", r.name, unit, price),
+        &format!(
+            "矩阵改价 {} 按{}{} = {}",
+            r.name,
+            unit,
+            if process.is_empty() {
+                String::new()
+            } else {
+                format!("（{process}）")
+            },
+            price
+        ),
     )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }

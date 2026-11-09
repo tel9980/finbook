@@ -708,6 +708,7 @@ function priceCellHtml(row, c, canEdit) {
         value="${c.rule_id ? priceIn(c.unit_price) : ""}" placeholder="未定价" ${canEdit ? "" : "disabled"} />
       ${canEdit ? `<button class="btn ghost sm" style="padding:0 4px" data-cell-edit="${esc(row.item_code)}|${esc(c.unit)}" title="改起步价 / 提前录下一版价">调</button>` : ""}
       ${c.future ? `<div style="font-size:10px;color:var(--warn)">${esc(c.effective_from || "")} 起</div>` : ""}
+      ${c.fallback ? `<div style="font-size:10px" class="muted" title="这一档还没单独定价，先用的是不分档的通用价">用通用价</div>` : ""}
       ${num(c.min_charge) > 0 ? `<div style="font-size:10px" class="muted">起步 ${fmt(c.min_charge)}</div>` : ""}
       ${noFactor ? `<div class="muted" style="font-size:10px${canEdit ? ";cursor:pointer" : ""}"${canEdit ? ` data-cell-none="${esc(row.item_code)}|${esc(c.unit)}"` : ""} title="按${esc(c.unit)}开单前，要先告诉系统 1 个库存单位折合多少 ${esc(c.unit)}">未设系数 · 点这里录</div>` : ""}
     </td>`;
@@ -761,6 +762,8 @@ async function viewPriceRules(main) {
   main.innerHTML = `<h2>加工费规则</h2>
     <div class="toolbar">
       <label>客户 <input id="pr-cust" style="width:120px" placeholder="留空 = 通用价" /></label>
+      <label title="同一个工件换个表面处理就是另一个价（普通氧化 / 硬质氧化 / 导电氧化…）">工艺
+        <input id="pr-proc" style="width:110px" placeholder="留空 = 不分档" /></label>
       <button class="btn primary sm" id="pr-load">看这个客户的价</button>
       ${can("price_edit") ? `<button class="btn ghost sm" id="pr-import">批量导入</button>
       <button class="btn ghost sm" id="pr-new-unit">录折算系数</button>
@@ -771,6 +774,7 @@ async function viewPriceRules(main) {
       一行一个工件，一列一种算法 —— 按只、按米、按 kg、按 ㎡ 各自一个价。格子里直接改单价，改完即生效。
       「调」里能改起步价，也能把下一版价提前录进去（写 2026-03-01，到那天自动换过来，旧单仍按旧价）。
       格子里写「没设系数」的，是还没告诉系统「1 只折合多少 ㎡」—— 先录折算系数，开单时填只数就能自动折算。
+      左上「工艺」填了档位（如<b>硬质氧化</b>）就只看这一档的价；没单独定价的格子会标「用通用价」，说明它沿用的是不分档的那条。
     </div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">单价矩阵</h3>
       <div id="pr-matrix" class="muted">加载中…</div></div>
@@ -782,6 +786,7 @@ async function viewPriceRules(main) {
         <label>数量 <input id="pr-q-qty" style="width:80px" value="1" /></label>
         <label>规格 <input id="pr-q-spec" style="width:120px" placeholder="1250*250*3" title="毫米。没录折算系数时按规格算折合量" /></label>
         <label>口径 <select id="pr-q-unit" style="width:130px"></select></label>
+        <label title="不填就按不分档的价算；填了只看这一档">工艺 <input id="pr-q-proc" style="width:100px" placeholder="可空" /></label>
         <label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="pr-q-rush" /> 加急</label>
         <button class="btn primary sm" id="pr-q-run">试算</button>
       </div>
@@ -810,12 +815,13 @@ async function viewPriceRules(main) {
 
   const loadMatrix = async () => {
     const cust = $("#pr-cust", main).value.trim();
+    const proc = ($("#pr-proc", main) || { value: "" }).value.trim();
     try {
       const [m, u] = await Promise.all([
-        api(`/price-matrix?customer=${encodeURIComponent(cust)}`),
+        api(`/price-matrix?customer=${encodeURIComponent(cust)}&process=${encodeURIComponent(proc)}`),
         api("/calc-units"),
       ]);
-      mx = m || { customer: cust, units: [], rows: [] };
+      mx = m || { customer: cust, process: proc, units: [], rows: [] };
       unitsAll = u.units || [];
       renderMatrix();
       renderUnits();
@@ -869,7 +875,15 @@ async function viewPriceRules(main) {
     const row = mx.rows.find((r) => r.item_code === item);
     const c = row && row.cells.find((x) => x.unit === unit);
     const body = Object.assign(
-      { customer_code: mx.customer || "", item_code: item, calc_unit: unit, unit_price: "", min_charge: "0", effective_from: "" },
+      {
+        customer_code: mx.customer || "",
+        process: mx.process || "",
+        item_code: item,
+        calc_unit: unit,
+        unit_price: "",
+        min_charge: "0",
+        effective_from: "",
+      },
       c ? { unit_price: c.unit_price, min_charge: c.min_charge, effective_from: c.effective_from || "" } : {},
       extra,
     );
@@ -883,7 +897,7 @@ async function viewPriceRules(main) {
   };
 
   const openCell = (row, c) => {
-    const m = modal(`<h3>${esc(row.item_code || "任意物料")} 按${esc(c.unit)}</h3>
+    const m = modal(`<h3>${esc(row.item_code || "任意物料")} 按${esc(c.unit)}${mx.process ? `（${esc(mx.process)}）` : ""}</h3>
       <div class="field"><label>单价（${esc(c.unit)}）</label><input id="pc-price" value="${c.rule_id ? priceIn(c.unit_price) : ""}" placeholder="未定价" /></div>
       <div class="field"><label>起步价（不足补到）</label><input id="pc-min" value="${priceIn(c.min_charge)}" /></div>
       <div class="field"><label>生效日期（留空 = 立刻；提前录下一版价写 2026-03-01）</label><input id="pc-from" value="${esc(c.effective_from || "")}" placeholder="YYYY-MM-DD" /></div>
@@ -981,6 +995,7 @@ async function viewPriceRules(main) {
       <div class="field"><label>物料（留空=任意）</label><input id="pr-item" value="${esc(c.item_code)}" /></div>
       <div class="field"><label>客户（留空=任意）</label><input id="pr-cust2" value="${esc(c.customer_code)}" /></div>
       <div class="field"><label>计价口径</label><input id="pr-unit" value="${esc(c.unit)}" placeholder="㎡ / 件 / kg / 只" /></div>
+      <div class="field"><label>工艺档（留空 = 不分档）</label><input id="pr-proc2" value="${esc(c.process || "")}" placeholder="硬质氧化" /></div>
       <div class="field"><label>单价 *</label><input id="pr-price" value="${esc(c.unit_price)}" /></div>
       <div class="field"><label>起步价（最低收费）</label><input id="pr-min" value="${esc(c.min_charge)}" /></div>
       <div class="field"><label>加急固定费</label><input id="pr-rfee" value="${esc(c.rush_fee)}" /></div>
@@ -997,6 +1012,7 @@ async function viewPriceRules(main) {
         item_code: $("#pr-item", m).value.trim(),
         customer_code: $("#pr-cust2", m).value.trim(),
         unit: $("#pr-unit", m).value.trim(),
+        process: $("#pr-proc2", m).value.trim(),
         unit_price: $("#pr-price", m).value.trim(),
         min_charge: $("#pr-min", m).value.trim(),
         rush_fee: $("#pr-rfee", m).value.trim(),
@@ -1031,7 +1047,8 @@ async function viewPriceRules(main) {
     const m = modal(`<h3>批量导入</h3>
       <div class="muted" style="font-size:12px;line-height:1.7">
         从 Excel 里直接复制整张表粘进来，或者选文件。表头行会自动跳过，<code>#</code> 开头的行当注释。
-        同一「物料 + 客户 + 口径 + 生效日」会<b>覆盖</b>原来那一格，不会变成两条；换了生效日就是另一版价。
+        同一「物料 + 客户 + 口径 + 工艺档 + 生效日」会<b>覆盖</b>原来那一格，不会变成两条；换了生效日就是另一版价。
+        有表头行时<b>按列名对齐</b>（列顺序随你排，缺的列当没填）；没有表头才按固定顺序读。
       </div>
       <div class="field"><label>导入什么</label>
         <select id="pi-kind">
@@ -1042,7 +1059,7 @@ async function viewPriceRules(main) {
       </div>
       <div class="field"><label>粘贴内容</label>
         <textarea id="pi-text" rows="9" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px"
-          placeholder="物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期,名称,备注"></textarea>
+          placeholder="物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期,名称,备注,工艺档"></textarea>
       </div>
       <div class="field"><label>或者选文件（.xlsx / .csv，会覆盖上面粘的内容）</label><input id="pi-file" type="file" accept=".xlsx,.csv,.txt" /></div>
       <div id="pi-out" style="margin:6px 0"></div>
@@ -1053,7 +1070,7 @@ async function viewPriceRules(main) {
       $("#pi-tmpl", m).download = kindSel.value === "units" ? "折算系数-模板.csv" : "加工费单价-模板.csv";
       $("#pi-text", m).placeholder = kindSel.value === "units"
         ? "物料编码,计价口径,系数,保留位数"
-        : "物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期,名称,备注";
+        : "物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期,名称,备注,工艺档";
     };
     $("#pi-cancel", m).onclick = closeModal;
     // Excel 文件 → base64（后端用 rust_xlsxwriter 那边的读法解）
@@ -1151,9 +1168,10 @@ async function viewPriceRules(main) {
     const cust = $("#pr-cust", main).value.trim();
     const spec = $("#pr-q-spec", main).value.trim();
     const density = $("#pr-sp-density", main).value.trim();
+    const proc = ($("#pr-q-proc", main) || { value: "" }).value.trim();
     const q = unit
-      ? `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&stock_qty=${encodeURIComponent(qty)}&calc_unit=${encodeURIComponent(unit)}&density=${encodeURIComponent(density)}&spec=${encodeURIComponent(spec)}&rush=${rush}`
-      : `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&qty=${encodeURIComponent(qty)}&rush=${rush}`;
+      ? `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&stock_qty=${encodeURIComponent(qty)}&calc_unit=${encodeURIComponent(unit)}&process=${encodeURIComponent(proc)}&density=${encodeURIComponent(density)}&spec=${encodeURIComponent(spec)}&rush=${rush}`
+      : `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&qty=${encodeURIComponent(qty)}&process=${encodeURIComponent(proc)}&rush=${rush}`;
     try {
       const r = await api(q);
       const x = r.quote;

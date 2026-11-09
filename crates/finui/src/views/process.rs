@@ -691,6 +691,9 @@ pub struct RuleBuf {
     /// 生效日期 `YYYY-MM-DD`（空 = 立即）。网页端「单价矩阵」里提前录的下一版价，
     /// 在这里编辑时必须原样带回来 —— 丢了就等于把「什么时候调价」删了。
     pub effective_from: String,
+    /// 工艺档（「硬质氧化」这类表面处理分档；空 = 不分档）。
+    /// 网页端按档录入的价，在这里编辑时要原样带回去，否则一编辑就把档位抹平了。
+    pub process: String,
 }
 
 impl RuleBuf {
@@ -720,6 +723,7 @@ impl RuleBuf {
             disabled: r.disabled,
             memo: r.memo.clone(),
             effective_from: r.effective_from.clone(),
+            process: r.process.clone(),
         }
     }
 
@@ -737,6 +741,7 @@ impl RuleBuf {
             disabled: self.disabled,
             memo: self.memo.trim().to_string(),
             effective_from: self.effective_from.trim().to_string(),
+            process: self.process.trim().to_string(),
         }
     }
 }
@@ -757,6 +762,8 @@ pub struct PriceRulesView {
     pub q_unit: String,
     /// 密度（只有按 kg 算才用；钢 7.85）
     pub q_density: String,
+    /// 工艺档（空 = 不分档）
+    pub q_proc: String,
     pub q_rush: bool,
     pub quote: Option<FeeQuote>,
     /// 折算过程的说明（口径为空时为 None）
@@ -780,6 +787,7 @@ impl Default for PriceRulesView {
             q_spec: String::new(),
             q_unit: String::new(),
             q_density: "7.85".to_string(),
+            q_proc: String::new(),
             q_rush: false,
             quote: None,
             conv_text: None,
@@ -855,6 +863,7 @@ impl PriceRulesView {
                 widgets::TCol::new("名称", 140.0),
                 widgets::TCol::new("物料", 100.0),
                 widgets::TCol::new("客户", 100.0),
+                widgets::TCol::new("工艺", 90.0),
                 widgets::TCol::new("单位", 60.0),
                 widgets::TCol::new("单价", 90.0).right(),
                 widgets::TCol::new("最低收费", 90.0).right(),
@@ -885,13 +894,21 @@ impl PriceRulesView {
                     ),
                     3 => txt(
                         ui,
+                        if r.process.trim().is_empty() {
+                            "—".to_string()
+                        } else {
+                            r.process.clone()
+                        },
+                    ),
+                    4 => txt(
+                        ui,
                         if r.unit.is_empty() {
                             "—".to_string()
                         } else {
                             r.unit.clone()
                         },
                     ),
-                    4 => txt(
+                    5 => txt(
                         ui,
                         if r.effective_from.trim().is_empty() {
                             r.unit_price.fmt_qty()
@@ -903,7 +920,7 @@ impl PriceRulesView {
                             )
                         },
                     ),
-                    5 => txt(
+                    6 => txt(
                         ui,
                         if r.min_charge.is_zero() {
                             "—".to_string()
@@ -911,7 +928,7 @@ impl PriceRulesView {
                             r.min_charge.fmt_qty()
                         },
                     ),
-                    6 => txt(
+                    7 => txt(
                         ui,
                         if r.rush_fee.is_zero() && r.rush_rate.is_zero() {
                             "—".to_string()
@@ -919,7 +936,7 @@ impl PriceRulesView {
                             format!("{}+{}%", r.rush_fee.fmt_qty(), r.rush_rate.fmt_qty())
                         },
                     ),
-                    7 => txt(
+                    8 => txt(
                         ui,
                         if r.disabled {
                             RichText::new("停用").weak()
@@ -927,7 +944,7 @@ impl PriceRulesView {
                             RichText::new("启用").strong()
                         },
                     ),
-                    8 => {
+                    9 => {
                         ui.horizontal(|ui| {
                             if ui
                                 .add_enabled(editable, egui::Button::new("编辑"))
@@ -974,6 +991,8 @@ impl PriceRulesView {
             widgets::text_input(ui, &mut self.ed.item_code, 100.0, "留空=任意");
             txt(ui, "客户");
             widgets::text_input(ui, &mut self.ed.customer_code, 100.0, "留空=任意");
+            txt(ui, "工艺");
+            widgets::text_input(ui, &mut self.ed.process, 100.0, "留空=不分档");
         });
         ui.horizontal(|ui| {
             txt(ui, "单位");
@@ -1023,6 +1042,8 @@ impl PriceRulesView {
             widgets::text_input(ui, &mut self.q_unit, 60.0, "㎡ / 米 / kg");
             txt(ui, "密度");
             widgets::text_input(ui, &mut self.q_density, 50.0, "7.85");
+            txt(ui, "工艺");
+            widgets::text_input(ui, &mut self.q_proc, 90.0, "硬质氧化（可空）");
             if ui.button("算一下").clicked() {
                 run = true;
             }
@@ -1039,15 +1060,38 @@ impl PriceRulesView {
         if run {
             let qty = widgets::parse_money(&self.q_qty);
             let unit = self.q_unit.trim().to_string();
+            let proc = self.q_proc.trim().to_string();
             let res = if unit.is_empty() {
-                processfee::quote_by(
-                    ctx.db(),
-                    self.q_item.trim(),
-                    self.q_customer.trim(),
-                    qty,
-                    self.q_rush,
-                )
-                .map(|q| (q, None))
+                // 没填口径：老算法（数量就是计价数量）。填了工艺档就必须按档位匹配 ——
+                // quote_by 不认档位，会把「硬质氧化 18 元」报成普通档的 12 元。
+                if proc.is_empty() {
+                    processfee::quote_by(
+                        ctx.db(),
+                        self.q_item.trim(),
+                        self.q_customer.trim(),
+                        qty,
+                        self.q_rush,
+                    )
+                    .map(|q| (q, None))
+                } else {
+                    processfee::match_rule_for_process(
+                        ctx.db(),
+                        self.q_item.trim(),
+                        self.q_customer.trim(),
+                        "",
+                        &proc,
+                    )
+                    .and_then(|hit| match hit {
+                        Some((rule, _)) => Ok((
+                            processfee::quote_on(&rule, qty, self.q_rush, &processfee::today()),
+                            None,
+                        )),
+                        None => Err(fincore::FinError::msg(format!(
+                            "没有「{proc}」这一档的单价 —— 先在单价表里给它单开一格"
+                        ))
+                        .into()),
+                    })
+                }
             } else {
                 let density = widgets::parse_money(&self.q_density);
                 processfee::quote_with_spec(
@@ -1058,6 +1102,7 @@ impl PriceRulesView {
                     qty,
                     &unit,
                     density,
+                    &proc,
                     self.q_rush,
                 )
                 .map(|sq| (sq.quote.clone(), Some(sq)))

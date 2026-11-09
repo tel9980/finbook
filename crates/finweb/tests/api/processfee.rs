@@ -508,3 +508,191 @@ async fn spec_turns_a_rate_into_a_piece_price() {
     let body = body_string(resp).await;
     assert!(body.contains("看不懂"), "实际：{body}");
 }
+
+/// 工艺档：同一个工件、同一个客户、同一种口径，换个表面处理就是另一个价
+///
+/// 规则要守住的是「不许串档」：没选档位的报价绝不能抓到硬质氧化的价 ——
+/// 客户拿普通氧化的单子来对账，一句「系统报的」就说不清了。
+#[tokio::test]
+async fn tier_prices_stay_in_their_own_tier() {
+    let hard = "%E7%A1%AC%E8%B4%A8%E6%B0%A7%E5%8C%96"; // 硬质氧化
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 普通氧化：不分档的通用价 12 元/㎡
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({ "name": "氧化-随便哪档", "item_code": "MB01", "unit": "㎡", "unit_price": "12" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 硬质氧化单独一档 18 元/㎡
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "name": "氧化-硬质", "item_code": "MB01", "unit": "㎡",
+                "unit_price": "18", "process": "硬质氧化",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "建硬质档");
+
+    // 一、选了档位就报档位价：10 ㎡ × 18 = 180
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/price-rules/quote?item=MB01&qty=10&process={hard}"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(money_num(v["quote"]["total"].as_str().unwrap()), 180.0);
+
+    // 二、不选档位走通用价：10 ㎡ × 12 = 120（不能串成 180）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules/quote?item=MB01&qty=10", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(money_num(v["quote"]["total"].as_str().unwrap()), 120.0);
+
+    // 三、只录了档位价、没录通用价的物料，不选档位必须报错而不是「随便借一个档」
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "name": "导电-只这一档", "item_code": "MB02", "unit": "㎡",
+                "unit_price": "25", "process": "导电氧化",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules/quote?item=MB02&qty=1", &sid))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "没选档位不许抓档位价"
+    );
+
+    // 四、档位价优先于通用价，且矩阵里「借来的通用价」要标出来
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/price-matrix?process={hard}"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let mx: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(mx["process"], "硬质氧化");
+    let cell_of = |code: &str| {
+        mx["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["item_code"] == code)
+            .and_then(|r| {
+                r["cells"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|c| c["unit"] == "㎡")
+            })
+            .cloned()
+            .unwrap()
+    };
+    let hard_cell = cell_of("MB01");
+    assert_eq!(money_num(hard_cell["unit_price"].as_str().unwrap()), 18.0);
+    assert_eq!(
+        hard_cell["fallback"].as_bool(),
+        Some(false),
+        "本档自己的价不该标成借用"
+    );
+
+    // 五、矩阵改价也要按档落库：同一物料同一口径，两档各自一条价
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_put(
+            "/api/price-matrix",
+            &sid,
+            serde_json::json!({
+                "item_code": "MB03", "calc_unit": "㎡", "unit_price": "30",
+                "process": "硬质氧化",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "按档改矩阵");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_put(
+            "/api/price-matrix",
+            &sid,
+            serde_json::json!({ "item_code": "MB03", "calc_unit": "㎡", "unit_price": "20" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "再改通用价");
+
+    let count = |mx: &serde_json::Value| {
+        mx["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["item_code"] == "MB03")
+            .count()
+    };
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/price-matrix?process={hard}"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let mx: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(count(&mx), 1, "同物料只该有一行：{mx}");
+    assert_eq!(
+        money_num(cell_of_relaxed(&mx, "MB03")["unit_price"].as_str().unwrap()),
+        30.0,
+        "硬质档看到的是自己那 30"
+    );
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-matrix", &sid))
+        .await
+        .unwrap();
+    let mx: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        money_num(cell_of_relaxed(&mx, "MB03")["unit_price"].as_str().unwrap()),
+        20.0,
+        "不分档看到的是通用价 20"
+    );
+}
+
+/// 从矩阵里取某物料 ㎡ 那一格（不关心行序）
+fn cell_of_relaxed(mx: &serde_json::Value, code: &str) -> serde_json::Value {
+    mx["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["item_code"] == code)
+        .and_then(|r| {
+            r["cells"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["unit"] == "㎡")
+        })
+        .cloned()
+        .expect("矩阵里要有这一行")
+}

@@ -1836,8 +1836,8 @@ const MUT = [
     // 照着报价就是拿别人的底价去谈。
     name: "67 单价矩阵不分客户（别人的专属价漏出来）",
     file: "crates/findb/src/processfee.rs",
-    from: '                best_for_cell(pick(customer), today).or_else(|| best_for_cell(pick(""), today))',
-    to: '                best_for_cell(pick(""), today)',
+    from: '                if let Some(r) = best_for_cell(pick(want_cust, process), today) {',
+    to: '                if let Some(r) = best_for_cell(pick("", process), today) {',
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::矩阵按物料行_口径列摆开"],
   },
   {
@@ -1856,8 +1856,8 @@ const MUT = [
     // 认不出来就整行报「单价不是数字」，导入结果里凭空多一条跳过，用户会以为文件坏了。
     name: "69 导入时不认表头行（把列名当数据）",
     file: "crates/findb/src/processfee.rs",
-    from: "        if is_head(f0) && Money::parse(f3).is_err() {",
-    to: "        if false {",
+    from: "    hits >= 2\n}\n",
+    to: "    hits >= 99\n}\n",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导入单价_表头自动跳过"],
   },
   {
@@ -1925,6 +1925,43 @@ const MUT = [
     from: "            if n < SPEC_MAX_DIM || !density.is_positive() {",
     to: "            if n < SPEC_MAX_DIM {",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::规格算重量要密度"],
+  },
+
+  // ── v1.8.90 工艺档（表面处理分档） ────────────────────────────────────
+  {
+    // 档位不参与匹配：硬质的 18 元会被普通氧化的 12 元顶掉（或反过来），
+    // 客户拿普通氧化的单子来对账，一句「系统报的」就说不清。
+    name: "77 工艺档不参与匹配（各档互相串价）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        } else if r.process.trim().is_empty() && !want_proc.is_empty() {\n            1u8\n        } else {\n            continue;\n        };\n        let rank = if item.is_empty() && customer.is_empty() {",
+    to: "        } else if r.process.trim().is_empty() && !want_proc.is_empty() {\n            1u8\n        } else {\n            0u8\n        };\n        let rank = if item.is_empty() && customer.is_empty() {",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::工艺档不同价不同"],
+  },
+  {
+    // 没选档位也抓档位价：开单时忘了填「硬质氧化」，系统随手抓一条档位价报出去。
+    name: "78 没选档位也抓档位价",
+    file: "crates/findb/src/processfee.rs",
+    from: "        } else if r.process.trim().is_empty() && !want_proc.is_empty() {\n            1u8\n        } else {",
+    to: "        } else if true {\n            1u8\n        } else {",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::工艺档不同价不同"],
+  },
+  {
+    // 矩阵不回退通用价：这一档没单独定价就显示「未定价」，可开单时明明按通用价报得出来 ——
+    // 界面说没有、开单能报，是最让人不敢用的一种不一致。
+    name: "79 矩阵不回退通用价（界面说没价、开单却有价）",
+    file: "crates/findb/src/processfee.rs",
+    from: "                if process.is_empty() {\n                    return None;\n                }",
+    to: "                if true {\n                    return None;\n                }",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::矩阵按档显示并标出借来的通用价"],
+  },
+  {
+    // 导入身份漏工艺档：先导普通氧化、再导硬质氧化，第二条把第一条覆盖掉 ——
+    // 一份新表能悄悄删价，比导不进来危险得多。
+    name: "80 导入身份漏工艺档（导新档把旧档覆盖掉）",
+    file: "crates/findb/src/processfee.rs",
+    from: "                 AND unit=?3 AND effective_from=?4 AND process=?5",
+    to: "                 AND unit=?3 AND effective_from=?4 AND (process=?5 OR 1=1)",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导入能带工艺档且同档重导算覆盖"],
   },
 
 ];

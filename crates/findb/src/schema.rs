@@ -33,7 +33,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 49;
+pub const SCHEMA_VERSION: i64 = 50;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1919,6 +1919,13 @@ const MIGRATE_V41: &[(&str, &str, &str)] = &[
 const MIGRATE_V49: &[(&str, &str, &str)] =
     &[("price_rule", "effective_from", "TEXT NOT NULL DEFAULT ''")];
 
+/// v50：单价规则加「工艺档」（普通氧化 / 硬质氧化 / 导电氧化 / 本色 / 黑色……）。
+///
+/// 同一物料、同一客户、同一口径，换个表面处理就是另一个价 —— 没有这一列，
+/// 只能靠规则名称区分，矩阵里看着像重复录入，报价时还挑不出来。
+/// 空串 = 不分档（老数据与「所有档位同价」都用它）。
+const MIGRATE_V50: &[(&str, &str, &str)] = &[("price_rule", "process", "TEXT NOT NULL DEFAULT ''")];
+
 const MIGRATE_V45: &[(&str, &str, &str)] = &[
     ("consign_doc", "so_id", "INTEGER NOT NULL DEFAULT 0"),
     ("consign_doc", "so_no", "TEXT NOT NULL DEFAULT ''"),
@@ -2470,6 +2477,7 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_generic(conn, MIGRATE_V45)?;
             // v49：单价生效日期（纯加列，没有索引引用它）
             migrate_generic(conn, MIGRATE_V49)?;
+            migrate_generic(conn, MIGRATE_V50)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：

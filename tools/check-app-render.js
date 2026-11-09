@@ -326,6 +326,31 @@ const CASES = [
     expect: ["disabled", 'value="12"'],
     absent: ["data-cell-edit", "data-cell-none"],
   },
+  {
+    // 工艺档：这一档还没单独定价，用的是不分档的通用价 —— 必须标出来，
+    // 否则用户以为「硬质氧化」已经定价了，报出去就是普通氧化的价
+    name: "priceCellHtml 借用通用价要标出来",
+    fn: "priceCellHtml",
+    args: [
+      { item_code: "MB03" },
+      { unit: "㎡", rule_id: 31, factor: "1.0000", future: false, min_charge: "0.00", effective_from: "", scale: 2, unit_price: "20.00", fallback: true },
+      true,
+    ],
+    stubs: CELL_STUBS,
+    expect: ["用通用价", 'value="20"'],
+  },
+  {
+    name: "priceCellHtml 本档自己的价不标借用",
+    fn: "priceCellHtml",
+    args: [
+      { item_code: "MB03" },
+      { unit: "㎡", rule_id: 32, factor: "1.0000", future: false, min_charge: "0.00", effective_from: "", scale: 2, unit_price: "30.00", fallback: false },
+      true,
+    ],
+    stubs: CELL_STUBS,
+    expect: ['value="30"'],
+    absent: ["用通用价"],
+  },
   // 金额进输入框要去掉多余的零，否则格子里写着 7.0200 没人愿意改
   { fn: "priceIn", args: ["7.0200"], stubs: {}, expect: ["7.02"], absent: ["7.0200"] },
   { fn: "priceIn", args: ["0.00"], stubs: {}, expect: ["0"], absent: ["0.00"] },
