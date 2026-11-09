@@ -1074,6 +1074,123 @@ fn unit_rank(u: &str) -> (u8, String) {
 ///
 /// 一屏看全「这个客户，每个物料按每种口径各多少钱」——这正是老板问
 /// 「单价怎么高效管理」时真正要的那张表：不是一长串规则，是矩阵。
+pub fn matrix(db: &Db, customer: &str) -> DbResult<PriceMatrix> {
+    let customer = customer.trim();
+    let today = today();
+    let units_all = calc_unit_list(db, "")?;
+    let rules = rule_list(db)?;
+
+    // 列：口径来自「系数表」与「单价表」的并集
+    let mut unit_set: Vec<String> = Vec::new();
+    for c in &units_all {
+        if !c.disabled && !unit_set.contains(&c.calc_unit) {
+            unit_set.push(c.calc_unit.clone());
+        }
+    }
+    for r in &rules {
+        if r.disabled {
+            continue;
+        }
+        let u = r.unit.trim().to_string();
+        if !u.is_empty() && !unit_set.contains(&u) {
+            unit_set.push(u);
+        }
+    }
+    unit_set.sort_by_key(|u| unit_rank(u));
+
+    // 行：有系数的物料 ∪ 有单价的物料（通配规则单独一行）
+    let mut codes: Vec<String> = Vec::new();
+    for c in &units_all {
+        if !c.disabled && !codes.contains(&c.item_code) {
+            codes.push(c.item_code.clone());
+        }
+    }
+    let mut has_wildcard = false;
+    for r in &rules {
+        if r.disabled {
+            continue;
+        }
+        if r.item_code.trim().is_empty() {
+            if r.customer_code.trim().is_empty() || r.customer_code.trim() == customer {
+                has_wildcard = true;
+            }
+        } else if !codes.contains(&r.item_code) {
+            codes.push(r.item_code.clone());
+        }
+    }
+    codes.sort();
+
+    let names = item_names(db)?;
+    let mut rows = Vec::new();
+    if has_wildcard {
+        rows.push(MatrixRow {
+            item_code: String::new(),
+            item_name: "任意物料（通配价）".to_string(),
+            stock_unit: String::new(),
+            cells: build_cells("", customer, &unit_set, &units_all, &rules, &today),
+        });
+    }
+    for code in codes {
+        rows.push(MatrixRow {
+            item_name: names.get(&code).cloned().unwrap_or_else(|| code.clone()),
+            stock_unit: stock_unit_of(db, &code)?,
+            cells: build_cells(&code, customer, &unit_set, &units_all, &rules, &today),
+            item_code: code,
+        });
+    }
+    Ok(PriceMatrix {
+        customer: customer.to_string(),
+        units: unit_set,
+        rows,
+    })
+}
+
+fn build_cells(
+    item: &str,
+    customer: &str,
+    units: &[String],
+    calc_units: &[CalcUnit],
+    rules: &[PriceRule],
+    today: &str,
+) -> Vec<MatrixCell> {
+    units
+        .iter()
+        .map(|u| {
+            let cu = calc_units
+                .iter()
+                .find(|c| !c.disabled && c.item_code == item && c.calc_unit == *u);
+            // 同一格可能有好几条（专属价/通用价，以及不同生效日）：专属优先，
+            // 再按「现在生效的最新一条」
+            let pick = |want_cust: &str| -> Vec<&PriceRule> {
+                rules
+                    .iter()
+                    .filter(|r| {
+                        !r.disabled
+                            && r.item_code == item
+                            && r.unit.trim() == u.as_str()
+                            && r.customer_code.trim() == want_cust
+                    })
+                    .collect()
+            };
+            let rule = if customer.is_empty() {
+                best_for_cell(pick(""), today)
+            } else {
+                best_for_cell(pick(customer), today).or_else(|| best_for_cell(pick(""), today))
+            };
+            MatrixCell {
+                unit: u.clone(),
+                rule_id: rule.map(|r| r.id).unwrap_or(0),
+                unit_price: rule.map(|r| r.unit_price).unwrap_or(Money::ZERO),
+                min_charge: rule.map(|r| r.min_charge).unwrap_or(Money::ZERO),
+                effective_from: rule.map(|r| r.effective_from.clone()).unwrap_or_default(),
+                future: rule.map(|r| is_future(r, today)).unwrap_or(false),
+                factor: cu.map(|c| c.factor),
+                scale: cu.map(|c| c.scale).unwrap_or(2),
+            }
+        })
+        .collect()
+}
+
 // ── 按规格折算（v1.8.89） ──────────────────────────────────────────────
 //
 // 氧化厂报价最常听见的两句话：「这个件 2.5 元一米」「这个件 80 元一个平方」。
@@ -1326,123 +1443,6 @@ pub fn quote_with_spec(
         calc_unit: unit.to_string(),
         quote: q,
     })
-}
-
-pub fn matrix(db: &Db, customer: &str) -> DbResult<PriceMatrix> {
-    let customer = customer.trim();
-    let today = today();
-    let units_all = calc_unit_list(db, "")?;
-    let rules = rule_list(db)?;
-
-    // 列：口径来自「系数表」与「单价表」的并集
-    let mut unit_set: Vec<String> = Vec::new();
-    for c in &units_all {
-        if !c.disabled && !unit_set.contains(&c.calc_unit) {
-            unit_set.push(c.calc_unit.clone());
-        }
-    }
-    for r in &rules {
-        if r.disabled {
-            continue;
-        }
-        let u = r.unit.trim().to_string();
-        if !u.is_empty() && !unit_set.contains(&u) {
-            unit_set.push(u);
-        }
-    }
-    unit_set.sort_by_key(|u| unit_rank(u));
-
-    // 行：有系数的物料 ∪ 有单价的物料（通配规则单独一行）
-    let mut codes: Vec<String> = Vec::new();
-    for c in &units_all {
-        if !c.disabled && !codes.contains(&c.item_code) {
-            codes.push(c.item_code.clone());
-        }
-    }
-    let mut has_wildcard = false;
-    for r in &rules {
-        if r.disabled {
-            continue;
-        }
-        if r.item_code.trim().is_empty() {
-            if r.customer_code.trim().is_empty() || r.customer_code.trim() == customer {
-                has_wildcard = true;
-            }
-        } else if !codes.contains(&r.item_code) {
-            codes.push(r.item_code.clone());
-        }
-    }
-    codes.sort();
-
-    let names = item_names(db)?;
-    let mut rows = Vec::new();
-    if has_wildcard {
-        rows.push(MatrixRow {
-            item_code: String::new(),
-            item_name: "任意物料（通配价）".to_string(),
-            stock_unit: String::new(),
-            cells: build_cells("", customer, &unit_set, &units_all, &rules, &today),
-        });
-    }
-    for code in codes {
-        rows.push(MatrixRow {
-            item_name: names.get(&code).cloned().unwrap_or_else(|| code.clone()),
-            stock_unit: stock_unit_of(db, &code)?,
-            cells: build_cells(&code, customer, &unit_set, &units_all, &rules, &today),
-            item_code: code,
-        });
-    }
-    Ok(PriceMatrix {
-        customer: customer.to_string(),
-        units: unit_set,
-        rows,
-    })
-}
-
-fn build_cells(
-    item: &str,
-    customer: &str,
-    units: &[String],
-    calc_units: &[CalcUnit],
-    rules: &[PriceRule],
-    today: &str,
-) -> Vec<MatrixCell> {
-    units
-        .iter()
-        .map(|u| {
-            let cu = calc_units
-                .iter()
-                .find(|c| !c.disabled && c.item_code == item && c.calc_unit == *u);
-            // 同一格可能有好几条（专属价/通用价，以及不同生效日）：专属优先，
-            // 再按「现在生效的最新一条」
-            let pick = |want_cust: &str| -> Vec<&PriceRule> {
-                rules
-                    .iter()
-                    .filter(|r| {
-                        !r.disabled
-                            && r.item_code == item
-                            && r.unit.trim() == u.as_str()
-                            && r.customer_code.trim() == want_cust
-                    })
-                    .collect()
-            };
-            let rule = if customer.is_empty() {
-                best_for_cell(pick(""), today)
-            } else {
-                best_for_cell(pick(customer), today).or_else(|| best_for_cell(pick(""), today))
-            };
-            MatrixCell {
-                unit: u.clone(),
-                rule_id: rule.map(|r| r.id).unwrap_or(0),
-                unit_price: rule.map(|r| r.unit_price).unwrap_or(Money::ZERO),
-                min_charge: rule.map(|r| r.min_charge).unwrap_or(Money::ZERO),
-                effective_from: rule.map(|r| r.effective_from.clone()).unwrap_or_default(),
-                future: rule.map(|r| is_future(r, today)).unwrap_or(false),
-                factor: cu.map(|c| c.factor),
-                scale: cu.map(|c| c.scale).unwrap_or(2),
-            }
-        })
-        .collect()
 }
 
 fn item_names(db: &Db) -> DbResult<HashMap<String, String>> {
