@@ -288,3 +288,108 @@ pub(super) async fn set_matrix_cell(
     )?;
     Ok(Json(json!({ "ok": true, "id": id })))
 }
+
+// ---------------------------------------------------------------------------
+// 批量导入（单价表 / 折算系数）
+// ---------------------------------------------------------------------------
+
+/// 粘贴 CSV 或上传 Excel 的请求体：两者给一个就行
+#[derive(Deserialize)]
+pub struct ImportPriceReq {
+    /// 粘贴的 CSV/TSV 文本
+    #[serde(default)]
+    pub text: String,
+    /// Excel(.xlsx) 的 base64；与 text 二选一
+    #[serde(default)]
+    pub file: Option<String>,
+}
+
+/// 把请求体变成 CSV 文本：有文件读文件（xlsx 也认），否则用粘贴的文本
+fn import_text(req: &ImportPriceReq) -> Result<String, AppError> {
+    let has_file = req
+        .file
+        .as_ref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    if has_file {
+        let bytes = super::b64_decode(req.file.as_deref().unwrap_or(""))?;
+        let rows = findb::imports::read_xlsx_bytes(&bytes)?;
+        return Ok(findb::imports::xlsx_to_csv_text(&rows));
+    }
+    if req.text.trim().is_empty() {
+        return Err(AppError::bad_request(
+            "请粘贴 CSV 内容，或者选一个 Excel 文件",
+        ));
+    }
+    Ok(req.text.clone())
+}
+
+fn import_json(r: &findb::processfee::PriceImport) -> serde_json::Value {
+    json!({
+        "created": r.created,
+        "updated": r.updated,
+        "skipped": r.skipped,
+        "warnings": r.warnings,
+    })
+}
+
+/// 批量导入单价（列头见「下载模板」）
+pub(super) async fn import_price_rules(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<ImportPriceReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceEdit)?;
+    let text = import_text(&req)?;
+    let r = findb::processfee::import_rules(&user.db, &text, user.username())?;
+    Ok(Json(import_json(&r)))
+}
+
+/// 批量导入折算系数
+pub(super) async fn import_calc_units(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<ImportPriceReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceEdit)?;
+    let text = import_text(&req)?;
+    let r = findb::processfee::import_calc_units(&user.db, &text, user.username())?;
+    Ok(Json(import_json(&r)))
+}
+
+/// 下载导入模板（CSV 带 BOM，Excel 双击打开不乱码）
+pub(super) async fn price_import_template(
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::PriceView)?;
+    let kind = q.get("kind").map(String::as_str).unwrap_or("rules");
+    let (body, file) = match kind {
+        "rules" => (
+            findb::processfee::rule_import_template(),
+            "加工费单价-模板.csv",
+        ),
+        "units" => (
+            findb::processfee::unit_import_template(),
+            "折算系数-模板.csv",
+        ),
+        _ => {
+            return Err(AppError::bad_request(
+                "未知模板 kind：rules（单价）/ units（折算系数）",
+            ))
+        }
+    };
+    let mut csv = String::from("\u{feff}");
+    csv.push_str(&body);
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{file}\"").as_str(),
+            ),
+        ],
+        csv,
+    )
+        .into_response())
+}

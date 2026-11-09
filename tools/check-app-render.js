@@ -187,8 +187,58 @@ const CASES = [
       true,
     ],
     stubs: CELL_STUBS,
-    expect: ["没设系数", "data-cell-none"],
-    absent: ["<input", "未定价"],
+    expect: ["未设系数 · 点这里录", "data-cell-none", 'placeholder="未定价"'],
+    absent: ['value="0"'],
+  },
+  {
+    // 客户发来的价目表刚导进来（价有了、系数还没录）：价必须看得见，
+    // 只在下面提一句「未设系数」。早先这一格整块变成「没设系数」三个字，价被藏了。
+    fn: "priceCellHtml",
+    args: [
+      { item_code: "MB09", item_name: "外壳" },
+      { unit: "㎡", rule_id: 21, factor: null, future: false, min_charge: "50.00", effective_from: "", scale: 2, unit_price: "20.00" },
+      true,
+    ],
+    stubs: CELL_STUBS,
+    expect: ['value="20"', "未设系数 · 点这里录", "起步 50.00"],
+    absent: ["没设系数"],
+  },
+  {
+    // 一行都没读到（粘错地方 / 空文本）：必须说人话，不能显示「新增 0 条」让人以为成功了
+    fn: "importResultHtml",
+    args: [{ created: 0, updated: 0, skipped: 0, warnings: [] }],
+    stubs: CELL_STUBS,
+    expect: ["一行都没读到", "下载模板"],
+    absent: ["新增", "覆盖"],
+  },
+  {
+    // 有跳过行时用黄字，并把每行原因摊出来（前 10 条）
+    fn: "importResultHtml",
+    args: [{
+      created: 12,
+      updated: 3,
+      skipped: 2,
+      warnings: ["第 7 行：单价「abc」不是数字，这一行导不了", "第 9 行：没有计价口径（按㎡还是按只），这一行导不了"],
+    }],
+    stubs: CELL_STUBS,
+    expect: ["新增 <b>12</b> 条", "覆盖 <b>3</b> 条", "跳过 <b>2</b> 行", "第 7 行", "不是数字", "--warn"],
+    absent: ["一行都没读到"],
+  },
+  {
+    // 干净导入：绿字，不出现「跳过」和警告列表
+    fn: "importResultHtml",
+    args: [{ created: 5, updated: 0, skipped: 0, warnings: [] }],
+    stubs: CELL_STUBS,
+    expect: ["新增 <b>5</b> 条", "--ok"],
+    absent: ["跳过", "<ul"],
+  },
+  {
+    // 警告超过 10 条只列前 10，并说明还有多少 —— 否则一次导 500 行会刷屏
+    fn: "importResultHtml",
+    args: [{ created: 0, updated: 0, skipped: 12, warnings: Array.from({ length: 12 }, (_, i) => `第 ${i + 1} 行：坏的`) }],
+    stubs: CELL_STUBS,
+    expect: ["跳过 <b>12</b> 行", "第 10 行", "还有 2 行没列出来"],
+    absent: ["第 11 行"],
   },
   {
     // 通配行没系数，但价照样能填 —— 否则「任意物料 12 元/㎡」这条规则在矩阵里

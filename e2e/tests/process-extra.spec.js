@@ -142,6 +142,32 @@ test("加工费单价：矩阵、折算、起步价兜底、加急费", async ({
 });
 
 
+test("批量导入单价：粘一张表进来（表头跳过、坏行只跳自己）", async ({ page }) => {
+  await newBook(page, `E2E导入${Date.now()}`);
+  await page.click('.nav-item[data-view="price-rules"]');
+  await expect(page.locator("#pr-matrix")).toContainText("还没有任何单价", { timeout: 15_000 });
+
+  await page.click("#pr-import");
+  // 模拟「从 Excel 里复制三行粘进来」：带表头 + 两行正常 + 一行坏数据
+  await page.fill(
+    "#pi-text",
+    "物料编码,客户编码,计价口径,单价,起步价\nMB09,C01,㎡,20,50\nMB09,C01,只,0.5,\n坏行,abc\n",
+  );
+  await page.click("#pi-run");
+  await expect(page.locator("#pi-out")).toContainText("新增", { timeout: 15_000 });
+  await expect(page.locator("#pi-out")).toContainText("跳过", { timeout: 15_000 });
+  // 坏行要说清是第几行、坏在哪 —— 只报「有 1 行失败」用户没法修
+  await expect(page.locator("#pi-out")).toContainText("第 4 行", { timeout: 15_000 });
+  await page.click("#pi-cancel");
+
+  // 导进来的价要立刻出现在矩阵里，而且价是对的那个数
+  await expect(page.locator("#pr-matrix")).toContainText("MB09", { timeout: 15_000 });
+  // 一行两个口径，价都要对（列的顺序按「只 / 米 / kg / ㎡」固定，别按位置断言）
+  const row = page.locator("#pr-matrix tbody tr", { hasText: "MB09" }).first();
+  const vals = await row.locator("input.pr-cell").evaluateAll((els) => els.map((e) => e.value));
+  expect(vals.sort(), "MB09 的两个口径价").toEqual(["0.5", "20"]);
+});
+
 test("计件工资：报工流水 → 按人汇总 → 回填工资表（幂等）", async ({ page }) => {
   await newBook(page, `E2E计件${Date.now()}`);
 

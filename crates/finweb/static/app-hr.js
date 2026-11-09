@@ -694,19 +694,45 @@ function priceIn(v) {
 /// ① 没有折算系数 → 这一格根本不能报价（不是「0 元」），只给一句「没设系数」；
 /// ② 有系数但没定价 → 输入框空着写「未定价」，不能预填 0，否则一路确下去就是白送。
 function priceCellHtml(row, c, canEdit) {
-  // 通配行（「任意物料（通配价）」）不挂折算系数 —— 它说的是「这个客户按㎡一律 12 元」，
-  // 跟某个物料 1 只折合多少㎡ 无关，所以这一格永远是能填价的输入框。
+  // 通配行（「任意物料（通配价）」）与具体物料两回事：
+  // 通配行本来就没有折算系数 —— 它说的是「这个客户按 ㎡ 一律 12 元」，
+  // 跟「某个物料 1 只折合多少 ㎡」无关。
   const wild = !row.item_code;
-  if (!wild && c.factor == null) {
-    return `<td class="muted" style="text-align:center;font-size:11px"${canEdit ? ` data-cell-none="${esc(row.item_code)}|${esc(c.unit)}"` : ""}>没设系数</td>`;
-  }
+  // 具体物料没设系数：价照旧要显示（客户发来的价目表导进来就是这种情况），
+  // 只是下面多一行小字提醒「按这个口径开单前还要先录系数」。
+  // 早先这里是「没设系数」的纯文字格，把已录好的价一起藏了 —— 导入一张价表
+  // 之后满屏「没设系数」，用户会以为没导进去。
+  const noFactor = !wild && c.factor == null;
   return `<td style="white-space:nowrap">
       <input class="pr-cell" style="width:64px;text-align:right" data-item="${esc(row.item_code)}" data-unit="${esc(c.unit)}"
         value="${c.rule_id ? priceIn(c.unit_price) : ""}" placeholder="未定价" ${canEdit ? "" : "disabled"} />
       ${canEdit ? `<button class="btn ghost sm" style="padding:0 4px" data-cell-edit="${esc(row.item_code)}|${esc(c.unit)}" title="改起步价 / 提前录下一版价">调</button>` : ""}
       ${c.future ? `<div style="font-size:10px;color:var(--warn)">${esc(c.effective_from || "")} 起</div>` : ""}
       ${num(c.min_charge) > 0 ? `<div style="font-size:10px" class="muted">起步 ${fmt(c.min_charge)}</div>` : ""}
+      ${noFactor ? `<div class="muted" style="font-size:10px${canEdit ? ";cursor:pointer" : ""}"${canEdit ? ` data-cell-none="${esc(row.item_code)}|${esc(c.unit)}"` : ""} title="按${esc(c.unit)}开单前，要先告诉系统 1 个库存单位折合多少 ${esc(c.unit)}">未设系数 · 点这里录</div>` : ""}
     </td>`;
+}
+
+// 导入结果说人话。抽成顶层函数是为了让 tools/check-app-render.js 能真调用它 ——
+// 这段文案是用户判断「到底导进去没有」的唯一依据，写错了没人看得见。
+function importResultHtml(r) {
+  const created = Number(r.created) || 0;
+  const updated = Number(r.updated) || 0;
+  const skipped = Number(r.skipped) || 0;
+  const warns = Array.isArray(r.warnings) ? r.warnings : [];
+  if (created + updated + skipped === 0) {
+    return `<div style="color:var(--warn)">一行都没读到 —— 是不是粘错了地方？点「下载模板」照着填最省事。</div>`;
+  }
+  const parts = [];
+  if (created) parts.push(`新增 <b>${created}</b> 条`);
+  if (updated) parts.push(`覆盖 <b>${updated}</b> 条`);
+  if (skipped) parts.push(`跳过 <b>${skipped}</b> 行`);
+  const head = `<div style="color:${skipped ? "var(--warn)" : "var(--ok)"}">${parts.join("、")}</div>`;
+  if (!warns.length) return head;
+  // 只列前 10 条：一次导 500 行时把每一行都摊出来，用户反而找不到重点
+  const shown = warns.slice(0, 10).map((w) => `<li>${esc(w)}</li>`).join("");
+  const more = warns.length > 10 ? `<li>…… 还有 ${warns.length - 10} 行没列出来</li>` : "";
+  return `${head}<ul style="margin:6px 0 0 18px;padding:0;font-size:12px;line-height:1.6">${shown}${more}</ul>`;
 }
 
 async function viewPriceRules(main) {
@@ -714,7 +740,8 @@ async function viewPriceRules(main) {
     <div class="toolbar">
       <label>客户 <input id="pr-cust" style="width:120px" placeholder="留空 = 通用价" /></label>
       <button class="btn primary sm" id="pr-load">看这个客户的价</button>
-      ${can("price_edit") ? `<button class="btn ghost sm" id="pr-new-unit">录折算系数</button>
+      ${can("price_edit") ? `<button class="btn ghost sm" id="pr-import">批量导入</button>
+      <button class="btn ghost sm" id="pr-new-unit">录折算系数</button>
       <button class="btn ghost sm" id="pr-new">新增规则（高级）</button>` : ""}
       <button class="btn ghost sm" id="pr-clear">清空客户</button>
     </div>
@@ -959,6 +986,86 @@ async function viewPriceRules(main) {
     $("#pr-cust", main).value = "";
     loadMatrix();
   };
+  // 批量导入：客户发来一张价目表，整张导进来 —— 这是「高效管理单价」真正的省力点，
+  // 一格一格点四十个客户 × 十几个工件，没人干得下去。
+  const openImport = () => {
+    const m = modal(`<h3>批量导入</h3>
+      <div class="muted" style="font-size:12px;line-height:1.7">
+        从 Excel 里直接复制整张表粘进来，或者选文件。表头行会自动跳过，<code>#</code> 开头的行当注释。
+        同一「物料 + 客户 + 口径 + 生效日」会<b>覆盖</b>原来那一格，不会变成两条；换了生效日就是另一版价。
+      </div>
+      <div class="field"><label>导入什么</label>
+        <select id="pi-kind">
+          <option value="rules">单价（物料 × 客户 × 口径 → 元）</option>
+          <option value="units">折算系数（1 只 = 多少 ㎡ / 1 米 = 多少 kg）</option>
+        </select>
+        <a id="pi-tmpl" class="btn ghost sm" style="margin-left:8px" href="${API}/price-import/template?kind=rules" download="加工费单价-模板.csv">下载模板</a>
+      </div>
+      <div class="field"><label>粘贴内容</label>
+        <textarea id="pi-text" rows="9" style="width:100%;font-family:ui-monospace,Menlo,monospace;font-size:12px"
+          placeholder="物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期,名称,备注"></textarea>
+      </div>
+      <div class="field"><label>或者选文件（.xlsx / .csv，会覆盖上面粘的内容）</label><input id="pi-file" type="file" accept=".xlsx,.csv,.txt" /></div>
+      <div id="pi-out" style="margin:6px 0"></div>
+      <div class="foot"><button class="btn primary" id="pi-run">开始导入</button><button class="btn ghost" id="pi-cancel">关闭</button></div>`, true);
+    const kindSel = $("#pi-kind", m);
+    kindSel.onchange = () => {
+      $("#pi-tmpl", m).href = `${API}/price-import/template?kind=${kindSel.value}`;
+      $("#pi-tmpl", m).download = kindSel.value === "units" ? "折算系数-模板.csv" : "加工费单价-模板.csv";
+      $("#pi-text", m).placeholder = kindSel.value === "units"
+        ? "物料编码,计价口径,系数,保留位数"
+        : "物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期,名称,备注";
+    };
+    $("#pi-cancel", m).onclick = closeModal;
+    // Excel 文件 → base64（后端用 rust_xlsxwriter 那边的读法解）
+    const asB64 = (file) => new Promise((res, rej) => {
+      const rd = new FileReader();
+      rd.onload = () => res(String(rd.result || "").split(",").slice(1).join(","));
+      rd.onerror = () => rej(new Error("读不了这个文件，换一个试试"));
+      rd.readAsDataURL(file);
+    });
+    $("#pi-run", m).onclick = async () => {
+      const kind = kindSel.value;
+      const out = $("#pi-out", m);
+      const btn = $("#pi-run", m);
+      const text = $("#pi-text", m).value;
+      const fileEl = $("#pi-file", m);
+      const f = fileEl.files && fileEl.files[0];
+      if (!text.trim() && !f) {
+        out.innerHTML = importResultHtml({ created: 0, updated: 0, skipped: 0, warnings: [] });
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = "导入中…";
+      try {
+        let body;
+        if (f && /\.xlsx$/i.test(f.name)) {
+          body = { file: await asB64(f) };
+        } else if (f) {
+          body = { text: await f.text() };
+        } else {
+          body = { text };
+        }
+        const r = await api(kind === "units" ? "/calc-units/import" : "/price-rules/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        out.innerHTML = importResultHtml(r);
+        if (r.created + r.updated > 0) {
+          toast(`已导入 ${r.created + r.updated} 条`, "ok");
+          loadMatrix();
+        }
+      } catch (e) {
+        out.innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "开始导入";
+      }
+    };
+  };
+
+  if ($("#pr-import", main)) $("#pr-import", main).onclick = openImport;
   if ($("#pr-new", main)) $("#pr-new", main).onclick = () => openRule(null);
   if ($("#pr-new-unit", main)) $("#pr-new-unit", main).onclick = () => openUnit(null);
 

@@ -539,6 +539,10 @@ pub fn router(state: Arc<WebState>) -> Router {
             "/api/price-matrix",
             get(get_price_matrix).put(set_matrix_cell),
         )
+        // 批量导入（v1.8.88）：客户发来一张价目表，整张导进去
+        .route("/api/price-rules/import", post(import_price_rules))
+        .route("/api/calc-units/import", post(import_calc_units))
+        .route("/api/price-import/template", get(price_import_template))
         .route(
             "/api/piece-rates",
             get(list_piece_rates).post(save_piece_rate),

@@ -284,6 +284,338 @@ pub fn rule_delete(db: &Db, id: i64) -> DbResult<()> {
     Ok(())
 }
 
+/// 批量导入单价表的结果
+///
+/// 为什么不复用 `imports::ImportResult`：这里要区分「新建」和「覆盖已有那一格」——
+/// 会计最怕的是把「导入 200 条」当成「加了 200 个价」，其实是改了 200 个价。
+#[derive(Clone, Debug, Default)]
+pub struct PriceImport {
+    /// 新加的价
+    pub created: usize,
+    /// 覆盖了已有那一格（同物料 + 同客户 + 同口径 + 同生效日）
+    pub updated: usize,
+    /// 跳过的行（认不出、金额不是数、校验不过）
+    pub skipped: usize,
+    /// 一行一条人话，带行号
+    pub warnings: Vec<String>,
+}
+
+/// 单价表的导入列头（模板与解析器共用一份，改一处就都改）
+pub const RULE_HEAD: [&str; 10] = [
+    "物料编码",
+    "客户编码",
+    "计价口径",
+    "单价",
+    "起步价",
+    "加急固定费",
+    "加急率%",
+    "生效日期",
+    "名称",
+    "备注",
+];
+
+/// 折算系数的导入列头
+pub const UNIT_HEAD: [&str; 4] = ["物料编码", "计价口径", "系数", "保留位数"];
+
+/// 单价表模板（CSV 文本，不带 BOM —— 带不带由调用方决定）
+pub fn rule_import_template() -> String {
+    let mut out = String::new();
+    out.push_str(&RULE_HEAD.join(","));
+    out.push('\n');
+    // 两行示例覆盖两种典型口径：按㎡（要配折算系数）和按只（数量就是只数）
+    out.push_str("MB01,,㎡,12.00,30.00,20.00,10,,\"氧化-按平方（通配）\"\n");
+    out.push_str("MB02,C01,只,0.45,0,,,2026-12-01,\"给客户C01的按只价\",\n");
+    out
+}
+
+/// 折算系数模板
+pub fn unit_import_template() -> String {
+    let mut out = String::new();
+    out.push_str(&UNIT_HEAD.join(","));
+    out.push('\n');
+    out.push_str("MB01,㎡,0.0234,2\n");
+    out.push_str("MB02,kg,1.8500,2\n");
+    out
+}
+
+/// 一行是不是表头：第一格出现「物料」「编码」「item」这类字样就跳过
+fn is_head(f0: &str) -> bool {
+    let t = f0.trim().to_ascii_lowercase();
+    t.contains("物料")
+        || t.contains("编码")
+        || t.contains("item")
+        || t == "code"
+        || t.contains("客商")
+}
+
+/// 第几列（越界给空串）
+fn col<'a>(f: &'a [String], i: usize) -> &'a str {
+    f.get(i).map(|s| s.trim()).unwrap_or("")
+}
+
+/// 批量导入单价
+///
+/// 列顺序见 [`RULE_HEAD`]：`物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期,名称,备注`。
+/// 只有「计价口径」与「单价」必填，其余留空即默认（物料/客户留空 = 通配，起步价等 = 0，
+/// 生效日期留空 = 立即）。表头行自动跳过；`#` 开头的行按注释跳过。
+///
+/// 同「物料 + 客户 + 口径 + 生效日」已有价的，覆盖那一格并计入 `updated`：
+/// 这是调价表最常见的用法 —— 客户发来一张新价目表，整张导进去，没变的那些也照抄一遍。
+/// 靠生效日区分版本，所以「提前录下个月的新价」不会被今天这张表冲掉。
+pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
+    let mut res = PriceImport::default();
+    let mut line_no = 0usize;
+    for raw in text.lines() {
+        let line = raw.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        line_no += 1;
+        let f = crate::imports::split_csv(line);
+        let (f0, f3) = (col(&f, 0), col(&f, 3));
+        // 表头：第一格是「物料编码」这类列名，且单价那一格不是数字。
+        // 只认「第一格像列名」不够 —— 客户从金蝶导出的表头就叫「物料编码」，行的第一格同样可能带「物料」二字。
+        if is_head(f0) && Money::parse(f3).is_err() {
+            continue;
+        }
+        if f.len() < 4 {
+            res.skipped += 1;
+            res.warnings.push(format!(
+                "第 {line_no} 行：至少要有「物料编码,客户编码,计价口径,单价」四列，这一行只有 {} 列",
+                f.len()
+            ));
+            continue;
+        }
+        let item = f0;
+        let cust = col(&f, 1);
+        let unit = col(&f, 2);
+        let price_s = f3;
+        if unit.is_empty() {
+            res.skipped += 1;
+            res.warnings.push(format!(
+                "第 {line_no} 行：没有计价口径（按㎡还是按只），这一行导不了"
+            ));
+            continue;
+        }
+        let price = match Money::parse(price_s) {
+            Ok(v) => v,
+            Err(_) => {
+                res.skipped += 1;
+                res.warnings.push(format!(
+                    "第 {line_no} 行：单价「{price_s}」不是数字，这一行导不了"
+                ));
+                continue;
+            }
+        };
+        let money_or_zero = |i: usize, what: &str, res: &mut PriceImport| -> Option<Money> {
+            let s = col(&f, i);
+            if s.is_empty() {
+                return Some(Money::ZERO);
+            }
+            match Money::parse(s) {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    res.skipped += 1;
+                    res.warnings.push(format!(
+                        "第 {line_no} 行：{what}「{s}」不是数字，这一行导不了"
+                    ));
+                    None
+                }
+            }
+        };
+        let min_charge = match money_or_zero(4, "起步价", &mut res) {
+            Some(v) => v,
+            None => continue,
+        };
+        let rush_fee = match money_or_zero(5, "加急固定费", &mut res) {
+            Some(v) => v,
+            None => continue,
+        };
+        let rush_rate = match money_or_zero(6, "加急率", &mut res) {
+            Some(v) => v,
+            None => continue,
+        };
+        let effective_from = col(&f, 7).to_string();
+        let name = col(&f, 8).to_string();
+        let memo = col(&f, 9).to_string();
+        // 名称留空就按四件事拼一个，免得矩阵里一整列都是空名字
+        let auto_name = format!(
+            "{} {unit}（{}）",
+            if item.is_empty() {
+                "任意物料"
+            } else {
+                item
+            },
+            if cust.is_empty() { "通用" } else { cust }
+        );
+        let exist: Option<i64> = db
+            .conn()
+            .query_row(
+                "SELECT id FROM price_rule WHERE item_code=?1 AND customer_code=?2
+                 AND unit=?3 AND effective_from=?4
+                 ORDER BY id LIMIT 1",
+                rusqlite::params![item, cust, unit, effective_from.trim()],
+                |r| r.get(0),
+            )
+            .ok();
+        let mut r = PriceRule {
+            id: exist.unwrap_or(0),
+            name: if name.is_empty() { auto_name } else { name },
+            item_code: item.to_string(),
+            customer_code: cust.to_string(),
+            unit: unit.to_string(),
+            unit_price: price,
+            min_charge,
+            rush_fee,
+            rush_rate,
+            disabled: false,
+            memo,
+            effective_from,
+        };
+        match rule_save(db, &mut r) {
+            Ok(_) => {
+                if exist.is_some() {
+                    res.updated += 1;
+                } else {
+                    res.created += 1;
+                }
+            }
+            Err(e) => {
+                res.skipped += 1;
+                res.warnings
+                    .push(format!("第 {line_no} 行：{}", short_err(&e)));
+            }
+        }
+    }
+    if res.created + res.updated > 0 {
+        db.log(
+            who,
+            "销售",
+            "加工费规则",
+            &format!(
+                "批量导入单价：新增 {} 条、覆盖 {} 条、跳过 {} 行",
+                res.created, res.updated, res.skipped
+            ),
+        )?;
+    }
+    Ok(res)
+}
+
+/// 批量导入折算系数
+///
+/// 列顺序见 [`UNIT_HEAD`]：`物料编码,计价口径,系数,保留位数`（位数留空 = 2）。
+/// 同「物料 + 口径」已有系数的覆盖，计入 `updated`。
+pub fn import_calc_units(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
+    let mut res = PriceImport::default();
+    let mut line_no = 0usize;
+    for raw in text.lines() {
+        let line = raw.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        line_no += 1;
+        let f = crate::imports::split_csv(line);
+        let (f0, f2) = (col(&f, 0), col(&f, 2));
+        if is_head(f0) && Money::parse(f2).is_err() {
+            continue;
+        }
+        if f.len() < 3 {
+            res.skipped += 1;
+            res.warnings.push(format!(
+                "第 {line_no} 行：至少要有「物料编码,计价口径,系数」三列，这一行只有 {} 列",
+                f.len()
+            ));
+            continue;
+        }
+        let item = f0;
+        let unit = col(&f, 1);
+        if item.is_empty() || unit.is_empty() {
+            res.skipped += 1;
+            res.warnings.push(format!(
+                "第 {line_no} 行：物料编码和计价口径都要填 —— 系数说的是「这个物料的 1 个库存单位折合多少 {unit}」"
+            ));
+            continue;
+        }
+        let factor = match Money::parse(f2) {
+            Ok(v) => v,
+            Err(_) => {
+                res.skipped += 1;
+                res.warnings.push(format!(
+                    "第 {line_no} 行：系数「{f2}」不是数字，这一行导不了"
+                ));
+                continue;
+            }
+        };
+        let scale_s = col(&f, 3);
+        let scale = if scale_s.is_empty() {
+            2
+        } else {
+            match scale_s.parse::<i32>() {
+                Ok(v) => v,
+                Err(_) => {
+                    res.skipped += 1;
+                    res.warnings.push(format!(
+                        "第 {line_no} 行：保留位数「{scale_s}」要写 0-{SCALE_MAX} 的整数"
+                    ));
+                    continue;
+                }
+            }
+        };
+        let exist: Option<i64> = db
+            .conn()
+            .query_row(
+                "SELECT id FROM item_calc_unit WHERE item_code=?1 AND calc_unit=?2",
+                rusqlite::params![item, unit],
+                |r| r.get(0),
+            )
+            .ok();
+        let mut c = CalcUnit {
+            id: exist.unwrap_or(0),
+            item_code: item.to_string(),
+            calc_unit: unit.to_string(),
+            factor,
+            scale,
+            disabled: false,
+            memo: String::new(),
+        };
+        match calc_unit_save(db, &mut c) {
+            Ok(_) => {
+                if exist.is_some() {
+                    res.updated += 1;
+                } else {
+                    res.created += 1;
+                }
+            }
+            Err(e) => {
+                res.skipped += 1;
+                res.warnings
+                    .push(format!("第 {line_no} 行：{}", short_err(&e)));
+            }
+        }
+    }
+    if res.created + res.updated > 0 {
+        db.log(
+            who,
+            "销售",
+            "折算系数",
+            &format!(
+                "批量导入系数：新增 {} 条、覆盖 {} 条、跳过 {} 行",
+                res.created, res.updated, res.skipped
+            ),
+        )?;
+    }
+    Ok(res)
+}
+
+/// 导入警告里用的人话
+///
+/// `DbError::Fin` 直接显示内层消息（`SQLite 错误：…` 只在真有 SQL 问题时才出现），
+/// 所以这里不要再剥前缀 —— 剥「：」会把「生效日期要写成 2026-03-01 这样（实际：2026-3-1）」
+/// 截成半句。
+fn short_err(e: &dyn std::fmt::Display) -> String {
+    format!("{e}")
+}
+
 /// 匹配一条规则：物料+客户 精确 > 只限物料 > 只限客户 > 通配
 ///
 /// 停用的规则不参与匹配；同精度取 id 最小的一条（先建的优先）。
@@ -894,6 +1226,130 @@ mod tests {
             rush_rate: m(rush_rate),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn 导入单价_表头自动跳过_通配和专属都进来() {
+        let db = crate::tests::mem();
+        let text =
+            "\u{feff}物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期,名称,备注
+MB01,,㎡,12.00,30.00,20.00,10,,,
+MB02,C01,只,0.45,,,,2026-12-01,
+# 这是注释行，不该算进任何计数
+";
+        let r = import_rules(&db, text, "tester").unwrap();
+        assert_eq!(
+            (r.created, r.updated, r.skipped),
+            (2, 0, 0),
+            "{:?}",
+            r.warnings
+        );
+        // 名称留空会自动拼一个，矩阵里不至于一整列空名字
+        let names: Vec<String> = rule_list(&db)
+            .unwrap()
+            .into_iter()
+            .map(|x| x.name)
+            .collect();
+        assert!(names.contains(&"MB01 ㎡（通用）".to_string()), "{names:?}");
+        assert!(names.contains(&"MB02 只（C01）".to_string()), "{names:?}");
+        // 通配行 + MB02 行；C01 的专属价不会串到别的客户
+        let mx = matrix(&db, "").unwrap();
+        assert!(mx.rows.iter().any(|r| r.item_code == "MB01"));
+    }
+
+    #[test]
+    fn 导入单价_覆盖同一格而不是再加一条() {
+        let db = crate::tests::mem();
+        let head = "物料编码,客户编码,计价口径,单价\n";
+        let first = import_rules(&db, &format!("{head}MB01,C01,㎡,12"), "t").unwrap();
+        assert_eq!((first.created, first.updated), (1, 0));
+        let second = import_rules(&db, &format!("{head}MB01,C01,㎡,13.5"), "t").unwrap();
+        assert_eq!(
+            (second.created, second.updated),
+            (0, 1),
+            "同一格要覆盖，不能变两条"
+        );
+        let all = rule_list(&db).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].unit_price, m("13.5"));
+        // 生效日不同就是另一版价，不算覆盖
+        let third = import_rules(
+            &db,
+            &format!("{head}MB01,C01,㎡,14,,\n").replace(",,\n", "\n"),
+            "t",
+        )
+        .unwrap();
+        assert_eq!(third.created, 0);
+        let dated = import_rules(
+            &db,
+            "物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期\nMB01,C01,㎡,15,,,,2027-01-01\n",
+            "t",
+        )
+        .unwrap();
+        assert_eq!(
+            (dated.created, dated.updated),
+            (1, 0),
+            "换了生效日 = 新一版价"
+        );
+        assert_eq!(rule_list(&db).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn 导入单价_坏行只跳过那一行() {
+        let db = crate::tests::mem();
+        let text = "物料编码,客户编码,计价口径,单价,起步价,加急固定费,加急率%,生效日期
+MB01,,㎡,abc
+MB02,,,10
+MB03,,㎡,10,,,,2026-3-1
+MB04,,㎡,9
+";
+        let r = import_rules(&db, text, "t").unwrap();
+        assert_eq!(r.created, 1, "只有 MB04 那行是对的");
+        assert_eq!(r.skipped, 3);
+        assert!(r.warnings[0].contains("第 2 行"), "{:?}", r.warnings);
+        assert!(
+            r.warnings[0].contains("abc"),
+            "要说清是哪一格坏了：{:?}",
+            r.warnings
+        );
+        assert!(r.warnings[1].contains("第 3 行"));
+        assert!(r.warnings[1].contains("计价口径"));
+        assert!(
+            r.warnings[2].contains("2026-03-01"),
+            "日期错要把正确写法给出来：{:?}",
+            r.warnings
+        );
+    }
+
+    #[test]
+    fn 导入系数_覆盖同物料同口径_坏行不拦别人() {
+        let db = crate::tests::mem();
+        let text = "物料编码,计价口径,系数,保留位数
+MB01,㎡,0.0234,2
+MB02,kg,0,2
+,只,1,2
+MB03,米,x,2
+";
+        let r = import_calc_units(&db, text, "t").unwrap();
+        assert_eq!((r.created, r.skipped), (1, 3), "{:?}", r.warnings);
+        // 系数 0 被 calc_unit_save 拦住，x 不是数字 —— 两种都要说清
+        assert!(
+            r.warnings.iter().any(|w| w.contains("必须大于 0")),
+            "{:?}",
+            r.warnings
+        );
+        assert!(
+            r.warnings.iter().any(|w| w.contains("不是数字")),
+            "{:?}",
+            r.warnings
+        );
+        // 再导一遍同一行 = 覆盖
+        let again = import_calc_units(&db, "MB01,㎡,0.0235,2\n", "t").unwrap();
+        assert_eq!((again.created, again.updated), (0, 1));
+        assert_eq!(
+            calc_unit_of(&db, "MB01", "㎡").unwrap().unwrap().factor,
+            m("0.0235")
+        );
     }
 
     #[test]

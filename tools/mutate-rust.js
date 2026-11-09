@@ -1849,6 +1849,47 @@ const MUT = [
     to: "    if false {",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::系数与口径的字段校验"],
   },
+
+  // ── v1.8.88 批量导入 ──────────────────────────────────────────────────
+  {
+    // 表头当数据行：客户从金蝶/用友导出的第一行就是「物料编码,客户编码,…」，
+    // 认不出来就整行报「单价不是数字」，导入结果里凭空多一条跳过，用户会以为文件坏了。
+    name: "69 导入时不认表头行（把列名当数据）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        if is_head(f0) && Money::parse(f3).is_err() {",
+    to: "        if false {",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导入单价_表头自动跳过"],
+  },
+  {
+    // 同一格变成新增一条：客户发来一张新价表重导一遍，价目从 40 条涨到 80 条，
+    // 矩阵里同一个物料同一口径出现两行，报价按「生效日更晚的赢」看起来还是对的，
+    // 于是没人发现底下埋了一份重复价。
+    name: "70 导入同一格不覆盖（价目表越导越臃肿）",
+    file: "crates/findb/src/processfee.rs",
+    from: "            id: exist.unwrap_or(0),\n            name: if name.is_empty() { auto_name } else { name },",
+    to: "            id: 0,\n            name: if name.is_empty() { auto_name } else { name },",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导入单价_覆盖同一格"],
+  },
+  {
+    // 导入系数时不查已有的那一条：同一「物料 + 口径」重导会报「新增 1 条」而不是
+    // 「覆盖 1 条」。写入本身是 upsert（`calc_unit_save` 自己会找），所以数据不错，
+    // 错的是给用户看的那个数 —— 会计据此判断「这次导进去几条」，报错了就会以为漏了。
+    name: "71 导入系数不查已有（覆盖被报成新增）",
+    file: "crates/findb/src/processfee.rs",
+    from: "                \"SELECT id FROM item_calc_unit WHERE item_code=?1 AND calc_unit=?2\",",
+    to: "                \"SELECT id FROM item_calc_unit WHERE 0\",",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导入系数_覆盖同物料同口径"],
+  },
+  {
+    // 警告不带行号：一次导 300 行、跳过 12 行，用户拿着「单价不是数字」这句话
+    // 去 Excel 里找，等于大海捞针。
+    name: "72 导入警告不带行号（用户找不到是哪一行）",
+    file: "crates/findb/src/processfee.rs",
+    from: "                res.warnings.push(format!(\n                    \"第 {line_no} 行：单价「{price_s}」不是数字，这一行导不了\"\n                ));",
+    to: "                res.warnings.push(format!(\n                    \"单价「{price_s}」不是数字，这一行导不了\"\n                ));",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导入单价_坏行只跳过那一行"],
+  },
+
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */
