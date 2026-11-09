@@ -191,6 +191,19 @@ const CASES = [
     absent: ["<input", "未定价"],
   },
   {
+    // 通配行没系数，但价照样能填 —— 否则「任意物料 12 元/㎡」这条规则在矩阵里
+    // 只能显示成「没设系数」，等于把已录好的价藏起来。
+    fn: "priceCellHtml",
+    args: [
+      { item_code: "", item_name: "任意物料（通配价）" },
+      { unit: "㎡", rule_id: 9, factor: null, future: false, min_charge: "0.00", effective_from: "", scale: 2, unit_price: "18.00" },
+      true,
+    ],
+    stubs: CELL_STUBS,
+    expect: ['value="18"', "data-cell-edit"],
+    absent: ["没设系数"],
+  },
+  {
     fn: "priceCellHtml",
     args: [
       { item_code: "MB01" },

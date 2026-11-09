@@ -694,7 +694,10 @@ function priceIn(v) {
 /// ① 没有折算系数 → 这一格根本不能报价（不是「0 元」），只给一句「没设系数」；
 /// ② 有系数但没定价 → 输入框空着写「未定价」，不能预填 0，否则一路确下去就是白送。
 function priceCellHtml(row, c, canEdit) {
-  if (c.factor == null) {
+  // 通配行（「任意物料（通配价）」）不挂折算系数 —— 它说的是「这个客户按㎡一律 12 元」，
+  // 跟某个物料 1 只折合多少㎡ 无关，所以这一格永远是能填价的输入框。
+  const wild = !row.item_code;
+  if (!wild && c.factor == null) {
     return `<td class="muted" style="text-align:center;font-size:11px"${canEdit ? ` data-cell-none="${esc(row.item_code)}|${esc(c.unit)}"` : ""}>没设系数</td>`;
   }
   return `<td style="white-space:nowrap">
@@ -707,7 +710,7 @@ function priceCellHtml(row, c, canEdit) {
 }
 
 async function viewPriceRules(main) {
-  main.innerHTML = `<h2>加工费单价</h2>
+  main.innerHTML = `<h2>加工费规则</h2>
     <div class="toolbar">
       <label>客户 <input id="pr-cust" style="width:120px" placeholder="留空 = 通用价" /></label>
       <button class="btn primary sm" id="pr-load">看这个客户的价</button>
