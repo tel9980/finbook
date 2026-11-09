@@ -1933,8 +1933,8 @@ const MUT = [
     // 客户拿普通氧化的单子来对账，一句「系统报的」就说不清。
     name: "77 工艺档不参与匹配（各档互相串价）",
     file: "crates/findb/src/processfee.rs",
-    from: "        } else if r.process.trim().is_empty() && !want_proc.is_empty() {\n            1u8\n        } else {\n            continue;\n        };\n        let rank = if item.is_empty() && customer.is_empty() {",
-    to: "        } else if r.process.trim().is_empty() && !want_proc.is_empty() {\n            1u8\n        } else {\n            0u8\n        };\n        let rank = if item.is_empty() && customer.is_empty() {",
+    from: "        } else if r.process.trim().is_empty() && !want_proc.is_empty() {\n            1u8\n        } else {\n            continue;\n        };",
+    to: "        } else if r.process.trim().is_empty() && !want_proc.is_empty() {\n            1u8\n        } else {\n            0u8\n        };",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::工艺档不同价不同"],
   },
   {
@@ -1962,6 +1962,40 @@ const MUT = [
     from: "                 AND unit=?3 AND effective_from=?4 AND process=?5",
     to: "                 AND unit=?3 AND effective_from=?4 AND (process=?5 OR 1=1)",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导入能带工艺档且同档重导算覆盖"],
+  },
+
+  // ── v1.8.91 按规格分档定价 ────────────────────────────────────────────
+  {
+    // 上限判成「不含」：「200cm 以下」的 200 正好掉进两档中间的缝里，报价直接报「没价」
+    name: "81 区间上限判成不含（200 掉进两档中间的缝）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        if v > to {",
+    to: "        if v >= to {",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::按规格分档_短件按件长料按米"],
+  },
+  {
+    // 没给规格也拿分档价：300cm 那条 1.5 元/米会被乘到 80cm 的活儿上，差十几倍
+    name: "82 没给规格也拿分档价",
+    file: "crates/findb/src/processfee.rs",
+    from: "            match dims {\n                Some(d) if band_ok(&r, d) => 0u8,\n                _ => continue,\n            }",
+    to: "            match dims {\n                Some(d) if band_ok(&r, d) => 0u8,\n                _ => 0u8,\n            }",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::没给规格就不拿分档价"],
+  },
+  {
+    // 分档价混进矩阵：一格是「物料×口径」，装不下「按件」和「按米」两条，看着像重复录入
+    name: "83 分档价混进单价矩阵",
+    file: "crates/findb/src/processfee.rs",
+    from: "        .filter(|r| r.band_dim.trim().is_empty())",
+    to: "        .filter(|_r| true)",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::分档价不进单价矩阵"],
+  },
+  {
+    // 口径不由规格档决定：又变成「先自己选按件还是按米」，短件长料混着报时必选错
+    name: "84 口径不由规格档决定（还得人先选）",
+    file: "crates/findb/src/processfee.rs",
+    from: "    if unit.is_empty() {\n        let dims = dims_opt.as_ref().ok_or_else(|| {",
+    to: "    if false {\n        let dims = dims_opt.as_ref().ok_or_else(|| {",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::按规格分档_短件按件长料按米"],
   },
 
 ];

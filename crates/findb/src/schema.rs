@@ -33,7 +33,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 50;
+pub const SCHEMA_VERSION: i64 = 51;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1926,6 +1926,22 @@ const MIGRATE_V49: &[(&str, &str, &str)] =
 /// 空串 = 不分档（老数据与「所有档位同价」都用它）。
 const MIGRATE_V50: &[(&str, &str, &str)] = &[("price_rule", "process", "TEXT NOT NULL DEFAULT ''")];
 
+/// v51：单价规则加「规格档」（按尺寸分段定价）。
+///
+/// 氧化厂常见：「规格 200cm 以下 0.2 元/件，200cm 以上 1.5 元/米」—— 短件按件、
+/// 长料按米，**连计价口径都跟着变**。所以区间和口径要一起存在规则上：
+///
+/// - `band_dim`：拿哪一维比（`max` 最长边 / `min` 最短边 / `first` 第一维 / `area` 面积）；
+///   空串 = 不分档。
+/// - `band_from` / `band_to`：区间上下限，单位 **cm**，空串 = 不限（「200 以下」只填 to）。
+///
+/// 判定含端点：`band_to = '200'` 表示 200 及以下，与客户说的「含 200」一致。
+const MIGRATE_V51: &[(&str, &str, &str)] = &[
+    ("price_rule", "band_dim", "TEXT NOT NULL DEFAULT ''"),
+    ("price_rule", "band_from", "TEXT NOT NULL DEFAULT ''"),
+    ("price_rule", "band_to", "TEXT NOT NULL DEFAULT ''"),
+];
+
 const MIGRATE_V45: &[(&str, &str, &str)] = &[
     ("consign_doc", "so_id", "INTEGER NOT NULL DEFAULT 0"),
     ("consign_doc", "so_no", "TEXT NOT NULL DEFAULT ''"),
@@ -2478,6 +2494,7 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             // v49：单价生效日期（纯加列，没有索引引用它）
             migrate_generic(conn, MIGRATE_V49)?;
             migrate_generic(conn, MIGRATE_V50)?;
+            migrate_generic(conn, MIGRATE_V51)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：

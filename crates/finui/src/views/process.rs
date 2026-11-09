@@ -694,6 +694,12 @@ pub struct RuleBuf {
     /// 工艺档（「硬质氧化」这类表面处理分档；空 = 不分档）。
     /// 网页端按档录入的价，在这里编辑时要原样带回去，否则一编辑就把档位抹平了。
     pub process: String,
+    /// 规格档：按哪一维比（max/min/first/area，空 = 不分档）
+    pub band_dim: String,
+    /// 区间下限（厘米，空 = 不限）
+    pub band_from: String,
+    /// 区间上限（厘米，空 = 不限，含端点）
+    pub band_to: String,
 }
 
 impl RuleBuf {
@@ -724,6 +730,9 @@ impl RuleBuf {
             memo: r.memo.clone(),
             effective_from: r.effective_from.clone(),
             process: r.process.clone(),
+            band_dim: r.band_dim.clone(),
+            band_from: r.band_from.clone(),
+            band_to: r.band_to.clone(),
         }
     }
 
@@ -742,6 +751,9 @@ impl RuleBuf {
             memo: self.memo.trim().to_string(),
             effective_from: self.effective_from.trim().to_string(),
             process: self.process.trim().to_string(),
+            band_dim: self.band_dim.trim().to_string(),
+            band_from: self.band_from.trim().to_string(),
+            band_to: self.band_to.trim().to_string(),
         }
     }
 }
@@ -864,6 +876,7 @@ impl PriceRulesView {
                 widgets::TCol::new("物料", 100.0),
                 widgets::TCol::new("客户", 100.0),
                 widgets::TCol::new("工艺", 90.0),
+                widgets::TCol::new("规格段", 110.0),
                 widgets::TCol::new("单位", 60.0),
                 widgets::TCol::new("单价", 90.0).right(),
                 widgets::TCol::new("最低收费", 90.0).right(),
@@ -900,7 +913,28 @@ impl PriceRulesView {
                             r.process.clone()
                         },
                     ),
-                    4 => txt(
+                    4 => {
+                        // 「≤200cm」「>200cm」「200–300cm」—— 单位厘米，客户嘴里的「200 以下」
+                        let dim = processfee::band_dim_label(&r.band_dim);
+                        let span = if r.band_dim.trim().is_empty() {
+                            "—".to_string()
+                        } else if r.band_from.trim().is_empty() {
+                            format!("≤ {}", r.band_to.trim())
+                        } else if r.band_to.trim().is_empty() {
+                            format!("> {}", r.band_from.trim())
+                        } else {
+                            format!("{}–{}", r.band_from.trim(), r.band_to.trim())
+                        };
+                        txt(
+                            ui,
+                            if r.band_dim.trim().is_empty() {
+                                span
+                            } else {
+                                format!("{dim} {span}cm")
+                            },
+                        )
+                    }
+                    6 => txt(
                         ui,
                         if r.unit.is_empty() {
                             "—".to_string()
@@ -908,7 +942,7 @@ impl PriceRulesView {
                             r.unit.clone()
                         },
                     ),
-                    5 => txt(
+                    7 => txt(
                         ui,
                         if r.effective_from.trim().is_empty() {
                             r.unit_price.fmt_qty()
@@ -920,7 +954,7 @@ impl PriceRulesView {
                             )
                         },
                     ),
-                    6 => txt(
+                    8 => txt(
                         ui,
                         if r.min_charge.is_zero() {
                             "—".to_string()
@@ -928,7 +962,7 @@ impl PriceRulesView {
                             r.min_charge.fmt_qty()
                         },
                     ),
-                    7 => txt(
+                    9 => txt(
                         ui,
                         if r.rush_fee.is_zero() && r.rush_rate.is_zero() {
                             "—".to_string()
@@ -936,7 +970,7 @@ impl PriceRulesView {
                             format!("{}+{}%", r.rush_fee.fmt_qty(), r.rush_rate.fmt_qty())
                         },
                     ),
-                    8 => txt(
+                    10 => txt(
                         ui,
                         if r.disabled {
                             RichText::new("停用").weak()
@@ -944,7 +978,7 @@ impl PriceRulesView {
                             RichText::new("启用").strong()
                         },
                     ),
-                    9 => {
+                    11 => {
                         ui.horizontal(|ui| {
                             if ui
                                 .add_enabled(editable, egui::Button::new("编辑"))
@@ -993,6 +1027,37 @@ impl PriceRulesView {
             widgets::text_input(ui, &mut self.ed.customer_code, 100.0, "留空=任意");
             txt(ui, "工艺");
             widgets::text_input(ui, &mut self.ed.process, 100.0, "留空=不分档");
+        });
+        ui.horizontal(|ui| {
+            txt(ui, "规格档");
+            egui::ComboBox::from_id_salt("rule_band_dim")
+                .width(96.0)
+                .selected_text(if self.ed.band_dim.trim().is_empty() {
+                    "不分档".to_string()
+                } else {
+                    processfee::band_dim_label(&self.ed.band_dim).to_string()
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.ed.band_dim, String::new(), "不分档");
+                    for (k, label) in [
+                        ("max", "最长边"),
+                        ("min", "最短边"),
+                        ("first", "第一维"),
+                        ("area", "面积"),
+                    ] {
+                        ui.selectable_value(&mut self.ed.band_dim, k.to_string(), label);
+                    }
+                });
+            txt(ui, "下限(cm)");
+            widgets::text_input(ui, &mut self.ed.band_from, 64.0, "留空=不限");
+            txt(ui, "上限(cm)");
+            widgets::text_input(ui, &mut self.ed.band_to, 64.0, "留空=不限");
+            txt(
+                ui,
+                RichText::new("含端点：填 200 表示 200cm 及以下")
+                    .size(11.0)
+                    .color(palette::GRID),
+            );
         });
         ui.horizontal(|ui| {
             txt(ui, "单位");
@@ -1061,8 +1126,24 @@ impl PriceRulesView {
             let qty = widgets::parse_money(&self.q_qty);
             let unit = self.q_unit.trim().to_string();
             let proc = self.q_proc.trim().to_string();
-            let res = if unit.is_empty() {
-                // 没填口径：老算法（数量就是计价数量）。填了工艺档就必须按档位匹配 ——
+            let res = if unit.is_empty() && !self.q_spec.trim().is_empty() {
+                // 填了规格但没选口径：让「按规格分段的价」自己定口径 ——
+                // 「200cm 以下按件 0.2、以上按米 1.5」这种价，口径本来就是档位决定的。
+                let density = widgets::parse_money(&self.q_density);
+                processfee::quote_with_spec(
+                    ctx.db(),
+                    self.q_item.trim(),
+                    self.q_customer.trim(),
+                    &self.q_spec,
+                    qty,
+                    "",
+                    density,
+                    &proc,
+                    self.q_rush,
+                )
+                .map(|sq| (sq.quote.clone(), Some(sq)))
+            } else if unit.is_empty() {
+                // 没填口径也没填规格：老算法（数量就是计价数量）。填了工艺档就必须按档位匹配 ——
                 // quote_by 不认档位，会把「硬质氧化 18 元」报成普通档的 12 元。
                 if proc.is_empty() {
                     processfee::quote_by(

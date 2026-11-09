@@ -539,6 +539,9 @@ pub fn router(state: Arc<WebState>) -> Router {
             "/api/price-matrix",
             get(get_price_matrix).put(set_matrix_cell),
         )
+        // 按规格分段的价（v1.8.91）：「200cm 以下 0.2 元/件、以上 1.5 元/米」这类，
+        // 不进矩阵（一格装不下两条不同口径的价），单独列一张表
+        .route("/api/price-bands", get(list_price_bands))
         // 批量导入（v1.8.88）：客户发来一张价目表，整张导进去
         .route("/api/price-rules/import", post(import_price_rules))
         .route("/api/calc-units/import", post(import_calc_units))

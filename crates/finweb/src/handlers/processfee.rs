@@ -30,6 +30,15 @@ pub struct PriceRuleReq {
     /// 工艺档（如「硬质氧化」，空 = 不分档）
     #[serde(default)]
     pub process: String,
+    /// 规格档：`max` / `min` / `first` / `area`，空 = 不分档
+    #[serde(default)]
+    pub band_dim: String,
+    /// 区间下限（cm，空 = 不限）
+    #[serde(default)]
+    pub band_from: String,
+    /// 区间上限（cm，空 = 不限，含端点）
+    #[serde(default)]
+    pub band_to: String,
 }
 
 fn money_or_zero(s: &str) -> Result<Money, AppError> {
@@ -71,6 +80,9 @@ pub(super) async fn save_price_rule(
         memo: req.memo,
         effective_from: req.effective_from.trim().to_string(),
         process: req.process.trim().to_string(),
+        band_dim: req.band_dim.trim().to_string(),
+        band_from: req.band_from.trim().to_string(),
+        band_to: req.band_to.trim().to_string(),
     };
     let id = findb::processfee::rule_save(db, &mut r)?;
     db.log(
@@ -177,7 +189,10 @@ pub(super) async fn quote_fee(
     //
     // 带规格（`spec=1250*250*3`）时走按规格折算：没录过折算系数的工件也能报价 ——
     // 「80 元/㎡，规格 1250×250×3」这类问法在小厂里是日常，不该逼人先算好 0.3125 再录进去。
-    if !get("calc_unit").is_empty() && !get("spec").is_empty() {
+    //
+    // 口径也可以留空：给了规格就让「规格档」来定口径 ——
+    // 「200cm 以下按件 0.2 元、以上按米 1.5 元」这种价，口径本来就是档位决定的。
+    if !get("spec").is_empty() {
         let stock_qty = parse_money_checked(get("stock_qty"))?;
         let density = money_or_zero(get("density"))?;
         let sq = findb::processfee::quote_with_spec(
@@ -334,6 +349,18 @@ pub(super) async fn get_price_matrix(
     let process = q.get("process").map(|s| s.trim()).unwrap_or("");
     let mx = findb::processfee::matrix(&user.db, customer, process)?;
     Ok(Json(json!(mx)))
+}
+
+/// 「按规格分段的价」：只列带规格档的规则（短件按件 / 长料按米这种）
+pub(super) async fn list_price_bands(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceView)?;
+    let customer = q.get("customer").map(|s| s.trim()).unwrap_or("");
+    let rows = findb::processfee::band_list(&user.db, customer)?;
+    Ok(Json(json!({ "customer": customer, "rows": rows })))
 }
 
 #[derive(Deserialize)]

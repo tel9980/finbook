@@ -73,6 +73,9 @@ const CELL_STUBS = {
       .replace(/\.$/, ""),
 };
 
+// 规格区间那一行的桩（v51）：只用到 esc
+const BAND_STUBS = { esc: (s) => String(s == null ? "" : s) };
+
 const CASES = [
   {
     fn: "renderAux",
@@ -355,6 +358,35 @@ const CASES = [
   { fn: "priceIn", args: ["7.0200"], stubs: {}, expect: ["7.02"], absent: ["7.0200"] },
   { fn: "priceIn", args: ["0.00"], stubs: {}, expect: ["0"], absent: ["0.00"] },
   { fn: "priceIn", args: ["300.00"], stubs: {}, expect: ["300"], absent: ["300.00"] },
+  // 按规格分段的价（v51）。区间说法有三种形态，写错了用户会照着错的范围报价：
+  // 「≤200」= 只有上限；「>200」= 只有下限；「200–300」= 两头都有；维度要翻成中文。
+  {
+    fn: "bandRangeHtml",
+    args: [{ band_dim: "max", band_dim_label: "最长边", band_from: "", band_to: "200" }],
+    stubs: BAND_STUBS,
+    expect: ["最长边", "≤ 200", "cm"],
+  },
+  {
+    fn: "bandRangeHtml",
+    args: [{ band_dim: "max", band_dim_label: "最长边", band_from: "200", band_to: "" }],
+    stubs: BAND_STUBS,
+    expect: ["> 200"],
+    absent: ["≤ 200"],
+  },
+  {
+    fn: "bandRangeHtml",
+    args: [{ band_dim: "area", band_dim_label: "面积", band_from: "1000", band_to: "2500" }],
+    stubs: BAND_STUBS,
+    expect: ["面积", "1000–2500", "cm²"],
+  },
+  {
+    // 两头都空 = 不管什么尺寸都用它，别显示成「≤ 」这种半句
+    fn: "bandRangeHtml",
+    args: [{ band_dim: "max", band_dim_label: "最长边", band_from: "", band_to: "" }],
+    stubs: BAND_STUBS,
+    expect: ["全部尺寸"],
+    absent: ["≤", ">"],
+  },
 ];
 
 function main() {

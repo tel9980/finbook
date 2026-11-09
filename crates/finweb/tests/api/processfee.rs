@@ -696,3 +696,98 @@ fn cell_of_relaxed(mx: &serde_json::Value, code: &str) -> serde_json::Value {
         .cloned()
         .expect("矩阵里要有这一行")
 }
+
+#[tokio::test]
+async fn spec_bands_pick_the_unit_by_size() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 客户原话：「200cm 以下 0.2 元/件，200cm 以上 1.5 元/米」
+    for (name, unit, price, from, to) in [
+        ("MB03 短件按件", "件", "0.2", "", "200"),
+        ("MB03 长料按米", "米", "1.5", "200", ""),
+    ] {
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/price-rules",
+                &sid,
+                serde_json::json!({
+                    "name": name,
+                    "item_code": "MB03",
+                    "unit": unit,
+                    "unit_price": price,
+                    "band_dim": "max",
+                    "band_from": from,
+                    "band_to": to,
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "建分档价 {name}");
+    }
+
+    // 1200mm = 120cm ≤ 200 → 按件，300 件 × 0.2 = 60
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/price-rules/quote?item=MB03&spec=1200*80&stock_qty=300",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp).await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["conv"]["calc_unit"], "件", "短件自动按件，不用人先选口径");
+    assert_eq!(money_num(v["quote"]["total"].as_str().unwrap()), 60.00);
+
+    // 2500mm = 250cm > 200 → 按米，10 件 × 2.5 米 × 1.5 = 37.50
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/price-rules/quote?item=MB03&spec=2500*100&stock_qty=10",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    let body = body_string(resp).await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["conv"]["calc_unit"], "米");
+    assert_eq!(money_num(v["quote"]["total"].as_str().unwrap()), 37.50);
+
+    // 分档价不进矩阵，但要能在 /api/price-bands 里看全
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-bands", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["rows"].as_array().unwrap().len(), 2);
+    assert_eq!(v["rows"][0]["band_to"], "200", "按区间从低到高排");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-matrix", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert!(
+        v["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["item_code"] != "MB03"),
+        "分档价不该在矩阵里冒充通价"
+    );
+
+    // 区间填反了当场拒绝，别让一条永远用不上的价躺在表里
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "name": "填反了", "unit": "件", "unit_price": "1",
+                "band_dim": "max", "band_from": "300", "band_to": "200",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(body_string(resp).await.contains("永远用不上"));
+}

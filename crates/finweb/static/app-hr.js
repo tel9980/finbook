@@ -714,6 +714,23 @@ function priceCellHtml(row, c, canEdit) {
     </td>`;
 }
 
+// 规格区间说人话：「≤200」「>200」「200–300」「全部」
+// 单位是厘米（客户嘴里的「200 以下」就是 200cm），规格录入是毫米 ——
+// 换算只在后端做，这里只负责把区间摆成人看得懂的一行字。
+function bandRangeHtml(r) {
+  const dim = r.band_dim_label || r.band_dim || "";
+  const from = String(r.band_from == null ? "" : r.band_from).trim();
+  const to = String(r.band_to == null ? "" : r.band_to).trim();
+  const fmtv = (v) => String(v).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  let span;
+  if (!from && !to) span = "全部尺寸";
+  else if (!from) span = `≤ ${fmtv(to)}`;
+  else if (!to) span = `> ${fmtv(from)}`;
+  else span = `${fmtv(from)}–${fmtv(to)}`;
+  const unit = dim === "面积" ? "cm²" : "cm";
+  return `${esc(dim)} ${esc(span)} ${esc(unit)}`.trim();
+}
+
 // 导入结果说人话。抽成顶层函数是为了让 tools/check-app-render.js 能真调用它 ——
 // 这段文案是用户判断「到底导进去没有」的唯一依据，写错了没人看得见。
 function specRowsHtml(rows) {
@@ -778,6 +795,17 @@ async function viewPriceRules(main) {
     </div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">单价矩阵</h3>
       <div id="pr-matrix" class="muted">加载中…</div></div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">按规格分段的价（短件一个价、长料一个价）</h3>
+      <div class="muted" style="font-size:12px;margin:-4px 0 8px">
+        客户说「200cm 以下 0.2 元/件、以上 1.5 元/米」就是这样录：一条一段，<b>每条自己带口径</b>。
+        开单时只填规格，系统自己挑这一档、按这一档的口径算 —— 不用先想清楚按件还是按米。
+        区间单位是<b>厘米</b>（规格录的是毫米），含端点：填 200 表示 200 及以下。
+      </div>
+      <div class="toolbar">
+        ${can("price_edit") ? `<button class="btn primary sm" id="pr-band-new">新增一段</button>` : ""}
+      </div>
+      <div id="pr-bands" class="muted">加载中…</div>
+    </div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">折算系数（1 个库存单位 = 多少计价单位）</h3>
       <div id="pr-units" class="muted">加载中…</div></div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">试算报价</h3>
@@ -790,8 +818,11 @@ async function viewPriceRules(main) {
         <label style="display:inline-flex;gap:4px;align-items:center"><input type="checkbox" id="pr-q-rush" /> 加急</label>
         <button class="btn primary sm" id="pr-q-run">试算</button>
       </div>
-      <div class="muted" style="font-size:12px">口径留「（不折算）」时，数量按计价单位直接算（老算法）。
-        填了规格但没录折算系数的，系统按规格算折合量（1250×250×3 的板一块 0.3125 ㎡）。</div>
+      <div class="muted" style="font-size:12px">
+        ① 填了<b>规格</b>：口径留空就由「按规格分段的价」自己定（短件按件、长料按米），填了就按你选的；
+        没录折算系数的，系统按规格算折合量（1250×250×3 的板一块 0.3125 ㎡）。<br />
+        ② 不填规格也不选口径：数量按计价单位直接算（老算法：先自己量好 7.02 ㎡ 再填）。
+      </div>
       <div id="pr-q-out" class="muted">填好物料和数量后试算</div>
     </div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">按规格算单价（客户报「2.5 元一米」「80 元一个平方」的时候）</h3>
@@ -812,23 +843,76 @@ async function viewPriceRules(main) {
 
   let mx = { customer: "", units: [], rows: [] };
   let unitsAll = [];
+  let bands = [];
 
   const loadMatrix = async () => {
     const cust = $("#pr-cust", main).value.trim();
     const proc = ($("#pr-proc", main) || { value: "" }).value.trim();
     try {
-      const [m, u] = await Promise.all([
+      const [m, u, b] = await Promise.all([
         api(`/price-matrix?customer=${encodeURIComponent(cust)}&process=${encodeURIComponent(proc)}`),
         api("/calc-units"),
+        api(`/price-bands?customer=${encodeURIComponent(cust)}`),
       ]);
       mx = m || { customer: cust, process: proc, units: [], rows: [] };
       unitsAll = u.units || [];
+      bands = (b && b.rows) || [];
       renderMatrix();
       renderUnits();
+      renderBands();
       renderUnitSelect();
     } catch (e) {
       $("#pr-matrix", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
     }
+  };
+
+  const renderBands = () => {
+    const box = $("#pr-bands", main);
+    if (!box) return;
+    if (!bands.length) {
+      box.innerHTML = `<div class="muted">还没有分段价 —— 客户报「200 以下一个价、以上一个价」的时候才需要，其它情况一格里一个价就够。</div>`;
+      return;
+    }
+    const edit = can("price_edit");
+    const body = bands
+      .map((r) => {
+        const who = `${esc(r.item_code || "任意物料")}${r.customer_code ? " / " + esc(r.customer_code) : ""}${r.process ? " · " + esc(r.process) : ""}`;
+        return `<tr>
+          <td>${who}</td>
+          <td>${bandRangeHtml({ ...r, band_dim_label: bandDimLabel(r.band_dim) })}</td>
+          <td>按${esc(r.unit)}</td>
+          <td class="num">${fmt(r.unit_price)}</td>
+          <td class="num">${Number(r.min_charge) ? fmt(r.min_charge) : "—"}</td>
+          <td>${esc(r.effective_from || "立即")}</td>
+          <td>${edit ? `<button class="btn ghost sm" data-band-edit="${r.id}">改</button>
+            <button class="btn ghost sm" data-band-del="${r.id}">删</button>` : ""}</td>
+        </tr>`;
+      })
+      .join("");
+    box.innerHTML = `<table class="grid"><thead><tr><th>物料 / 客户 / 工艺</th><th>规格范围</th><th>口径</th><th>单价</th><th>起步</th><th>生效</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
+    $all("[data-band-edit]", main).forEach((b) => {
+      b.onclick = () => {
+        const r = bands.find((x) => String(x.id) === b.dataset.bandEdit);
+        if (r) openBand(r);
+      };
+    });
+    $all("[data-band-del]", main).forEach((b) => {
+      b.onclick = async () => {
+        if (!confirm("删掉这一段价？删了就按相邻那一段算，可能报出不一样的价。")) return;
+        try {
+          await api(`/price-rules/${b.dataset.bandDel}`, { method: "DELETE" });
+          toast("已删除");
+          await loadMatrix();
+        } catch (e) {
+          toast(e.message, "err");
+        }
+      };
+    });
+  };
+
+  const bandDimLabel = (k) => {
+    const m = { max: "最长边", min: "最短边", first: "第一维", area: "面积" };
+    return m[String(k || "").trim()] || "";
   };
 
   const renderMatrix = () => {
@@ -944,6 +1028,58 @@ async function viewPriceRules(main) {
     });
   };
 
+  const openBand = (r) => {
+    const d = r || { id: 0, item_code: "", customer_code: "", process: "", band_dim: "max", band_from: "", band_to: "", unit: "", unit_price: "", min_charge: "", effective_from: "", memo: "" };
+    const dimOpt = (k) => ["max", "min", "first", "area"].map((x) => `<option value="${x}"${String(d.band_dim) === x ? " selected" : ""}>${{ max: "最长边", min: "最短边", first: "第一维", area: "面积" }[x]}</option>`).join("");
+    const m = modal(`<h3>${r && r.id ? "修改" : "新增"}一段规格价</h3>
+      <div class="field"><label>物料编码</label><input id="pb-item" value="${esc(d.item_code)}" placeholder="留空 = 任意物料" /></div>
+      <div class="field"><label>客户编码</label><input id="pb-cust" value="${esc(d.customer_code)}" placeholder="留空 = 通用" /></div>
+      <div class="field"><label>工艺档</label><input id="pb-proc" value="${esc(d.process)}" placeholder="留空 = 不分档" /></div>
+      <div class="field"><label>按哪一维比 *</label><select id="pb-dim">${dimOpt()}</select></div>
+      <div class="field"><label>下限（厘米，含）</label><input id="pb-from" value="${esc(d.band_from)}" placeholder="留空 = 不限，如 200" /></div>
+      <div class="field"><label>上限（厘米，含）</label><input id="pb-to" value="${esc(d.band_to)}" placeholder="留空 = 不限，如 200" /></div>
+      <div class="field"><label>计价口径 *</label><input id="pb-unit" value="${esc(d.unit)}" placeholder="件 / 米 / ㎡ / kg" /></div>
+      <div class="field"><label>单价 *</label><input id="pb-price" value="${priceIn(d.unit_price)}" placeholder="0.2" /></div>
+      <div class="field"><label>起步价</label><input id="pb-min" value="${priceIn(d.min_charge)}" placeholder="留空 = 0" /></div>
+      <div class="field"><label>生效日期</label><input id="pb-ef" value="${esc(d.effective_from)}" placeholder="留空 = 立即" /></div>
+      <div class="muted" style="font-size:12px">例：<b>最长边 / 上限 200 / 件 / 0.2</b> 与 <b>最长边 / 下限 200 / 米 / 1.5</b> 两条，
+        就是「200cm 以下 0.2 元一件，以上 1.5 元一米」。正好 200cm 算在下面那一档（客户说的「含 200」）。</div>
+      <div class="foot"><button class="btn primary" id="pb-save">保存</button><button class="btn ghost" id="pb-cancel">取消</button></div>`);
+    $("#pb-cancel", m).onclick = closeModal;
+    $("#pb-save", m).onclick = async () => {
+      const body = {
+        id: d.id || 0,
+        name: "",
+        item_code: $("#pb-item", m).value.trim(),
+        customer_code: $("#pb-cust", m).value.trim(),
+        process: $("#pb-proc", m).value.trim(),
+        band_dim: $("#pb-dim", m).value,
+        band_from: $("#pb-from", m).value.trim(),
+        band_to: $("#pb-to", m).value.trim(),
+        unit: $("#pb-unit", m).value.trim(),
+        unit_price: $("#pb-price", m).value.trim(),
+        min_charge: $("#pb-min", m).value.trim(),
+        effective_from: $("#pb-ef", m).value.trim(),
+      };
+      if (!body.unit || !body.unit_price) {
+        toast("口径和单价都要填", "err");
+        return;
+      }
+      try {
+        await api("/price-rules", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        toast("已保存", "ok");
+        closeModal();
+        await loadMatrix();
+      } catch (e) {
+        toast(e.message, "err");
+      }
+    };
+  };
+
   const openUnit = (u) => {
     const c = u || { id: 0, item_code: "", calc_unit: "", factor: "0", scale: 2, disabled: false, memo: "" };
     const m = modal(`<h3>${u && u.id ? "修改" : "新增"}折算系数</h3>
@@ -983,7 +1119,8 @@ async function viewPriceRules(main) {
   const renderUnitSelect = () => {
     const sel = $("#pr-q-unit", main);
     const keep = sel.value;
-    sel.innerHTML = `<option value="">（不折算，按计价数量）</option>${mx.units.map((u) => `<option value="${esc(u)}">${esc(u)}</option>`).join("")}`;
+    // 空选项有两个意思：没填规格时 = 按计价数量直接算；填了规格时 = 让规格档自己定口径
+    sel.innerHTML = `<option value="">（由规格决定 / 不折算）</option>${mx.units.map((u) => `<option value="${esc(u)}">${esc(u)}</option>`).join("")}`;
     if (keep) sel.value = keep;
   };
 
@@ -1047,7 +1184,9 @@ async function viewPriceRules(main) {
     const m = modal(`<h3>批量导入</h3>
       <div class="muted" style="font-size:12px;line-height:1.7">
         从 Excel 里直接复制整张表粘进来，或者选文件。表头行会自动跳过，<code>#</code> 开头的行当注释。
-        同一「物料 + 客户 + 口径 + 工艺档 + 生效日」会<b>覆盖</b>原来那一格，不会变成两条；换了生效日就是另一版价。
+        同一「物料 + 客户 + 口径 + 工艺档 + 生效日 + 规格区间」会<b>覆盖</b>原来那一格，不会变成两条；换了生效日就是另一版价。<br />
+        按尺寸分段的价也走这张表：填<b>规格维</b>（最长边 / 最短边 / 第一维 / 面积）与<b>规格下限 / 规格上限</b>（厘米，含端点），
+        一段一行、各自带口径 —— 就是「200cm 以下 0.2 元/件、以上 1.5 元/米」。
         有表头行时<b>按列名对齐</b>（列顺序随你排，缺的列当没填）；没有表头才按固定顺序读。
       </div>
       <div class="field"><label>导入什么</label>
@@ -1160,6 +1299,9 @@ async function viewPriceRules(main) {
     }
   };
 
+  const bandNewBtn = $("#pr-band-new", main);
+  if (bandNewBtn) bandNewBtn.onclick = () => openBand(null);
+
   $("#pr-q-run", main).onclick = async () => {
     const item = $("#pr-q-item", main).value.trim();
     const qty = $("#pr-q-qty", main).value.trim();
@@ -1169,9 +1311,12 @@ async function viewPriceRules(main) {
     const spec = $("#pr-q-spec", main).value.trim();
     const density = $("#pr-sp-density", main).value.trim();
     const proc = ($("#pr-q-proc", main) || { value: "" }).value.trim();
-    const q = unit
-      ? `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&stock_qty=${encodeURIComponent(qty)}&calc_unit=${encodeURIComponent(unit)}&process=${encodeURIComponent(proc)}&density=${encodeURIComponent(density)}&spec=${encodeURIComponent(spec)}&rush=${rush}`
-      : `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&qty=${encodeURIComponent(qty)}&process=${encodeURIComponent(proc)}&rush=${rush}`;
+    // 填了规格就走「按规格折算」这条路（口径可以留空 —— 由规格档决定按件还是按米）
+    const useSpec = !!spec;
+    const q =
+      useSpec || unit
+        ? `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&stock_qty=${encodeURIComponent(qty)}&calc_unit=${encodeURIComponent(unit)}&process=${encodeURIComponent(proc)}&density=${encodeURIComponent(density)}&spec=${encodeURIComponent(spec)}&rush=${rush}`
+        : `/price-rules/quote?item=${encodeURIComponent(item)}&customer=${encodeURIComponent(cust)}&qty=${encodeURIComponent(qty)}&process=${encodeURIComponent(proc)}&rush=${rush}`;
     try {
       const r = await api(q);
       const x = r.quote;
