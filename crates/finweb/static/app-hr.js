@@ -815,7 +815,7 @@ async function viewPriceRules(main) {
 
   const openCell = (row, c) => {
     const m = modal(`<h3>${esc(row.item_code || "任意物料")} 按${esc(c.unit)}</h3>
-      <div class="field"><label>单价（${esc(c.unit)}）</label><input id="pc-price" value="${priceIn(c.unit_price)}" /></div>
+      <div class="field"><label>单价（${esc(c.unit)}）</label><input id="pc-price" value="${c.rule_id ? priceIn(c.unit_price) : ""}" placeholder="未定价" /></div>
       <div class="field"><label>起步价（不足补到）</label><input id="pc-min" value="${priceIn(c.min_charge)}" /></div>
       <div class="field"><label>生效日期（留空 = 立刻；提前录下一版价写 2026-03-01）</label><input id="pc-from" value="${esc(c.effective_from || "")}" placeholder="YYYY-MM-DD" /></div>
       <div class="muted" style="font-size:12px">1 ${esc(row.stock_unit || "库存单位")} = ${priceIn(c.factor)} ${esc(c.unit)}（在下面的折算系数里改）</div>

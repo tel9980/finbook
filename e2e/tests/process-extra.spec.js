@@ -67,12 +67,14 @@ test("客供料台账：来料 → 交货 → 超交被拦 → 结存与对账�
   await expect(stmt).toContainText("40");
 });
 
-test("加工费规则：面积计价 → 最低收费兜底 → 加急费", async ({ page }) => {
+test("加工费单价：矩阵、折算、起步价兜底、加急费", async ({ page }) => {
   await newBook(page, `E2E加工费${Date.now()}`);
   await page.click('.nav-item[data-view="price-rules"]');
-  await expect(page.locator("#pr-list")).toContainText("还没有加工费规则", { timeout: 15_000 });
+  // v1.8.87 起这页是「单价矩阵」：一行物料、一列口径。空账套先给一句人话。
+  await expect(page.locator("#pr-matrix")).toContainText("还没有任何单价", { timeout: 15_000 });
 
-  // 氧化厂典型规则：18 元/㎡，起步 30 元，加急 20 元 + 10%
+  // 氧化厂典型规则：18 元/㎡，起步 30 元，加急 20 元 + 10%。
+  // 矩阵里改价点格子，但「起步价 / 加急」这些小格子放不下，走「新增规则（高级）」。
   await page.click("#pr-new");
   await page.fill("#pr-name", "氧化-普通");
   await page.fill("#pr-unit", "㎡");
@@ -81,7 +83,9 @@ test("加工费规则：面积计价 → 最低收费兜底 → 加急费", asyn
   await page.fill("#pr-rfee", "20");
   await page.fill("#pr-rrate", "10");
   await page.click("#pr-save");
-  await expect(page.locator("#pr-list")).toContainText("氧化-普通", { timeout: 15_000 });
+  // 通配规则（不填物料）在矩阵里单独一行
+  await expect(page.locator("#pr-matrix")).toContainText("任意物料（通配价）", { timeout: 15_000 });
+  await expect(page.locator("#pr-matrix .pr-cell").first()).toHaveValue("18", { timeout: 15_000 });
 
   // 12.5 ㎡ × 18 = 225，不触起步价
   await page.fill("#pr-q-qty", "12.5");
@@ -99,6 +103,25 @@ test("加工费规则：面积计价 → 最低收费兜底 → 加急费", asyn
   await page.check("#pr-q-rush");
   await page.click("#pr-q-run");
   await expect(page.locator("#pr-q-out")).toContainText("267.5", { timeout: 15_000 });
+  await page.uncheck("#pr-q-rush");
+
+  // 折算系数：1 只 = 0.0234 ㎡。开单填 300 只，系统自己折成 7.02 ㎡。
+  await page.click("#pr-new-unit");
+  await page.fill("#pu-item", "MB01");
+  await page.fill("#pu-unit", "㎡");
+  await page.fill("#pu-factor", "0.0234");
+  await page.fill("#pu-scale", "2");
+  await page.click("#pu-save");
+  await expect(page.locator("#pr-units")).toContainText("MB01", { timeout: 15_000 });
+  await expect(page.locator("#pr-matrix")).toContainText("MB01", { timeout: 15_000 });
+
+  await page.fill("#pr-q-item", "MB01");
+  await page.fill("#pr-q-qty", "300");
+  await page.selectOption("#pr-q-unit", "㎡");
+  await page.click("#pr-q-run");
+  // 300 × 0.0234 = 7.02；7.02 × 18 = 126.36
+  await expect(page.locator("#pr-q-out")).toContainText("7.02", { timeout: 15_000 });
+  await expect(page.locator("#pr-q-out")).toContainText("126.36", { timeout: 15_000 });
 
   // 加急率填 120% → 保存要被拦，且提示里说清合法区间
   await page.click("#pr-new");
@@ -107,17 +130,17 @@ test("加工费规则：面积计价 → 最低收费兜底 → 加急费", asyn
   await page.fill("#pr-rrate", "120");
   await page.click("#pr-save");
   await expect(page.locator("#toast")).toContainText("0-100", { timeout: 15_000 });
-  // 同上：被拒时窗口不关，遮罩挡着后面的按钮，先关窗
-  await page.click("#pr-cancel");
-  // 规则数仍是 1（没存进去）
-  await page.click("#pr-reload");
-  await expect(page.locator("#pr-list tbody tr")).toHaveCount(1, { timeout: 15_000 });
+  // 被拒时窗口不关，遮罩挡着后面的按钮，先关窗
+  await page.click("#pr-cancel2");
+  // 规则数仍是 1（没存进去）：矩阵里的通配行仍在，且没有第二行通配
+  await expect(page.locator("#pr-matrix tbody tr")).toHaveCount(2, { timeout: 15_000 });
   const afterBad = await (await page.request.get("/api/price-rules")).json();
   expect(
     (afterBad.rules || []).map((r) => r.name),
     "加急率越界的规则不该存进去",
   ).toHaveLength(1);
 });
+
 
 test("计件工资：报工流水 → 按人汇总 → 回填工资表（幂等）", async ({ page }) => {
   await newBook(page, `E2E计件${Date.now()}`);

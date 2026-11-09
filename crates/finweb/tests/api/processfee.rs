@@ -294,7 +294,7 @@ async fn matrix_cell_carries_effective_date() {
         .unwrap();
     let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
     assert_eq!(money_num(v["quote"]["total"].as_str().unwrap()), 10.0);
-    assert_eq!(v["quote"]["future"].as_bool().unwrap(), false);
+    assert!(!v["quote"]["future"].as_bool().unwrap());
     assert_eq!(v["quote"]["effective_from"].as_str().unwrap(), "2020-01-01");
 
     // 日期写错（2026-3-1）→ 400，理由说的是格式
