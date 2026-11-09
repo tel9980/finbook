@@ -39,6 +39,12 @@ pub struct PriceRuleReq {
     /// 区间上限（cm，空 = 不限，含端点）
     #[serde(default)]
     pub band_to: String,
+    /// 数量档下限（计价数量，空 = 不限；下限不含）
+    #[serde(default)]
+    pub qty_from: String,
+    /// 数量档上限（空 = 不限，含端点）
+    #[serde(default)]
+    pub qty_to: String,
 }
 
 fn money_or_zero(s: &str) -> Result<Money, AppError> {
@@ -83,6 +89,8 @@ pub(super) async fn save_price_rule(
         band_dim: req.band_dim.trim().to_string(),
         band_from: req.band_from.trim().to_string(),
         band_to: req.band_to.trim().to_string(),
+        qty_from: req.qty_from.trim().to_string(),
+        qty_to: req.qty_to.trim().to_string(),
     };
     let id = findb::processfee::rule_save(db, &mut r)?;
     db.log(

@@ -731,6 +731,21 @@ function bandRangeHtml(r) {
   return `${esc(dim)} ${esc(span)} ${esc(unit)}`.trim();
 }
 
+// 数量区间说人话：「≤ 500 件」「> 500 件」「500–2000 件」「不限数量」
+// 下限不含、上限含 —— 跟规格档同一个口径，正好 500 件算在下面那一档。
+function qtyRangeHtml(r) {
+  const from = String(r.qty_from == null ? "" : r.qty_from).trim();
+  const to = String(r.qty_to == null ? "" : r.qty_to).trim();
+  const unit = String(r.unit == null ? "" : r.unit).trim();
+  const fmtv = (v) => String(v).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  let span;
+  if (!from && !to) span = "不限数量";
+  else if (!from) span = `≤ ${fmtv(to)}`;
+  else if (!to) span = `> ${fmtv(from)}`;
+  else span = `${fmtv(from)}–${fmtv(to)}`;
+  return `${esc(span)}${unit ? " " + esc(unit) : ""}`;
+}
+
 // 导入结果说人话。抽成顶层函数是为了让 tools/check-app-render.js 能真调用它 ——
 // 这段文案是用户判断「到底导进去没有」的唯一依据，写错了没人看得见。
 function specRowsHtml(rows) {
@@ -795,11 +810,12 @@ async function viewPriceRules(main) {
     </div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">单价矩阵</h3>
       <div id="pr-matrix" class="muted">加载中…</div></div>
-    <div class="panel"><h3 style="margin-top:0;font-size:14px">按规格分段的价（短件一个价、长料一个价）</h3>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">分段价（按尺寸分 / 按批量分）</h3>
       <div class="muted" style="font-size:12px;margin:-4px 0 8px">
-        客户说「200cm 以下 0.2 元/件、以上 1.5 元/米」就是这样录：一条一段，<b>每条自己带口径</b>。
-        开单时只填规格，系统自己挑这一档、按这一档的口径算 —— 不用先想清楚按件还是按米。
-        区间单位是<b>厘米</b>（规格录的是毫米），含端点：填 200 表示 200 及以下。
+        两种分段都记在这张表里：<b>按尺寸</b>（「200cm 以下 0.2 元/件、以上 1.5 元/米」，每条自己带口径）
+        和<b>按批量</b>（「500 件以下 0.35、以上 0.25」）。开单时只填规格和数量，系统自己挑档。
+        尺寸区间单位是<b>厘米</b>（规格录的是毫米）；批量区间是<b>计价数量</b>。
+        <b>上限含、下限不含</b>：正好 200cm / 正好 500 件都算在下面那一档。
       </div>
       <div class="toolbar">
         ${can("price_edit") ? `<button class="btn primary sm" id="pr-band-new">新增一段</button>` : ""}
@@ -877,9 +893,12 @@ async function viewPriceRules(main) {
     const body = bands
       .map((r) => {
         const who = `${esc(r.item_code || "任意物料")}${r.customer_code ? " / " + esc(r.customer_code) : ""}${r.process ? " · " + esc(r.process) : ""}`;
+        const sizeSeg = r.band_dim ? bandRangeHtml({ ...r, band_dim_label: bandDimLabel(r.band_dim) }) : "";
+        const qtySeg = (r.qty_from || r.qty_to) ? qtyRangeHtml(r) : "";
+        const seg = [sizeSeg, qtySeg].filter(Boolean).join(" ・ ") || "不分段";
         return `<tr>
           <td>${who}</td>
-          <td>${bandRangeHtml({ ...r, band_dim_label: bandDimLabel(r.band_dim) })}</td>
+          <td>${seg}</td>
           <td>按${esc(r.unit)}</td>
           <td class="num">${fmt(r.unit_price)}</td>
           <td class="num">${Number(r.min_charge) ? fmt(r.min_charge) : "—"}</td>
@@ -889,7 +908,7 @@ async function viewPriceRules(main) {
         </tr>`;
       })
       .join("");
-    box.innerHTML = `<table class="grid"><thead><tr><th>物料 / 客户 / 工艺</th><th>规格范围</th><th>口径</th><th>单价</th><th>起步</th><th>生效</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
+    box.innerHTML = `<table class="grid"><thead><tr><th>物料 / 客户 / 工艺</th><th>分段</th><th>口径</th><th>单价</th><th>起步</th><th>生效</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
     $all("[data-band-edit]", main).forEach((b) => {
       b.onclick = () => {
         const r = bands.find((x) => String(x.id) === b.dataset.bandEdit);
@@ -1041,9 +1060,14 @@ async function viewPriceRules(main) {
       <div class="field"><label>计价口径 *</label><input id="pb-unit" value="${esc(d.unit)}" placeholder="件 / 米 / ㎡ / kg" /></div>
       <div class="field"><label>单价 *</label><input id="pb-price" value="${priceIn(d.unit_price)}" placeholder="0.2" /></div>
       <div class="field"><label>起步价</label><input id="pb-min" value="${priceIn(d.min_charge)}" placeholder="留空 = 0" /></div>
+      <div class="field"><label>数量下限（计价数量，不含）</label><input id="pb-qfrom" value="${esc(d.qty_from)}" placeholder="留空 = 不限，如 500" /></div>
+      <div class="field"><label>数量上限（含）</label><input id="pb-qto" value="${esc(d.qty_to)}" placeholder="留空 = 不限，如 500" /></div>
       <div class="field"><label>生效日期</label><input id="pb-ef" value="${esc(d.effective_from)}" placeholder="留空 = 立即" /></div>
-      <div class="muted" style="font-size:12px">例：<b>最长边 / 上限 200 / 件 / 0.2</b> 与 <b>最长边 / 下限 200 / 米 / 1.5</b> 两条，
-        就是「200cm 以下 0.2 元一件，以上 1.5 元一米」。正好 200cm 算在下面那一档（客户说的「含 200」）。</div>
+      <div class="muted" style="font-size:12px">例①（按尺寸）：<b>最长边 / 上限 200 / 件 / 0.2</b> 与
+        <b>最长边 / 下限 200 / 米 / 1.5</b>，就是「200cm 以下 0.2 元一件，以上 1.5 元一米」。<br />
+        例②（按批量）：只填<b>数量上限 500</b> 单价 0.35，再一条只填<b>数量下限 500</b> 单价 0.25，
+        就是「500 件以下 0.35，以上 0.25」。<br />
+        上限含、下限不含：正好 200cm、正好 500 件都算在下面那一档。</div>
       <div class="foot"><button class="btn primary" id="pb-save">保存</button><button class="btn ghost" id="pb-cancel">取消</button></div>`);
     $("#pb-cancel", m).onclick = closeModal;
     $("#pb-save", m).onclick = async () => {
@@ -1056,6 +1080,8 @@ async function viewPriceRules(main) {
         band_dim: $("#pb-dim", m).value,
         band_from: $("#pb-from", m).value.trim(),
         band_to: $("#pb-to", m).value.trim(),
+        qty_from: $("#pb-qfrom", m).value.trim(),
+        qty_to: $("#pb-qto", m).value.trim(),
         unit: $("#pb-unit", m).value.trim(),
         unit_price: $("#pb-price", m).value.trim(),
         min_charge: $("#pb-min", m).value.trim(),
@@ -1185,8 +1211,9 @@ async function viewPriceRules(main) {
       <div class="muted" style="font-size:12px;line-height:1.7">
         从 Excel 里直接复制整张表粘进来，或者选文件。表头行会自动跳过，<code>#</code> 开头的行当注释。
         同一「物料 + 客户 + 口径 + 工艺档 + 生效日 + 规格区间」会<b>覆盖</b>原来那一格，不会变成两条；换了生效日就是另一版价。<br />
-        按尺寸分段的价也走这张表：填<b>规格维</b>（最长边 / 最短边 / 第一维 / 面积）与<b>规格下限 / 规格上限</b>（厘米，含端点），
-        一段一行、各自带口径 —— 就是「200cm 以下 0.2 元/件、以上 1.5 元/米」。
+        按尺寸分段的价也走这张表：填<b>规格维</b>（最长边 / 最短边 / 第一维 / 面积）与<b>规格下限 / 规格上限</b>（厘米），
+        一段一行、各自带口径 —— 就是「200cm 以下 0.2 元/件、以上 1.5 元/米」。<br />
+        按批量分档则填<b>数量下限 / 数量上限</b>（计价数量）：500 件以下一条、以上一条，只差单价。
         有表头行时<b>按列名对齐</b>（列顺序随你排，缺的列当没填）；没有表头才按固定顺序读。
       </div>
       <div class="field"><label>导入什么</label>

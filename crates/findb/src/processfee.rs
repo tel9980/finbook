@@ -57,6 +57,14 @@ pub struct PriceRule {
     pub band_from: String,
     /// 区间上限（cm，空 = 不限）。含端点：「200 以下」填 200，200cm 也算在这一档
     pub band_to: String,
+    /// 数量档下限（计价数量，空 = 不限）
+    ///
+    /// 「500 件以下 0.3、以上 0.25」这种阶梯价：小批量要调机，大批量摊薄。
+    /// 比较对象是**计价数量**（要乘单价的那些件/米/㎡），不是库存单位数量 ——
+    /// 否则按㎡ 报价的活儿得先自己换算一遍才知道落在哪一档。
+    pub qty_from: String,
+    /// 数量档上限（空 = 不限）。含端点
+    pub qty_to: String,
     pub disabled: bool,
     pub memo: String,
 }
@@ -78,6 +86,8 @@ impl Default for PriceRule {
             band_dim: String::new(),
             band_from: String::new(),
             band_to: String::new(),
+            qty_from: String::new(),
+            qty_to: String::new(),
             disabled: false,
             memo: String::new(),
         }
@@ -110,7 +120,8 @@ pub struct FeeQuote {
 }
 
 const COLS: &str = "id,name,item_code,customer_code,unit,unit_price,min_charge,rush_fee,\
-                    rush_rate,disabled,memo,effective_from,process,band_dim,band_from,band_to";
+                    rush_rate,disabled,memo,effective_from,process,band_dim,band_from,band_to,\
+                    qty_from,qty_to";
 
 fn map_rule(r: &rusqlite::Row) -> rusqlite::Result<PriceRule> {
     Ok(PriceRule {
@@ -130,6 +141,8 @@ fn map_rule(r: &rusqlite::Row) -> rusqlite::Result<PriceRule> {
         band_dim: r.get(13)?,
         band_from: r.get(14)?,
         band_to: r.get(15)?,
+        qty_from: r.get(16)?,
+        qty_to: r.get(17)?,
     })
 }
 
@@ -282,12 +295,42 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
         ))
         .into());
     }
+    // 数量档：比较对象是计价数量（件/米/㎡）。空串 = 不限，含端点。
+    // 单独校验而不是复用规格档那套 —— 文案要说「件」而不是「厘米」，否则用户
+    // 会以为这里也要填尺寸。
+    let qty_from = r.qty_from.trim().to_string();
+    let qty_to = r.qty_to.trim().to_string();
+    let mut qlo: Option<f64> = None;
+    let mut qhi: Option<f64> = None;
+    for (label, v, slot) in [("下限", &qty_from, &mut qlo), ("上限", &qty_to, &mut qhi)] {
+        if v.is_empty() {
+            continue;
+        }
+        match v.parse::<f64>() {
+            Ok(x) if x >= 0.0 => *slot = Some(x),
+            _ => {
+                return Err(FinError::msg(format!(
+                    "数量{label}要填数字（计价数量，如 500），实际：{v}"
+                ))
+                .into())
+            }
+        }
+    }
+    if let (Some(lo), Some(hi)) = (qlo, qhi) {
+        if lo > hi {
+            return Err(FinError::msg(format!(
+                "数量区间下限 {qty_from} 比上限 {qty_to} 还大 —— 这一条永远用不上"
+            ))
+            .into());
+        }
+    }
     let tx = db.write_tx()?;
     let id = if r.id > 0 {
         let n = tx.execute(
             "UPDATE price_rule SET name=?2,item_code=?3,customer_code=?4,unit=?5,
              unit_price=?6,min_charge=?7,rush_fee=?8,rush_rate=?9,disabled=?10,memo=?11,
-             effective_from=?12,process=?13,band_dim=?14,band_from=?15,band_to=?16
+             effective_from=?12,process=?13,band_dim=?14,band_from=?15,band_to=?16,
+             qty_from=?17,qty_to=?18
              WHERE id=?1",
             rusqlite::params![
                 r.id,
@@ -305,7 +348,9 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
                 process,
                 band_dim,
                 band_from,
-                band_to
+                band_to,
+                qty_from,
+                qty_to
             ],
         )?;
         if n == 0 {
@@ -316,8 +361,8 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
         tx.execute(
             "INSERT INTO price_rule(name,item_code,customer_code,unit,unit_price,
              min_charge,rush_fee,rush_rate,disabled,memo,effective_from,process,
-             band_dim,band_from,band_to)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+             band_dim,band_from,band_to,qty_from,qty_to)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             rusqlite::params![
                 name,
                 r.item_code.trim(),
@@ -333,7 +378,9 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
                 process,
                 band_dim,
                 band_from,
-                band_to
+                band_to,
+                qty_from,
+                qty_to
             ],
         )?;
         tx.last_insert_rowid()
@@ -347,6 +394,8 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
     r.band_dim = band_dim;
     r.band_from = band_from;
     r.band_to = band_to;
+    r.qty_from = qty_from;
+    r.qty_to = qty_to;
     Ok(id)
 }
 
@@ -378,7 +427,7 @@ pub struct PriceImport {
 }
 
 /// 单价表的导入列头（模板与解析器共用一份，改一处就都改）
-pub const RULE_HEAD: [&str; 14] = [
+pub const RULE_HEAD: [&str; 16] = [
     "物料编码",
     "客户编码",
     "计价口径",
@@ -393,6 +442,8 @@ pub const RULE_HEAD: [&str; 14] = [
     "规格维",
     "规格下限",
     "规格上限",
+    "数量下限",
+    "数量上限",
 ];
 
 /// 折算系数的导入列头
@@ -403,12 +454,14 @@ pub fn rule_import_template() -> String {
     let mut out = String::new();
     out.push_str(&RULE_HEAD.join(","));
     out.push('\n');
-    // 四行示例：按㎡ 不分档、按只 + 工艺档、按㎡ + 工艺档、按规格分档（短件按件 / 长料按米）
-    out.push_str("MB01,,㎡,12.00,30.00,20.00,10,,\"氧化-按平方（通配）\",,,,,\n");
-    out.push_str("MB02,C01,只,0.45,0,,,2026-12-01,\"给客户C01的按只价\",,硬质氧化,,,\n");
-    out.push_str("MB01,,㎡,18.00,50.00,,,,,\"氧化-硬质\",,硬质氧化,,,\n");
-    out.push_str("MB03,,件,0.20,,,,,\"短件按件\",,,最长边,,200\n");
-    out.push_str("MB03,,米,1.50,,,,,\"长料按米\",,,最长边,200,\n");
+    // 示例：按㎡ 不分档、按只 + 工艺档、按㎡ + 工艺档、按规格分档（短件按件 / 长料按米）、按数量阶梯
+    out.push_str("MB01,,㎡,12.00,30.00,20.00,10,,\"氧化-按平方（通配）\",,,,,,\n");
+    out.push_str("MB02,C01,只,0.45,0,,,2026-12-01,\"给客户C01的按只价\",,硬质氧化,,,,,\n");
+    out.push_str("MB01,,㎡,18.00,50.00,,,,,\"氧化-硬质\",,硬质氧化,,,,,\n");
+    out.push_str("MB03,,件,0.20,,,,,\"短件按件\",,,最长边,,200,,,\n");
+    out.push_str("MB03,,米,1.50,,,,,\"长料按米\",,,最长边,200,,,,\n");
+    out.push_str("MB04,,件,0.35,,,,,\"小批量\",,,,,,,500\n");
+    out.push_str("MB04,,件,0.25,,,,,\"大批量\",,,,,,500,\n");
     out
 }
 
@@ -572,6 +625,9 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
         };
         let band_from = at(&["规格下限", "尺寸下限", "下限"], 12);
         let band_to = at(&["规格上限", "尺寸上限", "上限"], 13);
+        // 数量档（按批量分档）：比较对象是计价数量，空 = 不限
+        let qty_from = at(&["数量下限", "件数下限", "数量从"], 14);
+        let qty_to = at(&["数量上限", "件数上限", "数量到"], 15);
         // 名称留空就按几件事拼一个，免得矩阵里一整列都是空名字
         let auto_name = format!(
             "{} {unit}（{}）{}",
@@ -593,6 +649,7 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
                 "SELECT id FROM price_rule WHERE item_code=?1 AND customer_code=?2
                  AND unit=?3 AND effective_from=?4 AND process=?5
                  AND band_dim=?6 AND band_from=?7 AND band_to=?8
+                 AND qty_from=?9 AND qty_to=?10
                  ORDER BY id LIMIT 1",
                 rusqlite::params![
                     item,
@@ -602,7 +659,9 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
                     proc_s,
                     band_dim,
                     band_from,
-                    band_to
+                    band_to,
+                    qty_from,
+                    qty_to
                 ],
                 |r| r.get(0),
             )
@@ -624,6 +683,8 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
             band_dim,
             band_from,
             band_to,
+            qty_from,
+            qty_to,
         };
         match rule_save(db, &mut r) {
             Ok(_) => {
@@ -815,7 +876,7 @@ pub fn match_rule_for_process(
     calc_unit: &str,
     process: &str,
 ) -> DbResult<Option<(PriceRule, bool)>> {
-    pick_rule(db, item, customer, calc_unit, process, None)
+    pick_rule(db, item, customer, calc_unit, process, None, None)
 }
 
 /// 带规格档的匹配：`dims` 非空时，只有「不分档」或「这一档管这个尺寸」的价才算数。
@@ -830,7 +891,21 @@ pub fn match_rule_for_spec(
     process: &str,
     dims: &[Money],
 ) -> DbResult<Option<(PriceRule, bool)>> {
-    pick_rule(db, item, customer, calc_unit, process, Some(dims))
+    pick_rule(db, item, customer, calc_unit, process, Some(dims), None)
+}
+
+/// 完整匹配：规格档 + 数量档一起看。报价路径都走这里 ——
+/// 只给规格不给数量，阶梯价就永远轮不到。
+pub fn match_rule_full(
+    db: &Db,
+    item: &str,
+    customer: &str,
+    calc_unit: &str,
+    process: &str,
+    dims: Option<&[Money]>,
+    qty: Option<Money>,
+) -> DbResult<Option<(PriceRule, bool)>> {
+    pick_rule(db, item, customer, calc_unit, process, dims, qty)
 }
 
 fn pick_rule(
@@ -840,13 +915,14 @@ fn pick_rule(
     calc_unit: &str,
     process: &str,
     dims: Option<&[Money]>,
+    qty: Option<Money>,
 ) -> DbResult<Option<(PriceRule, bool)>> {
     let want_proc = process.trim();
     let item = item.trim();
     let customer = customer.trim();
     let want_unit = calc_unit.trim();
     let today = today();
-    let mut cands: Vec<(u8, u8, u8, PriceRule)> = Vec::new();
+    let mut cands: Vec<(u8, u8, u8, u8, PriceRule)> = Vec::new();
     for r in rule_list(db)? {
         if r.disabled {
             continue;
@@ -871,6 +947,12 @@ fn pick_rule(
                 Some(d) if band_ok(&r, d) => 0u8,
                 _ => continue,
             }
+        };
+        // 数量档：看这一批多少。没给数量时数量档一律不参与 —— 拿「500 以上」的
+        // 批发价去报 20 件的小单，客户当场就会发现，但单子已经发出去了。
+        let qty_rank = match qty_rank_of(&r, qty) {
+            Some(k) => k,
+            None => continue,
         };
         let rank = if item.is_empty() && customer.is_empty() {
             // 没给物料也没给客户：只有通配规则能报价
@@ -910,7 +992,7 @@ fn pick_rule(
                 continue;
             }
         };
-        cands.push((rank, proc_rank, band_rank, r));
+        cands.push((rank, proc_rank, band_rank, qty_rank, r));
     }
     // 精度优先，其次「现在该用哪一条」：已生效的价里挑生效日最晚的。
     // 不这么做的话，提前录的下一版价永远排在后面 —— 到了生效日也不会自动换过来，
@@ -918,24 +1000,56 @@ fn pick_rule(
     for rank in 0..=3u8 {
         for proc_rank in 0..=1u8 {
             for band_rank in 0..=1u8 {
-                let pool: Vec<&PriceRule> = cands
-                    .iter()
-                    .filter(|(k, p, b, _)| *k == rank && *p == proc_rank && *b == band_rank)
-                    .map(|(_, _, _, r)| r)
-                    .collect();
-                if pool.is_empty() {
-                    continue;
-                }
-                if let Some(r) = best_active(&pool, &today) {
-                    return Ok(Some((r.clone(), false)));
-                }
-                if let Some(r) = best_next(&pool, &today) {
-                    return Ok(Some((r.clone(), true)));
+                for qty_rank in 0..=1u8 {
+                    let pool: Vec<&PriceRule> = cands
+                        .iter()
+                        .filter(|(k, p, b, q, _)| {
+                            *k == rank && *p == proc_rank && *b == band_rank && *q == qty_rank
+                        })
+                        .map(|(_, _, _, _, r)| r)
+                        .collect();
+                    if pool.is_empty() {
+                        continue;
+                    }
+                    if let Some(r) = best_active(&pool, &today) {
+                        return Ok(Some((r.clone(), false)));
+                    }
+                    if let Some(r) = best_next(&pool, &today) {
+                        return Ok(Some((r.clone(), true)));
+                    }
                 }
             }
         }
     }
     Ok(None)
+}
+
+/// 这一条规则的数量档能不能用在 `qty` 上：`Some(0)` 命中、`Some(1)` 不分档、`None` 不适用
+///
+/// 同时返回「档位优先级」，是因为同一格里可能既有「500 件以下」又有不分档的价：
+/// 命中的档位优先，没有档位的价兜底 —— 但**没给数量时档位价一律不参与**。
+fn qty_rank_of(r: &PriceRule, qty: Option<Money>) -> Option<u8> {
+    let from = r.qty_from.trim();
+    let to = r.qty_to.trim();
+    if from.is_empty() && to.is_empty() {
+        return Some(1);
+    }
+    let q = qty?;
+    if !from.is_empty() {
+        let lo = Money::parse(from).ok()?;
+        // 下限不含：「500 件以上」从 501 起算，正好 500 件算下面那一档 ——
+        // 与规格档同一口径，避免一批正好 500 件时两条都命中、谁先建谁赢。
+        if q <= lo {
+            return None;
+        }
+    }
+    if !to.is_empty() {
+        let hi = Money::parse(to).ok()?;
+        if q > hi {
+            return None;
+        }
+    }
+    Some(0)
 }
 
 /// 已生效的价里，生效日最晚的那条（空日期算最早），同日期按建的先后
@@ -974,21 +1088,23 @@ pub fn quote_by(db: &Db, item: &str, customer: &str, qty: Money, rush: bool) -> 
     if !qty.is_positive() {
         return Err(FinError::msg("计价数量必须大于 0").into());
     }
-    let rule = match_rule(db, item, customer)?.ok_or_else(|| {
-        FinError::msg(format!(
-            "没有匹配的加工费规则（物料 {}／客户 {}），先在「加工费规则」里维护一条",
-            if item.trim().is_empty() {
-                "任意"
-            } else {
-                item.trim()
-            },
-            if customer.trim().is_empty() {
-                "任意"
-            } else {
-                customer.trim()
-            }
-        ))
-    })?;
+    // 数量阶梯价在「老算法」这条路上也要生效：这里给的 qty 就是计价数量
+    let (rule, _future) = match_rule_full(db, item, customer, "", "", None, Some(qty))?
+        .ok_or_else(|| {
+            FinError::msg(format!(
+                "没有匹配的加工费规则（物料 {}／客户 {}），先在「加工费规则」里维护一条",
+                if item.trim().is_empty() {
+                    "任意"
+                } else {
+                    item.trim()
+                },
+                if customer.trim().is_empty() {
+                    "任意"
+                } else {
+                    customer.trim()
+                }
+            ))
+        })?;
     Ok(quote_on(&rule, qty, rush, &today()))
 }
 
@@ -1218,8 +1334,9 @@ pub fn quote_with_units(
         ))
         .into());
     }
-    let (rule, _future) =
-        match_rule_for_process(db, item, customer, unit, process)?.ok_or_else(|| {
+    // 数量档按**折算后的计价数量**判 —— 「500 件以上」「500 ㎡ 以上」都自然成立
+    let (rule, _future) = match_rule_full(db, item, customer, unit, process, None, Some(calc_qty))?
+        .ok_or_else(|| {
             FinError::msg(format!(
                 "没有按「{unit}」计的单价（物料 {item}／客户 {}）——单价表里这一格还是空的",
                 if customer.trim().is_empty() {
@@ -1315,7 +1432,11 @@ pub fn matrix(db: &Db, customer: &str, process: &str) -> DbResult<PriceMatrix> {
     // 它们单独在「按规格分段的价」里看。
     let rules: Vec<PriceRule> = rule_list(db)?
         .into_iter()
-        .filter(|r| r.band_dim.trim().is_empty())
+        .filter(|r| {
+            r.band_dim.trim().is_empty()
+                && r.qty_from.trim().is_empty()
+                && r.qty_to.trim().is_empty()
+        })
         .collect();
 
     // 列：口径来自「系数表」与「单价表」的并集
@@ -1386,16 +1507,20 @@ pub fn matrix(db: &Db, customer: &str, process: &str) -> DbResult<PriceMatrix> {
     })
 }
 
-/// 按规格分段的价（只列带规格档的规则）。
+/// 分段价：带规格档（按尺寸）或数量档（按批量）的规则。
 ///
-/// 这是「规格 200cm 以下 0.2 元/件、以上 1.5 元/米」的落地形态：每条自带区间和口径，
+/// 规格档是「200cm 以下 0.2 元/件、以上 1.5 元/米」的落地形态：每条自带区间和口径，
 /// 报价时按规格自动挑档 —— 不用人先算一遍尺寸再决定按件还是按米。
+/// 数量档是「500 件以下 0.35、以上 0.25」：同一种活儿小批量要调机、大批量摊薄。
+/// 两者都**不进单价矩阵**（一格装不下两条），合在这张表里看。
 pub fn band_list(db: &Db, customer: &str) -> DbResult<Vec<PriceRule>> {
     let customer = customer.trim();
     let mut v: Vec<PriceRule> = rule_list(db)?
         .into_iter()
         .filter(|r| {
-            !r.band_dim.trim().is_empty()
+            (!r.band_dim.trim().is_empty()
+                || !r.qty_from.trim().is_empty()
+                || !r.qty_to.trim().is_empty())
                 && (customer.is_empty() || r.customer_code.trim() == customer)
         })
         .collect();
@@ -1407,6 +1532,11 @@ pub fn band_list(db: &Db, customer: &str) -> DbResult<Vec<PriceRule>> {
             .then(
                 band_num(&a.band_from)
                     .partial_cmp(&band_num(&b.band_from))
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(
+                band_num(&a.qty_from)
+                    .partial_cmp(&band_num(&b.qty_from))
                     .unwrap_or(std::cmp::Ordering::Equal),
             )
             .then(a.id.cmp(&b.id))
@@ -1621,8 +1751,12 @@ pub fn spec_measure(dims: &[Money], dim: &str) -> Option<Money> {
     }
 }
 
-/// 这一条价管不管这个规格。含端点：「200 以下」填 200，正好 200cm 也算在这一档
-/// （客户嘴里的「含 200」就是这个意思，多一毫米就换档要先跟他确认）。
+/// 这一条价管不管这个规格：**上限含、下限不含**。
+///
+/// 客户说「200cm 以下（含 200）0.2 元，以上 1.5 元/米」，两句是**接**上的：
+/// 正好 200 只算下面那一档。所以下限写成「严格大于」——两头都含的话，200 同时命中
+/// 两条，谁赢取决于谁先建，报价会随建单顺序变化，这种不确定性最难查。
+/// 上限含则保留了客户那句「含 200」。
 pub fn band_ok(r: &PriceRule, dims: &[Money]) -> bool {
     let dim = r.band_dim.trim();
     if dim.is_empty() {
@@ -1634,7 +1768,7 @@ pub fn band_ok(r: &PriceRule, dims: &[Money]) -> bool {
     };
     if !r.band_from.trim().is_empty() {
         let from = Money::parse_or_zero(r.band_from.trim());
-        if v < from {
+        if v <= from {
             return false;
         }
     }
@@ -1745,8 +1879,10 @@ pub fn quote_with_spec(
                 "没选口径时要用规格定档，但「{spec}」看不懂 —— 写成 1250*250*3 这样（毫米）"
             ))
         })?;
-        let (r, _) =
-            match_rule_for_spec(db, item, customer, "", process, dims)?.ok_or_else(|| {
+        // 这一步还不知道按哪种口径折算，也就没有「计价数量」可比 ——
+        // 所以数量阶梯价只在**自己带口径**时生效（见 4.135）。
+        let (r, _) = match_rule_full(db, item, customer, "", process, Some(dims), None)?
+            .ok_or_else(|| {
                 FinError::msg(format!(
                     "规格「{spec}」没有对应的单价（物料 {item}／客户 {}）—— 单价表里这一档还是空的",
                     if customer.trim().is_empty() {
@@ -1789,11 +1925,13 @@ pub fn quote_with_spec(
     }
     // 有规格就让分档价参与（含端点判定），没有就只认不分档的价。
     let mut hit = match dims_opt.as_deref() {
-        Some(d) if !d.is_empty() => match_rule_for_spec(db, item, customer, &unit, process, d)?,
+        Some(d) if !d.is_empty() => {
+            match_rule_full(db, item, customer, &unit, process, Some(d), Some(calc_qty))?
+        }
         _ => None,
     };
     if hit.is_none() {
-        hit = match_rule_for_process(db, item, customer, &unit, process)?;
+        hit = match_rule_full(db, item, customer, &unit, process, None, Some(calc_qty))?;
     }
     let (rule, _future) = hit.ok_or_else(|| {
         FinError::msg(format!(
@@ -2587,16 +2725,18 @@ MB03,米,x,2
     fn 按规格分档_短件按件长料按米() {
         let db = crate::tests::mem();
         // 「200cm 以下 0.2 元/件，以上 1.5 元/米」—— 口径也跟着档位变
-        let mut short = rule("MB03 短件按件", "件", "0.2", "0", "0", "0");
-        short.item_code = "MB03".to_string();
-        short.band_dim = "max".to_string();
-        short.band_to = "200".to_string();
-        rule_save(&db, &mut short).unwrap();
+        // 先建「以上」这条、再建「以下」这条：id 顺序反过来，才能守住
+        // 「正好 200cm 归下面那档」不是靠谁先建、而是靠区间判定本身。
         let mut long = rule("MB03 长料按米", "米", "1.5", "0", "0", "0");
         long.item_code = "MB03".to_string();
         long.band_dim = "max".to_string();
         long.band_from = "200".to_string();
         rule_save(&db, &mut long).unwrap();
+        let mut short = rule("MB03 短件按件", "件", "0.2", "0", "0", "0");
+        short.item_code = "MB03".to_string();
+        short.band_dim = "max".to_string();
+        short.band_to = "200".to_string();
+        rule_save(&db, &mut short).unwrap();
 
         // 1200mm = 120cm ≤ 200 → 按件，0.2 元/件
         let q =
@@ -2634,6 +2774,102 @@ MB03,米,x,2
         // 没有规格 → 不知道是哪一档 → 宁可报「没有价」，也别拿 200cm 以下那档去乘
         let e = quote_with_units(&db, "MB03", "", m("300"), "件", "", false).unwrap_err();
         assert!(format!("{e}").contains("空的"), "实际：{e}");
+    }
+
+    #[test]
+    fn 按数量分档_批发价不落到小单上() {
+        let db = crate::tests::mem();
+        // 500 件以下 0.35、以上 0.25 —— 同一物料同一口径，只差批量
+        // 同样先建「以上」这条：正好 500 件该归下面那档，不能靠 id 顺序碰巧对上
+        let mut big = rule("MB04 大批量", "件", "0.25", "0", "0", "0");
+        big.item_code = "MB04".to_string();
+        big.qty_from = "500".to_string();
+        rule_save(&db, &mut big).unwrap();
+        let mut small = rule("MB04 小批量", "件", "0.35", "0", "0", "0");
+        small.item_code = "MB04".to_string();
+        small.qty_to = "500".to_string();
+        rule_save(&db, &mut small).unwrap();
+
+        // 300 件 → 小批量那档（0.35）
+        let q = quote_by(&db, "MB04", "", m("300"), false).unwrap();
+        assert_eq!(q.unit_price, m("0.35"));
+        assert_eq!(q.total, m("105"));
+
+        // 800 件 → 大批量那档（0.25）
+        let q = quote_by(&db, "MB04", "", m("800"), false).unwrap();
+        assert_eq!(q.unit_price, m("0.25"));
+        assert_eq!(q.total, m("200"));
+
+        // 正好 500 件算下面那一档（下限不含），不会两条都命中
+        let q = quote_by(&db, "MB04", "", m("500"), false).unwrap();
+        assert_eq!(q.unit_price, m("0.35"));
+        assert_eq!(q.total, m("175"));
+        assert_eq!(q.rule_name, "MB04 小批量");
+    }
+
+    #[test]
+    fn 数量档按折算后的计价数量判() {
+        let db = crate::tests::mem();
+        // 按㎡ 计价、500 ㎡ 以上便宜：300 只 = 7.02 ㎡ 走小批量，3000 只 = 70.2 ㎡ 还是小批量，
+        // 20000 只 = 468 ㎡ 也还是 —— 这里用 30000 只 = 702 ㎡ 跨过 500
+        let mut cu = cu("MB05", "㎡", "0.0234", 2);
+        calc_unit_save(&db, &mut cu).unwrap();
+        let mut small = rule("MB05 小批量", "㎡", "10", "0", "0", "0");
+        small.item_code = "MB05".to_string();
+        small.qty_to = "500".to_string();
+        rule_save(&db, &mut small).unwrap();
+        let mut big = rule("MB05 大批量", "㎡", "9", "0", "0", "0");
+        big.item_code = "MB05".to_string();
+        big.qty_from = "500".to_string();
+        rule_save(&db, &mut big).unwrap();
+
+        let q = quote_with_units(&db, "MB05", "", m("300"), "㎡", "", false).unwrap();
+        assert_eq!(q.calc_qty, m("7.02"));
+        assert_eq!(q.quote.unit_price, m("10"), "7.02 ㎡ 没到 500，走小批量");
+        assert_eq!(q.quote.total, m("70.2"));
+
+        let q = quote_with_units(&db, "MB05", "", m("30000"), "㎡", "", false).unwrap();
+        assert_eq!(q.calc_qty, m("702"));
+        assert_eq!(q.quote.unit_price, m("9"), "702 ㎡ 过了 500，走大批量");
+        assert_eq!(q.quote.total, m("6318"));
+
+        // 600 只 = 14.04 ㎡：库存数量过了 500、计价数量没过 —— 必须按计价数量判，
+        // 否则一件小活儿被按 30000 件的大批量价算，看着便宜、实际亏在人工上
+        let q = quote_with_units(&db, "MB05", "", m("600"), "㎡", "", false).unwrap();
+        assert_eq!(q.calc_qty, m("14.04"));
+        assert_eq!(q.quote.unit_price, m("10"), "14.04 ㎡ 没到 500，仍走小批量");
+        assert_eq!(q.quote.total, m("140.4"));
+    }
+
+    #[test]
+    fn 数量档不进矩阵但要列在分段表里() {
+        let db = crate::tests::mem();
+        let mut big = rule("MB06 大批量", "件", "0.25", "0", "0", "0");
+        big.item_code = "MB06".to_string();
+        big.qty_from = "500".to_string();
+        rule_save(&db, &mut big).unwrap();
+        // 矩阵里看不到（一格放不下「500 以下」和「以上」两条）
+        let mx = matrix(&db, "", "").unwrap();
+        assert!(mx.rows.iter().all(|r| r.item_code != "MB06"));
+        // 分段表里看得到
+        let bands = band_list(&db, "").unwrap();
+        assert_eq!(bands.len(), 1);
+        assert_eq!(bands[0].qty_from, "500");
+    }
+
+    #[test]
+    fn 数量区间的上下限要自洽() {
+        let db = crate::tests::mem();
+        let mut r = rule("坏数量区间", "件", "1", "0", "0", "0");
+        r.qty_from = "500".to_string();
+        r.qty_to = "200".to_string();
+        let e = rule_save(&db, &mut r).unwrap_err().to_string();
+        assert!(e.contains("永远用不上"), "{e}");
+
+        let mut r = rule("坏数量", "件", "1", "0", "0", "0");
+        r.qty_from = "abc".to_string();
+        let e = rule_save(&db, &mut r).unwrap_err().to_string();
+        assert!(e.contains("数量下限要填数字"), "{e}");
     }
 
     #[test]

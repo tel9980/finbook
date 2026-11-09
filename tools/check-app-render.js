@@ -358,6 +358,27 @@ const CASES = [
   { fn: "priceIn", args: ["7.0200"], stubs: {}, expect: ["7.02"], absent: ["7.0200"] },
   { fn: "priceIn", args: ["0.00"], stubs: {}, expect: ["0"], absent: ["0.00"] },
   { fn: "priceIn", args: ["300.00"], stubs: {}, expect: ["300"], absent: ["300.00"] },
+  // 按批量分段的价（v52）。上限含、下限不含 —— 正好 500 件要落在下面那一档，
+  // 写成「≥500」会和下一条重复命中，谁先建谁赢，报价会随建单顺序变。
+  {
+    fn: "qtyRangeHtml",
+    args: [{ qty_from: "", qty_to: "500", unit: "件" }],
+    stubs: BAND_STUBS,
+    expect: ["≤ 500", "件"],
+  },
+  {
+    fn: "qtyRangeHtml",
+    args: [{ qty_from: "500", qty_to: "", unit: "㎡" }],
+    stubs: BAND_STUBS,
+    expect: ["> 500", "㎡"],
+    absent: ["≤ 500"],
+  },
+  {
+    fn: "qtyRangeHtml",
+    args: [{ qty_from: "500", qty_to: "2000", unit: "件" }],
+    stubs: BAND_STUBS,
+    expect: ["500–2000"],
+  },
   // 按规格分段的价（v51）。区间说法有三种形态，写错了用户会照着错的范围报价：
   // 「≤200」= 只有上限；「>200」= 只有下限；「200–300」= 两头都有；维度要翻成中文。
   {

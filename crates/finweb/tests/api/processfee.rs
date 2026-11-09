@@ -791,3 +791,102 @@ async fn spec_bands_pick_the_unit_by_size() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert!(body_string(resp).await.contains("永远用不上"));
 }
+
+#[tokio::test]
+async fn qty_tiers_follow_the_calc_quantity() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 「500 件以下 0.35、以上 0.25」：只填数量区间，不填规格档
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "name": "小批量", "item_code": "MB07", "unit": "件",
+                "unit_price": "0.35", "qty_to": "500",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "建小批量价");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "name": "大批量", "item_code": "MB07", "unit": "件",
+                "unit_price": "0.25", "qty_from": "500",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "建大批量价");
+
+    // 300 件走小批量：300 × 0.35
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules/quote?item=MB07&qty=300", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["quote"]["rule_name"].as_str().unwrap(), "小批量");
+    assert_eq!(money_num(v["quote"]["total"].as_str().unwrap()), 105.00);
+
+    // 800 件走大批量：800 × 0.25
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules/quote?item=MB07&qty=800", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["quote"]["rule_name"].as_str().unwrap(), "大批量");
+    assert_eq!(money_num(v["quote"]["total"].as_str().unwrap()), 200.00);
+
+    // 正好 500 件算下面那一档（下限不含），不会两天都命中
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules/quote?item=MB07&qty=500", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["quote"]["rule_name"].as_str().unwrap(), "小批量");
+
+    // 分段表里看得到这两条，矩阵里看不到
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-bands", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "两条数量档都要列出来");
+    assert_eq!(rows[0]["qty_to"].as_str().unwrap(), "500");
+    assert_eq!(rows[1]["qty_from"].as_str().unwrap(), "500");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-matrix", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert!(
+        v["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|r| r["item_code"] != "MB07"),
+        "数量档价不该在矩阵里冒充通价"
+    );
+
+    // 上下限填反 → 400
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "name": "填反了", "unit": "件", "unit_price": "1",
+                "qty_from": "500", "qty_to": "200",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(body_string(resp).await.contains("永远用不上"));
+}

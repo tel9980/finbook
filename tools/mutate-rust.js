@@ -1985,7 +1985,7 @@ const MUT = [
     // 分档价混进矩阵：一格是「物料×口径」，装不下「按件」和「按米」两条，看着像重复录入
     name: "83 分档价混进单价矩阵",
     file: "crates/findb/src/processfee.rs",
-    from: "        .filter(|r| r.band_dim.trim().is_empty())",
+    from: "        .filter(|r| {\n            r.band_dim.trim().is_empty()\n                && r.qty_from.trim().is_empty()\n                && r.qty_to.trim().is_empty()\n        })",
     to: "        .filter(|_r| true)",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::分档价不进单价矩阵"],
   },
@@ -1996,6 +1996,41 @@ const MUT = [
     from: "    if unit.is_empty() {\n        let dims = dims_opt.as_ref().ok_or_else(|| {",
     to: "    if false {\n        let dims = dims_opt.as_ref().ok_or_else(|| {",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::按规格分档_短件按件长料按米"],
+  },
+
+  // ── v1.8.92 按数量分档定价 ────────────────────────────────────────────
+  {
+    // 数量档不看数量：20 件的小单也拿「500 件以上」的批发价报出去，
+    // 客户拿到单子先高兴，做完一算账才发现亏在人工上
+    name: "85 数量档不看数量（批发价报给小单）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        let qty_rank = match qty_rank_of(&r, qty) {\n            Some(k) => k,\n            None => continue,\n        };",
+    to: "        let qty_rank = 1u8;",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::按数量分档_批发价不落到小单上"],
+  },
+  {
+    // 数量下限也算命中：正好 500 件两条都中，落到哪条看谁先建
+    name: "86 数量下限也算命中（500 件两条都中）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        if q <= lo {\n            return None;\n        }",
+    to: "        if q < lo {\n            return None;\n        }",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::按数量分档_批发价不落到小单上"],
+  },
+  {
+    // 数量档没排除出矩阵：一格装两条不同批量的价，看着像重复录入
+    name: "87 数量档混进单价矩阵",
+    file: "crates/findb/src/processfee.rs",
+    from: "                && r.qty_from.trim().is_empty()\n                && r.qty_to.trim().is_empty()",
+    to: "                && true\n                && true",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::数量档不进矩阵但要列在分段表里"],
+  },
+  {
+    // 拿库存数量而不是计价数量挑档：600 只（14 ㎡）被按「500 以上」算
+    name: "88 数量档看库存数量而不是计价数量",
+    file: "crates/findb/src/processfee.rs",
+    from: "    let (rule, _future) = match_rule_full(db, item, customer, unit, process, None, Some(calc_qty))?",
+    to: "    let (rule, _future) = match_rule_full(db, item, customer, unit, process, None, Some(stock_qty))?",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::数量档按折算后的计价数量判"],
   },
 
 ];

@@ -700,6 +700,10 @@ pub struct RuleBuf {
     pub band_from: String,
     /// 区间上限（厘米，空 = 不限，含端点）
     pub band_to: String,
+    /// 数量档下限（计价数量，空 = 不限；下限不含）
+    pub qty_from: String,
+    /// 数量档上限（空 = 不限，含端点）
+    pub qty_to: String,
 }
 
 impl RuleBuf {
@@ -733,6 +737,8 @@ impl RuleBuf {
             band_dim: r.band_dim.clone(),
             band_from: r.band_from.clone(),
             band_to: r.band_to.clone(),
+            qty_from: r.qty_from.clone(),
+            qty_to: r.qty_to.clone(),
         }
     }
 
@@ -754,6 +760,8 @@ impl RuleBuf {
             band_dim: self.band_dim.trim().to_string(),
             band_from: self.band_from.trim().to_string(),
             band_to: self.band_to.trim().to_string(),
+            qty_from: self.qty_from.trim().to_string(),
+            qty_to: self.qty_to.trim().to_string(),
         }
     }
 }
@@ -925,14 +933,29 @@ impl PriceRulesView {
                         } else {
                             format!("{}–{}", r.band_from.trim(), r.band_to.trim())
                         };
-                        txt(
-                            ui,
-                            if r.band_dim.trim().is_empty() {
-                                span
-                            } else {
-                                format!("{dim} {span}cm")
-                            },
-                        )
+                        let size_txt = if r.band_dim.trim().is_empty() {
+                            String::new()
+                        } else {
+                            format!("{dim} {span}cm")
+                        };
+                        // 数量段（「≤500件」「>500件」）：上限含、下限不含
+                        let qty_txt = if r.qty_from.trim().is_empty() && r.qty_to.trim().is_empty()
+                        {
+                            String::new()
+                        } else if r.qty_from.trim().is_empty() {
+                            format!("≤{} {}件", r.qty_to.trim(), r.unit)
+                        } else if r.qty_to.trim().is_empty() {
+                            format!(">{} {}件", r.qty_from.trim(), r.unit)
+                        } else {
+                            format!("{}–{} {}件", r.qty_from.trim(), r.qty_to.trim(), r.unit)
+                        };
+                        let seg = match (size_txt.is_empty(), qty_txt.is_empty()) {
+                            (true, true) => "—".to_string(),
+                            (false, true) => size_txt,
+                            (true, false) => qty_txt,
+                            (false, false) => format!("{size_txt} ・ {qty_txt}"),
+                        };
+                        txt(ui, seg)
                     }
                     6 => txt(
                         ui,
@@ -1054,7 +1077,20 @@ impl PriceRulesView {
             widgets::text_input(ui, &mut self.ed.band_to, 64.0, "留空=不限");
             txt(
                 ui,
-                RichText::new("含端点：填 200 表示 200cm 及以下")
+                RichText::new("上限含、下限不含：正好 200cm 算下面那档")
+                    .size(11.0)
+                    .color(palette::GRID),
+            );
+        });
+        ui.horizontal(|ui| {
+            txt(ui, "数量档");
+            txt(ui, "下限");
+            widgets::text_input(ui, &mut self.ed.qty_from, 72.0, "留空=不限");
+            txt(ui, "上限");
+            widgets::text_input(ui, &mut self.ed.qty_to, 72.0, "留空=不限");
+            txt(
+                ui,
+                RichText::new("比较的是计价数量（件/米/㎡）：500 件以下一个价、以上一个价")
                     .size(11.0)
                     .color(palette::GRID),
             );
