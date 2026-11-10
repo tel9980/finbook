@@ -212,7 +212,7 @@ async function viewSoDoc(main) {
   const period = encodeURIComponent(state.current || "");
   const table = (rows) => rows.length
     ? `<table class="grid"><thead><tr><th>单号</th><th>客户</th><th>存货</th><th>数量</th><th>单价</th><th>状态</th><th></th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td>${esc(r.no)}</td><td>${esc(r.customer_name)}</td><td>${esc(r.item_name)}</td><td class="num">${esc(r.qty)}</td><td class="num">${esc(r.unit_price)}</td><td>${esc(({ draft: "草稿", approved: "已审批", converted: "已转订单", cancelled: "已作废" })[r.status] || r.status)}<span data-wftag="quotation:${r.id}"></span></td><td>${r.status === "draft" ? `<button class="btn ghost sm" data-quo-approve="${r.id}">审批</button>` : ""}${r.status === "approved" ? `<button class="btn ghost sm" data-quo-toorder="${r.id}">转订单</button>` : ""}${r.status === "converted" ? `<span class="tag ok">已转订单</span>` : ""}</td></tr>`).join("")}</tbody></table>`
+      <tbody>${rows.map((r) => `<tr><td>${esc(r.no)}</td><td>${esc(r.customer_name)}</td><td>${esc(r.item_name)}</td><td class="num">${esc(r.qty)}</td><td class="num">${esc(r.unit_price)}</td><td>${esc(({ draft: "草稿", approved: "已审批", converted: "已转订单", cancelled: "已作废" })[r.status] || r.status)}<span data-wftag="quotation:${r.id}"></span></td><td class="row-actions"><button class="btn ghost sm" data-quo-print="${r.id}">打印</button>${r.status === "draft" ? `<button class="btn ghost sm" data-quo-approve="${r.id}">审批</button>` : ""}${r.status === "approved" ? `<button class="btn ghost sm" data-quo-toorder="${r.id}">转订单</button>` : ""}${r.status === "converted" ? `<span class="tag ok">已转订单</span>` : ""}</td></tr>`).join("")}</tbody></table>`
     : `<div class="muted">暂无报价单</div>`;
   const soTrack = (rows) => rows.length
     ? `<table class="grid"><thead><tr><th>订单号</th><th>客户</th><th>订单数量</th><th>发货数量</th><th>执行率</th></tr></thead>
@@ -291,6 +291,7 @@ async function viewSoDoc(main) {
         try { const r = await api(`/sales/quote/${b.dataset.quoApprove}/approve`, { method: "POST" }); toast(r && r.pending ? `已审批 → 下一节点：${r.pending}` : "已审批", "ok"); load(); } catch (e) { toast(e.message, "err"); }
       });
       fillWfTags($("#sd-list"));
+      $all("[data-quo-print]").forEach((b) => b.onclick = () => window.open(`/api/sales/quote/print-form?ids=${b.dataset.quoPrint}`, "_blank"));
       $all("[data-quo-toorder]").forEach((b) => b.onclick = async () => {
         try {
           const r = await postJson(`/sales/quote/${b.dataset.quoToorder}/to-order`, {});

@@ -615,6 +615,7 @@ pub fn router(state: Arc<WebState>) -> Router {
             get(check_quotation_price),
         )
         .route("/api/sales/quote/price", get(preview_quotation_price))
+        .route("/api/sales/quote/print-form", get(print_quotation_form))
         .route("/api/sales/shipment", post(add_so_shipment))
         .route("/api/sales/payment", post(add_so_payment))
         .route("/api/sales/return", post(add_so_return))
@@ -2239,6 +2240,42 @@ fn po_to_print(o: findb::scm::PurchaseOrder) -> findb::printform::OrderPrint {
             .collect(),
         amount_total: o.total_amount,
         tax_total: o.total_tax,
+    }
+}
+
+fn quo_to_print(o: findb::sales::Quotation) -> findb::printform::OrderPrint {
+    let status = match o.status.as_str() {
+        "draft" => "草稿",
+        "approved" => "已审批",
+        "converted" => "已转订单",
+        "cancelled" => "已作废",
+        other => other,
+    };
+    let memo = findb::sales::quo_print_memo(&o);
+    let amount = (o.qty * o.unit_price).round2();
+    findb::printform::OrderPrint {
+        title: "报价单".to_string(),
+        no: o.no,
+        date: o.date.format("%Y-%m-%d").to_string(),
+        status: status.to_string(),
+        party_label: "客户".to_string(),
+        party: format!("{} {}", o.customer_code, o.customer_name),
+        prepared_by: o.prepared_by,
+        // 把「这个价怎么算出来的」放进单据级备注（默认字段里 memo 常开，规格/折合/工艺
+        // 一打就带上，不依赖「行备注」那一列开没开）。
+        memo,
+        rows: vec![findb::printform::OrderPrintRow {
+            code: o.item_code,
+            name: o.item_name,
+            qty: o.qty,
+            price: o.unit_price,
+            rate: fincore::Money::ZERO,
+            amount,
+            tax: fincore::Money::ZERO,
+            memo: String::new(),
+        }],
+        amount_total: amount,
+        tax_total: fincore::Money::ZERO,
     }
 }
 

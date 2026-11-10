@@ -2866,6 +2866,70 @@ async fn quotation_price_comes_from_price_list_and_stays() {
     assert_eq!(row["rule_id"].as_i64(), Some(rule_id));
 }
 
+/// 报价单套打：打出来要带「这个价怎么算出来的」（规格/折合/工艺），且默认不含税率列。
+#[tokio::test]
+async fn quotation_print_form_carries_the_spec_breakdown() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/dashboard", &sid))
+        .await
+        .unwrap();
+    let dash: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let cur_ymm: i32 = dash["current_period"]
+        .as_str()
+        .unwrap()
+        .replace('-', "")
+        .parse()
+        .unwrap();
+    let d13 = format!("{}-13", dash["current_period"].as_str().unwrap());
+
+    // 存一张带折算快照的报价单（单价手填，直接测试打印对存储快照的还原）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/quote",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": cur_ymm, "date": d13, "customer_code": "C01",
+                "customer_name": "客户甲", "item_code": "MB31", "item_name": "支件",
+                "qty": "300", "unit_price": "0.2808", "status": "draft",
+                "prepared_by": "", "memo": "含送货", "spec": "1250*250*3",
+                "calc_unit": "㎡", "calc_qty": "7.02", "process": "硬质氧化"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "存报价单");
+    let qid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    // 打印
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/sales/quote/print-form?ids={qid}"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "打印报价单");
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(ct.contains("text/html"), "content-type: {ct}");
+    let html = body_string(resp).await;
+    assert!(html.contains("报价单"), "要有标题");
+    assert!(html.contains("客户甲"), "要带客户");
+    assert!(html.contains("1250*250*3"), "要带规格");
+    assert!(html.contains("7.02"), "要带折合数量");
+    assert!(html.contains("硬质氧化"), "要带工艺");
+    assert!(html.contains("含送货"), "要带原备注");
+    assert!(!html.contains("税率"), "报价单默认不显示税率列");
+}
+
 /// 报价单的价和价目表对不上：保存时给提示、也能单独查，但**不拦单**。
 #[tokio::test]
 async fn quote_price_check_flags_mismatch_without_blocking() {

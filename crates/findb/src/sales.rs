@@ -199,6 +199,27 @@ pub fn quo_get(db: &Db, id: i64) -> DbResult<Option<Quotation>> {
         .map_err(Into::into)
 }
 
+/// 报价单打印行的说明：把「这个价怎么算出来的」拼进明细行的备注里，
+/// 客户问「这 0.28 怎么来的」时照着念就行。只讲锁在单子上的快照
+/// （规格 / 折合 / 工艺 / 原备注），不讲价目表当时的费率——
+/// 那张价后来可能改了，讲出来反而对不上。
+pub fn quo_print_memo(q: &Quotation) -> String {
+    let mut bits: Vec<String> = Vec::new();
+    if !q.spec.trim().is_empty() {
+        bits.push(format!("规格 {}", q.spec.trim()));
+    }
+    if !q.calc_qty.trim().is_empty() && !q.calc_unit.trim().is_empty() {
+        bits.push(format!("折合 {} {}", q.calc_qty.trim(), q.calc_unit.trim()));
+    }
+    if !q.process.trim().is_empty() {
+        bits.push(format!("工艺 {}", q.process.trim()));
+    }
+    if !q.memo.trim().is_empty() {
+        bits.push(q.memo.trim().to_string());
+    }
+    bits.join("；")
+}
+
 /// 报价单审批：draft → approved
 pub fn quo_approve(db: &Db, id: i64) -> DbResult<()> {
     let q = quo_get(db, id)?.ok_or_else(|| fincore::FinError::msg("报价单不存在"))?;
@@ -987,6 +1008,31 @@ mod tests {
         assert_eq!(track[0].rate, m("60"));
         let stats = sales_stats(&db, p).unwrap();
         assert_eq!(stats[0].amount, m("2000"));
+    }
+
+    #[test]
+    fn quo_print_memo_summarizes_the_locked_snapshot() {
+        let q = Quotation {
+            item_code: "140501".into(),
+            item_name: "成品".into(),
+            spec: "1250*250*3".into(),
+            calc_qty: "7.02".into(),
+            calc_unit: "㎡".into(),
+            process: "硬质氧化".into(),
+            memo: "加急".into(),
+            ..Default::default()
+        };
+        let s = quo_print_memo(&q);
+        assert!(s.contains("规格 1250*250*3"), "缺规格：{s}");
+        assert!(s.contains("折合 7.02 ㎡"), "缺折合：{s}");
+        assert!(s.contains("工艺 硬质氧化"), "缺工艺：{s}");
+        assert!(s.contains("加急"), "缺原备注：{s}");
+        // 空字段一律不进说明，全空就是空串（老单子/手填价）
+        let empty = Quotation {
+            item_code: "140501".into(),
+            ..Default::default()
+        };
+        assert_eq!(quo_print_memo(&empty), "");
     }
 
     #[test]

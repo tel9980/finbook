@@ -720,6 +720,62 @@ pub(super) async fn print_so_form(
     Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
 }
 
+/// 报价单套打：单号 → 一张报价单（单行），备注里带上「规格/折合/工艺」的折算说明。
+pub(super) async fn print_quotation_form(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Report)?;
+    let db = &user.db;
+    let company = user.company.clone();
+    let ids = print_ids(&q);
+    let mut quotes = Vec::new();
+    if ids.is_empty() {
+        let period = q
+            .get("period")
+            .and_then(|s| parse_period(s))
+            .unwrap_or_else(|| current_period(&state, &user));
+        for o in findb::sales::quo_list(db, period)? {
+            quotes.push(quo_to_print(o));
+        }
+    } else {
+        for id in ids {
+            let o = findb::sales::quo_get(db, id)?
+                .ok_or_else(|| AppError::bad_request(format!("报价单 #{id} 不存在")))?;
+            quotes.push(quo_to_print(o));
+        }
+    }
+    if quotes.is_empty() {
+        return Err(AppError::bad_request("没有可打印的报价单"));
+    }
+    let mut f = doc_fields_from_q(&q);
+    // 报价单不含税：没显式指定字段时，把税率/税额两列关掉（默认全开会打出 0% / 0.00），
+    // 行备注列也关掉——折算说明已放在单据级「备注」里，行备注本来就是空的。
+    if !q.contains_key("fields") {
+        f.col_rate = false;
+        f.col_tax = false;
+        f.col_memo = false;
+    }
+    // 字段级价格权限：无「价格查看」者，套打强制裁掉价格类列
+    if !user.user.can(Perm::PriceView) {
+        f.col_price = false;
+        f.col_rate = false;
+        f.col_amount = false;
+        f.col_tax = false;
+        f.totals = false;
+    }
+    let html = findb::printform::order_forms_sized_html(
+        &company,
+        &quotes,
+        &f,
+        &doc_size_from_q(&q),
+        q.get("auto").map(|s| s.as_str() == "1").unwrap_or(false),
+        &db.options().print,
+    );
+    Ok(([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
+}
+
 /// 报价单转销售订单（approved → converted）：生成草稿订单，税率 0 可在订单中再调整
 pub(super) async fn convert_quotation(
     State(_state): State<Arc<WebState>>,

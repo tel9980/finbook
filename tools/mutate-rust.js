@@ -2162,6 +2162,27 @@ const MUT = [
     to: "        .filter_map(|pool| pool.into_iter().min_by_key(|r| r.effective_from.clone()).cloned())",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导出只给每格当前生效的那一版并排除停用"],
   },
+  {
+    name: "107 报价单打印漏掉规格（客户对不出尺寸）",
+    file: "crates/findb/src/sales.rs",
+    from: "    if !q.spec.trim().is_empty() {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::quo_print_memo_summarizes_the_locked_snapshot"],
+  },
+  {
+    name: "108 报价单打印漏掉折合说明（客户算不出单价）",
+    file: "crates/findb/src/sales.rs",
+    from: "    if !q.calc_qty.trim().is_empty() && !q.calc_unit.trim().is_empty() {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::quo_print_memo_summarizes_the_locked_snapshot"],
+  },
+  {
+    name: "109 报价单打印漏掉工艺档（普通/硬质分不清）",
+    file: "crates/findb/src/sales.rs",
+    from: "    if !q.process.trim().is_empty() {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::quo_print_memo_summarizes_the_locked_snapshot"],
+  },
 
 ];
 
