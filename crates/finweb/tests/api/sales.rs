@@ -3403,4 +3403,13 @@ async fn so_receivable_endpoint_lists_unsettled() {
     );
     assert_eq!(rows[0]["status"].as_str().unwrap(), "已确认");
     assert_eq!(v["count"].as_i64().unwrap(), 2);
+    // v1.8.103：回款看板带上账期/逾期（确定性计算在 findb 单测里，这里只验字段到位）
+    assert_eq!(
+        rows[0]["pay_days"].as_i64().unwrap(),
+        0,
+        "没设账期的客户按 0 天"
+    );
+    assert!(rows[0]["overdue_days"].as_i64().unwrap() >= 0);
+    assert!(v["overdue_count"].as_i64().unwrap() >= 0);
+    assert!(v["overdue_90_count"].as_i64().unwrap() >= 0);
 }

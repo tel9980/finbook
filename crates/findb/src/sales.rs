@@ -974,12 +974,22 @@ pub struct SoReceivable {
     pub total_amount: Money,
     pub collected: Money,
     pub balance: Money,
+    pub pay_days: i64,
+    pub overdue_days: i64,
 }
 
 /// 谁还欠我钱：所有未作废、未结清的销售订单，按未收金额从大到小排。
 ///
 /// 跨期间——上个月的单还没收完，这个月也要列出来；草稿订单不算数（还没承诺）。
+///
+/// `overdue_days` 以**订单日期**起算账期（近似口径）：`max(0, 今天 − 订单日期 − 账期)`。
+/// 真正的到期日是「发货/开票日 + 账期」，订单日期是手里最接近的起点。
 pub fn so_receivable(db: &Db) -> DbResult<Vec<SoReceivable>> {
+    so_receivable_as_of(db, chrono::Local::now().date_naive())
+}
+
+/// 内部：以指定「今天」计算账期（测试传固定日期，避免依赖机器时钟）。
+fn so_receivable_as_of(db: &Db, today: chrono::NaiveDate) -> DbResult<Vec<SoReceivable>> {
     let mut stmt = db.conn().prepare(
         "SELECT id, no, date, customer_code, customer_name, status, total_amount
          FROM sales_order
@@ -997,6 +1007,7 @@ pub fn so_receivable(db: &Db) -> DbResult<Vec<SoReceivable>> {
             Money::parse_or_zero(&r.get::<_, String>(6)?),
         ))
     })?;
+    let pay_days_map = crate::settle::customer_pay_days_map(db)?;
     let mut out = Vec::new();
     for row in rows {
         let (id, no, date, cc, cn, status, total) = row?;
@@ -1005,6 +1016,11 @@ pub fn so_receivable(db: &Db) -> DbResult<Vec<SoReceivable>> {
         if balance.is_zero() {
             continue; // 已经结清，不进「谁还欠我钱」这张表
         }
+        let pay_days = pay_days_map.get(cc.trim()).copied().unwrap_or(0);
+        let age = chrono::NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d")
+            .map(|d| (today - d).num_days())
+            .unwrap_or(0);
+        let overdue_days = (age - pay_days).max(0);
         out.push(SoReceivable {
             so_id: id,
             no,
@@ -1017,6 +1033,8 @@ pub fn so_receivable(db: &Db) -> DbResult<Vec<SoReceivable>> {
             total_amount: total,
             collected,
             balance,
+            pay_days,
+            overdue_days,
         });
     }
     out.sort_by(|a, b| {
@@ -1308,15 +1326,65 @@ mod tests {
         )
         .unwrap();
 
-        let rows = so_receivable(&db).unwrap();
+        // C01 账期 30 天：账期内的欠款不算逾期；C02 没设账期按 0 天（到期即逾期）
+        let mut c01 = fincore::AuxEntity::new(fincore::AuxKind::Customer, "C01", "客户A");
+        c01.set_prop(fincore::auxiliary::prop::PAY_DAYS, "30");
+        crate::auxs::insert(&db, &c01).unwrap();
+
+        // 固定「今天」= 2026-02-10：C01 订单 01-05（隔 36 天，扣账期 30 → 逾期 6 天），
+        // C02 订单 01-06（隔 35 天，无账期 → 逾期 35 天）
+        let today = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+        let rows = so_receivable_as_of(&db, today).unwrap();
         assert_eq!(rows.len(), 2, "只列已确认未结清的两张：{rows:?}");
         assert_eq!(rows[0].customer_code, "C01", "欠得多的排前面");
         assert_eq!(rows[0].total_amount, m("2000"));
         assert_eq!(rows[0].collected, m("1200"));
         assert_eq!(rows[0].balance, m("800"));
         assert_eq!(rows[0].status, "已确认");
+        assert_eq!(rows[0].pay_days, 30);
+        assert_eq!(rows[0].overdue_days, 6, "36 天 − 账期 30 = 逾期 6 天");
         assert_eq!(rows[1].customer_code, "C02");
         assert_eq!(rows[1].balance, m("500"));
+        assert_eq!(rows[1].pay_days, 0, "没设账期按 0 天");
+        assert_eq!(rows[1].overdue_days, 35, "35 天 − 账期 0 = 逾期 35 天");
+    }
+
+    #[test]
+    fn so_receivable_does_not_flag_orders_within_pay_days() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        // 账期 30 天，订单日期是「今天」前 2 天 → 账龄 2 天 < 账期 30 → 不算逾期
+        let mut c = fincore::AuxEntity::new(fincore::AuxKind::Customer, "C06", "客户F");
+        c.set_prop(fincore::auxiliary::prop::PAY_DAYS, "30");
+        crate::auxs::insert(&db, &c).unwrap();
+        let mut so = crate::scm::SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 2, 8).unwrap(),
+            "C06",
+            "客户F",
+            "u",
+        );
+        so.no = crate::scm::so_next_no(&db, p).unwrap();
+        so.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140506".into(),
+            item_name: "新品".into(),
+            qty_ordered: m("5"),
+            qty_shipped: m("0"),
+            unit_price: m("20"),
+            tax_rate: m("0"),
+            amount: m("100"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        let so_id = crate::scm::so_save(&db, &mut so).unwrap();
+        crate::scm::so_set_status(&db, so_id, crate::scm::SoStatus::Confirmed).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+        let rows = so_receivable_as_of(&db, today).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].pay_days, 30);
+        assert_eq!(rows[0].overdue_days, 0, "账龄 2 天在账期 30 天内，不算逾期");
     }
 
     #[test]

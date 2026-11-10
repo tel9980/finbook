@@ -2246,6 +2246,27 @@ const MUT = [
     to: "        if false {\n            continue; // 已经结清，不进「谁还欠我钱」这张表\n        }",
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
   },
+  {
+    name: "119 回款看板逾期不减账期（30 天账期当 0 天）",
+    file: "crates/findb/src/sales.rs",
+    from: "        let overdue_days = (age - pay_days).max(0);",
+    to: "        let overdue_days = age;",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
+  },
+  {
+    name: "120 回款看板读不到账期（客户设了 30 天也按 0 天）",
+    file: "crates/findb/src/sales.rs",
+    from: "        let pay_days = pay_days_map.get(cc.trim()).copied().unwrap_or(0);",
+    to: "        let pay_days = 0;",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
+  },
+  {
+    name: "121 回款看板账期内也报逾期（负数不钳成 0）",
+    file: "crates/findb/src/sales.rs",
+    from: "        let overdue_days = (age - pay_days).max(0);",
+    to: "        let overdue_days = age - pay_days;",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_does_not_flag_orders_within_pay_days"],
+  },
 
 ];
 

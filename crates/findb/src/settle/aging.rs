@@ -191,3 +191,11 @@ pub(super) fn pay_days_map(
     }
     Ok(m)
 }
+
+/// 客户账期表：客户编码 → 账期天数（0 = 未设，货到即付）。
+///
+/// 供回款看板等**非 settle 模块**复用 —— 账龄、催款函、回款看板三处必须用同一个
+/// 账期来源（客商档案的 `pay_days`），否则同一个客户在这页说 30 天、那页说 0 天。
+pub fn customer_pay_days_map(db: &Db) -> DbResult<std::collections::HashMap<String, i64>> {
+    pay_days_map(db, fincore::AuxKind::Customer)
+}

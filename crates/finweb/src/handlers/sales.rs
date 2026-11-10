@@ -953,9 +953,15 @@ pub(super) async fn get_so_receivable(
             acc
         }
     });
-    Ok(Json(
-        json!({ "rows": rows, "outstanding": outstanding, "count": rows.len() }),
-    ))
+    let overdue_count = rows.iter().filter(|r| r.overdue_days > 0).count();
+    let overdue_90_count = rows.iter().filter(|r| r.overdue_days > 90).count();
+    Ok(Json(json!({
+        "rows": rows,
+        "outstanding": outstanding,
+        "count": rows.len(),
+        "overdue_count": overdue_count,
+        "overdue_90_count": overdue_90_count,
+    })))
 }
 
 /// 发货通知（订单确认后）：仓库备货指令，出库后自动完成最早一条待发通知

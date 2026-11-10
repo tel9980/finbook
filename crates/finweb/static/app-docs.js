@@ -64,9 +64,31 @@ function quoReconcileHtml(rows) {
 
 function soReceivableHtml(rows, outstanding) {
   if (!rows || !rows.length) return `<div class="muted">没有未结清的订单 —— 要么都收齐了，要么还没有已确认的销售订单。</div>`;
-  const tr = (r) => `<tr><td>${esc(r.no)}</td><td>${esc(r.customer_name)}</td><td class="muted">${esc(r.date)}</td><td class="num">${fmtMoney(r.total_amount)}</td><td class="num">${fmtMoney(r.collected)}</td><td class="num"><b>${fmtMoney(r.balance)}</b></td><td>${esc(r.status)}</td></tr>`;
-  const summary = `<div class="muted" style="margin:4px 0">共 ${rows.length} 笔，未收合计 <b style="color:var(--warn)">${fmtMoney(outstanding)}</b></div>`;
-  return `${summary}<table class="grid"><thead><tr><th>单号</th><th>客户</th><th>日期</th><th class="num">订单金额</th><th class="num">已收</th><th class="num">未收</th><th>状态</th></tr></thead><tbody>${rows.map(tr).join("")}</tbody></table>`;
+  const canDun = can("voucher_new");
+  const overdue = rows.filter((r) => Number(r.overdue_days) > 0).length;
+  const overdue90 = rows.filter((r) => Number(r.overdue_days) > 90).length;
+  const overdueCell = (r) => (Number(r.overdue_days) > 0
+    ? `<td class="warn"><b>逾期 ${r.overdue_days} 天</b></td>`
+    : `<td class="muted">—</td>`);
+  const dunCell = (r) => (canDun
+    ? `<td class="row-actions"><button class="btn ghost sm" data-dun="${esc(JSON.stringify({ code: r.customer_code, name: r.customer_name }))}">催款函</button></td>`
+    : "");
+  const tr = (r) => `<tr><td>${esc(r.no)}</td><td>${esc(r.customer_name)}</td><td class="muted">${esc(r.date)}</td><td class="num">${fmtMoney(r.total_amount)}</td><td class="num">${fmtMoney(r.collected)}</td><td class="num"><b>${fmtMoney(r.balance)}</b></td><td>${esc(r.status)}</td>${overdueCell(r)}${dunCell(r)}</tr>`;
+  const extra = overdue > 0
+    ? `，其中 <b style="color:var(--warn)">${overdue}</b> 笔已逾期${overdue90 > 0 ? `、<b style="color:var(--err)">${overdue90}</b> 笔超 90 天` : ""}`
+    : "";
+  const summary = `<div class="muted" style="margin:4px 0">共 ${rows.length} 笔，未收合计 <b style="color:var(--warn)">${fmtMoney(outstanding)}</b>${extra}</div>`;
+  return `${summary}<table class="grid"><thead><tr><th>单号</th><th>客户</th><th>日期</th><th class="num">订单金额</th><th class="num">已收</th><th class="num">未收</th><th>状态</th><th>逾期</th>${canDun ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(tr).join("")}</tbody></table>`;
+}
+
+// 给某个客户生成一张催款函（复用了往来模块已有的催款单：从该客户未核销应收逐笔取数）。
+async function sendDunning(code, name) {
+  try {
+    const r = await api("/settle/dunnings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "ar", party_code: code, party_name: name }) });
+    const d = r && r.dunning;
+    if (d && d.id) window.open(`/api/settle/dunnings/${d.id}/print`, "_blank");
+    else toast("已生成催款函", "ok");
+  } catch (e) { toast(e.message, "err"); }
 }
 
 async function snLoad() {
@@ -345,11 +367,13 @@ async function viewSoDoc(main) {
         };
         $("#sd-recon-export").onclick = () => window.open(`/api/sales/quote/reconcile/export?period=${period}`, "_blank");
       } catch (e) { $("#sd-recon-out").innerHTML = `<div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; }
+      const bindDun = () => $all("[data-dun]", $("#sd-recv-out")).forEach((b) => b.onclick = () => { const d = JSON.parse(b.dataset.dun); sendDunning(d.code, d.name); });
       try {
         const rv = await api("/sales/so/receivable");
         $("#sd-recv-out").innerHTML = soReceivableHtml(rv.rows || [], rv.outstanding);
+        bindDun();
         $("#sd-recv").onclick = async () => {
-          try { const rv2 = await api("/sales/so/receivable"); $("#sd-recv-out").innerHTML = soReceivableHtml(rv2.rows || [], rv2.outstanding); toast("已刷新", "ok"); } catch (e) { toast(e.message, "err"); }
+          try { const rv2 = await api("/sales/so/receivable"); $("#sd-recv-out").innerHTML = soReceivableHtml(rv2.rows || [], rv2.outstanding); bindDun(); toast("已刷新", "ok"); } catch (e) { toast(e.message, "err"); }
         };
       } catch (e) { $("#sd-recv-out").innerHTML = `<div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; }
     }

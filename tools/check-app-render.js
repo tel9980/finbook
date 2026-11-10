@@ -620,24 +620,38 @@ const CASES = [
     absent: ["<table"],
   },
   // 销售订单回款看板（v1.8.102）：谁还欠我钱，未收合计点出来。
+  // v1.8.103 加了「逾期」列（看 overdue_days）和「催款函」按钮（要 voucher_new）。
   {
     fn: "soReceivableHtml",
     args: [
       [
-        { no: "XS2026010001", customer_name: "客户A", date: "2026-01-05", total_amount: "2000.00", collected: "1200.00", balance: "800.00", status: "已确认" },
-        { no: "XS2026010002", customer_name: "客户B", date: "2026-01-06", total_amount: "500.00", collected: "0.00", balance: "500.00", status: "已确认" },
+        { no: "XS2026010001", customer_name: "客户A", date: "2026-01-05", total_amount: "2000.00", collected: "1200.00", balance: "800.00", status: "已确认", overdue_days: 6, pay_days: 30 },
+        { no: "XS2026010002", customer_name: "客户B", date: "2026-01-06", total_amount: "500.00", collected: "0.00", balance: "500.00", status: "已确认", overdue_days: 0, pay_days: 0 },
       ],
       "1300.00",
     ],
-    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s) },
-    expect: ["共 2 笔", "未收合计", "1300.00", "客户A", "2000.00", "1200.00", "800.00", "已确认", "订单金额", "已收", "未收"],
+    stubs: { esc: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s), can: () => true },
+    expect: ["共 2 笔", "未收合计", "1300.00", "逾期 6 天", "催款函", "笔已逾期", "订单金额", "已收", "未收", "逾期"],
+    absent: ["笔超 90 天"],
   },
   {
     fn: "soReceivableHtml",
     args: [[], "0.00"],
-    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s) },
+    stubs: { esc: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s), can: () => true },
     expect: ["没有未结清的订单"],
     absent: ["<table"],
+  },
+  {
+    fn: "soReceivableHtml",
+    args: [
+      [
+        { no: "XS2026010003", customer_name: "客户C", date: "2025-09-01", total_amount: "1000.00", collected: "0.00", balance: "1000.00", status: "已确认", overdue_days: 120, pay_days: 0 },
+      ],
+      "1000.00",
+    ],
+    stubs: { esc: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s), can: () => false },
+    expect: ["逾期 120 天", "笔超 90 天", "笔已逾期", "共 1 笔"],
+    absent: ["催款函"],
   },
 ];
 
