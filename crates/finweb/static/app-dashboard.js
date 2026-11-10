@@ -48,6 +48,38 @@ function homeTrial(b) {
   return `<div class="home-trial">账平不平暂时算不出来，到「报表 → 试算平衡」看。</div>`;
 }
 
+function homePriceSoon(b) {
+  const rows = (b && b.price_soon) || [];
+  if (!rows.length) return "";
+  const total = b.price_soon_total || rows.length;
+  const items = rows
+    .map((r) => {
+      const who = [
+        r.item_code || "任意物料",
+        r.customer_code ? `客户 ${r.customer_code}` : "所有客户",
+        r.process || "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const when = r.today ? "今天起" : `${r.date} 起`;
+      return `<li><b>${fmt(r.price)}</b> 元/${esc(r.unit)} —— ${esc(who)}，${esc(when)}</li>`;
+    })
+    .join("");
+  const more =
+    total > rows.length
+      ? `<div class="muted" style="font-size:11.5px">还有 ${total - rows.length} 条，去「加工费规则 → 调价历史」看。</div>`
+      : "";
+  const nToday = rows.filter((r) => r.today).length;
+  const title = nToday
+    ? `⚠ 有 <b>${total}</b> 条价这几天开始生效，其中 ${nToday} 条<b>今天就生效</b>`
+    : `⚠ 有 <b>${total}</b> 条价这几天开始生效`;
+  return `<div class="home-soon">
+    <div class="hs-text">${title} —— 客户按新价结账，别让系统里还是旧价。
+      <ul class="hs-list">${items}</ul>${more}</div>
+    <button class="btn ghost sm" data-vd-go="price-rules">去单价表看看</button>
+  </div>`;
+}
+
 function homeHero(d) {
   const b = d && d.brief;
   if (!b) return "";
@@ -222,6 +254,7 @@ async function viewDashboard(main) {
     ${homeVerdict(d.brief)}
     ${homeHero(d)}
     ${homeTrial(d.brief)}
+    ${homePriceSoon(d.brief)}
     ${wbHtml.todo}
     <details class="wb-ref" ${firstRun ? "" : "open"}>
       <summary class="u-dim u-sm">账套概况</summary>

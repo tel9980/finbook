@@ -363,6 +363,83 @@ async fn selecting_a_book_lands_on_current_period_not_start_period() {
     );
 }
 
+/// 「这几天有价要生效」：提前录的下一版价，到点了得有人提醒
+///
+/// 录完就忘是这张表最常见的坑：生效那天没人说，客户按新价结账、系统里还是旧价，
+/// 一个月后对账才发现少收钱。首页只报窗口内（7 天）的，远处的别来占地方。
+#[tokio::test]
+async fn dashboard_warns_about_prices_taking_effect() {
+    let (state, _books, _tmp) = test_state();
+    let sid = boss_in_b1(&state).await;
+    paste_aux(&state, &sid, "item", "MB01\t氧化件\n").await;
+
+    // ① 一条都没有时不占地方
+    let b = brief(&state, &sid).await;
+    assert_eq!(
+        b["price_soon"].as_array().map(|a| a.len()),
+        Some(0),
+        "没有要生效的价就不该有这一块：{b}"
+    );
+    assert_eq!(b["price_soon_total"], 0, "{b}");
+
+    let day = |n: i64| {
+        (chrono::Local::now().date_naive() + chrono::Duration::days(n))
+            .format("%Y-%m-%d")
+            .to_string()
+    };
+    let mk = |from: String, price: &str, name: &str| {
+        serde_json::json!({
+            "name": name,
+            "item_code": "MB01",
+            "customer_code": "",
+            "unit": "㎡",
+            "unit_price": price,
+            "min_charge": "0",
+            "rush_fee": "0",
+            "rush_rate": "0",
+            "disabled": false,
+            "memo": "",
+            "effective_from": from,
+            "process": "",
+        })
+    };
+
+    // ② 三天后生效 → 进提醒
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            mk(day(3), "0.15", "下月价"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let b = brief(&state, &sid).await;
+    assert_eq!(b["price_soon_total"], 1, "三天后生效的要提醒：{b}");
+    let row = &b["price_soon"][0];
+    assert_eq!(row["date"], day(3));
+    assert_eq!(row["item_code"], "MB01");
+    assert_eq!(row["unit"], "㎡");
+    assert_eq!(row["price"], "0.15");
+    assert_eq!(row["today"], false, "三天后生效的不能说成今天生效：{b}");
+
+    // ③ 下个月才生效 → 窗口外，不提醒
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            mk(day(30), "0.12", "更远的价"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let b = brief(&state, &sid).await;
+    assert_eq!(
+        b["price_soon_total"], 1,
+        "只报 7 天内的，远处的别来占首页：{b}"
+    );
+}
+
 /// 一句话结论 + 「账有没有记错」：这是「打开软件第一眼」的两块
 ///
 /// 判定只有一份（`findb::verdict`），桌面端首屏读的也是它。这里从 HTTP 层

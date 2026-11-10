@@ -2053,6 +2053,20 @@ const MUT = [
     to: "                \"停用\",\n                id,",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::停用启用和删除都留痕"],
   },
+  {
+    name: "92 到点提醒不看日期窗口（下个月的价也来占首页）",
+    file: "crates/findb/src/processfee.rs",
+    from: "d <= last.as_str()",
+    to: "d <= \"9999-12-31\"",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::到点提醒只报真会生效的那几条"],
+  },
+  {
+    name: "93 到点提醒把停用的价也报上来",
+    file: "crates/findb/src/processfee.rs",
+    from: "!d.is_empty() && !r.disabled && d >= today.as_str()",
+    to: "!d.is_empty() && d >= today.as_str()",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::到点提醒只报真会生效的那几条"],
+  },
 
 ];
 

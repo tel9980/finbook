@@ -189,6 +189,43 @@ const CASES = [
     expect: ["暂时算不出来"],
     absent: ["账是平的", "home-trial ok"],
   },
+  // 首页「这几天有价要生效」（v1.8.94）。守三条：
+  // 空就不占地方；今天生效的要说「今天起」；条数截断了要老实说还剩几条。
+  {
+    fn: "homePriceSoon",
+    args: [{ price_soon: [], price_soon_total: 0 }],
+    stubs: HIST_STUBS,
+    absent: ["home-soon", "data-vd-go"],
+  },
+  {
+    fn: "homePriceSoon",
+    args: [
+      {
+        price_soon: [
+          { date: "2026-11-10", item_code: "MB01", customer_code: "C01", unit: "㎡", process: "", price: "0.15", today: true },
+          { date: "2026-11-13", item_code: "MB02", customer_code: "", unit: "件", process: "硬质氧化", price: "0.20", today: false },
+        ],
+        price_soon_total: 2,
+      },
+    ],
+    stubs: HIST_STUBS,
+    expect: ["home-soon", "今天就生效", "今天起", "2026-11-13 起", "0.15", "硬质氧化", 'data-vd-go="price-rules"'],
+    absent: ["还有"],
+  },
+  {
+    fn: "homePriceSoon",
+    args: [
+      {
+        price_soon: [
+          { date: "2026-11-12", item_code: "MB09", customer_code: "", unit: "㎡", process: "", price: "9.00", today: false },
+        ],
+        price_soon_total: 7,
+      },
+    ],
+    stubs: HIST_STUBS,
+    expect: ["还有 6 条", "调价历史"],
+    absent: ["今天就生效"],
+  },
   // 单价矩阵里的格子（v49）。守两条最会出事的边界：
   // 没折算系数的那一格**不能**变成「0 元」输入框；有系数没定价的要空着写「未定价」。
   {

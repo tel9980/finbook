@@ -208,6 +208,34 @@ pub fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
+/// 今天到 `days` 天内开始生效的价（含今天），按生效日排。
+///
+/// 提前录下一版价是好事，**录完就忘**是坑：生效那天没人提醒，客户按新价结账、
+/// 系统里还是旧价，一个月后对账才发现少收的钱。所以首页给一条黄字。
+///
+/// 只排除停用的。同一格排着两三版价时**每一版都要提醒** —— 12 月 1 日那版
+/// 在 11 月 20 日那版之后照样会生效，两部都得有人盯着，跳过就等于漏报。
+pub fn due_soon(db: &Db, days: i64) -> DbResult<Vec<PriceRule>> {
+    let today = today();
+    let last = (chrono::Local::now().date_naive() + chrono::Duration::days(days.max(0)))
+        .format("%Y-%m-%d")
+        .to_string();
+    let mut out: Vec<PriceRule> = rule_list(db)?
+        .into_iter()
+        .filter(|r| {
+            let d = r.effective_from.trim();
+            !d.is_empty() && !r.disabled && d >= today.as_str() && d <= last.as_str()
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.effective_from
+            .cmp(&b.effective_from)
+            .then_with(|| a.item_code.cmp(&b.item_code))
+            .then_with(|| a.customer_code.cmp(&b.customer_code))
+    });
+    Ok(out)
+}
+
 /// 规则列表
 pub fn rule_list(db: &Db) -> DbResult<Vec<PriceRule>> {
     let sql = format!("SELECT {COLS} FROM price_rule ORDER BY id");
@@ -2194,6 +2222,49 @@ mod tests {
         assert_eq!(hist[1].old_price, "");
         assert_eq!(hist[1].new_price, "0.20");
         assert!(hist[0].at.len() >= 19, "时间要能看懂：{}", hist[0].at);
+    }
+
+    #[test]
+    fn 到点提醒只报真会生效的那几条() {
+        let db = crate::tests::mem();
+        let t0 = today();
+        let day = |n: i64| {
+            (chrono::Local::now().date_naive() + chrono::Duration::days(n))
+                .format("%Y-%m-%d")
+                .to_string()
+        };
+        let new_rule = |name: &str, price: &str, cust: &str, from: &str| {
+            let mut r = rule(name, "㎡", price, "0", "0", "0");
+            r.item_code = "MB01".to_string();
+            r.customer_code = cust.to_string();
+            r.effective_from = from.to_string();
+            rule_save(&db, &mut r).unwrap();
+            r
+        };
+        new_rule("今天起", "10", "", &t0);
+        new_rule("三天后", "12", "C01", &day(3));
+        // 窗口外（30 天后）：不该提醒
+        new_rule("下个月", "9", "C02", &day(30));
+        // 停用：不该提醒
+        let mut off = new_rule("停用的", "8", "C03", &day(1));
+        off.disabled = true;
+        rule_save(&db, &mut off).unwrap();
+        // 同一格排两版、两版都在窗口内：两个都得提醒 —— 11 月那版之后
+        // 12 月那版照样会生效，跳过谁都是漏报
+        new_rule("一号那版", "7", "C04", &day(2));
+        new_rule("五号那版", "6", "C04", &day(5));
+
+        let v = due_soon(&db, 7).unwrap();
+        let names: Vec<&str> = v.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["今天起", "一号那版", "三天后", "五号那版"],
+            "窗口内的每一版都要报，停用的不报"
+        );
+        assert_eq!(v[0].effective_from, t0);
+        assert_eq!(v[1].effective_from, day(2));
+        assert_eq!(v[2].effective_from, day(3));
+        assert_eq!(v[3].effective_from, day(5));
     }
 
     #[test]

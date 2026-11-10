@@ -428,6 +428,28 @@ pub struct HomeBrief {
     pub verdict: HomeVerdict,
     /// 账有没有记错（试算平衡的结论层）
     pub trial: HomeTrial,
+    /// 这几天开始生效的价（最多 5 条，实际条数看 `price_soon_total`）
+    ///
+    /// 提前录的下一版价，录完就忘是最常见的出错点：生效那天没人提醒，
+    /// 客户按新价结账、系统里还是旧价，一个月后对账才发现少收钱。
+    pub price_soon: Vec<HomePriceSoon>,
+    /// 这几天要生效的价一共几条
+    pub price_soon_total: usize,
+}
+
+/// 一条「马上开始生效」的价
+#[derive(Clone, Serialize)]
+pub struct HomePriceSoon {
+    /// 生效日 YYYY-MM-DD（等于今天 = 今天开始用）
+    pub date: String,
+    pub item_code: String,
+    pub customer_code: String,
+    pub unit: String,
+    pub process: String,
+    /// 单价
+    pub price: String,
+    /// 是不是今天就生效（前端不用自己算日期，省掉时区踩坑）
+    pub today: bool,
 }
 
 /// 首屏「一句话结论」：一句人话 + 机器能识别的类型

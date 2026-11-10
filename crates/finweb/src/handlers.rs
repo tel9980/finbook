@@ -1313,6 +1313,23 @@ fn home_brief(
     // 「还有几张没记账」在首页出现两次（概览字段 + 一句话结论），算一次、用两处：
     // 两处各写一遍 `draft + audited` 时，改一处漏一处就是「上面说有 3 张、下面说都记完了」。
     let unposted = draft + audited;
+    // 这几天开始生效的价：录完就忘是这套表最常见的坑 —— 生效那天没人提醒，
+    // 客户按新价结账、系统里还是旧价，一个月后对账才发现少收钱。
+    // 首页只要一条黄的，全量在「销售 → 加工费规则」里看。
+    let soon: Vec<HomePriceSoon> = findb::processfee::due_soon(db, 7)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| HomePriceSoon {
+            today: r.effective_from == findb::processfee::today(),
+            date: r.effective_from,
+            item_code: r.item_code,
+            customer_code: r.customer_code,
+            unit: r.unit,
+            process: r.process,
+            price: r.unit_price.fmt_money(),
+        })
+        .collect();
+
     // 「账有没有记错」：小白只需要一句结论，逐项数字去「报表 → 试算平衡」看。
     //
     // 这里**不带**数据范围，与桌面端一致：按人裁开之后同一条凭证的对方分录
@@ -1384,6 +1401,8 @@ fn home_brief(
             view: v.view().to_string(),
             urgent: v.kind.is_urgent(),
         },
+        price_soon: soon.iter().take(5).cloned().collect(),
+        price_soon_total: soon.len(),
         trial,
     })
 }
