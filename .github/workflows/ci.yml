@@ -10,7 +10,11 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # PR 上「后来的顶掉前面的」正合适：改一版就重算一版，省机器。
+  # main 上不能这么干 —— 发布工作流要等「这个提交的 CI 全绿」才肯出包，
+  # 一旦被下一次推送取消，那个 tag 就永远发不出去（v1.8.94 就是这么丢的：
+  # 刚推 v1.8.94 的 tag，紧接着推 v1.8.95，前者 CI 被 cancelled，release 拒绝发布）。
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
