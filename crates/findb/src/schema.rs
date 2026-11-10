@@ -33,7 +33,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 53;
+pub const SCHEMA_VERSION: i64 = 54;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1975,6 +1975,19 @@ const MIGRATE_V52: &[(&str, &str, &str)] = &[
     ("price_rule", "qty_to", "TEXT NOT NULL DEFAULT ''"),
 ];
 
+/// v54：报价单记下「这个价是怎么算出来的」（规格 / 口径 / 工艺档 / 计价数量 / 用了哪条价）。
+///
+/// `unit_price` 早就在单子上，但那只是一个数。客户问「这 0.28 怎么来的」，
+/// 得答得出「按 1250*250*3 折成 0.3125 ㎡，用 12 元/㎡ 那条价」——
+/// 而且价目表以后怎么调，这张单子上的数都不该跟着变（报价单是当时的口头承诺）。
+const MIGRATE_V54: &[(&str, &str, &str)] = &[
+    ("quotation", "spec", "TEXT NOT NULL DEFAULT ''"),
+    ("quotation", "calc_unit", "TEXT NOT NULL DEFAULT ''"),
+    ("quotation", "process", "TEXT NOT NULL DEFAULT ''"),
+    ("quotation", "calc_qty", "TEXT NOT NULL DEFAULT ''"),
+    ("quotation", "rule_id", "INTEGER NOT NULL DEFAULT 0"),
+];
+
 const MIGRATE_V45: &[(&str, &str, &str)] = &[
     ("consign_doc", "so_id", "INTEGER NOT NULL DEFAULT 0"),
     ("consign_doc", "so_no", "TEXT NOT NULL DEFAULT ''"),
@@ -2529,6 +2542,8 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_generic(conn, MIGRATE_V50)?;
             migrate_generic(conn, MIGRATE_V51)?;
             migrate_generic(conn, MIGRATE_V52)?;
+            // v54：报价单记下按什么算的价（纯加列）
+            migrate_generic(conn, MIGRATE_V54)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：

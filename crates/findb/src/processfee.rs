@@ -208,6 +208,176 @@ pub fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
+/// 报价单一行该报多少钱（把规格 / 口径 / 工艺档 / 数量都交给价目表去挑）
+///
+/// 报价单上最终只有一个「数量 × 单价」。但客户说的可能是「1250*250*3 的件，
+/// 300 件」：先按规格折成 0.3125 ㎡/件、再按 300 件挑档、最后乘单价。
+/// 这里只算不落库 —— 单价与折算过程由报价单自己抄下来（报价单是当时的承诺，
+/// 价目表以后怎么调都不该改它）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct QuotePrice {
+    pub rule_id: i64,
+    pub rule_name: String,
+    /// 报价单上该填的单价（按**库存单位**计，4 位小数）
+    pub unit_price: Money,
+    pub stock_unit: String,
+    /// 计价数量与口径（按 ㎡ 报了 93.75 ㎡ 这种）
+    pub calc_qty: Money,
+    pub calc_unit: String,
+    /// 1 库存单位 = factor 计价单位（没折算时为 1）
+    pub factor: Money,
+    /// manual（用折算系数）/ spec（按规格算）/ unit（指定口径）/ plain（不分档的价）
+    pub basis: &'static str,
+    pub total: Money,
+    pub min_charge: Money,
+    /// 为凑够起步价补的差额
+    pub floor_extra: Money,
+    /// 还没到生效日的价
+    pub future: bool,
+    pub effective_from: String,
+    /// 给人看的一句话：折算过程 / 起步价补差 / 价还没生效
+    pub note: String,
+}
+
+/// 按价目表算一行报价单的价。`density` 只在按 kg 报、又走规格折算时用得上。
+#[allow(clippy::too_many_arguments)]
+pub fn price_for_line(
+    db: &Db,
+    item: &str,
+    customer: &str,
+    qty: Money,
+    spec: &str,
+    calc_unit: &str,
+    process: &str,
+    density: Money,
+) -> DbResult<QuotePrice> {
+    if item.trim().is_empty() {
+        return Err(FinError::msg("先选物料 —— 没有物料不知道报哪一档价").into());
+    }
+    if !qty.is_positive() {
+        return Err(FinError::msg("数量要大于 0，不然「数量 × 单价」算不出金额").into());
+    }
+    let stock_unit = {
+        let u = stock_unit_of(db, item)?;
+        if u.trim().is_empty() {
+            "件".to_string()
+        } else {
+            u
+        }
+    };
+    let spec = spec.trim().to_string();
+    let calc_unit = calc_unit.trim().to_string();
+    let process = process.trim().to_string();
+
+    let (q, calc_qty, calc_unit_out, factor, basis) = if !spec.is_empty() {
+        let sq = quote_with_spec(
+            db, item, customer, &spec, qty, &calc_unit, density, &process, false,
+        )?;
+        (
+            sq.quote,
+            sq.calc_qty,
+            sq.calc_unit.clone(),
+            sq.factor,
+            sq.basis,
+        )
+    } else if !calc_unit.is_empty() {
+        let uq = quote_with_units(db, item, customer, qty, &calc_unit, &process, false)?;
+        (
+            uq.quote,
+            uq.calc_qty,
+            uq.calc_unit.clone(),
+            uq.factor,
+            "unit",
+        )
+    } else {
+        // 什么都没给：按价目表那格自己的口径报，能折就折
+        // 未来价的提示由 quote_on 写进 FeeQuote，这里不用再判一次
+        let (rule, _future) = match_rule_full(db, item, customer, "", &process, None, Some(qty))?
+            .ok_or_else(|| {
+            FinError::msg(format!(
+                "价目表里没有「{item}」的价（客户「{customer}」）——先在「加工费规则」里加一条"
+            ))
+        })?;
+        let unit = rule.unit.trim().to_string();
+        let (cq, cu, f, _basis) = if unit.is_empty() || unit == stock_unit {
+            (qty, stock_unit.clone(), Money::ONE, "plain")
+        } else {
+            match calc_unit_of(db, item, &unit)? {
+                Some(c) => (
+                    (qty * c.factor).round_dp(c.scale.clamp(0, SCALE_MAX) as u32),
+                    unit.clone(),
+                    c.factor,
+                    "manual",
+                ),
+                None => {
+                    return Err(FinError::msg(format!(
+                        "价目表这格按「{unit}」记价，但没录「1 {stock_unit} = 多少 {unit}」——                         先在「加工费规则 → 折算系数」里补一条"
+                    ))
+                    .into())
+                }
+            }
+        };
+        let q = quote_on(&rule, cq, false, &today());
+        (q, cq, cu, f, _basis)
+    };
+
+    // 报价单只有「数量 × 单价」，所以把总额摊回每库存单位；4 位小数留给「0.2808」这种
+    let unit_price = (q
+        .total
+        .checked_div(qty)
+        .ok_or_else(|| FinError::msg("数量不能为 0"))?)
+    .round_dp(4);
+    let mut note = String::new();
+    if !spec.is_empty() {
+        note = format!(
+            "按规格 {spec} 折成 {} {}",
+            calc_qty.fmt_qty(),
+            calc_unit_out
+        );
+    } else if !calc_unit.is_empty() && factor != Money::ONE {
+        note = format!(
+            "1 {stock_unit} = {} {calc_unit}，共 {} {calc_unit}",
+            factor.fmt_qty(),
+            calc_qty.fmt_qty()
+        );
+    }
+    if q.floor_extra.is_positive() {
+        if !note.is_empty() {
+            note.push('；');
+        }
+        note.push_str(&format!("不足起步价，补 {}", q.floor_extra.fmt_money()));
+    }
+    if q.future {
+        if !note.is_empty() {
+            note.push('；');
+        }
+        note.push_str(&format!(
+            "这条价 {} 才生效，现在报的是提前预定的价",
+            if q.effective_from.is_empty() {
+                "以后".to_string()
+            } else {
+                q.effective_from.clone()
+            }
+        ));
+    }
+    Ok(QuotePrice {
+        rule_id: q.rule_id,
+        rule_name: q.rule_name.clone(),
+        unit_price,
+        stock_unit,
+        calc_qty,
+        calc_unit: calc_unit_out,
+        factor,
+        basis,
+        total: q.total,
+        min_charge: q.min_charge,
+        floor_extra: q.floor_extra,
+        future: q.future,
+        effective_from: q.effective_from.clone(),
+        note,
+    })
+}
+
 /// 「这单报的价和价目表对得上吗」的结论
 ///
 /// 报价单上只有一个数（单价），价目表上却可能按 ㎡ / 米 / kg 记。要真比，
@@ -2650,6 +2820,101 @@ MB03,米,x,2
             scale,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn 报价单一行按规格折出每件单价() {
+        let db = crate::tests::mem();
+        let mut r = rule("MB01 按平方", "㎡", "12", "0", "0", "0");
+        r.item_code = "MB01".to_string();
+        rule_save(&db, &mut r).unwrap();
+        let mut c = cu("MB01", "㎡", "0.0234", 2);
+        calc_unit_save(&db, &mut c).unwrap();
+
+        // 300 件、规格 1250*250*3 → 0.3125 ㎡/件（这里用 0.0234 的系数，取的是手录值）→ 7.02 ㎡ × 12 = 84.24
+        let p =
+            price_for_line(&db, "MB01", "", m("300"), "1250*250*3", "", "", Money::ZERO).unwrap();
+        assert_eq!(p.calc_qty.fmt_qty(), "7.02");
+        assert_eq!(p.total.fmt_money(), "84.24");
+        // 报价单只有「数量 × 单价」，所以摊回每件：84.24 / 300 = 0.2808
+        // 单价摊到 4 位：0.2808。用 fmt_money() 会显示成 0.28，
+        // 按 300 件乘回去就变 84.00，差的那 0.24 会被当成算错。
+        assert_eq!(p.unit_price.fmt_dp(4), "0.2808");
+        assert_eq!(p.stock_unit, "件");
+        assert_eq!(p.basis, "manual");
+        assert!(p.note.contains("按规格"), "note={}", p.note);
+        // 摊回去的数字必须能反过来凑出总额，否则单子上的金额是「凭空来的」
+        assert_eq!(
+            (p.unit_price * m("300")).round2().fmt_money(),
+            "84.24",
+            "单价 × 数量要还原成合计"
+        );
+    }
+
+    #[test]
+    fn 报价单一行按数量挑档() {
+        let db = crate::tests::mem();
+        // 先建大批量、再建小批量：让 id 顺序与档位方向相反，避免「碰巧对上」
+        let mut big = rule("大批量", "件", "0.25", "0", "0", "0");
+        big.item_code = "MB04".to_string();
+        big.qty_from = "500".to_string();
+        rule_save(&db, &mut big).unwrap();
+        let mut small = rule("小批量", "件", "0.35", "0", "0", "0");
+        small.item_code = "MB04".to_string();
+        small.qty_to = "500".to_string();
+        rule_save(&db, &mut small).unwrap();
+
+        let p = price_for_line(&db, "MB04", "", m("800"), "", "", "", Money::ZERO).unwrap();
+        assert_eq!(p.rule_name, "大批量");
+        assert_eq!(p.unit_price.fmt_money(), "0.25");
+        assert_eq!(p.total.fmt_money(), "200.00");
+
+        let p = price_for_line(&db, "MB04", "", m("300"), "", "", "", Money::ZERO).unwrap();
+        assert_eq!(p.rule_name, "小批量");
+        assert_eq!(p.total.fmt_money(), "105.00");
+    }
+
+    #[test]
+    fn 报价单一行按规格挑档() {
+        let db = crate::tests::mem();
+        // 短件按件 0.2、长料按米 1.5（按最长边 200cm 分界，上限含、下限不含）
+        let mut short = rule("短件", "件", "0.2", "0", "0", "0");
+        short.item_code = "MB32".to_string();
+        short.band_dim = "max".to_string();
+        short.band_to = "200".to_string();
+        rule_save(&db, &mut short).unwrap();
+        let mut long = rule("长料", "米", "1.5", "0", "0", "0");
+        long.item_code = "MB32".to_string();
+        long.band_dim = "max".to_string();
+        long.band_from = "200".to_string();
+        rule_save(&db, &mut long).unwrap();
+
+        // 120cm：落在短件那档，口径由档位定成「件」
+        let p = price_for_line(&db, "MB32", "", m("300"), "1200*80", "", "", Money::ZERO).unwrap();
+        assert_eq!(p.rule_name, "短件");
+        assert_eq!(p.calc_unit, "件");
+        assert_eq!(p.unit_price.fmt_dp(4), "0.2000");
+        assert_eq!(p.total.fmt_money(), "60.00");
+
+        // 250cm：落在长料那档，口径变成「米」（1 件 = 2.5 米 × 1.5 = 3.75 元/件）
+        let p = price_for_line(&db, "MB32", "", m("10"), "2500*100", "", "", Money::ZERO).unwrap();
+        assert_eq!(p.rule_name, "长料");
+        assert_eq!(p.calc_unit, "米");
+        assert_eq!(p.unit_price.fmt_dp(4), "3.7500");
+        assert_eq!(p.total.fmt_money(), "37.50");
+
+        // 不给规格：分档价一律不参与 —— 必须报「没有价」，不能随手抓一条
+        let e = price_for_line(&db, "MB32", "", m("10"), "", "", "", Money::ZERO).unwrap_err();
+        assert!(format!("{e}").contains("价目表里没有"), "{e}");
+    }
+
+    #[test]
+    fn 报价单一行没价要说清缺什么() {
+        let db = crate::tests::mem();
+        let e = price_for_line(&db, "MB99", "", m("10"), "", "", "", Money::ZERO).unwrap_err();
+        assert!(format!("{e}").contains("价目表里没有"), "{e}");
+        let e = price_for_line(&db, "MB99", "", Money::ZERO, "", "", "", Money::ZERO).unwrap_err();
+        assert!(format!("{e}").contains("数量要大于 0"), "{e}");
     }
 
     #[test]

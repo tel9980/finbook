@@ -35,6 +35,46 @@ pub struct Quotation {
     pub status: String, // draft / approved / converted / cancelled
     pub prepared_by: String,
     pub memo: String,
+    /// 规格（如 1250*250*3；空 = 不按规格算）
+    #[serde(default)]
+    pub spec: String,
+    /// 计价口径（㎡ / 米 / kg；空 = 按库存单位）
+    #[serde(default)]
+    pub calc_unit: String,
+    /// 工艺档（硬质氧化 …；空 = 不分档）
+    #[serde(default)]
+    pub process: String,
+    /// 折算后的计价数量快照（93.75 ㎡ 这种）
+    #[serde(default)]
+    pub calc_qty: String,
+    /// 用的是哪一条价（0 = 手填或老单子）
+    #[serde(default)]
+    pub rule_id: i64,
+}
+
+impl Default for Quotation {
+    fn default() -> Self {
+        Quotation {
+            id: 0,
+            no: String::new(),
+            period: Period::from_ymm(0),
+            date: NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+            customer_code: String::new(),
+            customer_name: String::new(),
+            item_code: String::new(),
+            item_name: String::new(),
+            qty: Money::ZERO,
+            unit_price: Money::ZERO,
+            status: String::new(),
+            prepared_by: String::new(),
+            memo: String::new(),
+            spec: String::new(),
+            calc_unit: String::new(),
+            process: String::new(),
+            calc_qty: String::new(),
+            rule_id: 0,
+        }
+    }
 }
 
 fn map_quo(r: &rusqlite::Row) -> rusqlite::Result<Quotation> {
@@ -53,10 +93,16 @@ fn map_quo(r: &rusqlite::Row) -> rusqlite::Result<Quotation> {
         status: r.get(10)?,
         prepared_by: r.get(11)?,
         memo: r.get(12)?,
+        spec: r.get(13)?,
+        calc_unit: r.get(14)?,
+        process: r.get(15)?,
+        calc_qty: r.get(16)?,
+        rule_id: r.get(17)?,
     })
 }
 
-const Q_COLS: &str = "id,no,period,date,customer_code,customer_name,item_code,item_name,qty,unit_price,status,prepared_by,memo";
+const Q_COLS: &str = "id,no,period,date,customer_code,customer_name,item_code,item_name,\
+     qty,unit_price,status,prepared_by,memo,spec,calc_unit,process,calc_qty,rule_id";
 
 pub fn quo_next_no(db: &Db, period: Period) -> DbResult<String> {
     let prefix = format!(
@@ -77,7 +123,8 @@ pub fn quo_save(db: &Db, q: &mut Quotation) -> DbResult<i64> {
     let id = if q.id > 0 {
         db.conn().execute(
             "UPDATE quotation SET period=?2,date=?3,customer_code=?4,customer_name=?5,
-             item_code=?6,item_name=?7,qty=?8,unit_price=?9,status=?10,prepared_by=?11,memo=?12
+             item_code=?6,item_name=?7,qty=?8,unit_price=?9,status=?10,prepared_by=?11,memo=?12,
+             spec=?13,calc_unit=?14,process=?15,calc_qty=?16,rule_id=?17
              WHERE id=?1",
             rusqlite::params![
                 q.id,
@@ -91,18 +138,38 @@ pub fn quo_save(db: &Db, q: &mut Quotation) -> DbResult<i64> {
                 crate::exact_param(q.unit_price),
                 q.status,
                 q.prepared_by,
-                q.memo
+                q.memo,
+                q.spec,
+                q.calc_unit,
+                q.process,
+                q.calc_qty,
+                q.rule_id
             ],
         )?;
         q.id
     } else {
         db.conn().execute(
-            "INSERT INTO quotation(no,period,date,customer_code,customer_name,item_code,item_name,qty,unit_price,status,prepared_by,memo)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            "INSERT INTO quotation(no,period,date,customer_code,customer_name,item_code,item_name,
+             qty,unit_price,status,prepared_by,memo,spec,calc_unit,process,calc_qty,rule_id)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             rusqlite::params![
-                q.no, q.period.ymm(), q.date.format("%Y-%m-%d").to_string(),
-                q.customer_code, q.customer_name, q.item_code, q.item_name,
-                crate::exact_param(q.qty), crate::exact_param(q.unit_price), q.status, q.prepared_by, q.memo
+                q.no,
+                q.period.ymm(),
+                q.date.format("%Y-%m-%d").to_string(),
+                q.customer_code,
+                q.customer_name,
+                q.item_code,
+                q.item_name,
+                crate::exact_param(q.qty),
+                crate::exact_param(q.unit_price),
+                q.status,
+                q.prepared_by,
+                q.memo,
+                q.spec,
+                q.calc_unit,
+                q.process,
+                q.calc_qty,
+                q.rule_id
             ],
         )?;
         db.conn().last_insert_rowid()
@@ -852,6 +919,7 @@ mod tests {
             status: "draft".into(),
             prepared_by: "张三".into(),
             memo: String::new(),
+            ..Default::default()
         };
         let id = quo_save(&db, &mut q).unwrap();
         quo_approve(&db, id).unwrap();

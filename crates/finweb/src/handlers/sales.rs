@@ -358,6 +358,29 @@ pub(super) async fn save_quotation(
     if req.prepared_by.is_empty() {
         req.prepared_by = user.user.display_name.clone();
     }
+    // 只填了规格 / 口径、没填单价 → 按价目表算出来填上，并把折算过程抄进单子。
+    // 单子上的单价是**当时的承诺**：价目表以后怎么调，都不回头改这张单。
+    let mut price = None;
+    if req.unit_price.is_zero() && (!req.spec.trim().is_empty() || !req.calc_unit.trim().is_empty())
+    {
+        let p = findb::processfee::price_for_line(
+            db,
+            &req.item_code,
+            &req.customer_code,
+            req.qty,
+            &req.spec,
+            &req.calc_unit,
+            &req.process,
+            fincore::Money::ZERO,
+        )?;
+        req.unit_price = p.unit_price;
+        req.calc_qty = p.calc_qty.fmt_qty();
+        if req.calc_unit.trim().is_empty() {
+            req.calc_unit = p.calc_unit.clone();
+        }
+        req.rule_id = p.rule_id;
+        price = Some(p);
+    }
     let id = findb::sales::quo_save(db, &mut req)?;
     // 存完顺手对一下价目表：把 1.5 写成 15 是常事。但只提示、不拦单 ——
     // 手工价有时是对的（老客户、一次性让价），系统不该替业务员拍板。
@@ -385,9 +408,47 @@ pub(super) async fn save_quotation(
         )),
         _ => None,
     };
-    Ok(Json(
-        serde_json::json!({ "id": id, "no": req.no, "price_warn": warn, "price_check": check }),
-    ))
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "no": req.no,
+        "price_warn": warn,
+        "price_check": check,
+        "price": price,
+    })))
+}
+
+/// 预览一行报价：规格 / 口径 / 工艺档 / 数量都交给价目表去挑，回单价和折算过程。
+/// 和 `/api/price-rules/quote` 的区别：这里回来的单价已经摊成「每库存单位」，
+/// 正好能填进报价单的「数量 × 单价」。
+pub(super) async fn preview_quotation_price(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::OrderOps)?;
+    let db = &user.db;
+    let get = |k: &str| q.get(k).map(|s| s.trim().to_string()).unwrap_or_default();
+    let item = get("item");
+    if item.is_empty() {
+        return Err(AppError::bad_request("先选物料"));
+    }
+    let qty = parse_money_checked(&get("qty"))?;
+    let density = if get("density").is_empty() {
+        fincore::Money::ZERO
+    } else {
+        parse_money_checked(&get("density"))?
+    };
+    let p = findb::processfee::price_for_line(
+        db,
+        &item,
+        &get("customer"),
+        qty,
+        &get("spec"),
+        &get("calc_unit"),
+        &get("process"),
+        density,
+    )?;
+    Ok(Json(serde_json::json!(p)))
 }
 
 pub(super) async fn check_quotation_price(

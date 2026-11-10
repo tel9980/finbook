@@ -1685,6 +1685,7 @@ mod tests {
             status: "approved".into(),
             prepared_by: "u".into(),
             memo: String::new(),
+            ..Default::default()
         };
         let qid = crate::sales::quo_save(&db, &mut q).unwrap();
 
@@ -2406,6 +2407,7 @@ mod tests {
                 status: "draft".into(),
                 prepared_by: "u".into(),
                 memo: String::new(),
+                ..Default::default()
             };
             q.no = crate::sales::quo_next_no(&db, p).unwrap();
             crate::sales::quo_save(&db, &mut q).unwrap()

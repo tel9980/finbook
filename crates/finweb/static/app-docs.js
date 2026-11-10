@@ -13,6 +13,17 @@
 // 数字（价目表折合价、差多少），写错了没人看得出来，只能靠门禁守。
 // 只提示、不拦单 —— 手工价有时是对的（老客户、一次性让价），但 1.5 写成 15
 // 这种错误得让人当场看见。
+// 「按价目表算」算完之后那一行绿字：用的是哪条价、单价多少、合计多少、折算过程。
+// 抽成顶层是为了让 check-app-render 能真调用它（不抽就只能靠手点）。
+function linePriceHtml(p) {
+  if (!p) return "";
+  const unit = esc(p.stock_unit || "");
+  const price = esc(fmt(p.unit_price));
+  const total = esc(fmt(p.total));
+  const note = p.note ? `（${esc(p.note)}）` : "";
+  return `<span style="color:var(--ok)">✔ ${esc(p.rule_name || "价目表")} → 单价 ${price} / ${unit}，合计 ${total}${note}</span>`;
+}
+
 function priceCheckHtml(r) {
   if (!r) return "";
   const c = r.price_check || null;
@@ -212,8 +223,12 @@ async function viewSoDoc(main) {
     <div class="toolbar">
       <label>客户 <input id="sd-cust" style="width:110px" /></label>
       <label>存货 <input id="sd-item" style="width:130px" /></label>
+      <label>规格 <input id="sd-spec" style="width:110px" placeholder="1250*250*3" /></label>
+      <label>口径 <input id="sd-cunit" style="width:52px" placeholder="㎡" /></label>
+      <label>工艺 <input id="sd-proc" style="width:88px" placeholder="硬质氧化" /></label>
       <label>数量 <input id="sd-qty" style="width:70px" /></label>
       <label>单价 <input id="sd-price" style="width:80px" /></label>
+      <button class="btn ghost sm" id="sd-line" title="按价目表算这一行：规格折成计价数量、按数量挑档、不足起步价兜底">按价目表算</button>
       <button class="btn ghost sm" id="sd-quote" title="按「加工费规则」算价：面积×单价，不足最低收费兜底，加急另加">按规则报价</button>
       <button class="btn primary" id="sd-save">保存报价单</button>
     </div>
@@ -317,6 +332,30 @@ async function viewSoDoc(main) {
       toast(`规则「${q.rule_name || "按规则"}」：${fmt(q.qty)} × ${fmt(q.unit_price)} = 基础价 ${fmt(q.base)}，最低收费补差 ${fmt(q.floor_extra)}，加急 ${fmt(q.rush_extra)}，合计 ${fmt(q.total)}`, "ok");
     } catch (e) { toast(e.message, "err"); }
   });
+  // 按价目表算一行：规格 → 折算成计价数量 → 按数量挑档 → 摊回「每库存单位」的单价。
+  // 后端 findb::processfee::price_for_line 算，界面不自己算（同一套规则两处实现早晚差一分钱）。
+  $("#sd-line").addEventListener("click", async () => {
+    const item = $("#sd-item").value.trim();
+    const qty = $("#sd-qty").value.trim();
+    if (!item) { toast("先填存货（物料）编码", "err"); return; }
+    if (!(Number(qty || "0") > 0)) { toast("先填数量", "err"); return; }
+    try {
+      const qs = new URLSearchParams({ item, qty });
+      const cust = $("#sd-cust").value.trim();
+      const spec = $("#sd-spec").value.trim();
+      const cunit = $("#sd-cunit").value.trim();
+      const proc = $("#sd-proc").value.trim();
+      if (cust) qs.set("customer", cust);
+      if (spec) qs.set("spec", spec);
+      if (cunit) qs.set("calc_unit", cunit);
+      if (proc) qs.set("process", proc);
+      const p = await api(`/sales/quote/price?${qs.toString()}`);
+      $("#sd-price").value = String(p.unit_price == null ? "" : p.unit_price).replace(/,/g, "");
+      const el = $("#sd-price-warn");
+      if (el) el.innerHTML = linePriceHtml(p);
+      toast(`按价目表算好：单价 ${fmt(p.unit_price)} / ${p.stock_unit}，合计 ${fmt(p.total)}`, "ok");
+    } catch (e) { toast(e.message, "err"); }
+  });
   // 存完把「这单价和价目表对不对得上」摆出来。只提示、不拦单 ——
   // 手工价有时是对的（老客户、一次性让价），系统不该替业务员拍板；
   // 但 1.5 写成 15 这种错误得让人当场看见。
@@ -326,9 +365,9 @@ async function viewSoDoc(main) {
   };
   $("#sd-save").addEventListener("click", async () => {
     try {
-      const r = await postJson("/sales/quote", { id: 0, period: ymm(state.current || ""), date: today(), customer_code: $("#sd-cust").value.trim(), customer_name: $("#sd-cust").value.trim(), item_code: $("#sd-item").value.trim(), item_name: $("#sd-item").value.trim(), qty: $("#sd-qty").value.trim() || "0", unit_price: $("#sd-price").value.trim() || "0", status: "draft", prepared_by: "", memo: "" });
+      const r = await postJson("/sales/quote", { id: 0, period: ymm(state.current || ""), date: today(), customer_code: $("#sd-cust").value.trim(), customer_name: $("#sd-cust").value.trim(), item_code: $("#sd-item").value.trim(), item_name: $("#sd-item").value.trim(), qty: $("#sd-qty").value.trim() || "0", unit_price: $("#sd-price").value.trim() || "0", status: "draft", prepared_by: "", memo: "", spec: $("#sd-spec").value.trim(), calc_unit: $("#sd-cunit").value.trim(), process: $("#sd-proc").value.trim() });
       if (r && r.price_warn) toast("已保存，但这单价和价目表对不上（见下方提示）", "err"); else toast("已保存报价单", "ok");
-      $("#sd-qty").value=""; $("#sd-price").value="";
+      $("#sd-qty").value=""; $("#sd-price").value=""; $("#sd-spec").value=""; $("#sd-cunit").value=""; $("#sd-proc").value="";
       // 先等列表重画再写提示，否则 load() 把这块 DOM 换了、提示当场消失
       const saved = r; await load(); showPriceCheck(saved);
     } catch (e) { toast(e.message, "err"); }

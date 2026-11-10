@@ -606,6 +606,7 @@ pub fn router(state: Arc<WebState>) -> Router {
             "/api/sales/quote/:id/price-check",
             get(check_quotation_price),
         )
+        .route("/api/sales/quote/price", get(preview_quotation_price))
         .route("/api/sales/shipment", post(add_so_shipment))
         .route("/api/sales/payment", post(add_so_payment))
         .route("/api/sales/return", post(add_so_return))

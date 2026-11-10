@@ -2733,6 +2733,139 @@ async fn invoice_list_is_bounded() {
     assert_eq!(r["truncated"], false, "收窄后不该报截断：{b}");
 }
 
+/// 报价单只填规格和数量：单价由价目表算出来并抄进单子，
+/// 之后价目表怎么改价，这张单子上的数都不回头变（报价单是当时的承诺）。
+#[tokio::test]
+async fn quotation_price_comes_from_price_list_and_stays() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/dashboard", &sid))
+        .await
+        .unwrap();
+    let dash: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let cur_ymm: i32 = dash["current_period"]
+        .as_str()
+        .unwrap()
+        .replace('-', "")
+        .parse()
+        .unwrap();
+    let d13 = format!("{}-13", dash["current_period"].as_str().unwrap());
+
+    // 价目表：MB31 按 ㎡ 记 12 元，1 件 = 0.0234 ㎡ → 300 件 = 7.02 ㎡ = 84.24，每件 0.2808
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/calc-units",
+            &sid,
+            serde_json::json!({
+                "id": 0, "item_code": "MB31", "calc_unit": "㎡",
+                "factor": "0.0234", "scale": 4, "disabled": false, "memo": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "录折算系数");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "id": 0, "name": "MB31 按平方", "item_code": "MB31", "customer_code": "",
+                "unit": "㎡", "unit_price": "12", "min_charge": "0",
+                "rush_fee": "0", "rush_rate": "0", "disabled": false, "memo": "",
+                "effective_from": "", "process": "", "band_dim": "", "band_from": "",
+                "band_to": "", "qty_from": "", "qty_to": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "建价目表");
+    let rule_id = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()
+        ["id"]
+        .as_i64()
+        .unwrap();
+
+    // ① 预览：只给物料 + 数量 + 规格，回来的单价已经摊成「每件」
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/sales/quote/price?item=MB31&qty=300&spec=1250*250*3",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "预览价");
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["stock_unit"], "件");
+    assert_eq!(v["calc_unit"], "㎡");
+    assert_eq!(money_num(v["calc_qty"].as_str().unwrap()), 7.02);
+    assert_eq!(money_num(v["total"].as_str().unwrap()), 84.24);
+    assert_eq!(
+        money_num(v["unit_price"].as_str().unwrap()),
+        0.2808,
+        "单价要摊到 4 位"
+    );
+
+    // ② 存报价单：单价留空，后端按价目表填上，并把折算过程抄进单子
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/quote",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": cur_ymm, "date": d13, "customer_code": "C01",
+                "customer_name": "客户甲", "item_code": "MB31", "item_name": "支件",
+                "qty": "300", "unit_price": "0", "status": "draft",
+                "prepared_by": "", "memo": "", "spec": "1250*250*3",
+                "calc_unit": "", "process": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "存报价单");
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        money_num(v["price"]["unit_price"].as_str().unwrap()),
+        0.2808
+    );
+    let qid = v["id"].as_i64().unwrap();
+
+    // ③ 价目表改成 99 元/㎡：老单子上的数不能跟着变
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "id": rule_id, "name": "MB31 按平方", "item_code": "MB31", "customer_code": "",
+                "unit": "㎡", "unit_price": "99", "min_charge": "0",
+                "rush_fee": "0", "rush_rate": "0", "disabled": false, "memo": "",
+                "effective_from": "", "process": "", "band_dim": "", "band_from": "",
+                "band_to": "", "qty_from": "", "qty_to": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "改价");
+
+    let list_resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/sales/quote", &sid))
+        .await
+        .unwrap();
+    let list: serde_json::Value = serde_json::from_str(&body_string(list_resp).await).unwrap();
+    let row = list["rows"]
+        .as_array()
+        .expect("报价单列表在 rows 里")
+        .iter()
+        .find(|r| r["id"].as_i64() == Some(qid))
+        .expect("列表里能找到刚存的报价单");
+    assert_eq!(
+        money_num(row["unit_price"].as_str().unwrap()),
+        0.2808,
+        "价目表改价后老单子不变"
+    );
+    assert_eq!(row["calc_qty"], "7.02");
+    assert_eq!(row["spec"], "1250*250*3");
+    assert_eq!(row["rule_id"].as_i64(), Some(rule_id));
+}
+
 /// 报价单的价和价目表对不上：保存时给提示、也能单独查，但**不拦单**。
 #[tokio::test]
 async fn quote_price_check_flags_mismatch_without_blocking() {

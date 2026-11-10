@@ -602,6 +602,7 @@ impl ScmDeepView {
             status: "draft".to_string(),
             prepared_by: ctx.user().display_name.clone(),
             memo: self.quo_memo.clone(),
+            ..Default::default()
         };
         match findb::sales::quo_save(ctx.db(), &mut q) {
             Ok(_) => {

@@ -42,11 +42,11 @@ const doc = fs.readFileSync(docPath, "utf8");
 // 期望内容写死在这里：改了代码这里也要改，这是有意的 ——
 // 它逼着改动者确认「文档说的和代码做的是同一件事」。
 const REFS = [
-  { file: "crates/finweb/src/handlers/sales.rs", line: 579, re: /^\s+let id = findb::sales::so_payment_add\(/, why: "销售收款同时写 so_payment" },
-  { file: "crates/finweb/src/handlers/sales.rs", line: 580, re: /^\s+let doc_id = findb::receipt::receipt_create\(/, why: "同一笔钱写两张表" },
+  { file: "crates/finweb/src/handlers/sales.rs", line: 640, re: /^\s+let id = findb::sales::so_payment_add\(/, why: "销售收款同时写 so_payment" },
+  { file: "crates/finweb/src/handlers/sales.rs", line: 641, re: /^\s+let doc_id = findb::receipt::receipt_create\(/, why: "同一笔钱写两张表" },
   { file: "crates/findb/src/scm.rs", line: 1303, re: /credit_check\(db, &customer, period\)/, why: "订单流转时的信用拦截" },
-  { file: "crates/findb/src/sales.rs", line: 790, re: /^pub fn customer_credit_limit/, why: "额度从 props_json 读" },
-  { file: "crates/findb/src/sales.rs", line: 810, re: /^pub fn credit_check/, why: "占用/额度/是否超限" },
+  { file: "crates/findb/src/sales.rs", line: 857, re: /^pub fn customer_credit_limit/, why: "额度从 props_json 读" },
+  { file: "crates/findb/src/sales.rs", line: 877, re: /^pub fn credit_check/, why: "占用/额度/是否超限" },
   { file: "crates/findb/src/settle/open.rs", line: 105, re: /^pub fn open_entries\b/, why: "余额唯一口径" },
   { file: "crates/findb/src/settle/open.rs", line: 124, re: /^pub fn open_entries_with\b/, why: "含子科目的 SQL" },
   { file: "crates/findb/src/settle/open.rs", line: 145, re: /account_code LIKE/, why: "传一级科目即含子科目" },

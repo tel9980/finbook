@@ -232,6 +232,47 @@ const CASES = [
     expect: [],
     absent: ["⚠", "✔"],
   },
+  // 「按价目表算」那一行：说得清用的是哪条价、单价多少、合计多少
+  {
+    fn: "linePriceHtml",
+    file: "crates/finweb/static/app-docs.js",
+    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (v) => String(v == null ? "" : v) },
+    args: [
+      {
+        rule_name: "MB31 按平方",
+        unit_price: "0.2808",
+        total: "84.24",
+        stock_unit: "件",
+        note: "按规格 1250×250×3 折成 7.02 ㎡",
+      },
+    ],
+    expect: ["✔", "MB31 按平方", "0.2808", "件", "84.24", "按规格"],
+    absent: ["⚠"],
+  },
+  {
+    fn: "linePriceHtml",
+    file: "crates/finweb/static/app-docs.js",
+    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (v) => String(v == null ? "" : v) },
+    args: [null],
+    expect: [],
+    absent: ["✔"],
+  },
+  {
+    fn: "linePriceHtml",
+    file: "crates/finweb/static/app-docs.js",
+    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (v) => String(v == null ? "" : v) },
+    args: [
+      {
+        rule_name: "MB31 按平方",
+        unit_price: "12",
+        total: "120.00",
+        stock_unit: "㎡",
+        note: "这条价 2026-12-01 才生效，现在报的是提前预定的价",
+      },
+    ],
+    expect: ["才生效"],
+    absent: ["⚠"],
+  },
   // 首页「这几天有价要生效」（v1.8.94）。守三条：
   // 空就不占地方；今天生效的要说「今天起」；条数截断了要老实说还剩几条。
   {
