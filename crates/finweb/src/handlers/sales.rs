@@ -361,6 +361,95 @@ pub(super) async fn get_quo_reconcile(
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
+/// 报价对账表导出 Excel：给老板/客户留档。
+pub(super) async fn export_quo_reconcile(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::Report)?;
+    let db = &user.db;
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
+    let rows = findb::sales::quo_reconcile(db, period)?;
+
+    let mut out: Vec<Vec<String>> = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let none = r.so_id == 0;
+        out.push(vec![
+            r.quo_no.clone(),
+            if r.customer_name.trim().is_empty() {
+                r.customer_code.clone()
+            } else {
+                r.customer_name.clone()
+            },
+            r.item_name.clone(),
+            r.quo_qty.fmt_qty(),
+            r.quo_price.fmt_exact(),
+            if none {
+                String::new()
+            } else {
+                r.so_price.fmt_exact()
+            },
+            if none {
+                String::new()
+            } else {
+                r.diff.fmt_exact()
+            },
+            if none {
+                String::new()
+            } else {
+                r.diff_amount.fmt_exact()
+            },
+            if none {
+                "未转订单".to_string()
+            } else {
+                r.so_status.clone()
+            },
+        ]);
+    }
+
+    let sheet = crate::xlsxout::Sheet::titled(
+        "报价对账",
+        "报价单 vs 实际结算对账",
+        &format!("期间 {}", period.label()),
+        &[
+            "单号",
+            "客户",
+            "存货",
+            "数量",
+            "报价单价",
+            "实际单价",
+            "单价差",
+            "差额",
+            "订单状态",
+        ],
+        &[
+            crate::xlsxout::ColFmt::Text,
+            crate::xlsxout::ColFmt::Text,
+            crate::xlsxout::ColFmt::Text,
+            crate::xlsxout::ColFmt::Money,
+            crate::xlsxout::ColFmt::Money,
+            crate::xlsxout::ColFmt::Money,
+            crate::xlsxout::ColFmt::Money,
+            crate::xlsxout::ColFmt::Money,
+            crate::xlsxout::ColFmt::Text,
+        ],
+    )
+    .with_rows(out);
+
+    let filename = format!("报价对账-{}.xlsx", period.label());
+    user.db.log(
+        user.username(),
+        "导出",
+        "报价对账",
+        &format!("期间 {}（{} 条）", period.label(), rows.len()),
+    )?;
+    super::build_xlsx(&[sheet], &filename, "报价对账")
+}
+
 pub(super) async fn save_quotation(
     State(_state): State<Arc<WebState>>,
     user: CurrentUser,

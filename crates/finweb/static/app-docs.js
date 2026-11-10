@@ -237,8 +237,8 @@ async function viewPoDoc(main) {
 async function viewSoDoc(main) {
   const period = encodeURIComponent(state.current || "");
   const table = (rows) => rows.length
-    ? `<table class="grid"><thead><tr><th>单号</th><th>客户</th><th>存货</th><th>数量</th><th>单价</th><th>状态</th><th></th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td>${esc(r.no)}</td><td>${esc(r.customer_name)}</td><td>${esc(r.item_name)}</td><td class="num">${esc(r.qty)}</td><td class="num">${esc(r.unit_price)}</td><td>${esc(({ draft: "草稿", approved: "已审批", converted: "已转订单", cancelled: "已作废" })[r.status] || r.status)}<span data-wftag="quotation:${r.id}"></span></td><td class="row-actions"><button class="btn ghost sm" data-quo-print="${r.id}">打印</button>${r.status === "draft" ? `<button class="btn ghost sm" data-quo-approve="${r.id}">审批</button>` : ""}${r.status === "approved" ? `<button class="btn ghost sm" data-quo-toorder="${r.id}">转订单</button>` : ""}${r.status === "converted" ? `<span class="tag ok">已转订单</span>` : ""}</td></tr>`).join("")}</tbody></table>`
+    ? `<table class="grid"><thead><tr><th style="width:26px"><input type="checkbox" id="quo-chkall" title="全选" /></th><th>单号</th><th>客户</th><th>存货</th><th>数量</th><th>单价</th><th>状态</th><th></th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td><input type="checkbox" class="quo-chk" value="${r.id}" /></td><td>${esc(r.no)}</td><td>${esc(r.customer_name)}</td><td>${esc(r.item_name)}</td><td class="num">${esc(r.qty)}</td><td class="num">${esc(r.unit_price)}</td><td>${esc(({ draft: "草稿", approved: "已审批", converted: "已转订单", cancelled: "已作废" })[r.status] || r.status)}<span data-wftag="quotation:${r.id}"></span></td><td class="row-actions"><button class="btn ghost sm" data-quo-print="${r.id}">打印</button>${r.status === "draft" ? `<button class="btn ghost sm" data-quo-approve="${r.id}">审批</button>` : ""}${r.status === "approved" ? `<button class="btn ghost sm" data-quo-toorder="${r.id}">转订单</button>` : ""}${r.status === "converted" ? `<span class="tag ok">已转订单</span>` : ""}</td></tr>`).join("")}</tbody></table>`
     : `<div class="muted">暂无报价单</div>`;
   const soTrack = (rows) => rows.length
     ? `<table class="grid"><thead><tr><th>订单号</th><th>客户</th><th>订单数量</th><th>发货数量</th><th>执行率</th></tr></thead>
@@ -274,7 +274,7 @@ async function viewSoDoc(main) {
     <div id="sd-credit-result" class="muted" style="margin-top:6px"></div>
     <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">发货通知（待发）</h4><span class="grow"></span><button class="btn ghost sm" id="sn-reload">刷新</button></div><div id="sn-list" class="muted" style="margin-top:8px">加载中…</div></div>
     <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">销售订单</h4><span class="grow"></span>${sizeSel("so-size")}<button class="btn ghost sm" id="so-print">打印所选</button><button class="btn ghost sm" id="so-deli">送货单(跟车)</button><button class="btn ghost sm" id="so-printcfg">打印设置</button><button class="btn primary sm" id="so-new">新建销售订单</button></div><div id="so-list" class="muted" style="margin-top:8px">加载中…</div></div>
-    <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">报价单</h4><span class="grow"></span>${can("report") ? `<button class="btn ghost sm" id="sd-recon">报价对账</button>` : ""}</div><div id="sd-list">加载中…</div><div id="sd-recon-out" class="muted" style="margin-top:8px"></div></div>
+    <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">报价单</h4><span class="grow"></span><button class="btn ghost sm" id="quo-print" title="勾选若干报价单一次打一摞；没勾就打印当前列表全部">打印所选</button>${can("report") ? `<button class="btn ghost sm" id="sd-recon">报价对账</button><button class="btn ghost sm" id="sd-recon-export" title="把对账表导成 Excel 给老板/客户留档">导出</button>` : ""}</div><div id="sd-list">加载中…</div><div id="sd-recon-out" class="muted" style="margin-top:8px"></div></div>
     <div class="panel" style="margin-top:12px"><h4>销售订单执行跟踪</h4><div id="sd-track">加载中…</div></div>`;
 
   const load = async () => {
@@ -318,6 +318,8 @@ async function viewSoDoc(main) {
       });
       fillWfTags($("#sd-list"));
       $all("[data-quo-print]").forEach((b) => b.onclick = () => window.open(`/api/sales/quote/print-form?ids=${b.dataset.quoPrint}`, "_blank"));
+      if ($("#quo-chkall")) $("#quo-chkall").onclick = (e) => { $all(".quo-chk").forEach((c) => { c.checked = e.target.checked; }); };
+      $("#quo-print").onclick = () => runPrint("/api/sales/quote/print-form", ".quo-chk", "order", PRINT_QUOTE_FIELDS);
       $all("[data-quo-toorder]").forEach((b) => b.onclick = async () => {
         try {
           const r = await postJson(`/sales/quote/${b.dataset.quoToorder}/to-order`, {});
@@ -333,6 +335,7 @@ async function viewSoDoc(main) {
         $("#sd-recon").onclick = async () => {
           try { const rc2 = await api(`/sales/quote/reconcile?period=${period}`); $("#sd-recon-out").innerHTML = quoReconcileHtml(rc2.rows || []); toast("已刷新", "ok"); } catch (e) { toast(e.message, "err"); }
         };
+        $("#sd-recon-export").onclick = () => window.open(`/api/sales/quote/reconcile/export?period=${period}`, "_blank");
       } catch (e) { $("#sd-recon-out").innerHTML = `<div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; }
     }
     try {
@@ -923,6 +926,9 @@ function openWfEditor(flow, reload) {
 
 // ---------------- 单据套打（订单/收付款单）：字段白名单 + 批量打印 ----------------
 const PRINT_ORDER_FIELDS = ["no", "date", "status", "party", "memo", "prepared", "code", "name", "qty", "price", "rate", "amount", "tax", "linememo", "totals", "sign", "pack"];
+// 报价单不含税、也没有行备注（折算说明在单据级「备注」里），字段白名单里去掉
+// rate / tax / linememo —— 否则套打会打出三列空的「税率 / 税额 / 行备注」。
+const PRINT_QUOTE_FIELDS = ["no", "date", "status", "party", "memo", "prepared", "code", "name", "qty", "price", "amount", "totals", "sign", "pack"];
 const PRINT_RECEIPT_FIELDS = ["no", "date", "status", "party", "fund", "voucher", "memo", "amount", "sign", "pack"];
 const PRINT_LABELS = {
   no: "单号", date: "日期", status: "状态 / 类型", party: "客户·供应商 / 往来单位",

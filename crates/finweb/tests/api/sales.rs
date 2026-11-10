@@ -3043,6 +3043,157 @@ async fn quotation_reconcile_compares_quoted_vs_settled_price() {
     );
 }
 
+/// 对账表导出成 Excel：转订单的带实际价/差价，没转的标「未转订单」且价格三列留空。
+#[tokio::test]
+async fn quotation_reconcile_exports_xlsx() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/dashboard", &sid))
+        .await
+        .unwrap();
+    let dash: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let cur_ymm: i32 = dash["current_period"]
+        .as_str()
+        .unwrap()
+        .replace('-', "")
+        .parse()
+        .unwrap();
+    let d13 = format!("{}-13", dash["current_period"].as_str().unwrap());
+
+    // 一张：0.28 × 300 转订单后把实际价改成 0.31
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/quote",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": cur_ymm, "date": d13, "customer_code": "C01",
+                "customer_name": "客户甲", "item_code": "MB31", "item_name": "支件",
+                "qty": "300", "unit_price": "0.28", "status": "draft",
+                "prepared_by": "", "memo": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "存报价单");
+    let qid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/sales/quote/{qid}/approve"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/sales/quote/{qid}/to-order"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    let so_id = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()
+        ["so_id"]
+        .as_i64()
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/so",
+            &sid,
+            serde_json::json!({
+                "id": so_id, "period": cur_ymm, "date": d13,
+                "customer_code": "C01", "customer_name": "客户甲",
+                "status": "Draft", "memo": "",
+                "lines": [
+                    { "item_code": "MB31", "item_name": "支件",
+                      "qty_ordered": "300", "unit_price": "0.31", "tax_rate": "" }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "改订单单价");
+
+    // 另一张：没转订单的草稿（0.50 × 100）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/quote",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": cur_ymm, "date": d13, "customer_code": "C02",
+                "customer_name": "客户乙", "item_code": "MB32", "item_name": "垫片",
+                "qty": "100", "unit_price": "0.50", "status": "draft",
+                "prepared_by": "", "memo": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "存第二张草稿");
+
+    // 导出
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/sales/quote/reconcile/export?period={cur_ymm}"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "导出 200");
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(ct.contains("spreadsheetml"), "content-type 应为 xlsx：{ct}");
+    let bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    assert!(bytes.len() > 1000, "xlsx 非空：{}", bytes.len());
+    assert_eq!(&bytes[..2], b"PK", "xlsx 是 zip，头两字节固定 PK");
+
+    // 读回：标题 + 副标题 + 表头 + 2 行数据；表头行以「单号」开头
+    let rows = findb::imports::read_xlsx_bytes(&bytes).unwrap();
+    let hdr_idx = rows
+        .iter()
+        .position(|r| r.first().map(|s| s.as_str()) == Some("单号"))
+        .expect("表头行以「单号」开头");
+    assert_eq!(rows[hdr_idx][3], "数量", "表头第 4 列是数量：{rows:?}");
+    assert_eq!(
+        rows[hdr_idx][8], "订单状态",
+        "表头第 9 列是订单状态：{rows:?}"
+    );
+    assert_eq!(rows.len(), hdr_idx + 1 + 2, "表头 + 2 行数据：{rows:?}");
+
+    let data = &rows[hdr_idx + 1..];
+    // 转订单那行：实际单价 0.31、单价差 0.03、订单状态不是「未转订单」
+    let conv = data
+        .iter()
+        .find(|r| r[8] != "未转订单")
+        .expect("转订单那行");
+    assert!(
+        (money_num(&conv[5]) - 0.31).abs() < 1e-9,
+        "实际单价 0.31：{conv:?}"
+    );
+    assert!(
+        (money_num(&conv[6]) - 0.03).abs() < 1e-9,
+        "单价差 0.03：{conv:?}"
+    );
+    assert!(!conv[7].is_empty(), "差额应有数字：{conv:?}");
+    // 没转订单那行：价格三列留空、状态「未转订单」
+    let un = data
+        .iter()
+        .find(|r| r[8] == "未转订单")
+        .expect("未转订单那行");
+    assert_eq!(un[5], "", "未转订单不该填实际单价：{un:?}");
+    assert_eq!(un[6], "", "未转订单不该填单价差：{un:?}");
+    assert_eq!(un[7], "", "未转订单不该填差额：{un:?}");
+}
+
 /// 报价单的价和价目表对不上：保存时给提示、也能单独查，但**不拦单**。
 #[tokio::test]
 async fn quote_price_check_flags_mismatch_without_blocking() {

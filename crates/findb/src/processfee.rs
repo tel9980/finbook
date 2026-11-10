@@ -562,6 +562,27 @@ pub fn export_rules(db: &Db, customer: &str) -> DbResult<Vec<PriceRule>> {
     Ok(out)
 }
 
+/// 给价目表导出的一行价配上「库存单位」和「1 库存单位 = 多少计价单位」。
+///
+/// 返回 `(库存单位, 折算系数)`。库存单位取 `item_unit.base_unit`，没设按「件」
+/// 兜底（与报价路径同口径）；折算系数取 `item_calc_unit` 里该物料该口径的系数，
+/// 没录就回空串 —— 空串在表上就是「这一格没设换算」，客户一眼看得出来。
+pub fn export_rule_facts(db: &Db, r: &PriceRule) -> DbResult<(String, String)> {
+    let stock_unit = {
+        let u = stock_unit_of(db, &r.item_code)?;
+        if u.trim().is_empty() {
+            "件".to_string()
+        } else {
+            u
+        }
+    };
+    let factor = match calc_unit_of(db, &r.item_code, &r.unit)? {
+        Some(c) => c.factor.fmt_exact(),
+        None => String::new(),
+    };
+    Ok((stock_unit, factor))
+}
+
 /// 保存规则（id=0 新建）
 pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
     rule_save_by(db, r, "")
@@ -1221,6 +1242,32 @@ pub const RULE_HEAD: [&str; 16] = [
     "规格上限",
     "数量下限",
     "数量上限",
+];
+
+/// 价目表**导出**的列头 = 可导入的 16 列 + 两个「给人看」的换算说明列。
+///
+/// 这两个多出来的列（库存单位 / 折算系数）**不参与导入**——导入只认
+/// [`RULE_HEAD`] 那 16 列。它们的作用是让客户拿到「12 元/㎡」时，不用再打电话
+/// 问「那 300 只到底是多少㎡」，表里直接写清「1 件 = 0.0234 ㎡」。
+pub const EXPORT_HEAD: [&str; 18] = [
+    "物料编码",
+    "客户编码",
+    "计价口径",
+    "单价",
+    "起步价",
+    "加急固定费",
+    "加急率%",
+    "生效日期",
+    "名称",
+    "备注",
+    "工艺档",
+    "规格维",
+    "规格下限",
+    "规格上限",
+    "数量下限",
+    "数量上限",
+    "库存单位",
+    "折算系数",
 ];
 
 /// 折算系数的导入列头
@@ -2138,7 +2185,7 @@ pub fn quote_with_units(
 }
 
 /// 库存单位（item_unit.base_unit，未设 = 空）
-fn stock_unit_of(db: &Db, item: &str) -> DbResult<String> {
+pub fn stock_unit_of(db: &Db, item: &str) -> DbResult<String> {
     let mut st = db
         .conn()
         .prepare("SELECT base_unit FROM item_unit WHERE item=?1")?;
@@ -4090,5 +4137,45 @@ MB03,米,x,2
         assert_eq!(banded_row.band_to, "200");
         let qty_row = rows.iter().find(|r| r.item_code == "MB04").unwrap();
         assert_eq!(qty_row.qty_to, "500");
+    }
+
+    #[test]
+    fn 导出带库存单位和折算系数() {
+        let db = crate::tests::mem();
+        // 库存单位：MB01 的主单位是「件」
+        db.conn()
+            .execute(
+                "INSERT INTO item_unit(item, base_unit) VALUES('MB01','件')",
+                [],
+            )
+            .unwrap();
+        let mut c = cu("MB01", "㎡", "0.0234", 4);
+        calc_unit_save(&db, &mut c).unwrap();
+        let mut r = rule("MB01 按平方", "㎡", "12", "0", "0", "0");
+        r.item_code = "MB01".to_string();
+        rule_save(&db, &mut r).unwrap();
+
+        let (su, factor) = export_rule_facts(&db, &r).unwrap();
+        assert_eq!(su, "件", "库存单位取 item_unit.base_unit");
+        assert_eq!(factor, "0.0234", "折算系数满精度，不丢尾数");
+
+        // 没录系数的口径：库存单位仍在，系数回空串（表上就是「没设换算」）
+        let mut r2 = rule("MB01 按只", "只", "0.45", "0", "0", "0");
+        r2.item_code = "MB01".to_string();
+        rule_save(&db, &mut r2).unwrap();
+        let (su2, f2) = export_rule_facts(&db, &r2).unwrap();
+        assert_eq!(su2, "件");
+        assert_eq!(f2, "");
+    }
+
+    #[test]
+    fn 导出没设库存单位时按件兜底() {
+        let db = crate::tests::mem();
+        let mut r = rule("MB09 按只", "只", "0.45", "0", "0", "0");
+        r.item_code = "MB09".to_string();
+        rule_save(&db, &mut r).unwrap();
+        let (su, factor) = export_rule_facts(&db, &r).unwrap();
+        assert_eq!(su, "件", "没单位档案按件，别导出一列空白");
+        assert_eq!(factor, "");
     }
 }

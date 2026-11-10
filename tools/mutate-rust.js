@@ -2204,6 +2204,20 @@ const MUT = [
     to: "row.diff_amount = line.unit_price - q.unit_price;",
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::quotation_reconcile_flags_price_drift"],
   },
+  {
+    name: "113 导出漏掉折算系数（客户看不出 1 件 = 几㎡）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        Some(c) => c.factor.fmt_exact(),",
+    to: "        Some(_) => String::new(),",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导出带库存单位和折算系数"],
+  },
+  {
+    name: "114 导出库存单位不兜底（没设单位就空着）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        let u = stock_unit_of(db, &r.item_code)?;\n        if u.trim().is_empty() {\n            \"件\".to_string()",
+    to: "        let u = stock_unit_of(db, &r.item_code)?;\n        if u.trim().is_empty() {\n            String::new()",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导出没设库存单位时按件兜底"],
+  },
 
 ];
 

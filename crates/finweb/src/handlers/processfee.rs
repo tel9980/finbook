@@ -675,6 +675,7 @@ pub(super) async fn export_price_rules(
 
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(rules.len());
     for r in &rules {
+        let (stock_unit, factor) = findb::processfee::export_rule_facts(&user.db, r)?;
         rows.push(vec![
             r.item_code.clone(),
             r.customer_code.clone(),
@@ -692,12 +693,14 @@ pub(super) async fn export_price_rules(
             r.band_to.clone(),
             r.qty_from.clone(),
             r.qty_to.clone(),
+            stock_unit,
+            factor,
         ]);
     }
 
     let sheet = crate::xlsxout::Sheet::plain(
         "加工费单价",
-        &findb::processfee::RULE_HEAD,
+        &findb::processfee::EXPORT_HEAD,
         &[
             crate::xlsxout::ColFmt::Text,  // 物料编码
             crate::xlsxout::ColFmt::Text,  // 客户编码
@@ -715,6 +718,8 @@ pub(super) async fn export_price_rules(
             crate::xlsxout::ColFmt::Text,  // 规格上限
             crate::xlsxout::ColFmt::Text,  // 数量下限
             crate::xlsxout::ColFmt::Text,  // 数量上限
+            crate::xlsxout::ColFmt::Text,  // 库存单位
+            crate::xlsxout::ColFmt::Text,  // 折算系数（满精度，不走 Money 的两位格式）
         ],
     )
     .with_rows(rows);
