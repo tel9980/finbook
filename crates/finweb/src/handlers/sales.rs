@@ -359,7 +359,60 @@ pub(super) async fn save_quotation(
         req.prepared_by = user.user.display_name.clone();
     }
     let id = findb::sales::quo_save(db, &mut req)?;
-    Ok(Json(serde_json::json!({ "id": id, "no": req.no })))
+    // 存完顺手对一下价目表：把 1.5 写成 15 是常事。但只提示、不拦单 ——
+    // 手工价有时是对的（老客户、一次性让价），系统不该替业务员拍板。
+    let check = findb::processfee::check_quote_price(
+        db,
+        &req.item_code,
+        &req.customer_code,
+        req.unit_price,
+        req.qty,
+    )
+    .ok();
+    let warn = match &check {
+        Some(c) if c.kind == "mismatch" => Some(format!(
+            "这单价和价目表对不上：价目表 {} 元/{}（折合每 {} {} 元），这单填 {} 元，差 {}",
+            c.rule_price.fmt_money(),
+            if c.rule_unit.is_empty() { "单位" } else { c.rule_unit.as_str() },
+            c.stock_unit,
+            c.per_unit.fmt_money(),
+            req.unit_price.fmt_money(),
+            c.diff.fmt_money()
+        )),
+        Some(c) if c.kind == "unit_unknown" => Some(format!(
+            "价目表这格是按 {} 记的（{} 元），但没录「1 {} = 多少 {}」，             没法换成每 {} 的价 —— 先去单价表补一条折算系数",
+            c.rule_unit, c.rule_price.fmt_money(), c.stock_unit, c.rule_unit, c.stock_unit
+        )),
+        _ => None,
+    };
+    Ok(Json(
+        serde_json::json!({ "id": id, "no": req.no, "price_warn": warn, "price_check": check }),
+    ))
+}
+
+pub(super) async fn check_quotation_price(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::OrderOps)?;
+    let db = &user.db;
+    let q = findb::sales::quo_get(db, id)?.ok_or_else(|| AppError::not_found("报价单不存在"))?;
+    let check = findb::processfee::check_quote_price(
+        db,
+        &q.item_code,
+        &q.customer_code,
+        q.unit_price,
+        q.qty,
+    )?;
+    Ok(Json(serde_json::json!({
+        "no": q.no,
+        "item_code": q.item_code,
+        "item_name": q.item_name,
+        "qty": q.qty.fmt_qty(),
+        "unit_price": q.unit_price.fmt_money(),
+        "check": check,
+    })))
 }
 
 pub(super) async fn approve_quotation(

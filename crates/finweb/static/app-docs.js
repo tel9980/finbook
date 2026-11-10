@@ -7,6 +7,24 @@
 // 加载顺序由 `index.html` 的 <script> 顺序决定（也是 `main.rs` 里 asset_version 的清单顺序）。
 // 新增文件必须同步三处：index.html、main.rs 的 asset_version 清单、tools/lib-app-src.js 的解析（自动）。
 // 待发通知面板：pending 列表 → 「去出库」预填执行坞（发货成功后通知自动完成）
+// 报价单存完之后的「和价目表对不对得上」那一行。
+//
+// 抽成顶层是为了让 tools/check-app-render.js 能真调用：这行字里既有颜色也有
+// 数字（价目表折合价、差多少），写错了没人看得出来，只能靠门禁守。
+// 只提示、不拦单 —— 手工价有时是对的（老客户、一次性让价），但 1.5 写成 15
+// 这种错误得让人当场看见。
+function priceCheckHtml(r) {
+  if (!r) return "";
+  const c = r.price_check || null;
+  if (r.price_warn) {
+    return `<span style="color:var(--warn)">⚠ ${esc(r.price_warn)}</span>`;
+  }
+  if (c && c.kind === "ok") {
+    return `<span style="color:var(--ok)">✔ 和价目表一致：${esc(c.rule_price)} 元/${esc(c.rule_unit || c.stock_unit)}，折合每${esc(c.stock_unit)} ${esc(c.per_unit)} 元</span>`;
+  }
+  return "";
+}
+
 async function snLoad() {
   const box = document.getElementById("sn-list");
   if (!box) return;
@@ -199,6 +217,7 @@ async function viewSoDoc(main) {
       <button class="btn ghost sm" id="sd-quote" title="按「加工费规则」算价：面积×单价，不足最低收费兜底，加急另加">按规则报价</button>
       <button class="btn primary" id="sd-save">保存报价单</button>
     </div>
+    <div id="sd-price-warn" class="muted" style="margin-top:6px"></div>
     <div class="toolbar">
       <label>销售订单ID <input id="sd-soid" style="width:80px" /></label>
       <label>数量/金额 <input id="sd-amt" style="width:100px" /></label>
@@ -298,10 +317,20 @@ async function viewSoDoc(main) {
       toast(`规则「${q.rule_name || "按规则"}」：${fmt(q.qty)} × ${fmt(q.unit_price)} = 基础价 ${fmt(q.base)}，最低收费补差 ${fmt(q.floor_extra)}，加急 ${fmt(q.rush_extra)}，合计 ${fmt(q.total)}`, "ok");
     } catch (e) { toast(e.message, "err"); }
   });
+  // 存完把「这单价和价目表对不对得上」摆出来。只提示、不拦单 ——
+  // 手工价有时是对的（老客户、一次性让价），系统不该替业务员拍板；
+  // 但 1.5 写成 15 这种错误得让人当场看见。
+  const showPriceCheck = (r) => {
+    const el = $("#sd-price-warn");
+    if (el) el.innerHTML = priceCheckHtml(r);
+  };
   $("#sd-save").addEventListener("click", async () => {
     try {
-      await postJson("/sales/quote", { id: 0, period: ymm(state.current || ""), date: today(), customer_code: $("#sd-cust").value.trim(), customer_name: $("#sd-cust").value.trim(), item_code: $("#sd-item").value.trim(), item_name: $("#sd-item").value.trim(), qty: $("#sd-qty").value.trim() || "0", unit_price: $("#sd-price").value.trim() || "0", status: "draft", prepared_by: "", memo: "" });
-      toast("已保存报价单", "ok"); $("#sd-qty").value=""; $("#sd-price").value=""; load();
+      const r = await postJson("/sales/quote", { id: 0, period: ymm(state.current || ""), date: today(), customer_code: $("#sd-cust").value.trim(), customer_name: $("#sd-cust").value.trim(), item_code: $("#sd-item").value.trim(), item_name: $("#sd-item").value.trim(), qty: $("#sd-qty").value.trim() || "0", unit_price: $("#sd-price").value.trim() || "0", status: "draft", prepared_by: "", memo: "" });
+      if (r && r.price_warn) toast("已保存，但这单价和价目表对不上（见下方提示）", "err"); else toast("已保存报价单", "ok");
+      $("#sd-qty").value=""; $("#sd-price").value="";
+      // 先等列表重画再写提示，否则 load() 把这块 DOM 换了、提示当场消失
+      const saved = r; await load(); showPriceCheck(saved);
     } catch (e) { toast(e.message, "err"); }
   });
   const soid = () => parseInt($("#sd-soid").value.trim(), 10) || 0;

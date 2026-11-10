@@ -602,6 +602,10 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/sales/quote", get(list_quotation).post(save_quotation))
         .route("/api/sales/quote/:id/approve", post(approve_quotation))
         .route("/api/sales/quote/:id/to-order", post(convert_quotation))
+        .route(
+            "/api/sales/quote/:id/price-check",
+            get(check_quotation_price),
+        )
         .route("/api/sales/shipment", post(add_so_shipment))
         .route("/api/sales/payment", post(add_so_payment))
         .route("/api/sales/return", post(add_so_return))

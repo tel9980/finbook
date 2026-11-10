@@ -208,6 +208,107 @@ pub fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
+/// 「这单报的价和价目表对得上吗」的结论
+///
+/// 报价单上只有一个数（单价），价目表上却可能按 ㎡ / 米 / kg 记。要真比，
+/// 得先把价目表那格换成「每库存单位」的价 —— 否则 12 元/㎡ 和 0.15 元/件
+/// 摆在一起，只能得出「差 75 倍」这种没用的结论。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PriceCheck {
+    /// ok / mismatch / no_rule / unit_unknown
+    pub kind: &'static str,
+    pub rule_name: String,
+    /// 价目表那格的口径（原样）
+    pub rule_unit: String,
+    /// 价目表那格的单价（按 `rule_unit` 计）
+    pub rule_price: Money,
+    /// 换成「每库存单位」之后的价
+    pub per_unit: Money,
+    /// 库存单位（件 / 只 …）
+    pub stock_unit: String,
+    /// 报价单上的单价
+    pub line_price: Money,
+    /// 报价单 − 价目表（正数 = 报高了）
+    pub diff: Money,
+    /// 折算系数（没折算时为空）
+    pub factor: Option<Money>,
+}
+
+/// 拿报价单的单价跟价目表对一下。
+///
+/// 只做**读**，不改单据：对不上是提示，不是拦。手工价有时是对的（老客户、
+/// 一次性让价），系统不该替业务员拍板 —— 但填错了也得让人看见。
+pub fn check_quote_price(
+    db: &Db,
+    item: &str,
+    customer: &str,
+    line_price: Money,
+    qty: Money,
+) -> DbResult<PriceCheck> {
+    // 没有单位档案（item_unit 没这一行）时按「件」算 —— 那是价目表的默认口径，
+    // 也是报价单最常见的单位。这里空着会让每一单都变成「单位对不上」，全是噪声。
+    let stock_unit = {
+        let u = stock_unit_of(db, item)?;
+        if u.trim().is_empty() {
+            "件".to_string()
+        } else {
+            u
+        }
+    };
+    let base = PriceCheck {
+        kind: "no_rule",
+        rule_name: String::new(),
+        rule_unit: String::new(),
+        rule_price: Money::ZERO,
+        per_unit: Money::ZERO,
+        stock_unit: stock_unit.clone(),
+        line_price,
+        diff: Money::ZERO,
+        factor: None,
+    };
+    let Some((rule, _future)) = match_rule_full(db, item, customer, "", "", None, Some(qty))?
+    else {
+        return Ok(base);
+    };
+    let unit = rule.unit.trim().to_string();
+    let (per, factor, kind) = if unit.is_empty() || unit == stock_unit {
+        let per = rule.unit_price;
+        let k = if (line_price - per).abs() < Money::parse_or_zero("0.005") {
+            "ok"
+        } else {
+            "mismatch"
+        };
+        (per, None, k)
+    } else {
+        match calc_unit_of(db, item, &unit)? {
+            // 1 个库存单位 = factor 个计价单位，所以「每件价」= 单价 × factor
+            Some(cu) => {
+                let per = (rule.unit_price * cu.factor).round2();
+                let k = if (line_price - per).abs() < Money::parse_or_zero("0.005") {
+                    "ok"
+                } else {
+                    "mismatch"
+                };
+                (per, Some(cu.factor), k)
+            }
+            // 价目表按公斤计，又没录「1 件 = 多少 kg」—— 对不上就说对不上，
+            // 别拿两个不同单位的数硬减出一个「差 12 元」
+            None => (rule.unit_price, None, "unit_unknown"),
+        }
+    };
+    Ok(PriceCheck {
+        kind,
+        rule_name: rule.name.clone(),
+        rule_unit: unit,
+        rule_price: rule.unit_price,
+        per_unit: per,
+        stock_unit,
+        line_price,
+        diff: (line_price - per).round2(),
+        factor,
+    })
+}
+
 /// 今天到 `days` 天内开始生效的价（含今天），按生效日排。
 ///
 /// 提前录下一版价是好事，**录完就忘**是坑：生效那天没人提醒，客户按新价结账、
@@ -2222,6 +2323,41 @@ mod tests {
         assert_eq!(hist[1].old_price, "");
         assert_eq!(hist[1].new_price, "0.20");
         assert!(hist[0].at.len() >= 19, "时间要能看懂：{}", hist[0].at);
+    }
+
+    #[test]
+    fn 报价单的价和价目表对不上的时候要说清楚() {
+        let db = crate::tests::mem();
+        let mut c = cu("MB01", "㎡", "0.0234", 4);
+        calc_unit_save(&db, &mut c).unwrap();
+        let mut r = rule("MB01 按平方", "㎡", "12", "0", "0", "0");
+        r.item_code = "MB01".to_string();
+        rule_save(&db, &mut r).unwrap();
+
+        // 12 元/㎡ × 0.0234 = 0.2808 → 每件 0.28。报 0.28 算对上
+        let good = check_quote_price(&db, "MB01", "", m("0.28"), m("100")).unwrap();
+        assert_eq!(good.kind, "ok");
+        assert_eq!(good.rule_unit, "㎡");
+        assert_eq!(good.per_unit.fmt_money(), "0.28");
+        assert_eq!(good.stock_unit, "件", "库存单位取 item_unit.base_unit");
+        assert_eq!(good.factor.map(|f| f.fmt_qty()), Some("0.0234".to_string()));
+
+        // 报 0.15 是报低了 0.13
+        let low = check_quote_price(&db, "MB01", "", m("0.15"), m("100")).unwrap();
+        assert_eq!(low.kind, "mismatch");
+        assert_eq!(low.diff.fmt_money(), "-0.13");
+
+        // 价目表按 kg、又没录「1 件 = 多少 kg」→ 说「对不上」，绝不硬减出一个差额
+        let mut r2 = rule("MB02 按公斤", "kg", "30", "0", "0", "0");
+        r2.item_code = "MB02".to_string();
+        rule_save(&db, &mut r2).unwrap();
+        let odd = check_quote_price(&db, "MB02", "", m("0.5"), m("1")).unwrap();
+        assert_eq!(odd.kind, "unit_unknown");
+        assert_eq!(odd.rule_price.fmt_money(), "30.00");
+
+        // 价目表里根本没有这个物料
+        let none = check_quote_price(&db, "MB99", "", m("1"), m("1")).unwrap();
+        assert_eq!(none.kind, "no_rule");
     }
 
     #[test]

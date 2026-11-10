@@ -2061,6 +2061,27 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::到点提醒只报真会生效的那几条"],
   },
   {
+    name: "94 对价校验不乘折算系数（12 元/㎡ 和 0.15 元/件 直接比）",
+    file: "crates/findb/src/processfee.rs",
+    from: "let per = (rule.unit_price * cu.factor).round2();",
+    to: "let per = rule.unit_price;",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::报价单的价和价目表对不上的时候要说清楚"],
+  },
+  {
+    name: "95 口径对不上也硬减出一个差额",
+    file: "crates/findb/src/processfee.rs",
+    from: 'None => (rule.unit_price, None, "unit_unknown"),',
+    to: 'None => (rule.unit_price, None, "mismatch"),',
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::报价单的价和价目表对不上的时候要说清楚"],
+  },
+  {
+    name: "96 没有价目表却说「和价目表一致」",
+    file: "crates/findb/src/processfee.rs",
+    from: '        kind: "no_rule",',
+    to: '        kind: "ok",',
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::报价单的价和价目表对不上的时候要说清楚"],
+  },
+  {
     name: "93 到点提醒把停用的价也报上来",
     file: "crates/findb/src/processfee.rs",
     from: "!d.is_empty() && !r.disabled && d >= today.as_str()",

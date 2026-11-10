@@ -189,6 +189,49 @@ const CASES = [
     expect: ["暂时算不出来"],
     absent: ["账是平的", "home-trial ok"],
   },
+  // 报价单存完的「和价目表对不对得上」（v1.8.95）。守三条：
+  // 出问题时给黄字并带上「价目表折合价」和「差多少」；一致时给绿字；没有价就说空。
+  {
+    fn: "priceCheckHtml",
+    file: "crates/finweb/static/app-docs.js",
+    stubs: { esc: (s) => String(s == null ? "" : s) },
+    args: [
+      {
+        price_warn:
+          "这单价和价目表对不上：价目表 12.00 元/㎡（折合每 件 0.28 元），这单填 0.15 元，差 -0.13",
+        price_check: { kind: "mismatch" },
+      },
+    ],
+    expect: ["⚠", "对不上", "0.28", "-0.13"],
+    absent: ["✔"],
+  },
+  {
+    fn: "priceCheckHtml",
+    file: "crates/finweb/static/app-docs.js",
+    stubs: { esc: (s) => String(s == null ? "" : s) },
+    args: [
+      {
+        price_warn: null,
+        price_check: {
+          kind: "ok",
+          rule_price: "12.00",
+          rule_unit: "㎡",
+          per_unit: "0.28",
+          stock_unit: "件",
+        },
+      },
+    ],
+    expect: ["✔", "12.00 元/㎡", "每件 0.28 元"],
+    absent: ["⚠"],
+  },
+  {
+    fn: "priceCheckHtml",
+    file: "crates/finweb/static/app-docs.js",
+    stubs: { esc: (s) => String(s == null ? "" : s) },
+    args: [{ price_warn: null, price_check: { kind: "no_rule" } }],
+    expect: [],
+    absent: ["⚠", "✔"],
+  },
   // 首页「这几天有价要生效」（v1.8.94）。守三条：
   // 空就不占地方；今天生效的要说「今天起」；条数截断了要老实说还剩几条。
   {

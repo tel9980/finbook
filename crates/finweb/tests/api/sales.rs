@@ -2732,3 +2732,97 @@ async fn invoice_list_is_bounded() {
     );
     assert_eq!(r["truncated"], false, "收窄后不该报截断：{b}");
 }
+
+/// 报价单的价和价目表对不上：保存时给提示、也能单独查，但**不拦单**。
+#[tokio::test]
+async fn quote_price_check_flags_mismatch_without_blocking() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/dashboard", &sid))
+        .await
+        .unwrap();
+    let dash: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let cur_ymm: i32 = dash["current_period"]
+        .as_str()
+        .unwrap()
+        .replace('-', "")
+        .parse()
+        .unwrap();
+    let d13 = format!("{}-13", dash["current_period"].as_str().unwrap());
+
+    // 价目表：MB21 按 ㎡ 记 12 元，1 件 = 0.0234 ㎡ → 每件 0.2808，抹两位 0.28
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/calc-units",
+            &sid,
+            serde_json::json!({
+                "id": 0, "item_code": "MB21", "calc_unit": "㎡",
+                "factor": "0.0234", "scale": 4, "disabled": false, "memo": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "录折算系数");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "id": 0, "name": "MB21 按平方", "item_code": "MB21", "customer_code": "",
+                "unit": "㎡", "unit_price": "12", "min_charge": "0",
+                "rush_fee": "0", "rush_rate": "0", "disabled": false, "memo": "",
+                "effective_from": "", "process": "", "band_dim": "", "band_from": "",
+                "band_to": "", "qty_from": "", "qty_to": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "建价目表");
+
+    let quote = |price: &str| {
+        serde_json::json!({
+            "id": 0, "period": cur_ymm, "date": d13, "customer_code": "C01",
+            "customer_name": "客户甲", "item_code": "MB21", "item_name": "氧化件",
+            "qty": "100", "unit_price": price, "status": "draft",
+            "prepared_by": "", "memo": ""
+        })
+    };
+
+    // ① 填 0.15：比价目表低 0.13 —— 照样能存，只是响应该里带一句
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post("/api/sales/quote", &sid, quote("0.15")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "填错价也要能存");
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["price_check"]["kind"], "mismatch", "{v}");
+    assert_eq!(v["price_check"]["diff"], "-0.13", "{v}");
+    assert_eq!(v["price_check"]["per_unit"], "0.28", "{v}");
+    let warn = v["price_warn"].as_str().unwrap_or("");
+    assert!(warn.contains("对不上"), "提示要说清对不上：{warn}");
+    assert!(warn.contains("0.28"), "提示要给出价目表折合价：{warn}");
+    let qid = v["id"].as_i64().unwrap();
+
+    // ② 单独查一次（页面上的「对一下价目表」按钮走这里）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/sales/quote/{qid}/price-check"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["check"]["kind"], "mismatch", "{v}");
+    assert_eq!(v["check"]["factor"], "0.0234", "{v}");
+
+    // ③ 按价目表报 0.28：一致，没有提示
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post("/api/sales/quote", &sid, quote("0.28")))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["price_check"]["kind"], "ok", "{v}");
+    assert!(v["price_warn"].is_null(), "对得上就别啰嗦：{v}");
+}
