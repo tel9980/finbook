@@ -1381,6 +1381,8 @@ async function viewPriceRules(main) {
         btn.textContent = "开始导入";
       }
     };
+  };
+
   // 批量调价：某个客户今年全线涨 3%，先看会改哪些、改成多少，再决定执行。
   // 预览与执行走同一个接口（GET 预览 / POST 执行），算的是同一份东西。
   const openAdjust = () => {
@@ -1468,7 +1470,6 @@ async function viewPriceRules(main) {
         runBtn.textContent = "执行调价";
       }
     };
-  };
   };
 
   if ($("#pr-adjust", main)) $("#pr-adjust", main).onclick = openAdjust;
