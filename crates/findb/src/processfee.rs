@@ -828,6 +828,258 @@ pub fn rule_delete_by(db: &Db, id: i64, who: &str) -> DbResult<()> {
     Ok(())
 }
 
+// ── 批量调价（v1.8.97） ────────────────────────────────────────────────
+
+/// 批量调价的条件：调谁、怎么调、从哪天起。
+///
+/// 「客户年年来压价」是最常见的一类活：二十个客户、几百格价，一格一格改要半天，
+/// 还容易漏。这里把「选范围 + 给幅度 + 定生效日」做成一次操作，先预览再执行。
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct AdjustSpec {
+    /// 只调这个客户（空 = 全部客户）
+    pub customer_code: String,
+    /// 只调这个物料（空 = 全部物料）
+    pub item_code: String,
+    /// 调价方式：`pct` 按百分比 / `delta` 加减固定金额 / `set` 直接设定
+    pub mode: String,
+    /// 数值：`pct` 传 3 表示 +3%；`delta` 传 -0.5 表示降 5 毛；`set` 传 12.5 表示定成 12.5
+    pub value: Money,
+    /// 生效日期（`YYYY-MM-DD`，空 = 今天）
+    pub effective_from: String,
+    /// 备注（写进新一版规则和调价历史，比如「2027 年度涨价」）
+    pub memo: String,
+}
+
+/// 批量调价里的一条：拿哪条当底、调前多少、调后多少、是新建一版还是覆盖同一天那一版
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct AdjustRow {
+    /// 以哪一版为底（现行价那一版）
+    pub base_id: i64,
+    /// 要覆盖的那一版（0 = 新建）
+    pub rule_id: i64,
+    pub name: String,
+    pub item_code: String,
+    pub customer_code: String,
+    pub unit: String,
+    pub process: String,
+    pub old_price: Money,
+    pub new_price: Money,
+    pub effective_from: String,
+    /// 新建 / 覆盖
+    pub action: String,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct AdjustResult {
+    pub rows: Vec<AdjustRow>,
+    pub warnings: Vec<String>,
+    pub created: usize,
+    pub updated: usize,
+}
+
+/// 调价的生效日：没填就今天
+fn adjust_target(spec: &AdjustSpec) -> String {
+    let d = spec.effective_from.trim();
+    if d.is_empty() {
+        today()
+    } else {
+        d.to_string()
+    }
+}
+
+/// 同一「格」的标识：物料 + 客户 + 口径 + 工艺档 + 规格档 + 数量档。
+/// 同一格里可以有多版价（靠生效日区分），批量调价只动「当前该用的那一版」。
+fn slot_key(r: &PriceRule) -> String {
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        r.item_code.trim(),
+        r.customer_code.trim(),
+        r.unit.trim(),
+        r.process.trim(),
+        r.band_dim.trim(),
+        r.band_from.trim(),
+        r.band_to.trim(),
+        r.qty_from.trim(),
+        r.qty_to.trim()
+    )
+}
+
+/// 在 `target` 之前生效的那一版（也就是「现在正用的价」）。
+///
+/// 不能直接用 `best_active`：批量调价的日期可能是未来的，
+/// 那时「现在生效的」与「新价之前那一版」恰好是同一条，但重复执行时要稳定 ——
+/// 已经存在 target 当天那一版时必须跳过它，否则连点两下就涨两次。
+fn best_before<'a>(pool: &[&'a PriceRule], target: &str) -> Option<&'a PriceRule> {
+    pool.iter()
+        .copied()
+        .filter(|r| {
+            let d = r.effective_from.trim();
+            d.is_empty() || d < target
+        })
+        .max_by(|a, b| {
+            a.effective_from
+                .trim()
+                .cmp(b.effective_from.trim())
+                .then_with(|| b.id.cmp(&a.id))
+        })
+}
+
+/// 按调价方式算新价；算出 0 或负数时返回 `None`（这条不调）
+fn adjusted_price(old: Money, spec: &AdjustSpec) -> Option<Money> {
+    let hundred = Money::parse_or_zero("100");
+    let new = match spec.mode.trim() {
+        "pct" => {
+            let k = (hundred + spec.value).checked_div(hundred)?;
+            (old * k).round_dp(4)
+        }
+        "delta" => (old + spec.value).round_dp(4),
+        _ => spec.value.round_dp(4),
+    };
+    if new.is_positive() {
+        Some(new)
+    } else {
+        None
+    }
+}
+
+/// 预览：调哪些、调成多少（**不落库**）
+pub fn adjust_rows(db: &Db, spec: &AdjustSpec) -> DbResult<(Vec<AdjustRow>, Vec<String>)> {
+    let mode = spec.mode.trim();
+    if !matches!(mode, "pct" | "delta" | "set") {
+        return Err(FinError::msg(
+            "调价方式只能是 按百分比（pct）/ 加减金额（delta）/ 直接设定（set）",
+        )
+        .into());
+    }
+    if mode != "set" && spec.value.is_zero() {
+        return Err(FinError::msg("调 0 等于没调 —— 填个幅度，比如 3 表示 +3%").into());
+    }
+    let target = adjust_target(spec);
+    let date_ok = chrono::NaiveDate::parse_from_str(&target, "%Y-%m-%d")
+        .map(|d| d.format("%Y-%m-%d").to_string() == target)
+        .unwrap_or(false);
+    if !date_ok {
+        return Err(
+            FinError::msg(format!("生效日期要写成 2026-03-01 这样（实际：{target}）")).into(),
+        );
+    }
+
+    let want_cust = spec.customer_code.trim();
+    let want_item = spec.item_code.trim();
+    let rules = rule_list(db)?;
+    let mut groups: std::collections::BTreeMap<String, Vec<&PriceRule>> = Default::default();
+    for r in rules.iter() {
+        if r.disabled {
+            continue;
+        }
+        if !want_cust.is_empty() && r.customer_code.trim() != want_cust {
+            continue;
+        }
+        if !want_item.is_empty() && r.item_code.trim() != want_item {
+            continue;
+        }
+        groups.entry(slot_key(r)).or_default().push(r);
+    }
+
+    let mut rows = Vec::new();
+    let mut warnings = Vec::new();
+    for pool in groups.values() {
+        let Some(base) = best_before(pool, &target) else {
+            continue;
+        };
+        // 算出 0 或负数时不落库，但要说清是哪条、差多少 —— 静默跳过最让人上火
+        let new_price = match adjusted_price(base.unit_price, spec) {
+            Some(m) => m,
+            None => {
+                warnings.push(format!(
+                    "「{}」按这个幅度调完不到 0（原价 {}）—— 这条跳过",
+                    base.name,
+                    base.unit_price.fmt_money()
+                ));
+                continue;
+            }
+        };
+        let same_day = pool
+            .iter()
+            .copied()
+            .find(|r| r.effective_from.trim() == target);
+        rows.push(AdjustRow {
+            base_id: base.id,
+            rule_id: same_day.map(|r| r.id).unwrap_or(0),
+            name: base.name.clone(),
+            item_code: base.item_code.clone(),
+            customer_code: base.customer_code.clone(),
+            unit: base.unit.clone(),
+            process: base.process.clone(),
+            old_price: base.unit_price,
+            new_price,
+            effective_from: target.clone(),
+            action: if same_day.is_some() {
+                "覆盖"
+            } else {
+                "新建"
+            }
+            .to_string(),
+        });
+    }
+    Ok((rows, warnings))
+}
+
+/// 执行：按预览的结果写新一版价（每一条都过 `rule_save_by`，所以调价历史里留痕）
+pub fn adjust_apply(db: &Db, spec: &AdjustSpec, who: &str) -> DbResult<AdjustResult> {
+    let (rows, warnings) = adjust_rows(db, spec)?;
+    let target = adjust_target(spec);
+    let rules = rule_list(db)?;
+    let mut out = AdjustResult {
+        rows: Vec::new(),
+        warnings,
+        created: 0,
+        updated: 0,
+    };
+    for row in rows {
+        let Some(base) = rules.iter().find(|r| r.id == row.base_id) else {
+            out.warnings
+                .push(format!("「{}」的底价找不到了 —— 这条跳过", row.name));
+            continue;
+        };
+        let mut nr = base.clone();
+        nr.id = row.rule_id;
+        nr.unit_price = row.new_price;
+        nr.effective_from = target.clone();
+        if !spec.memo.trim().is_empty() {
+            nr.memo = if nr.memo.trim().is_empty() {
+                spec.memo.trim().to_string()
+            } else {
+                format!("{}；{}", nr.memo.trim(), spec.memo.trim())
+            };
+        }
+        rule_save_by(db, &mut nr, who)?;
+        if row.rule_id == 0 {
+            out.created += 1;
+        } else {
+            out.updated += 1;
+        }
+        out.rows.push(row);
+    }
+    if !out.rows.is_empty() {
+        let desc = match spec.mode.trim() {
+            "pct" => format!("{}%", spec.value.fmt_qty()),
+            "delta" => spec.value.fmt_money().to_string(),
+            _ => format!("直接设定 {}", spec.value.fmt_money()),
+        };
+        db.log(
+            who,
+            "销售",
+            "加工费规则",
+            &format!(
+                "批量调价（{desc}）：新增 {} 条、覆盖 {} 条，{} 起生效",
+                out.created, out.updated, target
+            ),
+        )?;
+    }
+    Ok(out)
+}
+
 /// 一次调价（`price_change` 表的一行）
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PriceChange {
@@ -2483,6 +2735,111 @@ mod tests {
             rush_rate: m(rush_rate),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn 批量调价只动现在生效的那一版() {
+        let db = crate::tests::mem();
+        // 同一条价的老版本（2020 年 10 元）+ 现行版本（12 元）
+        let mut old = rule("MB01 老价", "㎡", "10", "0", "0", "0");
+        old.item_code = "MB01".to_string();
+        old.effective_from = "2020-01-01".to_string();
+        rule_save(&db, &mut old).unwrap();
+        let mut cur = rule("MB01 现价", "㎡", "12", "0", "0", "0");
+        cur.item_code = "MB01".to_string();
+        cur.effective_from = "2025-01-01".to_string();
+        rule_save(&db, &mut cur).unwrap();
+        // 别的客户不动
+        let mut other = rule("MB01 给 C02", "㎡", "15", "0", "0", "0");
+        other.item_code = "MB01".to_string();
+        other.customer_code = "C02".to_string();
+        rule_save(&db, &mut other).unwrap();
+
+        let spec = AdjustSpec {
+            customer_code: "".to_string(),
+            item_code: "MB01".to_string(),
+            mode: "pct".to_string(),
+            value: m("3"),
+            effective_from: "2027-01-01".to_string(),
+            memo: "年度涨价".to_string(),
+        };
+        let (rows, warns) = adjust_rows(&db, &spec).unwrap();
+        assert!(warns.is_empty(), "不该有警告：{warns:?}");
+        // 两格（通用 12、C02 15）各一条，都是「新建」；老版本 10 元不该被乘一遍
+        assert_eq!(rows.len(), 2);
+        let common = rows.iter().find(|r| r.customer_code.is_empty()).unwrap();
+        assert_eq!(common.old_price.fmt_money(), "12.00");
+        assert_eq!(common.new_price.fmt_money(), "12.36");
+        assert_eq!(common.action, "新建");
+    }
+
+    #[test]
+    fn 批量调价同一天重跑不叠加() {
+        let db = crate::tests::mem();
+        let mut r = rule("MB02 现价", "件", "0.50", "0", "0", "0");
+        r.item_code = "MB02".to_string();
+        rule_save(&db, &mut r).unwrap();
+
+        let spec = AdjustSpec {
+            mode: "pct".to_string(),
+            value: m("3"),
+            effective_from: "2027-01-01".to_string(),
+            ..Default::default()
+        };
+        let a = adjust_apply(&db, &spec, "李四").unwrap();
+        assert_eq!((a.created, a.updated), (1, 0));
+        // 再点一次：底价仍是 0.50（不是上一轮调完的 0.515），覆盖同一天那一版
+        let b = adjust_apply(&db, &spec, "李四").unwrap();
+        assert_eq!((b.created, b.updated), (0, 1));
+        assert_eq!(b.rows[0].old_price.fmt_money(), "0.50");
+        assert_eq!(b.rows[0].new_price.fmt_dp(4), "0.5150");
+        // 价目表里只有两版（0.50 与 0.5150），没有涨成第三条
+        assert_eq!(rule_list(&db).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn 批量调价跳过算成零或负数的() {
+        let db = crate::tests::mem();
+        let mut r = rule("MB03 现价", "件", "0.50", "0", "0", "0");
+        r.item_code = "MB03".to_string();
+        rule_save(&db, &mut r).unwrap();
+        let spec = AdjustSpec {
+            mode: "delta".to_string(),
+            value: m("-0.80"),
+            effective_from: String::new(),
+            ..Default::default()
+        };
+        let (rows, warns) = adjust_rows(&db, &spec).unwrap();
+        assert!(rows.is_empty(), "调到负数的一条都不该出现");
+        assert_eq!(warns.len(), 1);
+        assert!(warns[0].contains("跳过"), "{:?}", warns);
+        // 不落库
+        assert_eq!(rule_list(&db).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn 批量调价的参数得看得懂() {
+        let db = crate::tests::mem();
+        let e = adjust_rows(
+            &db,
+            &AdjustSpec {
+                mode: "涨".to_string(),
+                value: m("3"),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{e}").contains("调价方式只能是"), "{e}");
+        let e = adjust_rows(
+            &db,
+            &AdjustSpec {
+                mode: "pct".to_string(),
+                value: Money::ZERO,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(format!("{e}").contains("调 0 等于没调"), "{e}");
     }
 
     #[test]

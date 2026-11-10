@@ -799,6 +799,38 @@ function specRowsHtml(rows) {
   return `<table class="grid"><thead><tr><th>规格（毫米）</th><th>规范写法</th><th>1 件折合</th><th>单件价</th><th></th></tr></thead><tbody>${body}</tbody></table>`;
 }
 
+// 批量调价的预览表：老价 → 新价，一行一条。
+// 抽成顶层是为了让 check-app-render 能真调用（不抽就只能靠手点一次）。
+function adjustRowsHtml(rows, warnings) {
+  const list = Array.isArray(rows) ? rows : [];
+  const warns = Array.isArray(warnings) ? warnings : [];
+  const warnHtml = warns.length
+    ? `<div style="color:var(--warn);font-size:12px;margin:6px 0">${warns
+        .slice(0, 10)
+        .map((w) => `⚠ ${esc(w)}`)
+        .join("<br>")}${warns.length > 10 ? `<br>…… 还有 ${warns.length - 10} 条` : ""}</div>`
+    : "";
+  if (!list.length) {
+    return `${warnHtml}<div class="muted" style="font-size:12px">没有匹配的价 —— 检查一下客户/物料有没有填错，或者这个范围的价已经停用了。</div>`;
+  }
+  const body = list
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.name || "")}</td><td>${esc(r.item_code || "任意")}</td>` +
+        `<td>${esc(r.customer_code || "通用")}</td><td>${esc(r.unit || "")}${r.process ? `/${esc(r.process)}` : ""}</td>` +
+        `<td style="text-align:right">${esc(fmt(r.old_price))}</td>` +
+        `<td style="text-align:right"><b>${esc(fmt(r.new_price))}</b></td>` +
+        `<td>${esc(r.action || "新建")}</td></tr>`
+    )
+    .join("");
+  return `${warnHtml}<div class="muted" style="font-size:12px;margin:6px 0">共 ${list.length} 条，${esc(
+    list[0].effective_from || ""
+  )} 起生效</div>
+    <div style="max-height:260px;overflow:auto"><table class="tbl">
+    <thead><tr><th>规则</th><th>物料</th><th>客户</th><th>口径</th><th style="text-align:right">原价</th><th style="text-align:right">新价</th><th>动作</th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+
 function importResultHtml(r, hint) {
   const created = Number(r.created) || 0;
   const updated = Number(r.updated) || 0;
@@ -830,7 +862,8 @@ async function viewPriceRules(main) {
       <label title="同一个工件换个表面处理就是另一个价（普通氧化 / 硬质氧化 / 导电氧化…）">工艺
         <input id="pr-proc" style="width:110px" placeholder="留空 = 不分档" /></label>
       <button class="btn primary sm" id="pr-load">看这个客户的价</button>
-      ${can("price_edit") ? `<button class="btn ghost sm" id="pr-import">批量导入</button>
+      ${can("price_edit") ? `<button class="btn ghost sm" id="pr-adjust" title="某个客户今年全线涨 3%：先看会改哪些、改成多少，再决定执行">批量调价</button>
+      <button class="btn ghost sm" id="pr-import">批量导入</button>
       <button class="btn ghost sm" id="pr-new-unit">录折算系数</button>
       <button class="btn ghost sm" id="pr-new">新增规则（高级）</button>` : ""}
       <button class="btn ghost sm" id="pr-clear">清空客户</button>
@@ -1348,8 +1381,97 @@ async function viewPriceRules(main) {
         btn.textContent = "开始导入";
       }
     };
+  // 批量调价：某个客户今年全线涨 3%，先看会改哪些、改成多少，再决定执行。
+  // 预览与执行走同一个接口（GET 预览 / POST 执行），算的是同一份东西。
+  const openAdjust = () => {
+    const today = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const day = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    const cust0 = ($("#pr-cust", main) && $("#pr-cust", main).value.trim()) || "";
+    const m = modal(`<h3>批量调价</h3>
+      <div class="muted" style="font-size:12px;line-height:1.7;margin-bottom:8px">
+        把一批价按同一个幅度调一遍 —— 每个「物料 + 客户 + 口径 + 工艺 + 规格段 + 数量段」<b>只动现在正在生效的那一版</b>，
+        调完写成<b>新的一版价</b>，老价留在调价历史里。<br />
+        先点「看会改哪些」，确认没问题再执行。同一天再执行一次是<b>覆盖</b>，不会涨两次。
+      </div>
+      <div class="row">
+        <label>客户 <input id="pa-cust" style="width:110px" placeholder="留空 = 所有客户" value="${esc(cust0)}" /></label>
+        <label>物料 <input id="pa-item" style="width:110px" placeholder="留空 = 所有物料" /></label>
+      </div>
+      <div class="row">
+        <label>怎么调
+          <select id="pa-mode">
+            <option value="pct">按百分比（+3 表示涨 3%）</option>
+            <option value="delta">加减固定金额（-0.5 表示降 5 毛）</option>
+            <option value="set">直接设定成这个价</option>
+          </select></label>
+        <label>幅度 <input id="pa-value" style="width:90px" placeholder="3" /></label>
+      </div>
+      <div class="row">
+        <label>从哪天起 <input id="pa-date" style="width:130px" value="${esc(day)}" /></label>
+        <label>备注 <input id="pa-memo" style="width:200px" placeholder="2027 年度涨价" /></label>
+      </div>
+      <div id="pa-out" style="margin-top:10px"></div>
+      <div style="margin-top:12px;text-align:right">
+        <button class="btn ghost sm" id="pa-cancel">关闭</button>
+        <button class="btn ghost sm" id="pa-preview">看会改哪些</button>
+        <button class="btn primary sm" id="pa-run" disabled>执行调价</button>
+      </div>`, true);
+    const out = $("#pa-out", m);
+    const runBtn = $("#pa-run", m);
+    const qs = () => {
+      const q = new URLSearchParams({
+        customer_code: $("#pa-cust", m).value.trim(),
+        item_code: $("#pa-item", m).value.trim(),
+        mode: $("#pa-mode", m).value,
+        value: $("#pa-value", m).value.trim(),
+        effective_from: $("#pa-date", m).value.trim(),
+        memo: $("#pa-memo", m).value.trim(),
+      });
+      return q.toString();
+    };
+    $("#pa-cancel", m).onclick = () => closeModal();
+    $("#pa-preview", m).onclick = async () => {
+      out.innerHTML = `<span class="muted">在算…</span>`;
+      runBtn.disabled = true;
+      try {
+        const r = await api(`/price-rules/adjust?${qs()}`);
+        out.innerHTML = adjustRowsHtml(r.rows, r.warnings);
+        runBtn.disabled = !(r.rows && r.rows.length);
+      } catch (e) {
+        out.innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
+      }
+    };
+    $("#pa-run", m).onclick = async () => {
+      runBtn.disabled = true;
+      runBtn.textContent = "在改…";
+      try {
+        const r = await api("/price-rules/adjust", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            customer_code: $("#pa-cust", m).value.trim(),
+            item_code: $("#pa-item", m).value.trim(),
+            mode: $("#pa-mode", m).value,
+            value: $("#pa-value", m).value.trim(),
+            effective_from: $("#pa-date", m).value.trim(),
+            memo: $("#pa-memo", m).value.trim(),
+          }),
+        });
+        out.innerHTML = adjustRowsHtml(r.rows, r.warnings);
+        toast(`已调 ${r.created + r.updated} 条：新增 ${r.created}、覆盖 ${r.updated}`, "ok");
+        loadMatrix();
+      } catch (e) {
+        out.innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
+      } finally {
+        runBtn.disabled = false;
+        runBtn.textContent = "执行调价";
+      }
+    };
+  };
   };
 
+  if ($("#pr-adjust", main)) $("#pr-adjust", main).onclick = openAdjust;
   if ($("#pr-import", main)) $("#pr-import", main).onclick = openImport;
   if ($("#pr-new", main)) $("#pr-new", main).onclick = () => openRule(null);
   if ($("#pr-new-unit", main)) $("#pr-new-unit", main).onclick = () => openUnit(null);

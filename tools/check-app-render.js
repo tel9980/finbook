@@ -567,6 +567,28 @@ const CASES = [
     expect: ["全部尺寸"],
     absent: ["≤", ">"],
   },
+  // 批量调价的预览表（v1.8.97）。用户是靠这张表决定「执行」的，
+  // 所以老价、新价、动作三样缺一样都不行。
+  {
+    fn: "adjustRowsHtml",
+    args: [
+      [
+        { name: "MB01 按㎡", item_code: "MB01", customer_code: "", unit: "㎡", old_price: "12.00", new_price: "12.36", action: "新建", effective_from: "2027-01-01" },
+        { name: "C01 按只", item_code: "MB02", customer_code: "C01", unit: "只", old_price: "0.50", new_price: "0.52", action: "覆盖", effective_from: "2027-01-01" },
+      ],
+      [],
+    ],
+    stubs: HIST_STUBS,
+    expect: ["12.00", "12.36", "新建", "覆盖", "共 2 条", "2027-01-01"],
+  },
+  {
+    // 一条都没调到（比如幅度把价压到 0）+ 有警告：不能显示成空表让人以为成功
+    fn: "adjustRowsHtml",
+    args: [[], ["「MB03 按件」调完不到 0（原价 0.50）—— 这条跳过"]],
+    stubs: HIST_STUBS,
+    expect: ["跳过", "没有匹配的价"],
+    absent: ["<table"],
+  },
 ];
 
 function main() {

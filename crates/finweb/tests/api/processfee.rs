@@ -946,3 +946,129 @@ async fn price_history_records_who_changed_what() {
     assert_eq!(rows[1]["action"], "新增");
     assert_eq!(rows[1]["new_price"], "0.20");
 }
+
+#[tokio::test]
+async fn price_adjust_previews_then_writes_a_new_version() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 一条 12 元/㎡ 的通用价
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "name": "MB21 按㎡",
+                "item_code": "MB21",
+                "unit": "㎡",
+                "unit_price": "12",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 预览：涨 3% → 12.00 变 12.36，只算不落库
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            "/api/price-rules/adjust?item_code=MB21&mode=pct&value=3&effective_from=2027-01-01",
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "只有这一条该调：{v}");
+    assert_eq!(rows[0]["old_price"], "12.00");
+    // 算出来的价按 Money 的 4 位小数走（0.2808 这类每件价必须留住），比数值不比字面
+    assert!((money_num(rows[0]["new_price"].as_str().unwrap()) - 12.36).abs() < 1e-9);
+    assert_eq!(rows[0]["action"], "新建");
+    assert_eq!(rows[0]["effective_from"], "2027-01-01");
+    // 预览不写库
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["rules"].as_array().unwrap().len(), 1, "预览不该落库：{v}");
+
+    // 执行
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules/adjust",
+            &sid,
+            serde_json::json!({
+                "item_code": "MB21",
+                "mode": "pct",
+                "value": "3",
+                "effective_from": "2027-01-01",
+                "memo": "2027 年度涨价",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(v["created"].as_u64(), Some(1));
+    assert_eq!(v["updated"].as_u64(), Some(0));
+
+    // 价目表多了一版，老价还在
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let list = v["rules"].as_array().unwrap();
+    assert_eq!(list.len(), 2, "老价 + 新一版：{v}");
+    let nu = list
+        .iter()
+        .find(|r| r["effective_from"] == "2027-01-01")
+        .expect("新一版");
+    assert_eq!(nu["unit_price"], "12.36");
+    assert_eq!(nu["memo"], "2027 年度涨价");
+
+    // 同一天再执行一次是覆盖，不会涨两次
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules/adjust",
+            &sid,
+            serde_json::json!({
+                "item_code": "MB21",
+                "mode": "pct",
+                "value": "3",
+                "effective_from": "2027-01-01",
+            }),
+        ))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        v["updated"].as_u64(),
+        Some(1),
+        "同一天重跑要覆盖，不是再加一条：{v}"
+    );
+    let again = money_num(v["rows"][0]["new_price"].as_str().unwrap());
+    assert!(
+        (again - 12.36).abs() < 1e-9,
+        "底价仍是 12.00，不该变成 12.73：{v}"
+    );
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules", &sid))
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        v["rules"].as_array().unwrap().len(),
+        2,
+        "覆盖后仍是两条：{v}"
+    );
+
+    // 荒诞参数要说人话
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules/adjust?mode=pct&value=0", &sid))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(body_string(resp).await.contains("等于没调"));
+}

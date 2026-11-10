@@ -389,6 +389,70 @@ pub(super) async fn list_price_bands(
     Ok(Json(json!({ "customer": customer, "rows": rows })))
 }
 
+/// 批量调价的条件（预览与执行共用）
+#[derive(Deserialize)]
+pub struct AdjustReq {
+    #[serde(default)]
+    pub customer_code: String,
+    #[serde(default)]
+    pub item_code: String,
+    pub mode: String,
+    /// 百分比（3 = +3%）/ 加减金额 / 直接设定价，按 `mode` 解释
+    pub value: String,
+    #[serde(default)]
+    pub effective_from: String,
+    #[serde(default)]
+    pub memo: String,
+}
+
+impl AdjustReq {
+    fn spec(&self) -> Result<findb::processfee::AdjustSpec, AppError> {
+        Ok(findb::processfee::AdjustSpec {
+            customer_code: self.customer_code.trim().to_string(),
+            item_code: self.item_code.trim().to_string(),
+            mode: self.mode.trim().to_string(),
+            value: money_or_zero(&self.value)?,
+            effective_from: self.effective_from.trim().to_string(),
+            memo: self.memo.trim().to_string(),
+        })
+    }
+}
+
+/// 批量调价：先看会改哪些、改成多少（不落库）
+pub(super) async fn preview_price_adjust(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceView)?;
+    let req = AdjustReq {
+        customer_code: q.get("customer_code").cloned().unwrap_or_default(),
+        item_code: q.get("item_code").cloned().unwrap_or_default(),
+        mode: q.get("mode").cloned().unwrap_or_default(),
+        value: q.get("value").cloned().unwrap_or_default(),
+        effective_from: q.get("effective_from").cloned().unwrap_or_default(),
+        memo: q.get("memo").cloned().unwrap_or_default(),
+    };
+    let (rows, warnings) = findb::processfee::adjust_rows(&user.db, &req.spec()?)?;
+    Ok(Json(json!({
+        "rows": rows,
+        "warnings": warnings,
+        "count": rows.len(),
+    })))
+}
+
+/// 批量调价：真改（每一条都过 rule_save_by，所以调价历史里留痕）
+pub(super) async fn apply_price_adjust(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Json(req): Json<AdjustReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceEdit)?;
+    let spec = req.spec()?;
+    let out = findb::processfee::adjust_apply(&user.db, &spec, user.username())?;
+    Ok(Json(json!(out)))
+}
+
 #[derive(Deserialize)]
 pub struct MatrixCellReq {
     #[serde(default)]

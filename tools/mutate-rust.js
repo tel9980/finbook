@@ -2111,6 +2111,35 @@ const MUT = [
     to: "        req.calc_qty = String::new();",
     cmd: ["test", "-p", "finweb", "--test", "api", "quotation_price_comes_from_price_list_and_stays"],
   },
+  // v1.8.97 批量调价：四个错法，用户都会当场踩到
+  {
+    name: "101 批量调价不按格分组（不同物料的价挤成一条）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        groups.entry(slot_key(r)).or_default().push(r);",
+    to: "        groups.entry(String::new()).or_default().push(r);",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::批量调价只动现在生效的那一版"],
+  },
+  {
+    name: "102 批量调价涨跌算反（涨 3% 变成降 3%）",
+    file: "crates/findb/src/processfee.rs",
+    from: "            let k = (hundred + spec.value).checked_div(hundred)?;",
+    to: "            let k = (hundred - spec.value).checked_div(hundred)?;",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::批量调价同一天重跑不叠加"],
+  },
+  {
+    name: "103 同一天重跑又新建一条（价目表越调越臃肿）",
+    file: "crates/findb/src/processfee.rs",
+    from: "            rule_id: same_day.map(|r| r.id).unwrap_or(0),",
+    to: "            rule_id: 0,",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::批量调价同一天重跑不叠加"],
+  },
+  {
+    name: "104 调完不到 0 也照写（负数价进价目表）",
+    file: "crates/findb/src/processfee.rs",
+    from: "    if new.is_positive() {\n        Some(new)\n    } else {\n        None\n    }",
+    to: "    Some(new)",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::批量调价跳过算成零或负数的"],
+  },
   {
     name: "93 到点提醒把停用的价也报上来",
     file: "crates/findb/src/processfee.rs",
