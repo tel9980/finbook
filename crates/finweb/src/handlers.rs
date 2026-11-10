@@ -553,6 +553,8 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/price-rules/import", post(import_price_rules))
         .route("/api/calc-units/import", post(import_calc_units))
         .route("/api/price-import/template", get(price_import_template))
+        // 导出价目表（v1.8.98）：发给客户核对/改价，列头与导入模板一致，改完能导回来
+        .route("/api/price-rules/export", get(export_price_rules))
         .route("/api/price-specs/calc", post(calc_spec_prices))
         .route(
             "/api/piece-rates",

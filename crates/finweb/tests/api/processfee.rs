@@ -1072,3 +1072,80 @@ async fn price_adjust_previews_then_writes_a_new_version() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert!(body_string(resp).await.contains("等于没调"));
 }
+
+#[tokio::test]
+async fn price_export_downloads_xlsx_and_round_trips() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // MB31：老价 10 + 现价 12 + 停用 99 —— 只该导出「现价 12」这一条
+    for (name, price, from, disabled) in [
+        ("MB31 老价", "10", "2020-01-01", false),
+        ("MB31 现价", "12", "2025-01-01", false),
+        ("MB31 停用", "99", "", true),
+    ] {
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/price-rules",
+                &sid,
+                serde_json::json!({
+                    "name": name, "item_code": "MB31", "unit": "㎡",
+                    "unit_price": price, "effective_from": from, "disabled": disabled
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+    // MB32：加急率走 exact_param 落库（可能是三位小数），导出不能四舍五入丢尾数
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "name": "MB32 加急率", "item_code": "MB32", "unit": "只",
+                "unit_price": "0.45", "rush_rate": "7.125"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 导出
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules/export", &sid))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(ct.contains("spreadsheetml"), "content-type 应为 xlsx：{ct}");
+    let bytes = axum::body::to_bytes(resp.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    assert!(bytes.len() > 1000, "导出内容不该是空：{} 字节", bytes.len());
+    assert_eq!(&bytes[..2], b"PK", "xlsx 是 zip，头两字节固定 PK");
+
+    // 读回校验：表头与导入模板一致，数据只留当前生效价
+    let rows = findb::imports::read_xlsx_bytes(&bytes).unwrap();
+    assert_eq!(rows.len(), 3, "表头 + 2 行当前价：{rows:?}");
+    assert_eq!(rows[0][0], "物料编码");
+    assert_eq!(rows[0][3], "单价");
+    let mb31 = rows.iter().find(|r| r[0] == "MB31").expect("MB31 现价");
+    assert!(
+        (money_num(&mb31[3]) - 12.0).abs() < 1e-9,
+        "只留现价：{mb31:?}"
+    );
+    assert_eq!(mb31[7], "2025-01-01", "生效日期要原样保留");
+    let mb32 = rows.iter().find(|r| r[0] == "MB32").expect("MB32");
+    assert!(
+        (money_num(&mb32[6]) - 7.125).abs() < 1e-9,
+        "加急率的三位小数不能丢：{}",
+        mb32[6]
+    );
+}

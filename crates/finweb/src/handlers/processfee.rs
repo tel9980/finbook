@@ -660,3 +660,83 @@ pub(super) async fn price_import_template(
     )
         .into_response())
 }
+
+/// 导出价目表（xlsx）：每个「格」一行当前生效价，列头与导入模板逐字一致，
+/// 导出去改完能导回来。金额用 `fmt_exact`（满精度、无千分位）——
+/// 其中「加急率%」走 `exact_param` 落库、可能不是两位小数，`fmt_plain` 会四舍五入，
+/// 再导回就静默丢尾数。
+pub(super) async fn export_price_rules(
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    user.require(Perm::PriceView)?;
+    let customer = q.get("customer").map(String::as_str).unwrap_or("");
+    let rules = findb::processfee::export_rules(&user.db, customer)?;
+
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(rules.len());
+    for r in &rules {
+        rows.push(vec![
+            r.item_code.clone(),
+            r.customer_code.clone(),
+            r.unit.clone(),
+            r.unit_price.fmt_exact(),
+            r.min_charge.fmt_exact(),
+            r.rush_fee.fmt_exact(),
+            r.rush_rate.fmt_exact(),
+            r.effective_from.clone(),
+            r.name.clone(),
+            r.memo.clone(),
+            r.process.clone(),
+            r.band_dim.clone(),
+            r.band_from.clone(),
+            r.band_to.clone(),
+            r.qty_from.clone(),
+            r.qty_to.clone(),
+        ]);
+    }
+
+    let sheet = crate::xlsxout::Sheet::plain(
+        "加工费单价",
+        &findb::processfee::RULE_HEAD,
+        &[
+            crate::xlsxout::ColFmt::Text,  // 物料编码
+            crate::xlsxout::ColFmt::Text,  // 客户编码
+            crate::xlsxout::ColFmt::Text,  // 计价口径
+            crate::xlsxout::ColFmt::Money, // 单价
+            crate::xlsxout::ColFmt::Money, // 起步价
+            crate::xlsxout::ColFmt::Money, // 加急固定费
+            crate::xlsxout::ColFmt::Money, // 加急率%
+            crate::xlsxout::ColFmt::Text,  // 生效日期
+            crate::xlsxout::ColFmt::Text,  // 名称
+            crate::xlsxout::ColFmt::Text,  // 备注
+            crate::xlsxout::ColFmt::Text,  // 工艺档
+            crate::xlsxout::ColFmt::Text,  // 规格维
+            crate::xlsxout::ColFmt::Text,  // 规格下限
+            crate::xlsxout::ColFmt::Text,  // 规格上限
+            crate::xlsxout::ColFmt::Text,  // 数量下限
+            crate::xlsxout::ColFmt::Text,  // 数量上限
+        ],
+    )
+    .with_rows(rows);
+
+    let filename = if customer.trim().is_empty() {
+        "加工费价目表.xlsx".to_string()
+    } else {
+        format!("加工费价目表-{customer}.xlsx")
+    };
+    user.db.log(
+        user.username(),
+        "导出",
+        "加工费规则",
+        &format!(
+            "价目表{}（{} 条）",
+            if customer.trim().is_empty() {
+                "全部"
+            } else {
+                customer
+            },
+            rules.len()
+        ),
+    )?;
+    super::build_xlsx(&[sheet], &filename, "价目表")
+}

@@ -525,6 +525,43 @@ pub fn rule_list(db: &Db) -> DbResult<Vec<PriceRule>> {
     Ok(out)
 }
 
+/// 导出价目表：每个「格」取当前该用的一条（已生效里最新的，没有就取最早未来价），
+/// 历史版本、停用的都不进导出。返回按 客户 → 物料 → 口径 → 工艺 → 生效日 排序的当前价。
+///
+/// 导出的意图是「发给客户核对 / 改价发回」：只给当前价，不带一长串历史。
+/// 生效日期**保留原样**（不置空）—— 导入的身份里含生效日，客户改价发回时
+/// 日期不动，覆盖的正是当前这一版；若置空，而当前价来自未来生效的调价，
+/// 导入会覆盖被阴影的旧「立即」版，而未来版仍赢 → 新价不生效。
+pub fn export_rules(db: &Db, customer: &str) -> DbResult<Vec<PriceRule>> {
+    let rules = rule_list(db)?;
+    let today = today();
+    let want_cust = customer.trim();
+    let mut by_slot: HashMap<String, Vec<&PriceRule>> = HashMap::new();
+    for r in rules.iter() {
+        if r.disabled {
+            continue;
+        }
+        if !want_cust.is_empty() && r.customer_code.trim() != want_cust {
+            continue;
+        }
+        by_slot.entry(slot_key(r)).or_default().push(r);
+    }
+    let mut out: Vec<PriceRule> = by_slot
+        .into_values()
+        .filter_map(|pool| best_for_cell(pool, &today).cloned())
+        .collect();
+    out.sort_by(|a, b| {
+        a.customer_code
+            .cmp(&b.customer_code)
+            .then_with(|| a.item_code.cmp(&b.item_code))
+            .then_with(|| a.unit.cmp(&b.unit))
+            .then_with(|| a.process.cmp(&b.process))
+            .then_with(|| a.effective_from.cmp(&b.effective_from))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    Ok(out)
+}
+
 /// 保存规则（id=0 新建）
 pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
     rule_save_by(db, r, "")
@@ -3985,5 +4022,73 @@ MB03,米,x,2
         r3.band_dim = "对角线".to_string();
         let e = rule_save(&db, &mut r3).unwrap_err();
         assert!(format!("{e}").contains("最长边"), "实际：{e}");
+    }
+
+    #[test]
+    fn 导出只给每格当前生效的那一版并排除停用() {
+        let db = crate::tests::mem();
+        let mut old = rule("MB01 老价", "㎡", "10", "0", "0", "0");
+        old.item_code = "MB01".to_string();
+        old.effective_from = "2020-01-01".to_string();
+        rule_save(&db, &mut old).unwrap();
+        let mut cur = rule("MB01 现价", "㎡", "12", "0", "0", "0");
+        cur.item_code = "MB01".to_string();
+        cur.effective_from = "2025-01-01".to_string();
+        rule_save(&db, &mut cur).unwrap();
+        let mut dead = rule("MB01 停用", "㎡", "99", "0", "0", "0");
+        dead.item_code = "MB01".to_string();
+        dead.disabled = true;
+        rule_save(&db, &mut dead).unwrap();
+        // 另一个物料、整格都停用：这一格必须整个不出现（否则「删掉停用过滤」的变异看不到）
+        let mut dead2 = rule("MB05 停用", "只", "9.99", "0", "0", "0");
+        dead2.item_code = "MB05".to_string();
+        dead2.disabled = true;
+        rule_save(&db, &mut dead2).unwrap();
+
+        let rows = export_rules(&db, "").unwrap();
+        assert_eq!(rows.len(), 1, "历史与停用的都不该进导出：{rows:?}");
+        assert_eq!(rows[0].unit_price.fmt_money(), "12.00");
+        assert_eq!(rows[0].effective_from, "2025-01-01", "生效日期要原样保留");
+    }
+
+    #[test]
+    fn 导出按客户过滤且只有未来价时也带上() {
+        let db = crate::tests::mem();
+        let mut c1 = rule("给C01", "只", "0.45", "0", "0", "0");
+        c1.item_code = "MB02".to_string();
+        c1.customer_code = "C01".to_string();
+        c1.effective_from = "2027-01-01".to_string(); // 只有未来版也要报（这是下一个要用的价）
+        rule_save(&db, &mut c1).unwrap();
+        let mut c2 = rule("给C02", "只", "0.50", "0", "0", "0");
+        c2.item_code = "MB02".to_string();
+        c2.customer_code = "C02".to_string();
+        rule_save(&db, &mut c2).unwrap();
+
+        let rows = export_rules(&db, "C01").unwrap();
+        assert_eq!(rows.len(), 1, "只导出 C01 自己的价");
+        assert_eq!(rows[0].customer_code, "C01");
+        assert_eq!(rows[0].effective_from, "2027-01-01");
+    }
+
+    #[test]
+    fn 导出包含规格档和数量档的价() {
+        let db = crate::tests::mem();
+        let mut banded = rule("短件按件", "件", "0.20", "0", "0", "0");
+        banded.item_code = "MB03".to_string();
+        banded.band_dim = "max".to_string();
+        banded.band_to = "200".to_string();
+        rule_save(&db, &mut banded).unwrap();
+        let mut qty = rule("小批量", "件", "0.35", "0", "0", "0");
+        qty.item_code = "MB04".to_string();
+        qty.qty_to = "500".to_string();
+        rule_save(&db, &mut qty).unwrap();
+
+        let rows = export_rules(&db, "").unwrap();
+        assert_eq!(rows.len(), 2);
+        let banded_row = rows.iter().find(|r| r.item_code == "MB03").unwrap();
+        assert_eq!(banded_row.band_dim, "max");
+        assert_eq!(banded_row.band_to, "200");
+        let qty_row = rows.iter().find(|r| r.item_code == "MB04").unwrap();
+        assert_eq!(qty_row.qty_to, "500");
     }
 }

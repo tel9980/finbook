@@ -862,6 +862,7 @@ async function viewPriceRules(main) {
       <label title="同一个工件换个表面处理就是另一个价（普通氧化 / 硬质氧化 / 导电氧化…）">工艺
         <input id="pr-proc" style="width:110px" placeholder="留空 = 不分档" /></label>
       <button class="btn primary sm" id="pr-load">看这个客户的价</button>
+      <button class="btn ghost sm" id="pr-export" title="把当前生效价导出成 Excel，发给客户核对或改价，改完能导回来">导出 Excel</button>
       ${can("price_edit") ? `<button class="btn ghost sm" id="pr-adjust" title="某个客户今年全线涨 3%：先看会改哪些、改成多少，再决定执行">批量调价</button>
       <button class="btn ghost sm" id="pr-import">批量导入</button>
       <button class="btn ghost sm" id="pr-new-unit">录折算系数</button>
@@ -1290,6 +1291,8 @@ async function viewPriceRules(main) {
   };
 
   $("#pr-load", main).onclick = loadMatrix;
+  $("#pr-export", main).onclick = () =>
+    downloadUrl(`${API}/price-rules/export?customer=${encodeURIComponent($("#pr-cust", main).value.trim())}`);
   $("#pr-clear", main).onclick = () => {
     $("#pr-cust", main).value = "";
     loadMatrix();

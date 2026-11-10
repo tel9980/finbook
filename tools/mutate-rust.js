@@ -2147,6 +2147,21 @@ const MUT = [
     to: "!d.is_empty() && d >= today.as_str()",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::到点提醒只报真会生效的那几条"],
   },
+  // v1.8.98 价目表导出：两个错法，客户拿去会看到「该停的价」或「该换的旧价」
+  {
+    name: "105 导出把停用的价也带出来",
+    file: "crates/findb/src/processfee.rs",
+    from: "        if r.disabled {\n            continue;\n        }\n        if !want_cust.is_empty() && r.customer_code.trim() != want_cust {\n            continue;\n        }\n        by_slot.entry(slot_key(r)).or_default().push(r);",
+    to: "        if false {\n            continue;\n        }\n        if !want_cust.is_empty() && r.customer_code.trim() != want_cust {\n            continue;\n        }\n        by_slot.entry(slot_key(r)).or_default().push(r);",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导出只给每格当前生效的那一版并排除停用"],
+  },
+  {
+    name: "106 导出把历史价当现价（挑到最早那版）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        .filter_map(|pool| best_for_cell(pool, &today).cloned())",
+    to: "        .filter_map(|pool| pool.into_iter().min_by_key(|r| r.effective_from.clone()).cloned())",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导出只给每格当前生效的那一版并排除停用"],
+  },
 
 ];
 
