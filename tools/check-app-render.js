@@ -619,6 +619,26 @@ const CASES = [
     expect: ["当期还没有报价单"],
     absent: ["<table"],
   },
+  // 销售订单回款看板（v1.8.102）：谁还欠我钱，未收合计点出来。
+  {
+    fn: "soReceivableHtml",
+    args: [
+      [
+        { no: "XS2026010001", customer_name: "客户A", date: "2026-01-05", total_amount: "2000.00", collected: "1200.00", balance: "800.00", status: "已确认" },
+        { no: "XS2026010002", customer_name: "客户B", date: "2026-01-06", total_amount: "500.00", collected: "0.00", balance: "500.00", status: "已确认" },
+      ],
+      "1300.00",
+    ],
+    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s) },
+    expect: ["共 2 笔", "未收合计", "1300.00", "客户A", "2000.00", "1200.00", "800.00", "已确认", "订单金额", "已收", "未收"],
+  },
+  {
+    fn: "soReceivableHtml",
+    args: [[], "0.00"],
+    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s) },
+    expect: ["没有未结清的订单"],
+    absent: ["<table"],
+  },
 ];
 
 function main() {

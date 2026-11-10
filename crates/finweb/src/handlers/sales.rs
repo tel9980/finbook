@@ -931,6 +931,33 @@ pub(super) async fn list_so(
     Ok(Json(json!({ "rows": rows })))
 }
 
+/// 谁还欠我钱：未结清销售订单，按未收金额从大到小（跨期间）。
+pub(super) async fn get_so_receivable(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let db = &user.db;
+    let mut rows = findb::sales::so_receivable(db)?;
+    if !user.user.can(Perm::PriceView) {
+        for r in &mut rows {
+            r.total_amount = Money::ZERO;
+            r.collected = Money::ZERO;
+            r.balance = Money::ZERO;
+        }
+    }
+    let outstanding: Money = rows.iter().fold(Money::ZERO, |acc, r| {
+        if r.balance.is_positive() {
+            acc + r.balance
+        } else {
+            acc
+        }
+    });
+    Ok(Json(
+        json!({ "rows": rows, "outstanding": outstanding, "count": rows.len() }),
+    ))
+}
+
 /// 发货通知（订单确认后）：仓库备货指令，出库后自动完成最早一条待发通知
 pub(super) async fn create_notice(
     State(_state): State<Arc<WebState>>,

@@ -627,6 +627,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/sales/credit", get(get_credit_check))
         .route("/api/sales/track", get(get_so_track))
         .route("/api/sales/stats", get(get_sales_stats))
+        .route("/api/sales/so/receivable", get(get_so_receivable))
         .route("/api/sales/so", get(list_so).post(save_so))
         .route("/api/sales/so/:id/transition", post(transition_so))
         .route("/api/sales/so/:id/notice", post(create_notice))

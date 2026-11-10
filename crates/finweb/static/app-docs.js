@@ -62,6 +62,13 @@ function quoReconcileHtml(rows) {
   return `${summary}<table class="grid"><thead><tr><th>单号</th><th>客户</th><th>存货</th><th class="num">数量</th><th class="num">报价单价</th><th class="num">实际单价</th><th class="num">单价差</th><th class="num">差额</th><th>订单状态</th></tr></thead><tbody>${rows.map(tr).join("")}</tbody></table>`;
 }
 
+function soReceivableHtml(rows, outstanding) {
+  if (!rows || !rows.length) return `<div class="muted">没有未结清的订单 —— 要么都收齐了，要么还没有已确认的销售订单。</div>`;
+  const tr = (r) => `<tr><td>${esc(r.no)}</td><td>${esc(r.customer_name)}</td><td class="muted">${esc(r.date)}</td><td class="num">${fmtMoney(r.total_amount)}</td><td class="num">${fmtMoney(r.collected)}</td><td class="num"><b>${fmtMoney(r.balance)}</b></td><td>${esc(r.status)}</td></tr>`;
+  const summary = `<div class="muted" style="margin:4px 0">共 ${rows.length} 笔，未收合计 <b style="color:var(--warn)">${fmtMoney(outstanding)}</b></div>`;
+  return `${summary}<table class="grid"><thead><tr><th>单号</th><th>客户</th><th>日期</th><th class="num">订单金额</th><th class="num">已收</th><th class="num">未收</th><th>状态</th></tr></thead><tbody>${rows.map(tr).join("")}</tbody></table>`;
+}
+
 async function snLoad() {
   const box = document.getElementById("sn-list");
   if (!box) return;
@@ -275,6 +282,7 @@ async function viewSoDoc(main) {
     <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">发货通知（待发）</h4><span class="grow"></span><button class="btn ghost sm" id="sn-reload">刷新</button></div><div id="sn-list" class="muted" style="margin-top:8px">加载中…</div></div>
     <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">销售订单</h4><span class="grow"></span>${sizeSel("so-size")}<button class="btn ghost sm" id="so-print">打印所选</button><button class="btn ghost sm" id="so-deli">送货单(跟车)</button><button class="btn ghost sm" id="so-printcfg">打印设置</button><button class="btn primary sm" id="so-new">新建销售订单</button></div><div id="so-list" class="muted" style="margin-top:8px">加载中…</div></div>
     <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">报价单</h4><span class="grow"></span><button class="btn ghost sm" id="quo-print" title="勾选若干报价单一次打一摞；没勾就打印当前列表全部">打印所选</button>${can("report") ? `<button class="btn ghost sm" id="sd-recon">报价对账</button><button class="btn ghost sm" id="sd-recon-export" title="把对账表导成 Excel 给老板/客户留档">导出</button>` : ""}</div><div id="sd-list">加载中…</div><div id="sd-recon-out" class="muted" style="margin-top:8px"></div></div>
+    ${can("report") ? `<div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">谁还欠我钱</h4><span class="grow"></span><button class="btn ghost sm" id="sd-recv" title="刷新未结清订单">刷新</button></div><div id="sd-recv-out" class="muted" style="margin-top:8px">加载中…</div></div>` : ""}
     <div class="panel" style="margin-top:12px"><h4>销售订单执行跟踪</h4><div id="sd-track">加载中…</div></div>`;
 
   const load = async () => {
@@ -337,6 +345,13 @@ async function viewSoDoc(main) {
         };
         $("#sd-recon-export").onclick = () => window.open(`/api/sales/quote/reconcile/export?period=${period}`, "_blank");
       } catch (e) { $("#sd-recon-out").innerHTML = `<div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; }
+      try {
+        const rv = await api("/sales/so/receivable");
+        $("#sd-recv-out").innerHTML = soReceivableHtml(rv.rows || [], rv.outstanding);
+        $("#sd-recv").onclick = async () => {
+          try { const rv2 = await api("/sales/so/receivable"); $("#sd-recv-out").innerHTML = soReceivableHtml(rv2.rows || [], rv2.outstanding); toast("已刷新", "ok"); } catch (e) { toast(e.message, "err"); }
+        };
+      } catch (e) { $("#sd-recv-out").innerHTML = `<div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; }
     }
     try {
       const t = await api("/sales/track");

@@ -2218,6 +2218,34 @@ const MUT = [
     to: "        let u = stock_unit_of(db, &r.item_code)?;\n        if u.trim().is_empty() {\n            String::new()",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::导出没设库存单位时按件兜底"],
   },
+  {
+    name: "115 回款看板把作废和草稿也算进来（没承诺的也当欠款）",
+    file: "crates/findb/src/sales.rs",
+    from: "WHERE status NOT IN ('Cancelled','Draft')",
+    to: "WHERE status IS NOT NULL",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
+  },
+  {
+    name: "116 回款看板未收额不看已收款（把整单金额当欠款）",
+    file: "crates/findb/src/sales.rs",
+    from: "let balance = (total - collected).round2();",
+    to: "let balance = total;",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
+  },
+  {
+    name: "117 回款看板欠款排序反了（欠得少的排前面）",
+    file: "crates/findb/src/sales.rs",
+    from: "        b.balance\n            .cmp(&a.balance)",
+    to: "        a.balance\n            .cmp(&b.balance)",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
+  },
+  {
+    name: "118 回款看板把已结清的也列出来（欠 0 也占一行）",
+    file: "crates/findb/src/sales.rs",
+    from: "        if balance.is_zero() {\n            continue; // 已经结清，不进「谁还欠我钱」这张表\n        }",
+    to: "        if false {\n            continue; // 已经结清，不进「谁还欠我钱」这张表\n        }",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
+  },
 
 ];
 

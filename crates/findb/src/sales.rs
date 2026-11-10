@@ -963,6 +963,70 @@ pub fn so_execution_track(db: &Db, period: Period) -> DbResult<Vec<SoTrack>> {
     Ok(out)
 }
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct SoReceivable {
+    pub so_id: i64,
+    pub no: String,
+    pub date: String,
+    pub customer_code: String,
+    pub customer_name: String,
+    pub status: String,
+    pub total_amount: Money,
+    pub collected: Money,
+    pub balance: Money,
+}
+
+/// 谁还欠我钱：所有未作废、未结清的销售订单，按未收金额从大到小排。
+///
+/// 跨期间——上个月的单还没收完，这个月也要列出来；草稿订单不算数（还没承诺）。
+pub fn so_receivable(db: &Db) -> DbResult<Vec<SoReceivable>> {
+    let mut stmt = db.conn().prepare(
+        "SELECT id, no, date, customer_code, customer_name, status, total_amount
+         FROM sales_order
+         WHERE status NOT IN ('Cancelled','Draft')
+         ORDER BY date DESC, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, String>(5)?,
+            Money::parse_or_zero(&r.get::<_, String>(6)?),
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, no, date, cc, cn, status, total) = row?;
+        let collected = so_payment_sum(db, id)?;
+        let balance = (total - collected).round2();
+        if balance.is_zero() {
+            continue; // 已经结清，不进「谁还欠我钱」这张表
+        }
+        out.push(SoReceivable {
+            so_id: id,
+            no,
+            date,
+            customer_code: cc,
+            customer_name: cn,
+            status: crate::scm::status_from::<crate::scm::SoStatus>(&status)
+                .map(|s| s.label().to_string())
+                .unwrap_or(status),
+            total_amount: total,
+            collected,
+            balance,
+        });
+    }
+    out.sort_by(|a, b| {
+        b.balance
+            .cmp(&a.balance)
+            .then_with(|| b.so_id.cmp(&a.so_id))
+    });
+    Ok(out)
+}
+
 /// 客户信用额度（辅助档案 props.credit_limit），0 = 未设额度
 pub fn customer_credit_limit(db: &Db, customer_code: &str) -> DbResult<Money> {
     let props: Option<String> = db
@@ -1097,6 +1161,162 @@ mod tests {
         assert_eq!(track[0].rate, m("60"));
         let stats = sales_stats(&db, p).unwrap();
         assert_eq!(stats[0].amount, m("2000"));
+    }
+
+    #[test]
+    fn so_receivable_lists_unsettled_orders_by_balance() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        // 一张已确认、收了 1200 还欠 800 的单
+        let mut so1 = crate::scm::SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "C01",
+            "客户A",
+            "u",
+        );
+        so1.no = crate::scm::so_next_no(&db, p).unwrap();
+        so1.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140501".into(),
+            item_name: "成品".into(),
+            qty_ordered: m("100"),
+            qty_shipped: m("0"),
+            unit_price: m("20"),
+            tax_rate: m("0"),
+            amount: m("2000"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        let so1_id = crate::scm::so_save(&db, &mut so1).unwrap();
+        crate::scm::so_set_status(&db, so1_id, crate::scm::SoStatus::Confirmed).unwrap();
+        so_payment_add(
+            &db,
+            so1_id,
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 15).unwrap(),
+            m("1200"),
+            "",
+        )
+        .unwrap();
+
+        // 一张已确认、一分没收的单（欠 500）
+        let mut so2 = crate::scm::SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 6).unwrap(),
+            "C02",
+            "客户B",
+            "u",
+        );
+        so2.no = crate::scm::so_next_no(&db, p).unwrap();
+        so2.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140502".into(),
+            item_name: "配件".into(),
+            qty_ordered: m("10"),
+            qty_shipped: m("0"),
+            unit_price: m("50"),
+            tax_rate: m("0"),
+            amount: m("500"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        let so2_id = crate::scm::so_save(&db, &mut so2).unwrap();
+        crate::scm::so_set_status(&db, so2_id, crate::scm::SoStatus::Confirmed).unwrap();
+
+        // 一张作废（不算）+ 一张草稿（不承诺、不算）
+        let mut so3 = crate::scm::SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 7).unwrap(),
+            "C03",
+            "客户C",
+            "u",
+        );
+        so3.no = crate::scm::so_next_no(&db, p).unwrap();
+        so3.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140503".into(),
+            item_name: "废件".into(),
+            qty_ordered: m("1"),
+            qty_shipped: m("0"),
+            unit_price: m("999"),
+            tax_rate: m("0"),
+            amount: m("999"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        let so3_id = crate::scm::so_save(&db, &mut so3).unwrap();
+        crate::scm::so_set_status(&db, so3_id, crate::scm::SoStatus::Cancelled).unwrap();
+
+        let mut so4 = crate::scm::SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 8).unwrap(),
+            "C04",
+            "客户D",
+            "u",
+        );
+        so4.no = crate::scm::so_next_no(&db, p).unwrap();
+        so4.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140504".into(),
+            item_name: "草稿件".into(),
+            qty_ordered: m("1"),
+            qty_shipped: m("0"),
+            unit_price: m("888"),
+            tax_rate: m("0"),
+            amount: m("888"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        crate::scm::so_save(&db, &mut so4).unwrap(); // 留在 Draft
+
+        // 一张已确认、但钱已经收齐的单（欠 0，不该出现在「谁还欠我钱」里）
+        let mut so5 = crate::scm::SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 9).unwrap(),
+            "C05",
+            "客户E",
+            "u",
+        );
+        so5.no = crate::scm::so_next_no(&db, p).unwrap();
+        so5.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140505".into(),
+            item_name: "已结清件".into(),
+            qty_ordered: m("10"),
+            qty_shipped: m("0"),
+            unit_price: m("30"),
+            tax_rate: m("0"),
+            amount: m("300"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        let so5_id = crate::scm::so_save(&db, &mut so5).unwrap();
+        crate::scm::so_set_status(&db, so5_id, crate::scm::SoStatus::Confirmed).unwrap();
+        so_payment_add(
+            &db,
+            so5_id,
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+            m("300"),
+            "",
+        )
+        .unwrap();
+
+        let rows = so_receivable(&db).unwrap();
+        assert_eq!(rows.len(), 2, "只列已确认未结清的两张：{rows:?}");
+        assert_eq!(rows[0].customer_code, "C01", "欠得多的排前面");
+        assert_eq!(rows[0].total_amount, m("2000"));
+        assert_eq!(rows[0].collected, m("1200"));
+        assert_eq!(rows[0].balance, m("800"));
+        assert_eq!(rows[0].status, "已确认");
+        assert_eq!(rows[1].customer_code, "C02");
+        assert_eq!(rows[1].balance, m("500"));
     }
 
     #[test]

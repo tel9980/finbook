@@ -3287,3 +3287,120 @@ async fn quote_price_check_flags_mismatch_without_blocking() {
     assert_eq!(v["price_check"]["kind"], "ok", "{v}");
     assert!(v["price_warn"].is_null(), "对得上就别啰嗦：{v}");
 }
+
+/// 回款看板：已确认未结清的订单按欠款从大到小，作废/草稿/已结清都不列。
+#[tokio::test]
+async fn so_receivable_endpoint_lists_unsettled() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/dashboard", &sid))
+        .await
+        .unwrap();
+    let dash: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let cur_ymm: i32 = dash["current_period"]
+        .as_str()
+        .unwrap()
+        .replace('-', "")
+        .parse()
+        .unwrap();
+    let d = format!("{}-10", dash["current_period"].as_str().unwrap());
+
+    // 已确认、欠 800（总额 2000，收 1200）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/so",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": cur_ymm, "date": d,
+                "customer_code": "C01", "customer_name": "客户甲", "status": "Draft",
+                "lines": [{ "item_code": "140501", "item_name": "成品", "qty_ordered": "100", "unit_price": "20", "tax_rate": "0" }]
+            }),
+        ))
+        .await
+        .unwrap();
+    let so1 = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/sales/so/{so1}/transition"),
+            &sid,
+            serde_json::json!({ "status": "Confirmed" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/payment",
+            &sid,
+            serde_json::json!({ "so_id": so1, "period": cur_ymm, "date": d, "amount": "1200", "memo": "" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 已确认、欠 500（没收过款）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/so",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": cur_ymm, "date": d,
+                "customer_code": "C02", "customer_name": "客户乙", "status": "Draft",
+                "lines": [{ "item_code": "140502", "item_name": "配件", "qty_ordered": "10", "unit_price": "50", "tax_rate": "0" }]
+            }),
+        ))
+        .await
+        .unwrap();
+    let so2 = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/sales/so/{so2}/transition"),
+            &sid,
+            serde_json::json!({ "status": "Confirmed" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 草稿一张（不算欠款）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/so",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": cur_ymm, "date": d,
+                "customer_code": "C03", "customer_name": "客户丙", "status": "Draft",
+                "lines": [{ "item_code": "140503", "item_name": "草稿件", "qty_ordered": "1", "unit_price": "999", "tax_rate": "0" }]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/sales/so/receivable", &sid))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "作废/草稿不算、已结清不列：{v}");
+    assert_eq!(
+        money_num(rows[0]["balance"].as_str().unwrap()),
+        800.0,
+        "欠得多的排前面：{v}"
+    );
+    assert_eq!(money_num(rows[1]["balance"].as_str().unwrap()), 500.0);
+    assert_eq!(
+        money_num(v["outstanding"].as_str().unwrap()),
+        1300.0,
+        "未收合计：{v}"
+    );
+    assert_eq!(rows[0]["status"].as_str().unwrap(), "已确认");
+    assert_eq!(v["count"].as_i64().unwrap(), 2);
+}
