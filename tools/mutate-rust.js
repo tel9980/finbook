@@ -1789,8 +1789,10 @@ const MUT = [
     // 客户拿计算器按一遍是 68.75 而不是 68.80，一句「你怎么算的」说不清。
     name: "62 折算不按口径位数抹平（乘出来带一长串小数）",
     file: "crates/findb/src/processfee.rs",
-    from: "    (qty * c.factor).round_dp(c.scale.clamp(0, SCALE_MAX) as u32)",
-    to: "    qty * c.factor",
+    // 带上一行函数签名：只写这一行的话，quote_with_units 里缩进更深的同样一行
+    // 也包含它，replace 会先命中那里，变异成了空操作（shard 5 曾因此判「放过」）。
+    from: "pub fn convert(qty: Money, c: &CalcUnit) -> Money {\n    (qty * c.factor).round_dp(c.scale.clamp(0, SCALE_MAX) as u32)",
+    to: "pub fn convert(qty: Money, c: &CalcUnit) -> Money {\n    qty * c.factor",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::折算先按位数抹平再乘单价"],
   },
   {

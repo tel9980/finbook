@@ -453,6 +453,21 @@ function walkRs(dir) {
 const testSrc = walkRs("crates")
   .map((f) => fs.readFileSync(f, "utf8"))
   .join("\n");
+// 锚点出现多次时，replace 只改第一处 —— 若第一处不是「被测的那段代码」，
+// 变异就成了空操作：脚本照样跑测试、测试照样过，于是判成「放过了」。
+// 62 号（折算不抹平）就这么白跑过一轮 CI（from 那一行同时出现在 quote_with_units 里）。
+// 这里只提示、不判失败（历史上有两条确实需要多处匹配）。
+const dupAnchors = [];
+for (const m of rustList.cases) {
+  const src = fs.readFileSync(m.file, "utf8");
+  const n = src.split(m.from).length - 1;
+  if (n > 1) dupAnchors.push(`${n}× ${m.name}`);
+}
+if (dupAnchors.length) {
+  console.log(`提示：${dupAnchors.length} 条变异锚点出现多次（replace 只改第一处，可能变成空操作）：`);
+  for (const d of dupAnchors) console.log(`      ${d}`);
+}
+
 for (const m of rustList.cases) {
   const src = fs.readFileSync(m.file, "utf8");
   if (!stillMatches(src, m.from)) {

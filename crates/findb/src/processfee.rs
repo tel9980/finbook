@@ -311,7 +311,7 @@ pub fn price_for_line(
                 ),
                 None => {
                     return Err(FinError::msg(format!(
-                        "价目表这格按「{unit}」记价，但没录「1 {stock_unit} = 多少 {unit}」——                         先在「加工费规则 → 折算系数」里补一条"
+                        "价目表这格按「{unit}」记价，但没录「1 {stock_unit} = 多少 {unit}」—— 先在「加工费规则 → 折算系数」里补一条"
                     ))
                     .into())
                 }
@@ -329,11 +329,21 @@ pub fn price_for_line(
     .round_dp(4);
     let mut note = String::new();
     if !spec.is_empty() {
-        note = format!(
-            "按规格 {spec} 折成 {} {}",
-            calc_qty.fmt_qty(),
-            calc_unit_out
-        );
+        // 有手录系数时，折合出来的数字来自那条系数，不是规格几何 —— 说错了会让人
+        // 拿着规格去按计算器，算不出单子上的数。
+        note = if basis == "manual" {
+            format!(
+                "按手录系数（1 {stock_unit} = {} {calc_unit_out}）折成 {} {calc_unit_out}；规格 {spec} 只记在单上",
+                factor.fmt_qty(),
+                calc_qty.fmt_qty()
+            )
+        } else {
+            format!(
+                "按规格 {spec} 折成 {} {}",
+                calc_qty.fmt_qty(),
+                calc_unit_out
+            )
+        };
     } else if !calc_unit.is_empty() && factor != Money::ONE {
         note = format!(
             "1 {stock_unit} = {} {calc_unit}，共 {} {calc_unit}",
@@ -2842,7 +2852,9 @@ MB03,米,x,2
         assert_eq!(p.unit_price.fmt_dp(4), "0.2808");
         assert_eq!(p.stock_unit, "件");
         assert_eq!(p.basis, "manual");
-        assert!(p.note.contains("按规格"), "note={}", p.note);
+        // 这条用的是手录系数 0.0234，不是规格几何（0.3125）—— 提示必须说清来源
+        assert!(p.note.contains("手录系数"), "note={}", p.note);
+        assert!(p.note.contains("1250*250*3"), "note={}", p.note);
         // 摊回去的数字必须能反过来凑出总额，否则单子上的金额是「凭空来的」
         assert_eq!(
             (p.unit_price * m("300")).round2().fmt_money(),
