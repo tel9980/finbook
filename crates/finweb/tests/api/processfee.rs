@@ -890,3 +890,59 @@ async fn qty_tiers_follow_the_calc_quantity() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert!(body_string(resp).await.contains("永远用不上"));
 }
+
+#[tokio::test]
+async fn price_history_records_who_changed_what() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 建一条 0.2 元/件的价
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "name": "MB11 按件",
+                "item_code": "MB11",
+                "unit": "件",
+                "unit_price": "0.2",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let id = v["id"].as_i64().unwrap();
+
+    // 改成 0.15（同一个 id，走 UPDATE）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/price-rules",
+            &sid,
+            serde_json::json!({
+                "id": id,
+                "name": "MB11 按件",
+                "item_code": "MB11",
+                "unit": "件",
+                "unit_price": "0.15",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/price-rules/history?item=MB11", &sid))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "新增一条、改价一条：{v}");
+    assert_eq!(rows[0]["action"], "改价");
+    assert_eq!(rows[0]["old_price"], "0.20");
+    assert_eq!(rows[0]["new_price"], "0.15");
+    assert_eq!(rows[0]["who"], "boss", "改了价要能看出是谁改的");
+    assert_eq!(rows[1]["action"], "新增");
+    assert_eq!(rows[1]["new_price"], "0.20");
+}

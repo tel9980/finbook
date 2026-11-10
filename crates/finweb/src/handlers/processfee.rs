@@ -64,6 +64,24 @@ pub(super) async fn list_price_rules(
     Ok(Json(json!({ "rules": rules })))
 }
 
+/// 调价历史：谁在什么时候把哪一格从多少改成了多少
+///
+/// 小厂最常吵的就是「上个月不是这个价」—— 客户拿单子来对，这里能给凭据。
+pub(super) async fn price_history(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::PriceView)?;
+    let item = q.get("item").map(|s| s.trim()).unwrap_or("");
+    let limit = q
+        .get("limit")
+        .and_then(|s| s.trim().parse::<i64>().ok())
+        .unwrap_or(50);
+    let rows = findb::processfee::changes(&user.db, item, limit)?;
+    Ok(Json(json!({ "rows": rows })))
+}
+
 /// 新建/修改规则
 pub(super) async fn save_price_rule(
     State(_state): State<Arc<WebState>>,
@@ -92,7 +110,7 @@ pub(super) async fn save_price_rule(
         qty_from: req.qty_from.trim().to_string(),
         qty_to: req.qty_to.trim().to_string(),
     };
-    let id = findb::processfee::rule_save(db, &mut r)?;
+    let id = findb::processfee::rule_save_by(db, &mut r, user.username())?;
     db.log(
         user.username(),
         "销售",
@@ -123,7 +141,7 @@ pub(super) async fn delete_price_rule(
 ) -> Result<Json<serde_json::Value>, AppError> {
     user.require(Perm::PriceEdit)?;
     let db = &user.db;
-    findb::processfee::rule_delete(db, id)?;
+    findb::processfee::rule_delete_by(db, id, user.username())?;
     db.log(user.username(), "销售", "删除加工费规则", &id.to_string())?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -454,7 +472,7 @@ pub(super) async fn set_matrix_cell(
     r.min_charge = min_charge;
     r.effective_from = effective_from;
     r.disabled = false;
-    let id = findb::processfee::rule_save(db, &mut r)?;
+    let id = findb::processfee::rule_save_by(db, &mut r, user.username())?;
     db.log(
         user.username(),
         "销售",

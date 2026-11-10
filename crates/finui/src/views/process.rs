@@ -788,6 +788,8 @@ pub struct PriceRulesView {
     pub quote: Option<FeeQuote>,
     /// 折算过程的说明（口径为空时为 None）
     pub conv_text: Option<String>,
+    /// 调价历史（最近 30 条）：谁在什么时候把哪个价改了
+    pub changes: Vec<processfee::PriceChange>,
 }
 
 impl Default for PriceRulesView {
@@ -811,6 +813,7 @@ impl Default for PriceRulesView {
             q_rush: false,
             quote: None,
             conv_text: None,
+            changes: Vec::new(),
         }
     }
 }
@@ -837,6 +840,9 @@ impl PriceRulesView {
                 self.err = e.to_string();
             }
         }
+        // 调价历史：跟着规则一起刷。查不出来不该让整页报错 —— 老账套还没迁移到
+        // v53 时这张表不存在，历史空着就好，价照样能改。
+        self.changes = processfee::changes(ctx.db(), "", 30).unwrap_or_default();
     }
 
     pub fn show(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
@@ -1297,12 +1303,87 @@ impl PriceRulesView {
                     .size(15.0),
             );
         }
+
+        ui.add_space(10.0);
+        // 客户拿三个月前的单子来问「当时怎么按 0.15 算的」，凭据就在这张表里：
+        // 改前多少、改后多少、谁改的、哪天改的。默认折起来，不占首屏。
+        egui::CollapsingHeader::new(format!("调价历史（最近 {} 条）", self.changes.len()))
+            .id_salt("price_changes")
+            .default_open(false)
+            .show(ui, |ui| {
+                if self.changes.is_empty() {
+                    txt(
+                        ui,
+                        RichText::new("还没有调价记录 —— 新建、改价、停用、删除都会记在这里。")
+                            .weak(),
+                    );
+                    return;
+                }
+                egui::Grid::new("price_changes_grid")
+                    .num_columns(6)
+                    .striped(true)
+                    .show(ui, |ui| {
+                        for h in ["时间", "物料 / 客户", "动作", "单价", "谁", "说明"]
+                        {
+                            txt(ui, RichText::new(h).weak());
+                        }
+                        ui.end_row();
+                        for c in self.changes.iter() {
+                            txt(ui, RichText::new(&c.at).size(11.5));
+                            let what = match (c.item_code.is_empty(), c.customer_code.is_empty()) {
+                                (true, true) => "任意物料 / 任意客户".to_string(),
+                                (false, true) => format!("{} / 任意客户", c.item_code),
+                                (true, false) => format!("任意物料 / {}", c.customer_code),
+                                (false, false) => format!("{} / {}", c.item_code, c.customer_code),
+                            };
+                            let what = if c.process.is_empty() {
+                                what
+                            } else {
+                                format!("{what} · {}", c.process)
+                            };
+                            txt(ui, what);
+                            txt(ui, &c.action);
+                            let price = match c.action.as_str() {
+                                "删除" | "停用" | "启用" => c.old_price.clone(),
+                                _ if c.old_price.is_empty() => c.new_price.clone(),
+                                _ => format!("{} → {}", c.old_price, c.new_price),
+                            };
+                            txt(ui, price);
+                            txt(
+                                ui,
+                                if c.who.is_empty() {
+                                    "—".to_string()
+                                } else {
+                                    c.who.clone()
+                                },
+                            );
+                            txt(
+                                ui,
+                                RichText::new(if c.memo.is_empty() {
+                                    if c.effective_from.is_empty() {
+                                        String::new()
+                                    } else {
+                                        format!("{} 起", c.effective_from)
+                                    }
+                                } else {
+                                    c.memo.clone()
+                                })
+                                .size(11.5)
+                                .color(palette::GRID),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
     }
 
     fn save(&mut self, ctx: &mut AppCtx<'_>) {
         self.err.clear();
         let mut r = self.ed.to_rule();
-        match processfee::rule_save(ctx.db(), &mut r) {
+        // 带操作人：网页端与窗口端改的价要记在同一个人名下，
+        // 否则调价历史里窗口端改的那几条「谁」是空的，客户一问又说不清
+        let who = ctx.user().username.clone();
+        match processfee::rule_save_by(ctx.db(), &mut r, &who) {
             Ok(_) => {
                 ctx.log("加工费", "保存规则", &format!("规则 {}", r.name));
                 ctx.info(format!("已保存规则「{}」", r.name));

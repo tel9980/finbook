@@ -531,6 +531,7 @@ pub fn router(state: Arc<WebState>) -> Router {
             get(list_price_rules).post(save_price_rule),
         )
         .route("/api/price-rules/quote", get(quote_fee))
+        .route("/api/price-rules/history", get(price_history))
         .route("/api/price-rules/:id", delete(delete_price_rule))
         // 计价口径与折算系数（v49）：一个物料可以同时按 只 / 米 / kg / ㎡ 报价
         .route("/api/calc-units", get(list_calc_units).post(save_calc_unit))

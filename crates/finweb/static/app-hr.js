@@ -748,6 +748,39 @@ function qtyRangeHtml(r) {
 
 // 导入结果说人话。抽成顶层函数是为了让 tools/check-app-render.js 能真调用它 ——
 // 这段文案是用户判断「到底导进去没有」的唯一依据，写错了没人看得见。
+// 调价历史的一张表：谁在什么时候把哪一格从多少改成了多少
+//
+// 抽成顶层函数是为了让 tools/check-app-render.js 能真调用 —— 这段文案
+// （「改前 → 改后」）最容易在重构时写歪，而它正是客户对账时看的那一行。
+function histRowsHtml(rows) {
+  if (!rows || !rows.length) {
+    return `<div class="muted">还没有调价记录 —— 新建、改价、停用、删除都会记在这里。</div>`;
+  }
+  const body = rows
+    .map((r) => {
+      const who = `${esc(r.item_code || "任意物料")}${r.customer_code ? " / " + esc(r.customer_code) : ""}${r.process ? " · " + esc(r.process) : ""}`;
+      const price =
+        r.action === "改价"
+          ? `${fmt(r.old_price)} → <b>${fmt(r.new_price)}</b>`
+          : r.action === "新增"
+            ? `<b>${fmt(r.new_price)}</b>`
+            : `${fmt(r.old_price)}`;
+      return `<tr>
+        <td style="white-space:nowrap">${esc(r.at)}</td>
+        <td>${who}</td>
+        <td>${esc(r.unit || "")}</td>
+        <td>${esc(r.action)}</td>
+        <td style="text-align:right;white-space:nowrap">${price}</td>
+        <td>${esc(r.who || "—")}</td>
+        <td class="muted" style="font-size:11px">${esc(r.memo || (r.effective_from ? r.effective_from + " 起" : ""))}</td>
+      </tr>`;
+    })
+    .join("");
+  return `<table class="tbl"><thead><tr>
+      <th>时间</th><th>物料 / 客户</th><th>口径</th><th>动作</th><th style="text-align:right">单价</th><th>谁</th><th>备注</th>
+    </tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function specRowsHtml(rows) {
   if (!rows || !rows.length) {
     return `<div class="muted">还没有结果 —— 先把规格粘到上面的框里。</div>`;
@@ -824,6 +857,16 @@ async function viewPriceRules(main) {
     </div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">折算系数（1 个库存单位 = 多少计价单位）</h3>
       <div id="pr-units" class="muted">加载中…</div></div>
+    <div class="panel"><h3 style="margin-top:0;font-size:14px">调价历史</h3>
+      <div class="muted" style="font-size:12px;margin:-4px 0 8px">
+        新建、改价、停用、删除都留一条记录：谁在什么时候把哪一格从多少改成了多少。
+        客户拿三个月前的单子来问「当时为什么按 0.15 算」，这一列就是凭据。
+      </div>
+      <div class="toolbar">
+        <label>物料 <input id="pr-hist-item" style="width:110px" placeholder="空 = 全部" /></label>
+        <button class="btn ghost sm" id="pr-hist-load">查历史</button>
+      </div>
+      <div id="pr-hist" class="muted">加载中…</div></div>
     <div class="panel"><h3 style="margin-top:0;font-size:14px">试算报价</h3>
       <div class="toolbar">
         <label>物料 <input id="pr-q-item" style="width:110px" /></label>
@@ -877,8 +920,22 @@ async function viewPriceRules(main) {
       renderUnits();
       renderBands();
       renderUnitSelect();
+      await loadHist();
     } catch (e) {
       $("#pr-matrix", main).innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
+    }
+  };
+
+  // 调价历史：物料留空看全部（最近 50 条）
+  const loadHist = async () => {
+    const box = $("#pr-hist", main);
+    if (!box) return;
+    const item = ($("#pr-hist-item", main) || { value: "" }).value.trim();
+    try {
+      const r = await api(`/price-rules/history?limit=50&item=${encodeURIComponent(item)}`);
+      box.innerHTML = histRowsHtml((r && r.rows) || []);
+    } catch (e) {
+      box.innerHTML = `<div style="color:var(--err)">${esc(e.message)}</div>`;
     }
   };
 

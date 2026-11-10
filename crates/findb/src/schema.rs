@@ -33,7 +33,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 52;
+pub const SCHEMA_VERSION: i64 = 53;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1636,6 +1636,29 @@ CREATE TABLE IF NOT EXISTS price_rule (
     disabled      INTEGER NOT NULL DEFAULT 0,
     memo          TEXT NOT NULL DEFAULT ''
 );
+
+-- 加工费调价历史（v53）：一次改价一条，记改前改后
+--
+-- 为什么不留「靠 price_rule 的生效日自己看历史」：价改了以后旧行要么被覆盖、要么
+-- 变成另一条规则，谁在什么时候把 0.2 改成 0.15 就查不出来了。而这正是小厂最容易
+-- 吵起来的地方 —— 客户说「上个月不是这个价」，谁也拿不出凭据。
+CREATE TABLE IF NOT EXISTS price_change (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    at            TEXT NOT NULL DEFAULT '',       -- 2026-11-09 14:03:11
+    who           TEXT NOT NULL DEFAULT '',
+    action        TEXT NOT NULL DEFAULT '',       -- 新增 / 改价 / 停用 / 启用 / 删除
+    rule_id       INTEGER NOT NULL DEFAULT 0,
+    name          TEXT NOT NULL DEFAULT '',
+    item_code     TEXT NOT NULL DEFAULT '',
+    customer_code TEXT NOT NULL DEFAULT '',
+    unit          TEXT NOT NULL DEFAULT '',
+    process       TEXT NOT NULL DEFAULT '',
+    effective_from TEXT NOT NULL DEFAULT '',
+    old_price     TEXT NOT NULL DEFAULT '',       -- 改前的单价（新增时为空）
+    new_price     TEXT NOT NULL DEFAULT '',
+    memo          TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_price_change_item ON price_change(item_code, id);
 
 -- 物料计价口径与折算系数（v49）：1 个库存单位 = factor 个计价单位
 --

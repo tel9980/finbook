@@ -2032,6 +2032,27 @@ const MUT = [
     to: "    let (rule, _future) = match_rule_full(db, item, customer, unit, process, None, Some(stock_qty))?",
     cmd: ["test", "-p", "findb", "--lib", "processfee::tests::数量档按折算后的计价数量判"],
   },
+  {
+    name: "89 调价不记改前值（只留一个改后的数）",
+    file: "crates/findb/src/processfee.rs",
+    from: "        .map(|(p, _, _)| Money::parse_or_zero(p).fmt_money())",
+    to: "        .map(|_| String::new())",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::调价留下改前改后和是谁改的"],
+  },
+  {
+    name: "90 改个备注也记一条改价（历史表变噪声）",
+    file: "crates/findb/src/processfee.rs",
+    from: "            let changed =\n                Money::parse_or_zero(p) != r.unit_price || Money::parse_or_zero(m) != r.min_charge;",
+    to: "            let changed = true;",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::只改备注不动价就不留历史"],
+  },
+  {
+    name: "91 删除不留痕（说是删了、查不出删的是哪个价）",
+    file: "crates/findb/src/processfee.rs",
+    from: "                \"删除\",\n                id,",
+    to: "                \"停用\",\n                id,",
+    cmd: ["test", "-p", "findb", "--lib", "processfee::tests::停用启用和删除都留痕"],
+  },
 
 ];
 

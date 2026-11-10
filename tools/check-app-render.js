@@ -76,6 +76,15 @@ const CELL_STUBS = {
 // 规格区间那一行的桩（v51）：只用到 esc
 const BAND_STUBS = { esc: (s) => String(s == null ? "" : s) };
 
+// 调价历史用例用：esc 要真转义（断言里含 <b> 标签），fmt 保持原样不补零
+const HIST_STUBS = {
+  esc: (s) =>
+    s == null
+      ? ""
+      : String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])),
+  fmt: (s) => (s == null ? "" : String(s)),
+};
+
 const CASES = [
   {
     fn: "renderAux",
@@ -378,6 +387,35 @@ const CASES = [
     args: [{ qty_from: "500", qty_to: "2000", unit: "件" }],
     stubs: BAND_STUBS,
     expect: ["500–2000"],
+  },
+  // 调价历史（v53）。这一行文案是客户对账时看的：「0.20 → 0.15」写反了
+  // 客户会以为你把价涨回去了；删除行不能画箭头（没有「改成多少」这回事）。
+  {
+    fn: "histRowsHtml",
+    args: [[]],
+    stubs: HIST_STUBS,
+    expect: ["还没有调价记录"],
+  },
+  {
+    fn: "histRowsHtml",
+    args: [
+      [
+        { at: "2026-11-09 14:03:11", item_code: "MB01", unit: "㎡", action: "改价", old_price: "0.20", new_price: "0.15", who: "李四", memo: "" },
+      ],
+    ],
+    stubs: HIST_STUBS,
+    expect: ["0.20 → <b>0.15</b>", "李四", "改价", "MB01"],
+  },
+  {
+    fn: "histRowsHtml",
+    args: [
+      [
+        { at: "2026-11-09 15:00:00", item_code: "MB02", unit: "只", action: "删除", old_price: "0.45", new_price: "", who: "王五", memo: "删除前这条规则还在用" },
+      ],
+    ],
+    stubs: HIST_STUBS,
+    expect: ["0.45", "王五"],
+    absent: ["→"],
   },
   // 按规格分段的价（v51）。区间说法有三种形态，写错了用户会照着错的范围报价：
   // 「≤200」= 只有上限；「>200」= 只有下限；「200–300」= 两头都有；维度要翻成中文。

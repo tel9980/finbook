@@ -200,7 +200,8 @@ impl FinBookApp {
                     ctx.error(format!("没有「{}」权限", Perm::PriceEdit.label()));
                     return;
                 }
-                let r = findb::processfee::rule_delete(ctx.db(), id);
+                let who = ctx.user().username.clone();
+                let r = findb::processfee::rule_delete_by(ctx.db(), id, &who);
                 if ctx.handle(r).is_some() {
                     ctx.log("加工费", "删除规则", &format!("规则 #{id}"));
                     ctx.info("已删除规则");

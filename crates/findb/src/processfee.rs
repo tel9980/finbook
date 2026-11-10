@@ -218,6 +218,13 @@ pub fn rule_list(db: &Db) -> DbResult<Vec<PriceRule>> {
 
 /// 保存规则（id=0 新建）
 pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
+    rule_save_by(db, r, "")
+}
+
+/// 保存规则，并把这次改动记进调价历史（`price_change`）。
+///
+/// `who` 是操作人 —— 调价历史里最常被问的一句是「谁改的」，留空等于白记。
+pub fn rule_save_by(db: &Db, r: &mut PriceRule, who: &str) -> DbResult<i64> {
     let name = r.name.trim().to_string();
     if name.is_empty() {
         return Err(FinError::msg("规则名称必填").into());
@@ -325,6 +332,17 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
         }
     }
     let tx = db.write_tx()?;
+    // 改价前先把旧值读出来 —— 历史里要写的正是「改前 / 改后」
+    let before: Option<(String, String, bool)> = if r.id > 0 {
+        tx.query_row(
+            "SELECT unit_price,min_charge,disabled FROM price_rule WHERE id=?1",
+            rusqlite::params![r.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? != 0)),
+        )
+        .ok()
+    } else {
+        None
+    };
     let id = if r.id > 0 {
         let n = tx.execute(
             "UPDATE price_rule SET name=?2,item_code=?3,customer_code=?4,unit=?5,
@@ -334,23 +352,23 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
              WHERE id=?1",
             rusqlite::params![
                 r.id,
-                name,
+                &name,
                 r.item_code.trim(),
                 r.customer_code.trim(),
-                unit,
+                &unit,
                 crate::money_param(r.unit_price),
                 crate::money_param(r.min_charge),
                 crate::money_param(r.rush_fee),
                 crate::exact_param(r.rush_rate),
                 r.disabled as i64,
-                r.memo,
-                effective_from,
-                process,
-                band_dim,
-                band_from,
-                band_to,
-                qty_from,
-                qty_to
+                &r.memo,
+                &effective_from,
+                &process,
+                &band_dim,
+                &band_from,
+                &band_to,
+                &qty_from,
+                &qty_to
             ],
         )?;
         if n == 0 {
@@ -364,27 +382,83 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
              band_dim,band_from,band_to,qty_from,qty_to)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             rusqlite::params![
-                name,
+                &name,
                 r.item_code.trim(),
                 r.customer_code.trim(),
-                unit,
+                &unit,
                 crate::money_param(r.unit_price),
                 crate::money_param(r.min_charge),
                 crate::money_param(r.rush_fee),
                 crate::exact_param(r.rush_rate),
                 r.disabled as i64,
-                r.memo,
-                effective_from,
-                process,
-                band_dim,
-                band_from,
-                band_to,
-                qty_from,
-                qty_to
+                &r.memo,
+                &effective_from,
+                &process,
+                &band_dim,
+                &band_from,
+                &band_to,
+                &qty_from,
+                &qty_to
             ],
         )?;
         tx.last_insert_rowid()
     };
+    // 调价历史：新建必记；改价/停用只在真变了的时候记，
+    // 否则改个备注也留一条，历史表很快就没法看了
+    let old_price = before
+        .as_ref()
+        .map(|(p, _, _)| Money::parse_or_zero(p).fmt_money())
+        .unwrap_or_default();
+    let old_min = before
+        .as_ref()
+        .map(|(_, m, _)| Money::parse_or_zero(m).fmt_money())
+        .unwrap_or_default();
+    let action = match &before {
+        None => Some("新增"),
+        Some((_, _, was_disabled)) if *was_disabled != r.disabled => {
+            Some(if r.disabled { "停用" } else { "启用" })
+        }
+        Some((p, m, _)) => {
+            let changed =
+                Money::parse_or_zero(p) != r.unit_price || Money::parse_or_zero(m) != r.min_charge;
+            if changed {
+                Some("改价")
+            } else {
+                None
+            }
+        }
+    };
+    if let Some(action) = action {
+        let memo = if action == "改价" && old_min != r.min_charge.fmt_money() {
+            format!(
+                "起步价 {} → {}",
+                if old_min.is_empty() { "0.00" } else { &old_min },
+                r.min_charge.fmt_money()
+            )
+        } else {
+            String::new()
+        };
+        tx.execute(
+            "INSERT INTO price_change(at,who,action,rule_id,name,item_code,customer_code,
+             unit,process,effective_from,old_price,new_price,memo)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            rusqlite::params![
+                now_stamp(),
+                who,
+                action,
+                id,
+                name,
+                r.item_code.trim(),
+                r.customer_code.trim(),
+                unit,
+                process,
+                effective_from,
+                old_price,
+                r.unit_price.fmt_money(),
+                memo
+            ],
+        )?;
+    }
     tx.commit()?;
     r.id = id;
     r.name = name;
@@ -401,13 +475,118 @@ pub fn rule_save(db: &Db, r: &mut PriceRule) -> DbResult<i64> {
 
 /// 删除规则
 pub fn rule_delete(db: &Db, id: i64) -> DbResult<()> {
-    let n = db
-        .conn()
-        .execute("DELETE FROM price_rule WHERE id=?1", [id])?;
+    rule_delete_by(db, id, "")
+}
+
+/// 删除规则，并把这一笔记进调价历史。
+///
+/// 删掉就查不回来了 —— 所以删除也要留痕：客户拿三个月前的单子来问
+/// 「当时为什么按 0.15 算」，只有这条记录能回答。
+pub fn rule_delete_by(db: &Db, id: i64, who: &str) -> DbResult<()> {
+    let tx = db.write_tx()?;
+    let row: Option<PriceRule> = tx
+        .query_row(
+            &format!("SELECT {COLS} FROM price_rule WHERE id=?1"),
+            [id],
+            map_rule,
+        )
+        .ok();
+    let n = tx.execute("DELETE FROM price_rule WHERE id=?1", [id])?;
     if n == 0 {
         return Err(FinError::msg(format!("规则 {id} 不存在")).into());
     }
+    if let Some(r) = row {
+        tx.execute(
+            "INSERT INTO price_change(at,who,action,rule_id,name,item_code,customer_code,
+             unit,process,effective_from,old_price,new_price,memo)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'','删除前这条规则还在用')",
+            rusqlite::params![
+                now_stamp(),
+                who,
+                "删除",
+                id,
+                &r.name,
+                &r.item_code,
+                &r.customer_code,
+                &r.unit,
+                &r.process,
+                &r.effective_from,
+                r.unit_price.fmt_money()
+            ],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
+}
+
+/// 一次调价（`price_change` 表的一行）
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PriceChange {
+    pub id: i64,
+    pub at: String,
+    pub who: String,
+    /// 新增 / 改价 / 停用 / 启用 / 删除
+    pub action: String,
+    pub rule_id: i64,
+    pub name: String,
+    pub item_code: String,
+    pub customer_code: String,
+    pub unit: String,
+    pub process: String,
+    pub effective_from: String,
+    /// 改前的单价（新增时为空）
+    pub old_price: String,
+    pub new_price: String,
+    pub memo: String,
+}
+
+const CHANGE_COLS: &str = "id,at,who,action,rule_id,name,item_code,customer_code,unit,\
+                           process,effective_from,old_price,new_price,memo";
+
+fn map_change(r: &rusqlite::Row) -> rusqlite::Result<PriceChange> {
+    Ok(PriceChange {
+        id: r.get(0)?,
+        at: r.get(1)?,
+        who: r.get(2)?,
+        action: r.get(3)?,
+        rule_id: r.get(4)?,
+        name: r.get(5)?,
+        item_code: r.get(6)?,
+        customer_code: r.get(7)?,
+        unit: r.get(8)?,
+        process: r.get(9)?,
+        effective_from: r.get(10)?,
+        old_price: r.get(11)?,
+        new_price: r.get(12)?,
+        memo: r.get(13)?,
+    })
+}
+
+/// 「2026-11-09 14:03:11」——调价历史里给人看的时刻
+fn now_stamp() -> String {
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// 调价历史（新的在前）。`item` 为空 = 所有物料。
+pub fn changes(db: &Db, item: &str, limit: i64) -> DbResult<Vec<PriceChange>> {
+    let limit = limit.clamp(1, 500);
+    let item = item.trim();
+    let mut st = db.conn().prepare(&format!(
+        "SELECT {CHANGE_COLS} FROM price_change {} ORDER BY id DESC LIMIT ?1",
+        if item.is_empty() {
+            ""
+        } else {
+            "WHERE item_code=?2"
+        }
+    ))?;
+    let v = if item.is_empty() {
+        st.query_map(rusqlite::params![limit], map_change)?
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        st.query_map(rusqlite::params![limit, item], map_change)?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    Ok(v)
 }
 
 /// 批量导入单价表的结果
@@ -686,7 +865,7 @@ pub fn import_rules(db: &Db, text: &str, who: &str) -> DbResult<PriceImport> {
             qty_from,
             qty_to,
         };
-        match rule_save(db, &mut r) {
+        match rule_save_by(db, &mut r, who) {
             Ok(_) => {
                 if exist.is_some() {
                     res.updated += 1;
@@ -1995,6 +2174,56 @@ mod tests {
             rush_rate: m(rush_rate),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn 调价留下改前改后和是谁改的() {
+        let db = crate::tests::mem();
+        let mut r = rule("MB01 按平方", "㎡", "0.2", "0", "0", "0");
+        r.item_code = "MB01".to_string();
+        rule_save_by(&db, &mut r, "张三").unwrap();
+        r.unit_price = m("0.15");
+        rule_save_by(&db, &mut r, "李四").unwrap();
+        let hist = changes(&db, "MB01", 10).unwrap();
+        assert_eq!(hist.len(), 2, "新增一条、改价一条");
+        assert_eq!(hist[0].action, "改价");
+        assert_eq!(hist[0].old_price, "0.20");
+        assert_eq!(hist[0].new_price, "0.15");
+        assert_eq!(hist[0].who, "李四");
+        assert_eq!(hist[1].action, "新增");
+        assert_eq!(hist[1].old_price, "");
+        assert_eq!(hist[1].new_price, "0.20");
+        assert!(hist[0].at.len() >= 19, "时间要能看懂：{}", hist[0].at);
+    }
+
+    #[test]
+    fn 只改备注不动价就不留历史() {
+        let db = crate::tests::mem();
+        let mut r = rule("MB01 按平方", "㎡", "0.2", "0", "0", "0");
+        r.item_code = "MB01".to_string();
+        rule_save_by(&db, &mut r, "张三").unwrap();
+        r.memo = "改个备注".to_string();
+        rule_save_by(&db, &mut r, "张三").unwrap();
+        assert_eq!(changes(&db, "MB01", 10).unwrap().len(), 1, "改备注不叫调价");
+    }
+
+    #[test]
+    fn 停用启用和删除都留痕() {
+        let db = crate::tests::mem();
+        let mut r = rule("MB02 按只", "只", "0.45", "0", "0", "0");
+        r.item_code = "MB02".to_string();
+        rule_save_by(&db, &mut r, "张三").unwrap();
+        r.disabled = true;
+        rule_save_by(&db, &mut r, "张三").unwrap();
+        r.disabled = false;
+        rule_save_by(&db, &mut r, "张三").unwrap();
+        rule_delete_by(&db, r.id, "王五").unwrap();
+        let hist = changes(&db, "MB02", 10).unwrap();
+        let acts: Vec<&str> = hist.iter().map(|x| x.action.as_str()).collect();
+        assert_eq!(acts, vec!["删除", "启用", "停用", "新增"]);
+        assert_eq!(hist[0].who, "王五");
+        assert_eq!(hist[0].old_price, "0.45", "删掉也要记得它当时多少钱");
+        assert!(rule_list(&db).unwrap().is_empty());
     }
 
     #[test]
