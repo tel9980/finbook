@@ -345,6 +345,22 @@ pub(super) async fn list_quotation(
     Ok(Json(serde_json::json!({ "rows": rows })))
 }
 
+/// 报价单 vs 实际结算对账：报价单转成订单后，实际单价与报价单价差多少、差在哪。
+pub(super) async fn get_quo_reconcile(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let db = &user.db;
+    let period = q
+        .get("period")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
+    let rows = findb::sales::quo_reconcile(db, period)?;
+    Ok(Json(serde_json::json!({ "rows": rows })))
+}
+
 pub(super) async fn save_quotation(
     State(_state): State<Arc<WebState>>,
     user: CurrentUser,

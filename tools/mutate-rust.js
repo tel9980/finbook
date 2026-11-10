@@ -2183,6 +2183,27 @@ const MUT = [
     to: "    if false {",
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::quo_print_memo_summarizes_the_locked_snapshot"],
   },
+  {
+    name: "110 报价对账取错下游单据（查采购单去了）",
+    file: "crates/findb/src/sales.rs",
+    from: "AND dst_type='so'",
+    to: "AND dst_type='po'",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::quotation_reconcile_flags_price_drift"],
+  },
+  {
+    name: "111 报价对账单价差算反（实际减报价写反）",
+    file: "crates/findb/src/sales.rs",
+    from: "row.diff = line.unit_price - q.unit_price;",
+    to: "row.diff = q.unit_price - line.unit_price;",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::quotation_reconcile_flags_price_drift"],
+  },
+  {
+    name: "112 报价对账金额差误用单价差",
+    file: "crates/findb/src/sales.rs",
+    from: "row.diff_amount = line.amount - quo_amount;",
+    to: "row.diff_amount = line.unit_price - q.unit_price;",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::quotation_reconcile_flags_price_drift"],
+  },
 
 ];
 

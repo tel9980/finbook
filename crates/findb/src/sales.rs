@@ -274,6 +274,95 @@ pub fn quo_to_order(db: &Db, id: i64, who: &str) -> DbResult<i64> {
     Ok(so_id)
 }
 
+/// 报价单 vs 实际结算对账（按月）：每张报价单一行，已转订单的带上「实际单价」，
+/// 差价 = 实际单价 − 报价单价、差额 = 实际金额 − 报价金额。
+///
+/// 只认**已转换**（converted）的报价单的差价 —— 草稿 / 已审批还没落到订单，谈不上
+/// 「结算」；作废的更不参与。实际单价取下游销售订单首行的 `unit_price`（订单在转单
+/// 后仍可在明细里调整，那份才是真正卖给客户的价格），金额取该行的 `amount`。
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct QuoReconcile {
+    pub quo_id: i64,
+    pub quo_no: String,
+    pub quo_date: String,
+    pub customer_code: String,
+    pub customer_name: String,
+    pub item_code: String,
+    pub item_name: String,
+    pub quo_qty: Money,
+    pub quo_price: Money,
+    pub quo_amount: Money,
+    /// 0 = 还没转订单
+    pub so_id: i64,
+    pub so_no: String,
+    /// 汉化状态（未转订单为空串）
+    pub so_status: String,
+    pub so_qty: Money,
+    pub so_price: Money,
+    pub so_amount: Money,
+    /// 实际单价 − 报价单价
+    pub diff: Money,
+    /// 实际金额 − 报价金额
+    pub diff_amount: Money,
+}
+
+pub fn quo_reconcile(db: &Db, period: Period) -> DbResult<Vec<QuoReconcile>> {
+    let quotes = quo_list(db, period)?;
+    let mut out: Vec<QuoReconcile> = Vec::with_capacity(quotes.len());
+    for q in quotes {
+        let quo_amount = (q.qty * q.unit_price).round2();
+        let mut row = QuoReconcile {
+            quo_id: q.id,
+            quo_no: q.no.clone(),
+            quo_date: q.date.format("%Y-%m-%d").to_string(),
+            customer_code: q.customer_code.clone(),
+            customer_name: q.customer_name.clone(),
+            item_code: q.item_code.clone(),
+            item_name: q.item_name.clone(),
+            quo_qty: q.qty,
+            quo_price: q.unit_price,
+            quo_amount,
+            so_id: 0,
+            so_no: String::new(),
+            so_status: String::new(),
+            so_qty: Money::ZERO,
+            so_price: Money::ZERO,
+            so_amount: Money::ZERO,
+            diff: Money::ZERO,
+            diff_amount: Money::ZERO,
+        };
+        if q.status == "converted" {
+            let so_id: Option<i64> = db
+                .conn()
+                .query_row(
+                    "SELECT dst_id FROM doc_link WHERE src_type='quote' AND src_id=?1
+                     AND dst_type='so' ORDER BY id LIMIT 1",
+                    [q.id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if let Some(so_id) = so_id {
+                if let Some(so) = crate::scm::so_get(db, so_id)? {
+                    if let Some(line) = so.lines.first() {
+                        row.so_id = so.id;
+                        row.so_no = so.no.clone();
+                        row.so_status = so.status.label().to_string();
+                        row.so_qty = line.qty_ordered;
+                        row.so_price = line.unit_price;
+                        row.so_amount = line.amount;
+                        row.diff = line.unit_price - q.unit_price;
+                        row.diff_amount = line.amount - quo_amount;
+                    }
+                }
+            }
+        }
+        out.push(row);
+    }
+    // 新单在前，与列表同序
+    out.sort_by_key(|a| std::cmp::Reverse(a.quo_id));
+    Ok(out)
+}
+
 // ===========================================================================
 // 发货 / 收款 / 退货
 // ===========================================================================
@@ -1033,6 +1122,72 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(quo_print_memo(&empty), "");
+    }
+
+    #[test]
+    fn quotation_reconcile_flags_price_drift() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        // 报价单 1：0.28 一件 × 300 → 转订单后被改成 0.31
+        let mut q1 = Quotation {
+            id: 0,
+            no: quo_next_no(&db, p).unwrap(),
+            period: p,
+            date: NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            customer_code: "C01".into(),
+            customer_name: "客户甲".into(),
+            item_code: "MB01".into(),
+            item_name: "铝件".into(),
+            qty: m("300"),
+            unit_price: m("0.28"),
+            status: "draft".into(),
+            prepared_by: "张三".into(),
+            memo: String::new(),
+            ..Default::default()
+        };
+        let q1_id = quo_save(&db, &mut q1).unwrap();
+        quo_approve(&db, q1_id).unwrap();
+        let so_id = quo_to_order(&db, q1_id, "张三").unwrap();
+        let mut so = crate::scm::so_get(&db, so_id).unwrap().unwrap();
+        so.lines[0].unit_price = m("0.31");
+        so.lines[0].amount = (so.lines[0].qty_ordered * so.lines[0].unit_price).round2();
+        crate::scm::so_save(&db, &mut so).unwrap();
+
+        // 报价单 2：已审批但还没转订单
+        let mut q2 = Quotation {
+            id: 0,
+            no: quo_next_no(&db, p).unwrap(),
+            period: p,
+            date: NaiveDate::from_ymd_opt(2026, 1, 6).unwrap(),
+            customer_code: "C02".into(),
+            customer_name: "客户乙".into(),
+            item_code: "MB02".into(),
+            item_name: "钢件".into(),
+            qty: m("100"),
+            unit_price: m("0.50"),
+            status: "approved".into(),
+            prepared_by: "张三".into(),
+            memo: String::new(),
+            ..Default::default()
+        };
+        quo_save(&db, &mut q2).unwrap();
+
+        let rows = quo_reconcile(&db, p).unwrap();
+        assert_eq!(rows.len(), 2);
+        // 新单在前
+        let r2 = &rows[0];
+        assert_eq!(r2.quo_no, q2.no);
+        assert_eq!(r2.so_id, 0);
+        assert!(r2.diff.is_zero() && r2.diff_amount.is_zero());
+        let r1 = &rows[1];
+        assert_eq!(r1.quo_no, q1.no);
+        assert_eq!(r1.so_id, so_id);
+        assert_eq!(r1.quo_price, m("0.28"));
+        assert_eq!(r1.so_price, m("0.31"));
+        assert_eq!(r1.diff, m("0.03"));
+        assert_eq!(r1.quo_amount, m("84.00"));
+        assert_eq!(r1.so_amount, m("93.00"));
+        assert_eq!(r1.diff_amount, m("9.00"));
     }
 
     #[test]

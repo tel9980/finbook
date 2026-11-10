@@ -2930,6 +2930,119 @@ async fn quotation_print_form_carries_the_spec_breakdown() {
     assert!(!html.contains("税率"), "报价单默认不显示税率列");
 }
 
+/// 报价单转成订单后单价被改（说好 0.28、结算按 0.31）：对账表把差价点名。
+#[tokio::test]
+async fn quotation_reconcile_compares_quoted_vs_settled_price() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/dashboard", &sid))
+        .await
+        .unwrap();
+    let dash: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let cur_ymm: i32 = dash["current_period"]
+        .as_str()
+        .unwrap()
+        .replace('-', "")
+        .parse()
+        .unwrap();
+    let d13 = format!("{}-13", dash["current_period"].as_str().unwrap());
+
+    // 报价：0.28 × 300
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/quote",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": cur_ymm, "date": d13, "customer_code": "C01",
+                "customer_name": "客户甲", "item_code": "MB31", "item_name": "支件",
+                "qty": "300", "unit_price": "0.28", "status": "draft",
+                "prepared_by": "", "memo": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "存报价单");
+    let qid = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    // 审批 → 转订单
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/sales/quote/{qid}/approve"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "审批");
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/sales/quote/{qid}/to-order"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "转订单");
+    let so_id = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()
+        ["so_id"]
+        .as_i64()
+        .unwrap();
+
+    // 结算时把订单首行单价改成 0.31
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/sales/so",
+            &sid,
+            serde_json::json!({
+                "id": so_id, "period": cur_ymm, "date": d13,
+                "customer_code": "C01", "customer_name": "客户甲",
+                "status": "Draft", "memo": "",
+                "lines": [
+                    { "item_code": "MB31", "item_name": "支件",
+                      "qty_ordered": "300", "unit_price": "0.31", "tax_rate": "" }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "改订单单价");
+
+    // 对账
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get(
+            &format!("/api/sales/quote/reconcile?period={cur_ymm}"),
+            &sid,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "对账");
+    let v: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let rows = v["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "当期一张报价单：{v}");
+    let row = &rows[0];
+    assert!(!row["quo_no"].as_str().unwrap().is_empty(), "带单号");
+    assert_eq!(row["so_id"].as_i64().unwrap(), so_id);
+    assert!(
+        (money_num(row["quo_price"].as_str().unwrap()) - 0.28).abs() < 1e-9,
+        "报价单价 0.28：{row}"
+    );
+    assert!(
+        (money_num(row["so_price"].as_str().unwrap()) - 0.31).abs() < 1e-9,
+        "实际单价 0.31：{row}"
+    );
+    assert!(
+        (money_num(row["diff"].as_str().unwrap()) - 0.03).abs() < 1e-9,
+        "单价差 0.03：{row}"
+    );
+    assert!(
+        (money_num(row["diff_amount"].as_str().unwrap()) - 9.00).abs() < 1e-9,
+        "差额 9.00：{row}"
+    );
+}
+
 /// 报价单的价和价目表对不上：保存时给提示、也能单独查，但**不拦单**。
 #[tokio::test]
 async fn quote_price_check_flags_mismatch_without_blocking() {

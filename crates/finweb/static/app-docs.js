@@ -36,6 +36,32 @@ function priceCheckHtml(r) {
   return "";
 }
 
+function quoReconcileHtml(rows) {
+  if (!rows || !rows.length) return `<div class="muted">当期还没有报价单</div>`;
+  const drifted = rows.filter((r) => r.so_id && Number(r.diff) !== 0);
+  const tr = (r) => {
+    const none = !r.so_id;
+    const diff = none ? "" : fmtMoney(r.diff);
+    const sign = !none && Number(r.diff) > 0 ? "+" : "";
+    const cls = !none && Number(r.diff) !== 0 ? "warn" : "";
+    return `<tr${cls ? ` class="${cls}"` : ""}>
+      <td>${esc(r.quo_no)}</td>
+      <td>${esc(r.customer_name)}</td>
+      <td>${esc(r.item_name)}</td>
+      <td class="num">${esc(fmt(r.quo_qty))}</td>
+      <td class="num">${esc(fmtMoney(r.quo_price))}</td>
+      <td class="num">${none ? `<span class="muted">未转订单</span>` : esc(fmtMoney(r.so_price))}</td>
+      <td class="num">${none ? `<span class="muted">—</span>` : `<b>${sign}${esc(diff)}</b>`}</td>
+      <td class="num">${none ? `<span class="muted">—</span>` : esc(fmtMoney(r.diff_amount))}</td>
+      <td>${none ? `<span class="muted">—</span>` : esc(r.so_status)}</td>
+    </tr>`;
+  };
+  const summary = drifted.length
+    ? `<div class="muted" style="margin:4px 0">共 ${rows.length} 张，其中 <span style="color:var(--warn)">${drifted.length} 张</span>实际单价和报价不一致</div>`
+    : `<div class="muted" style="margin:4px 0">共 ${rows.length} 张，实际单价都与报价一致</div>`;
+  return `${summary}<table class="grid"><thead><tr><th>单号</th><th>客户</th><th>存货</th><th class="num">数量</th><th class="num">报价单价</th><th class="num">实际单价</th><th class="num">单价差</th><th class="num">差额</th><th>订单状态</th></tr></thead><tbody>${rows.map(tr).join("")}</tbody></table>`;
+}
+
 async function snLoad() {
   const box = document.getElementById("sn-list");
   if (!box) return;
@@ -248,7 +274,7 @@ async function viewSoDoc(main) {
     <div id="sd-credit-result" class="muted" style="margin-top:6px"></div>
     <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">发货通知（待发）</h4><span class="grow"></span><button class="btn ghost sm" id="sn-reload">刷新</button></div><div id="sn-list" class="muted" style="margin-top:8px">加载中…</div></div>
     <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">销售订单</h4><span class="grow"></span>${sizeSel("so-size")}<button class="btn ghost sm" id="so-print">打印所选</button><button class="btn ghost sm" id="so-deli">送货单(跟车)</button><button class="btn ghost sm" id="so-printcfg">打印设置</button><button class="btn primary sm" id="so-new">新建销售订单</button></div><div id="so-list" class="muted" style="margin-top:8px">加载中…</div></div>
-    <div class="panel" style="margin-top:12px"><h4>报价单</h4><div id="sd-list">加载中…</div></div>
+    <div class="panel" style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px"><h4 style="margin:0">报价单</h4><span class="grow"></span>${can("report") ? `<button class="btn ghost sm" id="sd-recon">报价对账</button>` : ""}</div><div id="sd-list">加载中…</div><div id="sd-recon-out" class="muted" style="margin-top:8px"></div></div>
     <div class="panel" style="margin-top:12px"><h4>销售订单执行跟踪</h4><div id="sd-track">加载中…</div></div>`;
 
   const load = async () => {
@@ -300,6 +326,15 @@ async function viewSoDoc(main) {
         } catch (e) { toast(e.message, "err"); }
       });
     } catch (e) { $("#sd-list").innerHTML = `<div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; }
+    if (can("report")) {
+      try {
+        const rc = await api(`/sales/quote/reconcile?period=${period}`);
+        $("#sd-recon-out").innerHTML = quoReconcileHtml(rc.rows || []);
+        $("#sd-recon").onclick = async () => {
+          try { const rc2 = await api(`/sales/quote/reconcile?period=${period}`); $("#sd-recon-out").innerHTML = quoReconcileHtml(rc2.rows || []); toast("已刷新", "ok"); } catch (e) { toast(e.message, "err"); }
+        };
+      } catch (e) { $("#sd-recon-out").innerHTML = `<div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; }
+    }
     try {
       const t = await api("/sales/track");
       $("#sd-track").innerHTML = soTrack(t.rows || []);

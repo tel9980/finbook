@@ -589,6 +589,36 @@ const CASES = [
     expect: ["跳过", "没有匹配的价"],
     absent: ["<table"],
   },
+  // 报价单 vs 实际结算对账（v1.8.100）：说好 0.28、结算 0.31，差价要点名。
+  {
+    fn: "quoReconcileHtml",
+    args: [
+      [
+        { quo_no: "BJ20261001", customer_name: "客户甲", item_name: "支件", quo_qty: "300", quo_price: "0.28", so_id: 5, so_no: "SO0001", so_status: "Draft", so_price: "0.31", diff: "0.03", diff_amount: "9.00" },
+        { quo_no: "BJ20261002", customer_name: "客户乙", item_name: "盖板", quo_qty: "100", quo_price: "0.50", so_id: 0, so_status: "", so_price: "0.00", diff: "0.00", diff_amount: "0.00" },
+      ],
+    ],
+    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s) },
+    expect: ["共 2 张", "1 张", "实际单价和报价不一致", "客户甲", "0.28", "0.31", "+0.03", "9.00", "未转订单", "单价差"],
+  },
+  {
+    fn: "quoReconcileHtml",
+    args: [
+      [
+        { quo_no: "BJ20261003", customer_name: "客户丙", item_name: "支架", quo_qty: "50", quo_price: "1.20", so_id: 8, so_status: "Confirmed", so_price: "1.20", diff: "0.00", diff_amount: "0.00" },
+      ],
+    ],
+    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s) },
+    expect: ["实际单价都与报价一致", "1.20"],
+    absent: ["不一致", "warn"],
+  },
+  {
+    fn: "quoReconcileHtml",
+    args: [[]],
+    stubs: { esc: (s) => String(s == null ? "" : s), fmt: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s) },
+    expect: ["当期还没有报价单"],
+    absent: ["<table"],
+  },
 ];
 
 function main() {
