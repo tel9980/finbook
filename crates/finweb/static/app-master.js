@@ -898,7 +898,7 @@ function openAuxEditor(main, ent, kind) {
     <h3>${isEdit ? "编辑档案" : "新增档案"}（${esc(AUX_KINDS.find((k) => k.code === kind).label)}）</h3>
     <div class="field"><label>编码 *</label><input id="au-code" value="${esc(e.code)}" /></div>
     <div class="field"><label>名称 *</label><input id="au-name" value="${esc(e.name)}" /></div>
-    ${kind === "customer" ? `<div class="field"><label>信用额度（0 = 不限；超出后订单「确认」被拒）</label><input id="au-credit" value="${esc((e.props && e.props.credit_limit) || "0")}" /></div>` : ""}
+    ${kind === "customer" ? `<div class="field"><label>信用额度（0 = 不限；超出后订单「确认」被拒）</label><input id="au-credit" value="${esc((e.props && e.props.credit_limit) || "0")}" /></div><div class="field"><label>账期（天，留空 = 货到即付；到期按发货日起算）</label><input id="au-paydays" value="${esc((e.props && e.props.pay_days) || "")}" placeholder="如 30" /></div>` : ""}
     ${kind === "item" ? `<div class="field"><label>保质期天数（0 = 不启用批次效期）</label><input id="au-shelf" value="${esc((e.props && e.props.shelf_life_days) || "0")}" /></div><div class="field"><label style="display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" id="au-qc" ${e.props && (e.props.qc_required === "1" || e.props.qc_required === "true") ? "checked" : ""} /> 启用来料检验（到货先入待检，质检转正后才可用）</label></div>
     <div class="field" style="display:flex;gap:12px;flex-wrap:wrap">
       <div><label>安全库存（低库存预警口径）</label><input id="au-safety" placeholder="0 = 不预警" style="width:130px" /></div>
@@ -930,12 +930,17 @@ function openAuxEditor(main, ent, kind) {
     const name = $("#au-name", mask).value.trim();
     if (!code || !name) { toast("编码与名称必填", "err"); return; }
     const parent = $("#au-parent", mask).value.trim();
+    if (kind === "customer") {
+      const paydays = $("#au-paydays", mask).value.trim();
+      if (paydays && !/^\d{1,4}$/.test(paydays)) { toast("账期要填整数天数（0-3650），或留空", "err"); return; }
+      if (paydays && (Number(paydays) < 0 || Number(paydays) > 3650)) { toast("账期要在 0-3650 天之间，或留空", "err"); return; }
+    }
     const body = Object.assign({}, e, {
       kind, code, name,
       parent_code: parent || null,
       disabled: $("#au-disabled", mask).checked,
       memo: $("#au-memo", mask).value.trim(),
-      props: Object.assign({}, e.props || {}, kind === "customer" ? { credit_limit: $("#au-credit", mask).value.trim() || "0" } : {}, kind === "item" ? { shelf_life_days: $("#au-shelf", mask).value.trim() || "0", qc_required: $("#au-qc", mask).checked ? "1" : "0" } : {}),
+      props: Object.assign({}, e.props || {}, kind === "customer" ? { credit_limit: $("#au-credit", mask).value.trim() || "0", pay_days: $("#au-paydays", mask).value.trim() } : {}, kind === "item" ? { shelf_life_days: $("#au-shelf", mask).value.trim() || "0", qc_required: $("#au-qc", mask).checked ? "1" : "0" } : {}),
     });
     try {
       if (isEdit) await api(`/aux/${e.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

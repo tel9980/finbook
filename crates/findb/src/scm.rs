@@ -552,32 +552,11 @@ pub fn po_list(db: &Db, period: Period, status: Option<PoStatus>) -> DbResult<Ve
     // 一次取回本期间所有到货流水，Rust 侧按订单分组累加（不在 SQL 里 SUM——
     // 金额/数量列全库按 TEXT 存，SQLite 对 TEXT 的 SUM 返回 Integer/Real）
     let recv_by_po = po_receipt_qty_map(db, period)?;
+    let lines_by_po = po_lines_by_order(db, period)?;
 
     let mut orders = Vec::new();
     for mut po in rows {
-        let mut stmt = db.conn().prepare(
-            "SELECT id, item_code, item_name, qty_ordered, qty_received,
-             unit_price, tax_rate, amount, tax_amount, memo
-             FROM po_line WHERE po_id=? ORDER BY id",
-        )?;
-        let lines = stmt
-            .query_map([po.id], |r| {
-                Ok(PoLine {
-                    id: r.get(0)?,
-                    po_id: po.id,
-                    item_code: r.get(1)?,
-                    item_name: r.get(2)?,
-                    qty_ordered: Money::parse_or_zero(&r.get::<_, String>(3)?),
-                    qty_received: Money::parse_or_zero(&r.get::<_, String>(4)?),
-                    unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
-                    tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
-                    amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
-                    tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                    memo: r.get(9)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        po.lines = lines;
+        po.lines = lines_by_po.get(&po.id).cloned().unwrap_or_default();
         // 执行进度（已收数量/金额）从 po_receipt 实时汇总，不读冗余列。
         //
         // 与销售侧同一个毛病：`purchase_order.received_amount` / `po_line.qty_received`
@@ -605,6 +584,48 @@ fn po_receipt_qty_map(db: &Db, period: Period) -> DbResult<std::collections::Has
     for r in rows {
         let (po_id, qty) = r?;
         *map.entry(po_id).or_insert(Money::ZERO) += Money::parse_or_zero(&qty);
+    }
+    Ok(map)
+}
+
+/// 本期间所有采购订单的明细行，一次取全、按 po_id 分组。
+///
+/// `po_list` 原来对每张采购订单单独查一次 `po_line`（N+1）：几十张单就是几十次
+/// 往返。这里 join `purchase_order` 限定期间、一次扫全，Rust 侧按 po_id 分组，
+/// 与逐单查询口径完全一致。
+fn po_lines_by_order(
+    db: &Db,
+    period: Period,
+) -> DbResult<std::collections::HashMap<i64, Vec<PoLine>>> {
+    let mut st = db.conn().prepare(
+        "SELECT l.po_id, l.id, l.item_code, l.item_name, l.qty_ordered, l.qty_received,
+                l.unit_price, l.tax_rate, l.amount, l.tax_amount, l.memo
+         FROM po_line l JOIN purchase_order o ON o.id = l.po_id
+         WHERE o.period=?1 ORDER BY l.po_id, l.id",
+    )?;
+    let rows = st.query_map([period.ymm()], |r| {
+        let po_id = r.get::<_, i64>(0)?;
+        Ok((
+            po_id,
+            PoLine {
+                id: r.get(1)?,
+                po_id,
+                item_code: r.get(2)?,
+                item_name: r.get(3)?,
+                qty_ordered: Money::parse_or_zero(&r.get::<_, String>(4)?),
+                qty_received: Money::parse_or_zero(&r.get::<_, String>(5)?),
+                unit_price: Money::parse_or_zero(&r.get::<_, String>(6)?),
+                tax_rate: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
+                tax_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
+                memo: r.get(10)?,
+            },
+        ))
+    })?;
+    let mut map: std::collections::HashMap<i64, Vec<PoLine>> = std::collections::HashMap::new();
+    for r in rows {
+        let (po_id, line) = r?;
+        map.entry(po_id).or_default().push(line);
     }
     Ok(map)
 }
@@ -1099,32 +1120,11 @@ pub fn so_list(db: &Db, period: Period, status: Option<SoStatus>) -> DbResult<Ve
     // Integer/Real，get::<String> 直接报 InvalidColumnType——而且这个错只在
     // 「全整数数据」时出现，有小数时碰巧能过，属于最难自查的那类。
     let shipped_by_so = so_shipment_qty_map(db, period)?;
+    let lines_by_so = so_lines_by_order(db, period)?;
 
     let mut orders = Vec::new();
     for mut so in rows {
-        let mut stmt = db.conn().prepare(
-            "SELECT id, item_code, item_name, qty_ordered, qty_shipped,
-             unit_price, tax_rate, amount, tax_amount, memo
-             FROM so_line WHERE so_id=? ORDER BY id",
-        )?;
-        let lines = stmt
-            .query_map([so.id], |r| {
-                Ok(SoLine {
-                    id: r.get(0)?,
-                    so_id: so.id,
-                    item_code: r.get(1)?,
-                    item_name: r.get(2)?,
-                    qty_ordered: Money::parse_or_zero(&r.get::<_, String>(3)?),
-                    qty_shipped: Money::parse_or_zero(&r.get::<_, String>(4)?),
-                    unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
-                    tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
-                    amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
-                    tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                    memo: r.get(9)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        so.lines = lines;
+        so.lines = lines_by_so.get(&so.id).cloned().unwrap_or_default();
         // 执行进度（已发数量/金额）从 so_shipment 实时汇总，不读冗余列。
         //
         // 冗余列 `sales_order.shipped_amount` / `so_line.qty_shipped` 建表后
@@ -1154,6 +1154,48 @@ fn so_shipment_qty_map(db: &Db, period: Period) -> DbResult<std::collections::Ha
     for r in rows {
         let (so_id, qty) = r?;
         *map.entry(so_id).or_insert(Money::ZERO) += Money::parse_or_zero(&qty);
+    }
+    Ok(map)
+}
+
+/// 本期间所有销售订单的明细行，一次取全、按 so_id 分组。
+///
+/// `so_list` 原来对每张销售订单单独查一次 `so_line`（N+1）：几十张单就是几十次
+/// 往返。这里 join `sales_order` 限定期间、一次扫全，Rust 侧按 so_id 分组，
+/// 与逐单查询口径完全一致。
+fn so_lines_by_order(
+    db: &Db,
+    period: Period,
+) -> DbResult<std::collections::HashMap<i64, Vec<SoLine>>> {
+    let mut st = db.conn().prepare(
+        "SELECT l.so_id, l.id, l.item_code, l.item_name, l.qty_ordered, l.qty_shipped,
+                l.unit_price, l.tax_rate, l.amount, l.tax_amount, l.memo
+         FROM so_line l JOIN sales_order o ON o.id = l.so_id
+         WHERE o.period=?1 ORDER BY l.so_id, l.id",
+    )?;
+    let rows = st.query_map([period.ymm()], |r| {
+        let so_id = r.get::<_, i64>(0)?;
+        Ok((
+            so_id,
+            SoLine {
+                id: r.get(1)?,
+                so_id,
+                item_code: r.get(2)?,
+                item_name: r.get(3)?,
+                qty_ordered: Money::parse_or_zero(&r.get::<_, String>(4)?),
+                qty_shipped: Money::parse_or_zero(&r.get::<_, String>(5)?),
+                unit_price: Money::parse_or_zero(&r.get::<_, String>(6)?),
+                tax_rate: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
+                tax_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
+                memo: r.get(10)?,
+            },
+        ))
+    })?;
+    let mut map: std::collections::HashMap<i64, Vec<SoLine>> = std::collections::HashMap::new();
+    for r in rows {
+        let (so_id, line) = r?;
+        map.entry(so_id).or_default().push(line);
     }
     Ok(map)
 }
@@ -1750,6 +1792,102 @@ mod tests {
             "全量到货金额 = 订单价税合计"
         );
         assert_eq!(got[0].status, PoStatus::Completed);
+    }
+
+    /// 明细行批量加载：多张订单、每张多行，`po_list`/`so_list` 一次扫全、按单分组，
+    /// 不再逐单查明细（防 N+1 回潮）。
+    #[test]
+    fn list_batch_loads_lines_across_orders() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mk_line = |item: &str, qty: &str| (item.to_string(), m(qty));
+
+        let mut po1 = PurchaseOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            "S001",
+            "供应商A",
+            "u1",
+        );
+        po1.no = po_next_no(&db, p).unwrap();
+        for (item, qty) in [mk_line("140301", "100"), mk_line("140302", "50")] {
+            po1.lines.push(PoLine {
+                id: 0,
+                po_id: 0,
+                item_code: item,
+                item_name: "料".into(),
+                qty_ordered: qty,
+                qty_received: Money::ZERO,
+                unit_price: m("10"),
+                tax_rate: Money::ZERO,
+                amount: m("1000"),
+                tax_amount: Money::ZERO,
+                memo: String::new(),
+            });
+        }
+        po_save(&db, &mut po1).unwrap();
+        let mut po2 = PurchaseOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 6).unwrap(),
+            "S002",
+            "供应商B",
+            "u1",
+        );
+        po2.no = po_next_no(&db, p).unwrap();
+        po2.lines.push(PoLine {
+            id: 0,
+            po_id: 0,
+            item_code: "140303".into(),
+            item_name: "料".into(),
+            qty_ordered: m("20"),
+            qty_received: Money::ZERO,
+            unit_price: m("5"),
+            tax_rate: Money::ZERO,
+            amount: m("100"),
+            tax_amount: Money::ZERO,
+            memo: String::new(),
+        });
+        po_save(&db, &mut po2).unwrap();
+
+        let pos = po_list(&db, p, None).unwrap();
+        assert_eq!(pos.len(), 2);
+        // 日期倒序：po2(01-06) 在前，po1(01-05) 在后
+        assert_eq!(pos[0].supplier_code, "S002");
+        assert_eq!(pos[0].lines.len(), 1);
+        assert_eq!(pos[1].supplier_code, "S001");
+        assert_eq!(pos[1].lines.len(), 2, "多行订单两条明细都要回来");
+        assert_eq!(pos[1].lines[0].item_code, "140301");
+        assert_eq!(pos[1].lines[1].item_code, "140302");
+
+        // 销售侧同款
+        let mut so = SalesOrder::new(
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 7).unwrap(),
+            "C001",
+            "客户甲",
+            "u1",
+        );
+        so.no = so_next_no(&db, p).unwrap();
+        for (item, qty) in [mk_line("140501", "10"), mk_line("140502", "30")] {
+            so.lines.push(SoLine {
+                id: 0,
+                so_id: 0,
+                item_code: item,
+                item_name: "成品".into(),
+                qty_ordered: qty,
+                qty_shipped: Money::ZERO,
+                unit_price: m("100"),
+                tax_rate: Money::ZERO,
+                amount: m("1000"),
+                tax_amount: Money::ZERO,
+                memo: String::new(),
+            });
+        }
+        so_save(&db, &mut so).unwrap();
+        let sos = so_list(&db, p, None).unwrap();
+        assert_eq!(sos.len(), 1);
+        assert_eq!(sos[0].lines.len(), 2, "销售订单两条明细都要回来");
+        assert_eq!(sos[0].lines[1].item_code, "140502");
     }
 
     /// 超收如实反映：到货超过订购量时，已收金额会大于订单金额

@@ -498,6 +498,22 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             po_pending,
             "po-doc",
         ));
+        let po_receive = pos
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o.status,
+                    crate::scm::PoStatus::Confirmed | crate::scm::PoStatus::PartialIn
+                )
+            })
+            .count() as i64;
+        out.todos.push(todo(
+            "采购",
+            "po_receive_todo",
+            "待收货采购订单",
+            po_receive,
+            "po-doc",
+        ));
     }
 
     // ---- 仓管 ----
@@ -899,6 +915,22 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             "po_todo",
             "待确认采购订单",
             po_pending,
+            "po-doc",
+        ));
+        let po_receive = pos
+            .iter()
+            .filter(|o| {
+                matches!(
+                    o.status,
+                    crate::scm::PoStatus::Confirmed | crate::scm::PoStatus::PartialIn
+                )
+            })
+            .count() as i64;
+        todos.push(todo(
+            "采购",
+            "po_receive_todo",
+            "待收货采购订单",
+            po_receive,
             "po-doc",
         ));
     }
@@ -1405,5 +1437,68 @@ mod tests {
         assert_eq!(t.label, "待确认采购订单");
         assert_eq!(t.count, 1, "两张采购订单只有一张是草稿");
         assert_eq!(t.view, "po-doc", "点了该跳去采购单据页确认");
+    }
+
+    #[test]
+    fn pending_receipt_purchase_orders_surface_as_a_todo() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let mk_po = |supplier: &str, status: crate::scm::PoStatus| -> i64 {
+            let mut po = crate::scm::PurchaseOrder::new(p, d, supplier, "供应商", "u");
+            po.no = crate::scm::po_next_no(&db, p).unwrap();
+            po.lines.push(crate::scm::PoLine {
+                id: 0,
+                po_id: 0,
+                item_code: "140301".into(),
+                item_name: "原料".into(),
+                qty_ordered: Money::parse("10").unwrap(),
+                qty_received: Money::ZERO,
+                unit_price: Money::parse("10").unwrap(),
+                tax_rate: Money::ZERO,
+                amount: Money::parse("100").unwrap(),
+                tax_amount: Money::ZERO,
+                memo: String::new(),
+            });
+            let id = crate::scm::po_save(&db, &mut po).unwrap();
+            // 状态机：草稿 → 已确认 → 部分入库 → 已完成；作废可任一点直达
+            match status {
+                crate::scm::PoStatus::Draft => {}
+                crate::scm::PoStatus::Cancelled => {
+                    crate::scm::po_set_status(&db, id, crate::scm::PoStatus::Cancelled).unwrap();
+                }
+                _ => {
+                    crate::scm::po_set_status(&db, id, crate::scm::PoStatus::Confirmed).unwrap();
+                    if status == crate::scm::PoStatus::PartialIn
+                        || status == crate::scm::PoStatus::Completed
+                    {
+                        crate::scm::po_set_status(&db, id, crate::scm::PoStatus::PartialIn)
+                            .unwrap();
+                    }
+                    if status == crate::scm::PoStatus::Completed {
+                        crate::scm::po_set_status(&db, id, crate::scm::PoStatus::Completed)
+                            .unwrap();
+                    }
+                }
+            }
+            id
+        };
+        // 待收货 = 已确认 + 部分入库；草稿/已完成/已作废都不算
+        mk_po("S01", crate::scm::PoStatus::Confirmed);
+        mk_po("S02", crate::scm::PoStatus::PartialIn);
+        mk_po("S03", crate::scm::PoStatus::Draft);
+        mk_po("S04", crate::scm::PoStatus::Completed);
+        mk_po("S05", crate::scm::PoStatus::Cancelled);
+
+        let admin = User::new("boss", "老板", Role::Admin);
+        let out = collect(&db, &admin, p, 6).unwrap();
+        let t = out
+            .todos
+            .iter()
+            .find(|t| t.key == "po_receive_todo")
+            .expect("应有「待收货采购订单」待办");
+        assert_eq!(t.label, "待收货采购订单");
+        assert_eq!(t.count, 2, "只有「已确认」和「部分入库」算待收货");
+        assert_eq!(t.view, "po-doc", "点了该跳去采购单据页收货");
     }
 }

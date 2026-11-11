@@ -2337,6 +2337,20 @@ const MUT = [
     to: "        let po_pending = pos\n            .iter()\n            .filter(|_o| true)\n            .count() as i64;\n        out.todos.push(todo(",
     cmd: ["test", "-p", "findb", "--lib", "workbench::tests::pending_purchase_orders_surface_as_a_todo"],
   },
+  {
+    name: "132 待收货采购订单把草稿也算进来",
+    file: "crates/findb/src/workbench.rs",
+    from: "        let po_receive = pos\n            .iter()\n            .filter(|o| {\n                matches!(\n                    o.status,\n                    crate::scm::PoStatus::Confirmed | crate::scm::PoStatus::PartialIn\n                )\n            })\n            .count() as i64;\n        out.todos.push(todo(",
+    to: "        let po_receive = pos\n            .iter()\n            .filter(|_o| true)\n            .count() as i64;\n        out.todos.push(todo(",
+    cmd: ["test", "-p", "findb", "--lib", "workbench::tests::pending_receipt_purchase_orders_surface_as_a_todo"],
+  },
+  {
+    name: "133 订单明细批量加载只留第一行（第 2 行弄丢）",
+    file: "crates/findb/src/scm.rs",
+    from: "    let mut map: std::collections::HashMap<i64, Vec<SoLine>> = std::collections::HashMap::new();\n    for r in rows {\n        let (so_id, line) = r?;\n        map.entry(so_id).or_default().push(line);\n    }\n    Ok(map)",
+    to: "    let mut map: std::collections::HashMap<i64, Vec<SoLine>> = std::collections::HashMap::new();\n    for r in rows {\n        let (so_id, line) = r?;\n        let v = map.entry(so_id).or_default();\n        if v.is_empty() {\n            v.push(line);\n        }\n    }\n    Ok(map)",
+    cmd: ["test", "-p", "findb", "--lib", "scm::tests::list_batch_loads_lines_across_orders"],
+  },
 
 ];
 
