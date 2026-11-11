@@ -2267,6 +2267,20 @@ const MUT = [
     to: "        let overdue_days = age - pay_days;",
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_does_not_flag_orders_within_pay_days"],
   },
+  {
+    name: "122 回款汇总只取每单第一笔收款（多笔只算一笔）",
+    file: "crates/findb/src/sales.rs",
+    from: "        let e = map.entry(so_id).or_insert(Money::ZERO);\n        *e += m(&amt);",
+    to: "        let e = map.entry(so_id).or_insert(Money::ZERO);\n        *e = m(&amt);",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_payment_sums_aggregates_multiple_payments"],
+  },
+  {
+    name: "123 工作台逾期应收把没过期的也算进来",
+    file: "crates/findb/src/workbench.rs",
+    from: "            .filter(|r| r.overdue_days > 0)\n            .count() as i64;\n        out.todos.push(todo(",
+    to: "            .filter(|_r| true)\n            .count() as i64;\n        out.todos.push(todo(",
+    cmd: ["test", "-p", "findb", "--lib", "workbench::tests::overdue_receivable_surfaces_as_a_todo"],
+  },
 
 ];
 

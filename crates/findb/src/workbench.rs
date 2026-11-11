@@ -418,6 +418,21 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
         ));
     }
 
+    // ---- 应收：逾期欠款（谁还欠我钱里超了账期的单）----
+    if user.can(Perm::Report) {
+        let overdue = crate::sales::so_receivable(db)?
+            .iter()
+            .filter(|r| r.overdue_days > 0)
+            .count() as i64;
+        out.todos.push(todo(
+            "销售",
+            "ar_overdue",
+            "逾期应收待催收",
+            overdue,
+            "so-doc",
+        ));
+    }
+
     // ---- 采购（订单权限，单据类型区分）----
     if user.can(Perm::OrderOps) {
         let prs = crate::procurement::pr_list(db, cur)?;
@@ -864,6 +879,20 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             "po-doc",
         ));
     }
+    // 应收：逾期欠款（谁还欠我钱里超了账期的单）
+    if user.can(Perm::Report) {
+        let overdue = crate::sales::so_receivable(db)?
+            .iter()
+            .filter(|r| r.overdue_days > 0)
+            .count() as i64;
+        todos.push(todo(
+            "销售",
+            "ar_overdue",
+            "逾期应收待催收",
+            overdue,
+            "so-doc",
+        ));
+    }
     // 仓管
     if user.can(Perm::Warehouse) {
         let exp = crate::batch::expiring_batches(db, 30)?;
@@ -1268,5 +1297,51 @@ mod tests {
             vec!["销售"],
             "WbOut.active 应与 domain_active 一致"
         );
+    }
+
+    /// 逾期应收要在工作台「本月该干的事」里冒出来，老板一打开就知道谁欠着没还。
+    #[test]
+    fn overdue_receivable_surfaces_as_a_todo() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mk = |date: chrono::NaiveDate, code: &str, name: &str| -> i64 {
+            let mut so = crate::scm::SalesOrder::new(p, date, code, name, "u");
+            so.no = crate::scm::so_next_no(&db, p).unwrap();
+            so.lines.push(crate::scm::SoLine {
+                id: 0,
+                so_id: 0,
+                item_code: "140501".into(),
+                item_name: "成品".into(),
+                qty_ordered: Money::parse("10").unwrap(),
+                qty_shipped: Money::ZERO,
+                unit_price: Money::parse("100").unwrap(),
+                tax_rate: Money::ZERO,
+                amount: Money::parse("1000").unwrap(),
+                tax_amount: Money::ZERO,
+                memo: String::new(),
+            });
+            let id = crate::scm::so_save(&db, &mut so).unwrap();
+            crate::scm::so_set_status(&db, id, crate::scm::SoStatus::Confirmed).unwrap();
+            id
+        };
+        // 一张很久前确认、一分没收的单 → 账龄远超账期，必逾期
+        mk(
+            chrono::NaiveDate::from_ymd_opt(2025, 1, 5).unwrap(),
+            "C01",
+            "客户A",
+        );
+        // 一张今天才确认、也还没收的单 → 没过账期，不算逾期（但要出现在「谁还欠我钱」里）
+        mk(chrono::Local::now().date_naive(), "C02", "客户B");
+
+        let admin = User::new("boss", "老板", Role::Admin);
+        let out = collect(&db, &admin, p, 6).unwrap();
+        let t = out
+            .todos
+            .iter()
+            .find(|t| t.key == "ar_overdue")
+            .expect("应有「逾期应收待催收」待办");
+        assert_eq!(t.label, "逾期应收待催收");
+        assert_eq!(t.count, 1, "两张没结清，只有一张逾期，count 应为 1");
+        assert_eq!(t.view, "so-doc", "点了该跳去销售单据页看谁还欠我钱");
     }
 }

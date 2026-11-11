@@ -779,6 +779,23 @@ pub fn so_payment_sum(db: &Db, so_id: i64) -> DbResult<Money> {
     Ok(rows.iter().map(|s| m(s)).sum())
 }
 
+/// 一次性汇总所有订单的已收款（替代逐单 `so_payment_sum`，消除 N+1）。
+///
+/// `so_receivable` / `credit_check` 每跑一条订单就查一次 `so_payment`，几十张开着的单
+/// 就是几十次往返；小厂单子虽不多，但这是纯浪费。这里只扫一遍 `so_payment` 表，
+/// 按 `so_id` 累加成一张表，两条路径各查一次就够。
+pub fn so_payment_sums(db: &Db) -> DbResult<std::collections::HashMap<i64, Money>> {
+    let mut st = db.conn().prepare("SELECT so_id, amount FROM so_payment")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut map: std::collections::HashMap<i64, Money> = std::collections::HashMap::new();
+    for row in rows {
+        let (so_id, amt) = row?;
+        let e = map.entry(so_id).or_insert(Money::ZERO);
+        *e += m(&amt);
+    }
+    Ok(map)
+}
+
 // ===========================================================================
 // 统计 / 执行跟踪 / 信用管理
 
@@ -1008,10 +1025,11 @@ fn so_receivable_as_of(db: &Db, today: chrono::NaiveDate) -> DbResult<Vec<SoRece
         ))
     })?;
     let pay_days_map = crate::settle::customer_pay_days_map(db)?;
+    let sums = so_payment_sums(db)?;
     let mut out = Vec::new();
     for row in rows {
         let (id, no, date, cc, cn, status, total) = row?;
-        let collected = so_payment_sum(db, id)?;
+        let collected = sums.get(&id).copied().unwrap_or(Money::ZERO);
         let balance = (total - collected).round2();
         if balance.is_zero() {
             continue; // 已经结清，不进「谁还欠我钱」这张表
@@ -1073,6 +1091,7 @@ pub fn credit_check(
 ) -> DbResult<(Money, Money, bool)> {
     let limit = customer_credit_limit(db, customer_code)?;
     let orders = crate::scm::so_list(db, period, None)?;
+    let sums = so_payment_sums(db)?;
     let mut receivable = Money::ZERO;
     for o in orders.iter().filter(|o| {
         o.customer_code == customer_code
@@ -1082,7 +1101,7 @@ pub fn credit_check(
             )
     }) {
         receivable += o.total_amount;
-        receivable -= so_payment_sum(db, o.id)?;
+        receivable -= sums.get(&o.id).copied().unwrap_or(Money::ZERO);
     }
     let over = !limit.is_zero() && receivable > limit;
     Ok((receivable, limit, over))
@@ -1385,6 +1404,47 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].pay_days, 30);
         assert_eq!(rows[0].overdue_days, 0, "账龄 2 天在账期 30 天内，不算逾期");
+    }
+
+    #[test]
+    fn so_payment_sums_aggregates_multiple_payments() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mk = |code: &str, name: &str| -> i64 {
+            let mut so = crate::scm::SalesOrder::new(
+                p,
+                NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                code,
+                name,
+                "u",
+            );
+            so.no = crate::scm::so_next_no(&db, p).unwrap();
+            so.lines.push(crate::scm::SoLine {
+                id: 0,
+                so_id: 0,
+                item_code: "140501".into(),
+                item_name: "成品".into(),
+                qty_ordered: m("1"),
+                qty_shipped: m("0"),
+                unit_price: m("100"),
+                tax_rate: m("0"),
+                amount: m("100"),
+                tax_amount: m("0"),
+                memo: String::new(),
+            });
+            crate::scm::so_save(&db, &mut so).unwrap()
+        };
+        let so1 = mk("C01", "客户A");
+        let so2 = mk("C02", "客户B");
+        let so3 = mk("C03", "客户C");
+        let d = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        so_payment_add(&db, so1, p, d, m("1200"), "").unwrap();
+        so_payment_add(&db, so1, p, d, m("300"), "").unwrap();
+        so_payment_add(&db, so2, p, d, m("500"), "").unwrap();
+        let sums = so_payment_sums(&db).unwrap();
+        assert_eq!(sums.get(&so1).copied(), Some(m("1500")));
+        assert_eq!(sums.get(&so2).copied(), Some(m("500")));
+        assert_eq!(sums.get(&so3), None, "没收过款的单不进汇总表");
     }
 
     #[test]
