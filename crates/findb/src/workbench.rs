@@ -487,6 +487,17 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             pr_pending,
             "po-doc",
         ));
+        let po_pending = pos
+            .iter()
+            .filter(|o| matches!(o.status, crate::scm::PoStatus::Draft))
+            .count() as i64;
+        out.todos.push(todo(
+            "采购",
+            "po_todo",
+            "待确认采购订单",
+            po_pending,
+            "po-doc",
+        ));
     }
 
     // ---- 仓管 ----
@@ -876,6 +887,18 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             "pr_todo",
             "待审批请购单",
             pr_pending,
+            "po-doc",
+        ));
+        let pos = crate::scm::po_list(db, cur, None)?;
+        let po_pending = pos
+            .iter()
+            .filter(|o| matches!(o.status, crate::scm::PoStatus::Draft))
+            .count() as i64;
+        todos.push(todo(
+            "采购",
+            "po_todo",
+            "待确认采购订单",
+            po_pending,
             "po-doc",
         ));
     }
@@ -1343,5 +1366,44 @@ mod tests {
         assert_eq!(t.label, "逾期应收待催收");
         assert_eq!(t.count, 1, "两张没结清，只有一张逾期，count 应为 1");
         assert_eq!(t.view, "so-doc", "点了该跳去销售单据页看谁还欠我钱");
+    }
+
+    #[test]
+    fn pending_purchase_orders_surface_as_a_todo() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let mk_po = |supplier: &str| -> i64 {
+            let mut po = crate::scm::PurchaseOrder::new(p, d, supplier, "供应商", "u");
+            po.no = crate::scm::po_next_no(&db, p).unwrap();
+            po.lines.push(crate::scm::PoLine {
+                id: 0,
+                po_id: 0,
+                item_code: "140301".into(),
+                item_name: "原料".into(),
+                qty_ordered: Money::parse("10").unwrap(),
+                qty_received: Money::ZERO,
+                unit_price: Money::parse("10").unwrap(),
+                tax_rate: Money::ZERO,
+                amount: Money::parse("100").unwrap(),
+                tax_amount: Money::ZERO,
+                memo: String::new(),
+            });
+            crate::scm::po_save(&db, &mut po).unwrap()
+        };
+        mk_po("S01"); // 草稿（待确认）
+        let confirmed = mk_po("S02");
+        crate::scm::po_set_status(&db, confirmed, crate::scm::PoStatus::Confirmed).unwrap();
+
+        let admin = User::new("boss", "老板", Role::Admin);
+        let out = collect(&db, &admin, p, 6).unwrap();
+        let t = out
+            .todos
+            .iter()
+            .find(|t| t.key == "po_todo")
+            .expect("应有「待确认采购订单」待办");
+        assert_eq!(t.label, "待确认采购订单");
+        assert_eq!(t.count, 1, "两张采购订单只有一张是草稿");
+        assert_eq!(t.view, "po-doc", "点了该跳去采购单据页确认");
     }
 }

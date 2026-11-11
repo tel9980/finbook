@@ -2330,6 +2330,13 @@ const MUT = [
     to: "        let e = map.entry(so_id).or_insert(Money::ZERO);\n        *e = m(&qty);",
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_shipment_sums_aggregates_across_orders"],
   },
+  {
+    name: "131 待确认采购订单把已确认的也算进来",
+    file: "crates/findb/src/workbench.rs",
+    from: "        let po_pending = pos\n            .iter()\n            .filter(|o| matches!(o.status, crate::scm::PoStatus::Draft))\n            .count() as i64;\n        out.todos.push(todo(",
+    to: "        let po_pending = pos\n            .iter()\n            .filter(|_o| true)\n            .count() as i64;\n        out.todos.push(todo(",
+    cmd: ["test", "-p", "findb", "--lib", "workbench::tests::pending_purchase_orders_surface_as_a_todo"],
+  },
 
 ];
 
