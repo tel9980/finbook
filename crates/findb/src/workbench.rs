@@ -708,13 +708,8 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             "元",
         ));
         let mut m: BTreeMap<i32, f64> = BTreeMap::new();
-        for p in &ps {
-            let rows = crate::manufacturing::wip_cost(db, *p)?;
-            let mut s = Money::ZERO;
-            for r in &rows {
-                s += r.total;
-            }
-            m.insert(p.ymm(), money_f64(s));
+        for (p, v) in crate::manufacturing::wip_total_by_period(db, y0, y1)? {
+            m.insert(p, v.to_f64());
         }
         out.trends.push(trend(
             "成本",
@@ -758,14 +753,8 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             "元",
         ));
         let mut m: BTreeMap<i32, f64> = BTreeMap::new();
-        for p in &ps {
-            let mut s = Money::ZERO;
-            for c in crate::business::claim_list(db, *p, None)? {
-                if c.applicant == me {
-                    s += c.amount;
-                }
-            }
-            m.insert(p.ymm(), money_f64(s));
+        for (p, v) in crate::business::claim_amount_by_period(db, y0, y1, me)? {
+            m.insert(p, v.to_f64());
         }
         out.trends.push(trend(
             "报销",

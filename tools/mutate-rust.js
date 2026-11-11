@@ -2380,6 +2380,34 @@ const MUT = [
     to: "        \"SELECT period, total_amount FROM sales_order WHERE period BETWEEN ?1 AND ?2\",",
     cmd: ["test", "-p", "findb", "--lib", "scm::tests::order_amount_by_period_batches_trend_totals"],
   },
+  {
+    name: "138 在产品走势累加写成覆盖（只取每期最后一笔）",
+    file: "crates/findb/src/manufacturing.rs",
+    from: "    for (p, v) in rows {\n        *m.entry(p).or_insert(Money::ZERO) += v;\n    }\n    Ok(m)\n}\n\n/// 某订单在某期间累计的报工工时",
+    to: "    for (p, v) in rows {\n        *m.entry(p).or_insert(Money::ZERO) = v;\n    }\n    Ok(m)\n}\n\n/// 某订单在某期间累计的报工工时",
+    cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::wip_total_by_period_batches_across_periods"],
+  },
+  {
+    name: "139 在产品走势把完工单也算进来",
+    file: "crates/findb/src/manufacturing.rs",
+    from: "o.status NOT IN ('completed','cancelled')",
+    to: "o.status NOT IN ('cancelled')",
+    cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::wip_total_by_period_batches_across_periods"],
+  },
+  {
+    name: "140 报销走势漏掉本人过滤（把别人的也算进来）",
+    file: "crates/findb/src/business.rs",
+    from: "WHERE period BETWEEN ?1 AND ?2 AND applicant=?3",
+    to: "WHERE period BETWEEN ?1 AND ?2",
+    cmd: ["test", "-p", "findb", "--lib", "business::tests::claim_amount_by_period_batches_across_periods"],
+  },
+  {
+    name: "141 报销走势累加写成覆盖（只取每期最后一笔）",
+    file: "crates/findb/src/business.rs",
+    from: "    for (p, v) in rows {\n        *m.entry(p).or_insert(Money::ZERO) += v;\n    }\n    Ok(m)\n}\n\npub fn claim_get",
+    to: "    for (p, v) in rows {\n        *m.entry(p).or_insert(Money::ZERO) = v;\n    }\n    Ok(m)\n}\n\npub fn claim_get",
+    cmd: ["test", "-p", "findb", "--lib", "business::tests::claim_amount_by_period_batches_across_periods"],
+  },
 
 ];
 

@@ -178,6 +178,39 @@ pub fn wip_cost(db: &Db, period: Period) -> DbResult<Vec<WipRow>> {
     Ok(out)
 }
 
+/// 跨期间的在制品成本合计（按期间，供工作台「在产品走势」用）。
+///
+/// `collect` 原来对近 n 期各调一次 `wip_cost`——而 `wip_cost` 每期还要逐单查
+/// `prod_cost` 三要素，是双重 N+1。这里一条 `JOIN` 扫全、Rust 侧按期间累加，
+/// 口径与 `wip_cost` 的 `total`（未完工订单的材料+人工+制造费用合计）一致：
+/// 只看 `status NOT IN ('completed','cancelled')` 的订单，金额是 `prod_cost`
+/// 全量累加（material+labor+overhead 之和 = 该单所有 `prod_cost` 行金额之和）。
+pub fn wip_total_by_period(
+    db: &Db,
+    from: i32,
+    to: i32,
+) -> DbResult<std::collections::BTreeMap<i32, Money>> {
+    let mut st = db.conn().prepare(
+        "SELECT o.period, c.amount FROM production_order o \
+         JOIN prod_cost c ON c.po_id = o.id \
+         WHERE o.period BETWEEN ?1 AND ?2 AND o.status NOT IN ('completed','cancelled')",
+    )?;
+    let rows = st
+        .query_map(rusqlite::params![from, to], |r| {
+            Ok((
+                r.get::<_, i32>(0)?,
+                Money::parse_or_zero(&r.get::<_, String>(1)?),
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(st);
+    let mut m = std::collections::BTreeMap::new();
+    for (p, v) in rows {
+        *m.entry(p).or_insert(Money::ZERO) += v;
+    }
+    Ok(m)
+}
+
 /// 某订单在某期间累计的报工工时（`prod_op_log.hours`）。
 ///
 /// 工时分摊的全部依据就在这里：没有报工流水就没有工时，也就没有可分的依据 ——
@@ -1424,6 +1457,56 @@ mod tests {
         let alloc = overhead_allocate(&db, p, m("1000")).unwrap();
         assert_eq!(alloc.len(), 1);
         assert_eq!(alloc[0].1, m("1000"));
+    }
+
+    /// 跨期间在制品成本汇总：按期间累加未完工订单的成本，排除完工/作废单
+    #[test]
+    fn wip_total_by_period_batches_across_periods() {
+        let db = mem();
+        let p1 = Period::new(2026, 1).unwrap();
+        let p2 = Period::new(2026, 2).unwrap();
+
+        // 1 月两张在制单：500+100 = 600，另一张 400
+        let o1 = order_in_progress(&db, p1, "SC2026010001", "1001");
+        add_cost(&db, o1.id, CostType::Material, m("500"), "领料").unwrap();
+        add_cost(&db, o1.id, CostType::Labor, m("100"), "人工").unwrap();
+        let o2 = order_in_progress(&db, p1, "SC2026010002", "1002");
+        add_cost(&db, o2.id, CostType::Material, m("400"), "领料").unwrap();
+
+        // 2 月一张在制单：制造费用 300
+        let o3 = order_in_progress(&db, p2, "SC2026020001", "1003");
+        add_cost(&db, o3.id, CostType::Overhead, m("300"), "制造费用").unwrap();
+
+        // 一张已完工单（应排除）：材料 999
+        let tx = db.write_tx().unwrap();
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        tx.execute(
+            "INSERT INTO production_order(period, no, date, item_code, item_name, planned_qty, completed_qty, status, work_center, prepared_by, memo, created_at, updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            rusqlite::params![
+                p1.ymm(), "SC2026010003", "2026-01-06", "1004", "成品",
+                "10", "10", "completed", "WC01", "u1", "",
+                now.clone(), now.clone()
+            ],
+        )
+        .unwrap();
+        let done_id = tx.last_insert_rowid();
+        tx.commit().unwrap();
+        add_cost(&db, done_id, CostType::Material, m("999"), "领料").unwrap();
+
+        let got = wip_total_by_period(&db, p1.ymm(), p2.ymm()).unwrap();
+        assert_eq!(
+            got.get(&p1.ymm()).copied().unwrap(),
+            m("1000"),
+            "1 月两张在制单 600+400，完工单 999 不计"
+        );
+        assert_eq!(
+            got.get(&p2.ymm()).copied().unwrap(),
+            m("300"),
+            "2 月一张在制单"
+        );
+        // 范围外不计入
+        assert!(wip_total_by_period(&db, 202603, 202603).unwrap().is_empty());
     }
 
     /// 建一张"进行中"的生产订单（item_code 由调用方给）

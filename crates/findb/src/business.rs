@@ -1579,6 +1579,36 @@ pub fn claim_list(db: &Db, period: Period, status: Option<ClaimStatus>) -> DbRes
     Ok(rows)
 }
 
+/// 跨期间的报销金额汇总（按期间，供工作台「我的报销走势」用）。
+///
+/// `collect` 原来对近 n 期各调一次 `claim_list` 再逐单过滤本人，是逐期整表扫描的
+/// N+1。这里一条 `BETWEEN` 扫全、SQL 侧按 `applicant` 过滤、Rust 侧按期间累加，
+/// 口径与旧循环一致：只算 `applicant` 等于本人的报销单金额（不分状态）。
+pub fn claim_amount_by_period(
+    db: &Db,
+    from: i32,
+    to: i32,
+    applicant: &str,
+) -> DbResult<std::collections::BTreeMap<i32, Money>> {
+    let mut st = db.conn().prepare(
+        "SELECT period, amount FROM expense_claim WHERE period BETWEEN ?1 AND ?2 AND applicant=?3",
+    )?;
+    let rows = st
+        .query_map(rusqlite::params![from, to, applicant], |r| {
+            Ok((
+                r.get::<_, i32>(0)?,
+                Money::parse_or_zero(&r.get::<_, String>(1)?),
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(st);
+    let mut m = std::collections::BTreeMap::new();
+    for (p, v) in rows {
+        *m.entry(p).or_insert(Money::ZERO) += v;
+    }
+    Ok(m)
+}
+
 pub fn claim_get(db: &Db, id: i64) -> DbResult<Option<Claim>> {
     db.conn()
         .query_row(
@@ -2437,6 +2467,62 @@ mod tests {
         // 幂等：重复请求返回同一张
         let vid2 = claim_voucher(&db, id, "100201", "u").unwrap();
         assert_eq!(vid2, vid, "重复请求应返回同一凭证");
+    }
+
+    /// 跨期间报销汇总：按期间累加、只算本人、不分状态
+    #[test]
+    fn claim_amount_by_period_batches_across_periods() {
+        let db = tmpdb("claimamt");
+        let p1 = Period::new(2026, 1).unwrap();
+        let p2 = Period::new(2026, 2).unwrap();
+
+        let mk = |p: Period, no: &str, applicant: &str, amount: &str| -> i64 {
+            let c = Claim {
+                id: 0,
+                period: p,
+                no: no.to_string(),
+                biz_date: d(2026, 1, 10),
+                applicant: applicant.to_string(),
+                dept: "D01".into(),
+                reason: "差旅费".into(),
+                amount: m(amount),
+                status: ClaimStatus::Draft,
+                items: vec![],
+                approver: String::new(),
+                approved_at: None,
+                payer: String::new(),
+                paid_at: None,
+                voucher_id: None,
+                created_at: now_str(),
+            };
+            claim_insert(&db, &c).unwrap()
+        };
+
+        mk(p1, "BX202601-001", "E01", "100"); // 本人 1 月
+        mk(p1, "BX202601-002", "E02", "200"); // 别人 1 月，不计
+        mk(p1, "BX202601-003", "E01", "50"); // 本人 1 月第二张
+        mk(p2, "BX202602-001", "E01", "300"); // 本人 2 月
+        mk(p2, "BX202602-002", "E02", "999"); // 别人 2 月，不计
+
+        let got = claim_amount_by_period(&db, p1.ymm(), p2.ymm(), "E01").unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(
+            got.get(&p1.ymm()).copied().unwrap(),
+            m("150"),
+            "1 月只算 E01 的 100+50"
+        );
+        assert_eq!(
+            got.get(&p2.ymm()).copied().unwrap(),
+            m("300"),
+            "2 月只算 E01"
+        );
+        // 范围外 / 别的人不计
+        assert!(claim_amount_by_period(&db, 202603, 202603, "E01")
+            .unwrap()
+            .is_empty());
+        assert!(claim_amount_by_period(&db, p1.ymm(), p2.ymm(), "E99")
+            .unwrap()
+            .is_empty());
     }
 
     /// 条件更新（CAS）：库里状态与期望值不符时一条都不动。
