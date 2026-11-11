@@ -1833,3 +1833,146 @@ async fn web_settle_cross_flow() {
         "应付 S02 应全额冲销"
     );
 }
+
+/// 到期月表：按账期把未核销往来归到「到期月」，应收应付一起出。
+#[tokio::test]
+async fn settle_due_schedules_open_entries_by_due_month() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 客户 C01 账期 30 天，供应商 S01 账期 60 天
+    for (kind, code, name, pay_days) in [
+        ("customer", "C01", "客户甲", "30"),
+        ("supplier", "S01", "供应商丙", "60"),
+    ] {
+        let resp = handlers::router(state.clone())
+            .oneshot(authed_post(
+                "/api/aux",
+                &sid,
+                serde_json::json!({
+                    "id": 0, "kind": kind, "code": code, "name": name,
+                    "parent_code": null, "disabled": false,
+                    "props": { "pay_days": pay_days }, "memo": ""
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "建档案应成功：{kind} {code}");
+    }
+
+    // 应收 C01：1/5 卖 1000，账期 30 → 2/4 到期（2026-02）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/vouchers",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": 202601, "date": "2026-01-05", "word": "记",
+                "no": 1, "attachments": 0, "memo": "到期月表造数",
+                "entries": [
+                    { "line": 1, "account_code": "112201", "summary": "应收", "debit": "1000", "credit": "0",
+                      "aux": { "customer": "C01" } },
+                    { "line": 2, "account_code": "600101", "summary": "应收", "debit": "0", "credit": "1000" }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    let ar_id: i64 = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()
+        ["id"]
+        .as_i64()
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/vouchers/{ar_id}/post"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "应收记账");
+
+    // 应付 S01：1/10 买 800，账期 60 → 3/11 到期（2026-03）
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/vouchers",
+            &sid,
+            serde_json::json!({
+                "id": 0, "period": 202601, "date": "2026-01-10", "word": "记",
+                "no": 2, "attachments": 0, "memo": "到期月表造数",
+                "entries": [
+                    { "line": 1, "account_code": "1001", "summary": "应付", "debit": "800", "credit": "0" },
+                    { "line": 2, "account_code": "220201", "summary": "应付", "debit": "0", "credit": "800",
+                      "aux": { "supplier": "S01" } }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    let ap_id: i64 = serde_json::from_str::<serde_json::Value>(&body_string(resp).await).unwrap()
+        ["id"]
+        .as_i64()
+        .unwrap();
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            &format!("/api/vouchers/{ap_id}/post"),
+            &sid,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "应付记账");
+
+    // 到期月表：200 + 月份汇总 + 明细
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/settle/due?upto=202603", &sid))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "到期月表接口应可用");
+    let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+
+    assert_eq!(body["upto"], 202603, "{body}");
+    assert_eq!(body["ar_account"], "1122", "{body}");
+    assert_eq!(body["ap_account"], "2202", "{body}");
+
+    // 月份汇总：2026-02 应收 1000、2026-03 应付 800
+    let months = body["months"].as_array().unwrap();
+    assert_eq!(months.len(), 2, "两个到期月：{body}");
+    assert_eq!(months[0]["month"], "2026-02", "{body}");
+    assert_eq!(
+        money_num(months[0]["ar"].as_str().unwrap()),
+        1000.0,
+        "{body}"
+    );
+    assert_eq!(money_num(months[0]["ap"].as_str().unwrap()), 0.0, "{body}");
+    assert_eq!(months[1]["month"], "2026-03", "{body}");
+    assert_eq!(money_num(months[1]["ar"].as_str().unwrap()), 0.0, "{body}");
+    assert_eq!(
+        money_num(months[1]["ap"].as_str().unwrap()),
+        800.0,
+        "{body}"
+    );
+
+    // 明细：2 行，类型/到期日/金额正确
+    let rows = body["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{body}");
+    assert_eq!(rows[0]["kind"], "ar", "{body}");
+    assert_eq!(rows[0]["party"], "C01", "{body}");
+    assert_eq!(rows[0]["name"], "客户甲", "{body}");
+    assert_eq!(rows[0]["due_date"], "2026-02-04", "{body}");
+    assert_eq!(rows[0]["month"], "2026-02", "{body}");
+    assert_eq!(
+        money_num(rows[0]["amount"].as_str().unwrap()),
+        1000.0,
+        "{body}"
+    );
+    assert_eq!(rows[1]["kind"], "ap", "{body}");
+    assert_eq!(rows[1]["party"], "S01", "{body}");
+    assert_eq!(rows[1]["name"], "供应商丙", "{body}");
+    assert_eq!(rows[1]["due_date"], "2026-03-11", "{body}");
+    assert_eq!(rows[1]["month"], "2026-03", "{body}");
+    assert_eq!(
+        money_num(rows[1]["amount"].as_str().unwrap()),
+        800.0,
+        "{body}"
+    );
+}

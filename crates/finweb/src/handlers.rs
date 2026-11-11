@@ -866,6 +866,7 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/settle/unsettle", post(unsettle_endpoint))
         .route("/api/settle/aging", get(get_settle_aging))
         .route("/api/settle/aging/xlsx", get(export_settle_aging_xlsx))
+        .route("/api/settle/due", get(get_settle_due))
         // 往来对冲单（应收 ↔ 应付相互抵销：借 应付 / 贷 应收，两端各自 FIFO 核销）
         .route("/api/settle/offsets", get(list_offsets).post(create_offset))
         .route("/api/settle/offsets/:id/audit", post(audit_offset))

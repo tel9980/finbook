@@ -2351,6 +2351,21 @@ const MUT = [
     to: "    let mut map: std::collections::HashMap<i64, Vec<SoLine>> = std::collections::HashMap::new();\n    for r in rows {\n        let (so_id, line) = r?;\n        let v = map.entry(so_id).or_default();\n        if v.is_empty() {\n            v.push(line);\n        }\n    }\n    Ok(map)",
     cmd: ["test", "-p", "findb", "--lib", "scm::tests::list_batch_loads_lines_across_orders"],
   },
+  // v1.8.110 到期月表：把未核销往来按「到期月」归拢。失效形态都是「表还是那张表，只是漏了/算错了」。
+  {
+    name: "134 到期月表漏掉应付（只出应收，供应商那笔丢了）",
+    file: "crates/findb/src/settle/aging.rs",
+    from: "    for (account, kind) in [(ar_account, \"ar\"), (ap_account, \"ap\")] {",
+    to: "    for (account, kind) in [(ar_account, \"ar\")] {",
+    cmd: ["test", "-p", "findb", "--lib", "settle::tests::ar_ap_due_schedule_groups_open_entries_by_due_month"],
+  },
+  {
+    name: "135 到期月表账期没接上（客户设了 30 天也按货到即付）",
+    file: "crates/findb/src/settle/aging.rs",
+    from: "            let pay = days.get(it.key.trim()).copied().unwrap_or(0);",
+    to: "            let pay = 0;",
+    cmd: ["test", "-p", "findb", "--lib", "settle::tests::ar_ap_due_schedule_groups_open_entries_by_due_month"],
+  },
 
 ];
 

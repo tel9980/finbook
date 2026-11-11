@@ -670,6 +670,105 @@ pub(super) async fn get_settle_aging(
     })))
 }
 
+/// 按账期每月应收应付明细（到期月表）。
+///
+/// 账龄是往回看（这笔钱欠了多久），这里是往前看（接下来哪个月该收多少、该付多少）。
+/// 与账龄走同一条取数（`ar_ap_due_schedule` 复用 `aging_items`），口径不会分叉。
+pub(super) async fn get_settle_due(
+    State(state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::Report)?;
+    let ar_account = q
+        .get("ar_account")
+        .cloned()
+        .unwrap_or_else(|| "1122".into());
+    let ap_account = q
+        .get("ap_account")
+        .cloned()
+        .unwrap_or_else(|| "2202".into());
+    let upto = q
+        .get("upto")
+        .and_then(|s| parse_period(s))
+        .unwrap_or_else(|| current_period(&state, &user));
+    let db = &user.db;
+    // 数据范围：科目不在可见范围就当没这个科目（403，别用空清单让用户以为没欠款）。
+    if !user.user.can_see_account(ar_account.trim()) {
+        return Err(AppError::forbidden("无权查看应收科目"));
+    }
+    if !user.user.can_see_account(ap_account.trim()) {
+        return Err(AppError::forbidden("无权查看应付科目"));
+    }
+    let rows = findb::settle::ar_ap_due_schedule(db, ar_account.trim(), ap_account.trim(), upto)?;
+
+    // 客户与供应商名称分别查 —— 到期表里两类同屏，不能只查一种档案。
+    let cust_names: std::collections::HashMap<String, String> =
+        findb::auxs::list(db, &fincore::AuxQuery::kind(fincore::AuxKind::Customer))?
+            .into_iter()
+            .map(|a| (a.code, a.name))
+            .collect();
+    let sup_names: std::collections::HashMap<String, String> =
+        findb::auxs::list(db, &fincore::AuxQuery::kind(fincore::AuxKind::Supplier))?
+            .into_iter()
+            .map(|a| (a.code, a.name))
+            .collect();
+
+    // 按月汇总：应收 / 应付各一列，再加净额（应收 - 应付）。
+    let mut month_map: std::collections::BTreeMap<String, (Money, Money)> =
+        std::collections::BTreeMap::new();
+    for r in &rows {
+        let e = month_map
+            .entry(r.month.clone())
+            .or_insert((Money::ZERO, Money::ZERO));
+        if r.kind == "ar" {
+            e.0 += r.amount;
+        } else {
+            e.1 += r.amount;
+        }
+    }
+    let months: Vec<serde_json::Value> = month_map
+        .iter()
+        .map(|(m, (ar, ap))| {
+            json!({
+                "month": m,
+                "ar": ar.fmt_money(),
+                "ap": ap.fmt_money(),
+                "net": (*ar - *ap).fmt_money(),
+            })
+        })
+        .collect();
+
+    let detail: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let name = if r.kind == "ar" {
+                cust_names.get(&r.party).cloned().unwrap_or_default()
+            } else {
+                sup_names.get(&r.party).cloned().unwrap_or_default()
+            };
+            json!({
+                "kind": r.kind,
+                "party": r.party,
+                "name": name,
+                "doc_no": r.doc_no,
+                "date": r.date,
+                "due_date": r.due_date,
+                "month": r.month,
+                "amount": r.amount.fmt_money(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "ar_account": ar_account.trim(),
+        "ap_account": ap_account.trim(),
+        "upto": upto.ymm(),
+        "months": months,
+        "rows": detail,
+    })))
+}
+
 /// 往来账龄**导出成 Excel**（同一份取数，只是换成文件）。
 ///
 /// 为什么单做一件事：账龄表现在只能截图。老板要发给客户、或者存档给会计，

@@ -59,6 +59,37 @@ pub fn aging(
     buckets: &[AgingBucket],
     key_filter: Option<&str>,
 ) -> DbResult<Vec<AgingLine>> {
+    let (items, party) = aging_items(db, account, upto, key_filter)?;
+    let mut lines = fincore::engine::aging::analyze(&items, as_of, buckets)?;
+    // 账期在这里补上：analyze 是纯函数（fincore 不碰数据库），而账期存在客商档案里。
+    //
+    // 逾期按**最老一笔未核销单据**算（`as_of - max_days` 就是它的日期）：
+    // 客户 9/1 卖的货账期 30 天，10/25 还没给，就是逾期 24 天。
+    // 一个客户有十笔单据时这是最保守的那个数 —— 也正是催款时要说的那个数。
+    if !lines.is_empty() {
+        let days_map = pay_days_map(db, party)?;
+        for l in lines.iter_mut() {
+            if let Some(d) = days_map.get(l.key.trim()) {
+                l.pay_days = Some(*d);
+                let due_days = *d - l.max_days;
+                l.overdue_days = (-due_days).max(0);
+            }
+        }
+    }
+    Ok(lines)
+}
+
+/// 取某往来科目的未清单据列表（方向已翻转、key 已归一），并返回往来维度。
+///
+/// `aging` 与 `ar_ap_due_schedule` 共用这一份取数：往来维度判定、方向翻转、
+/// 期初影子行的口径只该有一个定义点，两处各自重写就会像历史那样「账龄有、
+/// 到期表没有」。
+fn aging_items(
+    db: &Db,
+    account: &str,
+    upto: Period,
+    key_filter: Option<&str>,
+) -> DbResult<(Vec<AgingItem>, fincore::AuxKind)> {
     let entries = open_entries(db, account, upto, false)?;
     // 往来维度按科目的真实辅助核算取（取不到才按首位推），见 party_kind_of。
     //
@@ -145,23 +176,69 @@ pub fn aging(
             });
         }
     }
-    let mut lines = fincore::engine::aging::analyze(&items, as_of, buckets)?;
-    // 账期在这里补上：analyze 是纯函数（fincore 不碰数据库），而账期存在客商档案里。
-    //
-    // 逾期按**最老一笔未核销单据**算（`as_of - max_days` 就是它的日期）：
-    // 客户 9/1 卖的货账期 30 天，10/25 还没给，就是逾期 24 天。
-    // 一个客户有十笔单据时这是最保守的那个数 —— 也正是催款时要说的那个数。
-    if !lines.is_empty() {
-        let days_map = pay_days_map(db, party)?;
-        for l in lines.iter_mut() {
-            if let Some(d) = days_map.get(l.key.trim()) {
-                l.pay_days = Some(*d);
-                let due_days = *d - l.max_days;
-                l.overdue_days = (-due_days).max(0);
+    Ok((items, party))
+}
+
+/// 到期月表的一行：一条未核销往来单据，到期月 = 单据日期 + 账期天数。
+#[derive(Clone, Debug)]
+pub struct DueEntry {
+    /// 应收 `ar` / 应付 `ap`
+    pub kind: &'static str,
+    /// 往来单位裸编码（`C01`），不是 aux_key（`customer=C01`）
+    pub party: String,
+    /// 单据号（凭证字-号，或「期初 #id」）
+    pub doc_no: String,
+    /// 单据日期 `YYYY-MM-DD`
+    pub date: String,
+    /// 到期日 `YYYY-MM-DD`（单据日期 + 账期天数）
+    pub due_date: String,
+    /// 到期月 `YYYY-MM`
+    pub month: String,
+    /// 未核销金额（正数，应收应付都已翻转成正数）
+    pub amount: Money,
+}
+
+/// 按账期每月应收、应付明细：把未核销往来单据按「到期月」归拢。
+///
+/// 与账龄的区别：账龄是**往回看**（这笔钱欠了多久），这里是**往前看**
+/// （接下来哪个月该收多少、该付多少）。到期日 = 单据日期 + 客商账期天数；
+/// 没设账期按 0 天（货到即付，到期日就是单据日期）。
+pub fn ar_ap_due_schedule(
+    db: &Db,
+    ar_account: &str,
+    ap_account: &str,
+    upto: Period,
+) -> DbResult<Vec<DueEntry>> {
+    let mut out: Vec<DueEntry> = Vec::new();
+    for (account, kind) in [(ar_account, "ar"), (ap_account, "ap")] {
+        let (items, party) = aging_items(db, account, upto, None)?;
+        let days = pay_days_map(db, party)?;
+        for it in items {
+            let open = it.open();
+            if open.is_zero() {
+                continue;
             }
+            let pay = days.get(it.key.trim()).copied().unwrap_or(0);
+            let due = it.date + chrono::Duration::days(pay);
+            out.push(DueEntry {
+                kind,
+                party: it.key.clone(),
+                doc_no: it.doc_no.clone(),
+                date: it.date.format("%Y-%m-%d").to_string(),
+                due_date: due.format("%Y-%m-%d").to_string(),
+                month: due.format("%Y-%m").to_string(),
+                amount: open,
+            });
         }
     }
-    Ok(lines)
+    out.sort_by(|a, b| {
+        a.month
+            .cmp(&b.month)
+            .then_with(|| a.kind.cmp(b.kind))
+            .then_with(|| a.party.cmp(&b.party))
+            .then_with(|| a.due_date.cmp(&b.due_date))
+    });
+    Ok(out)
 }
 
 /// 账期表：客商编码 → 账期天数

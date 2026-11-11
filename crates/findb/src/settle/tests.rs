@@ -1302,6 +1302,82 @@ fn aging_report() {
     assert_eq!(lines[0].amounts[4], Money::parse("2000").unwrap());
 }
 
+/// 到期月表：把未核销往来按「单据日期 + 账期」归到月份，应收应付一起出。
+#[test]
+fn ar_ap_due_schedule_groups_open_entries_by_due_month() {
+    let db = tmpdb("ar_ap_due");
+    let p = Period::new(2026, 3).unwrap();
+
+    // 客户 C01 账期 30 天；C02 没设账期（货到即付）；供应商 S01 账期 60 天
+    for (kind, code, name, days) in [
+        (fincore::AuxKind::Customer, "C01", "客户甲", Some("30")),
+        (fincore::AuxKind::Customer, "C02", "客户乙", None),
+        (fincore::AuxKind::Supplier, "S01", "供应商丙", Some("60")),
+    ] {
+        let mut c = fincore::AuxEntity::new(kind, code, name);
+        if let Some(d) = days {
+            c.props.insert(
+                fincore::auxiliary::prop::PAY_DAYS.to_string(),
+                d.to_string(),
+            );
+        }
+        crate::auxs::insert(&db, &c).unwrap();
+    }
+
+    // 应收 C01：1/5 卖 1000，账期 30 天 → 2/4 到期（落在 2026-02）
+    ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        1,
+        "C01",
+        "1000",
+        true,
+        "600101",
+    );
+    // 应收 C02：1/20 卖 500，没账期 → 1/20 到期（落在 2026-01）
+    ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+        2,
+        "C02",
+        "500",
+        true,
+        "600101",
+    );
+    // 应付 S01：1/10 买 800，账期 60 天 → 3/11 到期（落在 2026-03）
+    ap_voucher(
+        &db,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        3,
+        "S01",
+        "800",
+        "1001",
+    );
+
+    let rows = ar_ap_due_schedule(&db, "1122", "2202", p).unwrap();
+    assert_eq!(rows.len(), 3, "三笔未核销往来都要进月表");
+    // 排序：按月，再按 kind（ar 在 ap 前），再按 party
+    assert_eq!(rows[0].kind, "ar");
+    assert_eq!(rows[0].party, "C02");
+    assert_eq!(rows[0].month, "2026-01");
+    assert_eq!(rows[0].due_date, "2026-01-20");
+    assert_eq!(rows[0].amount, m("500"));
+
+    assert_eq!(rows[1].kind, "ar");
+    assert_eq!(rows[1].party, "C01");
+    assert_eq!(rows[1].month, "2026-02");
+    assert_eq!(rows[1].due_date, "2026-02-04");
+    assert_eq!(rows[1].amount, m("1000"));
+
+    assert_eq!(rows[2].kind, "ap");
+    assert_eq!(rows[2].party, "S01");
+    assert_eq!(rows[2].month, "2026-03");
+    assert_eq!(rows[2].due_date, "2026-03-11");
+    assert_eq!(rows[2].amount, m("800"));
+}
+
 #[test]
 fn bad_debt_provision_generates_voucher() {
     let db = tmpdb("baddebt");

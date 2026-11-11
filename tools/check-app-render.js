@@ -654,6 +654,34 @@ const CASES = [
     expect: ["逾期 120 天", "笔超 90 天", "笔已逾期", "共 1 笔"],
     absent: ["催款函"],
   },
+  // 按账期每月应收应付（到期月表，v1.8.110）：月份汇总 + 明细两条一起出。
+  {
+    fn: "dueMonthHtml",
+    args: [
+      {
+        ar_account: "1122",
+        ap_account: "2202",
+        upto: "202603",
+        months: [
+          { month: "2026-02", ar: "1,000.00", ap: "0.00", net: "1,000.00" },
+          { month: "2026-03", ar: "0.00", ap: "800.00", net: "-800.00" },
+        ],
+        rows: [
+          { kind: "ar", party: "C01", name: "客户甲", doc_no: "记-1", date: "2026-01-05", due_date: "2026-02-04", month: "2026-02", amount: "1,000.00" },
+          { kind: "ap", party: "S01", name: "供应商丙", doc_no: "记-2", date: "2026-01-10", due_date: "2026-03-11", month: "2026-03", amount: "800.00" },
+        ],
+      },
+    ],
+    stubs: { esc: (s) => String(s == null ? "" : s) },
+    expect: ["按账期应收应付", "到期月", "应收到期", "应付到期", "净额", "2026-02", "2026-03", "应收", "应付", "客户甲", "供应商丙", "2026-02-04", "2026-03-11"],
+  },
+  {
+    fn: "dueMonthHtml",
+    args: [{ ar_account: "1122", ap_account: "2202", upto: "202603", months: [], rows: [] }],
+    stubs: { esc: (s) => String(s == null ? "" : s) },
+    expect: ["暂无未核销往来"],
+    absent: ["<table"],
+  },
 ];
 
 function main() {

@@ -1015,6 +1015,31 @@ async function viewBank(main) {
 // ===========================================================================
 // 往来核销（与桌面端对齐：未核销清单 / 自动核销 / 手工核销 / 账龄）
 // ===========================================================================
+// 到期月表渲染：把未核销往来按「到期月」归拢。与账龄的区别——账龄往回看
+// （这笔钱欠了多久），这里是往前看（接下来哪个月该收多少、付多少）。
+function dueMonthHtml(d) {
+  const months = d.months || [];
+  const rows = d.rows || [];
+  const kindLabel = (k) => (k === "ar" ? "应收" : "应付");
+  const head = `<b>按账期应收应付（应收 ${esc(d.ar_account)} / 应付 ${esc(d.ap_account)}，截止 ${esc(d.upto)}）</b>`;
+  const monthTable = months.length
+    ? `<table class="grid" style="margin-top:6px"><thead><tr><th>到期月</th><th class="num">应收到期</th><th class="num">应付到期</th><th class="num">净额</th></tr></thead><tbody>${months
+        .map(
+          (m) =>
+            `<tr><td>${esc(m.month)}</td><td class="num">${esc(m.ar)}</td><td class="num">${esc(m.ap)}</td><td class="num" style="${String(m.net).startsWith("-") ? "color:var(--warn-t,#b46a00)" : ""}">${esc(m.net)}</td></tr>`
+        )
+        .join("")}</tbody></table>`
+    : `<div class="muted" style="margin-top:6px">暂无未核销往来</div>`;
+  const detailTable = rows.length
+    ? `<table class="grid" style="margin-top:10px"><thead><tr><th>类型</th><th>对象</th><th>单据</th><th>日期</th><th>到期日</th><th>到期月</th><th class="num">金额</th></tr></thead><tbody>${rows
+        .map(
+          (r) =>
+            `<tr><td>${kindLabel(r.kind)}</td><td>${esc(r.name || r.party)}</td><td>${esc(r.doc_no)}</td><td>${esc(r.date)}</td><td>${esc(r.due_date)}</td><td>${esc(r.month)}</td><td class="num">${esc(r.amount)}</td></tr>`
+        )
+        .join("")}</tbody></table>`
+    : "";
+  return `<div class="panel">${head}${monthTable}${detailTable}</div>`;
+}
 async function viewSettle(main) {
   const cur = (state.current || "").replace("-", "");
   main.innerHTML = `<h2>往来核销</h2>
@@ -1031,6 +1056,7 @@ async function viewSettle(main) {
       ${can("voucher_new") ? `<button class="btn ghost" id="st-manual-diff" title="实收/实付与挂账有零头时，把差异记入损益，被核销方一次结清">差异核销</button>` : ""}
       ${can("voucher_new") ? `<button class="btn ghost" id="st-manual-cross" title="A 的付款冲 B 的货款 / 三方抵账：借方与贷方分录的科目或往来单位可以不同，系统自动出一张过渡凭证把两边接上">跨单位互抵</button>` : ""}
       <button class="btn ghost" id="st-aging">账龄分析</button>
+      <button class="btn ghost" id="st-due" title="把未核销往来按「到期月」归拢：往前看接下来哪个月该收多少、付多少。应收=1122 客户，应付=2202 供应商">按月应收应付</button>
       ${can("export") ? `<button class="btn ghost" id="st-aging-xlsx" title="把账龄表导出成 Excel（同一份取数，界面上的数字即文件里的数字）">账龄导出</button>` : ""}
       <button class="btn ghost" id="st-records">核销记录</button>
     </div>
@@ -1478,6 +1504,12 @@ async function viewSettle(main) {
             `</tbody></table>`;
         } catch (e) { box.innerHTML = `<div class="muted" style="color:var(--err)">${esc(e.message)}</div>`; }
       });
+    } catch (e) { toast(e.message, "err"); }
+  };
+  if ($("#st-due", main)) $("#st-due", main).onclick = async () => {
+    try {
+      const d = await api(`/settle/due?upto=${encodeURIComponent(upto())}`);
+      $("#st-extra", main).innerHTML = dueMonthHtml(d);
     } catch (e) { toast(e.message, "err"); }
   };
   if ($("#st-records", main)) $("#st-records", main).onclick = async () => {
