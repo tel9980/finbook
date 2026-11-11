@@ -656,6 +656,22 @@ pub fn so_shipment_sum(db: &Db, so_id: i64) -> DbResult<Money> {
     so_shipment_sum_on(db.conn(), so_id)
 }
 
+/// 一次性汇总所有销售订单的净发货量（替代逐单 `so_shipment_sum`，消除 N+1）。
+///
+/// `so_execution_track` 每跑一条订单就查一次 `so_shipment`；这里只扫一遍表，
+/// 按 `so_id` 累加成一张表（退货行是负值，自然轧成净发货）。
+pub fn so_shipment_sums(db: &Db) -> DbResult<std::collections::HashMap<i64, Money>> {
+    let mut st = db.conn().prepare("SELECT so_id, qty FROM so_shipment")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut map: std::collections::HashMap<i64, Money> = std::collections::HashMap::new();
+    for row in rows {
+        let (so_id, qty) = row?;
+        let e = map.entry(so_id).or_insert(Money::ZERO);
+        *e += m(&qty);
+    }
+    Ok(map)
+}
+
 // ---------------- 发货通知（对标金蝶发货通知单） ----------------
 
 /// 发货通知单：订单确认后备货指令；出库后自动完成
@@ -971,13 +987,14 @@ pub struct SoTrack {
 
 pub fn so_execution_track(db: &Db, period: Period) -> DbResult<Vec<SoTrack>> {
     let orders = crate::scm::so_list(db, period, None)?;
+    let shipped_sums = so_shipment_sums(db)?;
     let mut out = Vec::new();
     for o in orders {
         if matches!(o.status, crate::scm::SoStatus::Cancelled) {
             continue;
         }
         let ordered: Money = o.lines.iter().map(|l| l.qty_ordered).sum();
-        let shipped = so_shipment_sum(db, o.id)?;
+        let shipped = shipped_sums.get(&o.id).copied().unwrap_or(Money::ZERO);
         let rate = if ordered.is_zero() {
             Money::ZERO
         } else {
@@ -1227,6 +1244,43 @@ mod tests {
         assert_eq!(track[0].rate, m("60"));
         let stats = sales_stats(&db, p).unwrap();
         assert_eq!(stats[0].amount, m("2000"));
+    }
+
+    #[test]
+    fn so_shipment_sums_aggregates_across_orders() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let mk_so = |code: &str| {
+            let mut so = crate::scm::SalesOrder::new(p, d, code, "客户", "u");
+            so.no = crate::scm::so_next_no(&db, p).unwrap();
+            so.lines.push(crate::scm::SoLine {
+                id: 0,
+                so_id: 0,
+                item_code: "140501".into(),
+                item_name: "成品".into(),
+                qty_ordered: m("100"),
+                qty_shipped: m("0"),
+                unit_price: m("20"),
+                tax_rate: m("0"),
+                amount: m("2000"),
+                tax_amount: m("0"),
+                memo: String::new(),
+            });
+            crate::scm::so_save(&db, &mut so).unwrap()
+        };
+        let so1 = mk_so("C01");
+        let so2 = mk_so("C02");
+        let _so3 = mk_so("C03");
+
+        so_shipment_add(&db, so1, p, d, m("70"), "").unwrap();
+        so_return_add(&db, so1, p, d, m("10"), "拒收").unwrap(); // 净 60
+        so_shipment_add(&db, so2, p, d, m("30"), "").unwrap();
+
+        let sums = so_shipment_sums(&db).unwrap();
+        assert_eq!(sums.get(&so1).copied().unwrap(), m("60"));
+        assert_eq!(sums.get(&so2).copied().unwrap(), m("30"));
+        assert_eq!(sums.len(), 2); // so3 没发货，不该出现
     }
 
     #[test]

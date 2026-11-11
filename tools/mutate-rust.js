@@ -2323,6 +2323,13 @@ const MUT = [
     to: "        let received = Money::ZERO;",
     cmd: ["test", "-p", "findb", "--lib", "scm2::tests::reconcile_uses_batch_sums"],
   },
+  {
+    name: "130 发货汇总只取最后一笔（退货没轧掉、净发货算错）",
+    file: "crates/findb/src/sales.rs",
+    from: "        let e = map.entry(so_id).or_insert(Money::ZERO);\n        *e += m(&qty);",
+    to: "        let e = map.entry(so_id).or_insert(Money::ZERO);\n        *e = m(&qty);",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_shipment_sums_aggregates_across_orders"],
+  },
 
 ];
 
