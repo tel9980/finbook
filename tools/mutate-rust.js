@@ -2295,6 +2295,34 @@ const MUT = [
     to: "        let aging_start = ship_date.clone();",
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
   },
+  {
+    name: "126 采购付款汇总只取每单第一笔（多笔只算一笔）",
+    file: "crates/findb/src/procurement.rs",
+    from: "        let e = map.entry(po_id).or_insert(Money::ZERO);\n        *e += m(&amt);",
+    to: "        let e = map.entry(po_id).or_insert(Money::ZERO);\n        *e = m(&amt);",
+    cmd: ["test", "-p", "findb", "--lib", "scm2::tests::po_payment_sums_aggregates_multiple_payments"],
+  },
+  {
+    name: "127 采购暂估汇总把已冲回的也算进来（应付虚增）",
+    file: "crates/findb/src/scm2.rs",
+    from: "        .prepare(\"SELECT po_id, est_amount FROM po_estimate WHERE settled=0\")?;",
+    to: "        .prepare(\"SELECT po_id, est_amount FROM po_estimate\")?;",
+    cmd: ["test", "-p", "findb", "--lib", "scm2::tests::po_estimate_open_sums_ignores_settled"],
+  },
+  {
+    name: "128 采购对账漏掉未冲回暂估列（open_estimate 恒 0）",
+    file: "crates/findb/src/scm2.rs",
+    from: "        let est = est_sums.get(&o.id).copied().unwrap_or(Money::ZERO);",
+    to: "        let est = Money::ZERO;",
+    cmd: ["test", "-p", "findb", "--lib", "scm2::tests::reconcile_uses_batch_sums"],
+  },
+  {
+    name: "129 销售对账漏掉已收款（received 恒 0）",
+    file: "crates/findb/src/scm2.rs",
+    from: "        let received = received_sums.get(&o.id).copied().unwrap_or(Money::ZERO);",
+    to: "        let received = Money::ZERO;",
+    cmd: ["test", "-p", "findb", "--lib", "scm2::tests::reconcile_uses_batch_sums"],
+  },
 
 ];
 

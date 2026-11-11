@@ -348,6 +348,21 @@ pub fn po_estimate_open_sum(db: &Db, po_id: i64) -> DbResult<Money> {
     Ok(rows.iter().map(|s| m(s)).sum())
 }
 
+/// 一次性汇总所有采购订单的未冲回暂估（替代逐单 `po_estimate_open_sum`，消除 N+1）。
+pub fn po_estimate_open_sums(db: &Db) -> DbResult<std::collections::HashMap<i64, Money>> {
+    let mut st = db
+        .conn()
+        .prepare("SELECT po_id, est_amount FROM po_estimate WHERE settled=0")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut map: std::collections::HashMap<i64, Money> = std::collections::HashMap::new();
+    for row in rows {
+        let (po_id, amt) = row?;
+        let e = map.entry(po_id).or_insert(Money::ZERO);
+        *e += m(&amt);
+    }
+    Ok(map)
+}
+
 /// 某采购订单的暂估明细
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PoEstimate {
@@ -401,13 +416,15 @@ pub struct PoRecon {
 /// 采购对账：订单金额 vs 付款 vs 暂估
 pub fn po_reconcile(db: &Db, period: Period) -> DbResult<Vec<PoRecon>> {
     let orders = crate::scm::po_list(db, period, None)?;
+    let paid_sums = crate::procurement::po_payment_sums(db)?;
+    let est_sums = po_estimate_open_sums(db)?;
     let mut out = Vec::new();
     for o in orders {
         if matches!(o.status, crate::scm::PoStatus::Cancelled) {
             continue;
         }
-        let paid = crate::procurement::po_payment_sum(db, o.id)?;
-        let est = po_estimate_open_sum(db, o.id)?;
+        let paid = paid_sums.get(&o.id).copied().unwrap_or(Money::ZERO);
+        let est = est_sums.get(&o.id).copied().unwrap_or(Money::ZERO);
         out.push(PoRecon {
             po_id: o.id,
             no: o.no,
@@ -435,12 +452,13 @@ pub struct SoRecon {
 /// 销售对账：订单金额 vs 收款
 pub fn so_reconcile(db: &Db, period: Period) -> DbResult<Vec<SoRecon>> {
     let orders = crate::scm::so_list(db, period, None)?;
+    let received_sums = crate::sales::so_payment_sums(db)?;
     let mut out = Vec::new();
     for o in orders {
         if matches!(o.status, crate::scm::SoStatus::Cancelled) {
             continue;
         }
-        let received = crate::sales::so_payment_sum(db, o.id)?;
+        let received = received_sums.get(&o.id).copied().unwrap_or(Money::ZERO);
         out.push(SoRecon {
             so_id: o.id,
             no: o.no,
@@ -983,5 +1001,160 @@ mod tests {
         assert_eq!(log.len(), 1);
         assert_eq!(log[0].0, "status");
         assert_eq!(log[0].2, "confirmed");
+    }
+
+    #[test]
+    fn po_payment_sums_aggregates_multiple_payments() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let mut po1 = crate::scm::PurchaseOrder::new(p, d, "S01", "供应商A", "u");
+        po1.no = crate::scm::po_next_no(&db, p).unwrap();
+        po1.lines.push(crate::scm::PoLine {
+            id: 0,
+            po_id: 0,
+            item_code: "140301".into(),
+            item_name: "原料".into(),
+            qty_ordered: m("100"),
+            qty_received: m("0"),
+            unit_price: m("10"),
+            tax_rate: m("0"),
+            amount: m("1000"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        let po1_id = crate::scm::po_save(&db, &mut po1).unwrap();
+        let mut po2 = crate::scm::PurchaseOrder::new(p, d, "S02", "供应商B", "u");
+        po2.no = crate::scm::po_next_no(&db, p).unwrap();
+        po2.lines.push(crate::scm::PoLine {
+            id: 0,
+            po_id: 0,
+            item_code: "140302".into(),
+            item_name: "辅料".into(),
+            qty_ordered: m("200"),
+            qty_received: m("0"),
+            unit_price: m("10"),
+            tax_rate: m("0"),
+            amount: m("2000"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        let po2_id = crate::scm::po_save(&db, &mut po2).unwrap();
+
+        let pay = |po_id, amt: &str| {
+            crate::procurement::po_payment_add(
+                &db,
+                &crate::procurement::PoPayment {
+                    id: 0,
+                    po_id,
+                    period: p,
+                    date: d,
+                    amount: m(amt),
+                    memo: String::new(),
+                },
+            )
+            .unwrap();
+        };
+        pay(po1_id, "500");
+        pay(po1_id, "300");
+        pay(po2_id, "200");
+
+        let sums = crate::procurement::po_payment_sums(&db).unwrap();
+        assert_eq!(sums.get(&po1_id).copied().unwrap(), m("800"));
+        assert_eq!(sums.get(&po2_id).copied().unwrap(), m("200"));
+        assert_eq!(sums.len(), 2);
+    }
+
+    #[test]
+    fn po_estimate_open_sums_ignores_settled() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        // 直接插表绕过暂估封顶校验，只测「按 po_id 汇总未冲回的暂估」。
+        db.conn()
+            .execute(
+                "INSERT INTO po_estimate(po_id,period,item,est_amount,settled)
+                 VALUES(1,?1,'a','400',0),(1,?1,'b','600',0),(1,?1,'c','999',1),(2,?1,'d','100',0)",
+                rusqlite::params![p.ymm()],
+            )
+            .unwrap();
+        let sums = po_estimate_open_sums(&db).unwrap();
+        assert_eq!(sums.get(&1).copied().unwrap(), m("1000")); // 400+600，settled=1 的 999 不计
+        assert_eq!(sums.get(&2).copied().unwrap(), m("100"));
+        assert_eq!(sums.len(), 2);
+    }
+
+    #[test]
+    fn reconcile_uses_batch_sums() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+
+        // 销售：订单 1000，收 400 → 未收 600
+        let mut so = crate::scm::SalesOrder::new(p, d, "C01", "客户甲", "u");
+        so.no = crate::scm::so_next_no(&db, p).unwrap();
+        so.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140501".into(),
+            item_name: "成品".into(),
+            qty_ordered: m("100"),
+            qty_shipped: m("0"),
+            unit_price: m("10"),
+            tax_rate: m("0"),
+            amount: m("1000"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        so.status = crate::scm::SoStatus::Confirmed;
+        let so_id = crate::scm::so_save(&db, &mut so).unwrap();
+        crate::sales::so_payment_add(&db, so_id, p, d, m("400"), "").unwrap();
+
+        // 采购：订单 1000，付 600、暂估未冲回 100 → 未付 400、暂估 100
+        let mut po = crate::scm::PurchaseOrder::new(p, d, "S01", "供应商A", "u");
+        po.no = crate::scm::po_next_no(&db, p).unwrap();
+        po.lines.push(crate::scm::PoLine {
+            id: 0,
+            po_id: 0,
+            item_code: "140301".into(),
+            item_name: "原料".into(),
+            qty_ordered: m("100"),
+            qty_received: m("0"),
+            unit_price: m("10"),
+            tax_rate: m("0"),
+            amount: m("1000"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        po.status = crate::scm::PoStatus::Confirmed;
+        let po_id = crate::scm::po_save(&db, &mut po).unwrap();
+        crate::procurement::po_payment_add(
+            &db,
+            &crate::procurement::PoPayment {
+                id: 0,
+                po_id,
+                period: p,
+                date: d,
+                amount: m("600"),
+                memo: String::new(),
+            },
+        )
+        .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO po_estimate(po_id,period,item,est_amount,settled) VALUES(?1,?2,'a','100',0)",
+                rusqlite::params![po_id, p.ymm()],
+            )
+            .unwrap();
+
+        let so_rows = so_reconcile(&db, p).unwrap();
+        assert_eq!(so_rows.len(), 1);
+        assert_eq!(so_rows[0].received, m("400"));
+        assert_eq!(so_rows[0].unreceived, m("600"));
+
+        let po_rows = po_reconcile(&db, p).unwrap();
+        assert_eq!(po_rows.len(), 1);
+        assert_eq!(po_rows[0].paid, m("600"));
+        assert_eq!(po_rows[0].unpaid, m("400"));
+        assert_eq!(po_rows[0].open_estimate, m("100"));
     }
 }

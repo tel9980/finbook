@@ -728,6 +728,22 @@ pub fn po_payment_sum(db: &Db, po_id: i64) -> DbResult<Money> {
     Ok(rows.iter().map(|s| m(s)).sum())
 }
 
+/// 一次性汇总所有采购订单的已付款（替代逐单 `po_payment_sum`，消除 N+1）。
+///
+/// `po_reconcile` 每跑一条采购订单就查一次 `po_payment`，几十张开着的单就是几十次往返；
+/// 这里只扫一遍表，按 `po_id` 累加成一张表，对账查一次就够。
+pub fn po_payment_sums(db: &Db) -> DbResult<std::collections::HashMap<i64, Money>> {
+    let mut st = db.conn().prepare("SELECT po_id, amount FROM po_payment")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut map: std::collections::HashMap<i64, Money> = std::collections::HashMap::new();
+    for row in rows {
+        let (po_id, amt) = row?;
+        let e = map.entry(po_id).or_insert(Money::ZERO);
+        *e += m(&amt);
+    }
+    Ok(map)
+}
+
 // ===========================================================================
 // 历史价格 / 统计 / 执行跟踪
 // ===========================================================================
