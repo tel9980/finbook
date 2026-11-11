@@ -2366,6 +2366,20 @@ const MUT = [
     to: "            let pay = 0;",
     cmd: ["test", "-p", "findb", "--lib", "settle::tests::ar_ap_due_schedule_groups_open_entries_by_due_month"],
   },
+  {
+    name: "136 工作台销售趋势只取每期最后一张单（累加写成覆盖）",
+    file: "crates/findb/src/scm.rs",
+    from: "    for (p, v) in rows {\n        *m.entry(p).or_insert(Money::ZERO) += v;\n    }\n    Ok(m)\n}\n\n/// 跨期间的采购订单金额汇总",
+    to: "    for (p, v) in rows {\n        *m.entry(p).or_insert(Money::ZERO) = v;\n    }\n    Ok(m)\n}\n\n/// 跨期间的采购订单金额汇总",
+    cmd: ["test", "-p", "findb", "--lib", "scm::tests::order_amount_by_period_batches_trend_totals"],
+  },
+  {
+    name: "137 工作台采购趋势查成销售订单表（金额串了）",
+    file: "crates/findb/src/scm.rs",
+    from: "        \"SELECT period, total_amount FROM purchase_order WHERE period BETWEEN ?1 AND ?2\",",
+    to: "        \"SELECT period, total_amount FROM sales_order WHERE period BETWEEN ?1 AND ?2\",",
+    cmd: ["test", "-p", "findb", "--lib", "scm::tests::order_amount_by_period_batches_trend_totals"],
+  },
 
 ];
 

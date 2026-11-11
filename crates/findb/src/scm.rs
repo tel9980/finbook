@@ -1142,6 +1142,61 @@ pub fn so_list(db: &Db, period: Period, status: Option<SoStatus>) -> DbResult<Ve
     Ok(orders)
 }
 
+/// 跨期间的销售订单金额汇总（按期间，供工作台趋势图用）。
+///
+/// `collect` 原来对近 n 期各调一次 `so_list`（每次都是一整张 `sales_order` 加
+/// 明细的扫描），只为画一条走势线——6 个期间就是 6 次全表往返。这里一条
+/// `BETWEEN` 扫全、Rust 侧按期间累加，与 `so_list` 的 `total_amount` 口径
+/// 完全一致（含所有状态，不含税）。
+pub fn so_amount_by_period(
+    db: &Db,
+    from: i32,
+    to: i32,
+) -> DbResult<std::collections::BTreeMap<i32, Money>> {
+    let mut st = db
+        .conn()
+        .prepare("SELECT period, total_amount FROM sales_order WHERE period BETWEEN ?1 AND ?2")?;
+    let rows = st
+        .query_map(rusqlite::params![from, to], |r| {
+            Ok((
+                r.get::<_, i32>(0)?,
+                Money::parse_or_zero(&r.get::<_, String>(1)?),
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(st);
+    let mut m = std::collections::BTreeMap::new();
+    for (p, v) in rows {
+        *m.entry(p).or_insert(Money::ZERO) += v;
+    }
+    Ok(m)
+}
+
+/// 跨期间的采购订单金额汇总（按期间，供工作台趋势图用）。同 `so_amount_by_period`。
+pub fn po_amount_by_period(
+    db: &Db,
+    from: i32,
+    to: i32,
+) -> DbResult<std::collections::BTreeMap<i32, Money>> {
+    let mut st = db.conn().prepare(
+        "SELECT period, total_amount FROM purchase_order WHERE period BETWEEN ?1 AND ?2",
+    )?;
+    let rows = st
+        .query_map(rusqlite::params![from, to], |r| {
+            Ok((
+                r.get::<_, i32>(0)?,
+                Money::parse_or_zero(&r.get::<_, String>(1)?),
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(st);
+    let mut m = std::collections::BTreeMap::new();
+    for (p, v) in rows {
+        *m.entry(p).or_insert(Money::ZERO) += v;
+    }
+    Ok(m)
+}
+
 /// 某期间各销售订单的累计已发数量（Rust 侧累加，不在 SQL 里 SUM）
 fn so_shipment_qty_map(db: &Db, period: Period) -> DbResult<std::collections::HashMap<i64, Money>> {
     let mut st = db
@@ -1888,6 +1943,88 @@ mod tests {
         assert_eq!(sos.len(), 1);
         assert_eq!(sos[0].lines.len(), 2, "销售订单两条明细都要回来");
         assert_eq!(sos[0].lines[1].item_code, "140502");
+    }
+
+    /// 工作台趋势按期间批量汇总，不逐期拉整表（防 N+1 回潮）。
+    ///
+    /// `so_amount_by_period` / `po_amount_by_period` 一条 `BETWEEN` 扫全、
+    /// Rust 侧按期间累加，与逐期 `so_list`/`po_list` 累加 `total_amount` 同口径。
+    #[test]
+    fn order_amount_by_period_batches_trend_totals() {
+        let db = mem();
+        let p1 = Period::new(2026, 1).unwrap();
+        let p2 = Period::new(2026, 2).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+
+        // 销售：1 月两张（10×10 + 20×10 = 300），2 月一张（50×10 = 500）
+        mk_so(&db, p1, d, "draft", "10", "A");
+        mk_so(&db, p1, d, "draft", "20", "A");
+        mk_so(
+            &db,
+            p2,
+            NaiveDate::from_ymd_opt(2026, 2, 5).unwrap(),
+            "draft",
+            "50",
+            "A",
+        );
+
+        let so = so_amount_by_period(&db, 202601, 202602).unwrap();
+        assert_eq!(
+            so.get(&202601).copied().unwrap(),
+            m("300"),
+            "1 月两张应累加"
+        );
+        assert_eq!(so.get(&202602).copied().unwrap(), m("500"), "2 月一张");
+
+        // 采购：1 月一张 1000，2 月一张 2000
+        let mut po1 = PurchaseOrder::new(p1, d, "S001", "供应商A", "u1");
+        po1.no = po_next_no(&db, p1).unwrap();
+        po1.lines.push(PoLine {
+            id: 0,
+            po_id: 0,
+            item_code: "140301".into(),
+            item_name: "料".into(),
+            qty_ordered: m("100"),
+            qty_received: Money::ZERO,
+            unit_price: m("10"),
+            tax_rate: Money::ZERO,
+            amount: m("1000"),
+            tax_amount: Money::ZERO,
+            memo: String::new(),
+        });
+        po_save(&db, &mut po1).unwrap();
+
+        let mut po2 = PurchaseOrder::new(
+            p2,
+            NaiveDate::from_ymd_opt(2026, 2, 5).unwrap(),
+            "S001",
+            "供应商A",
+            "u1",
+        );
+        po2.no = po_next_no(&db, p2).unwrap();
+        po2.lines.push(PoLine {
+            id: 0,
+            po_id: 0,
+            item_code: "140301".into(),
+            item_name: "料".into(),
+            qty_ordered: m("200"),
+            qty_received: Money::ZERO,
+            unit_price: m("10"),
+            tax_rate: Money::ZERO,
+            amount: m("2000"),
+            tax_amount: Money::ZERO,
+            memo: String::new(),
+        });
+        po_save(&db, &mut po2).unwrap();
+
+        let po = po_amount_by_period(&db, 202601, 202602).unwrap();
+        assert_eq!(po.get(&202601).copied().unwrap(), m("1000"), "1 月采购单");
+        assert_eq!(po.get(&202602).copied().unwrap(), m("2000"), "2 月采购单");
+
+        // 范围外不计入
+        let only_jan = so_amount_by_period(&db, 202601, 202601).unwrap();
+        assert_eq!(only_jan.len(), 1);
+        assert_eq!(only_jan.get(&202601).copied().unwrap(), m("300"));
     }
 
     /// 超收如实反映：到货超过订购量时，已收金额会大于订单金额

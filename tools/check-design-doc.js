@@ -44,7 +44,7 @@ const doc = fs.readFileSync(docPath, "utf8");
 const REFS = [
   { file: "crates/finweb/src/handlers/sales.rs", line: 745, re: /^\s+let id = findb::sales::so_payment_add\(/, why: "销售收款同时写 so_payment" },
   { file: "crates/finweb/src/handlers/sales.rs", line: 746, re: /^\s+let doc_id = findb::receipt::receipt_create\(/, why: "同一笔钱写两张表" },
-  { file: "crates/findb/src/scm.rs", line: 1351, re: /credit_check\(db, &customer, period\)/, why: "订单流转时的信用拦截" },
+  { file: "crates/findb/src/scm.rs", line: 1406, re: /credit_check\(db, &customer, period\)/, why: "订单流转时的信用拦截" },
   { file: "crates/findb/src/sales.rs", line: 1113, re: /^pub fn customer_credit_limit/, why: "额度从 props_json 读" },
   { file: "crates/findb/src/sales.rs", line: 1133, re: /^pub fn credit_check/, why: "占用/额度/是否超限" },
   { file: "crates/findb/src/settle/open.rs", line: 105, re: /^pub fn open_entries\b/, why: "余额唯一口径" },

@@ -386,13 +386,8 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             "元",
         ));
         let mut m: BTreeMap<i32, f64> = BTreeMap::new();
-        for p in &ps {
-            let list = crate::scm::so_list(db, *p, None)?;
-            let mut s = Money::ZERO;
-            for o in &list {
-                s += o.total_amount;
-            }
-            m.insert(p.ymm(), money_f64(s));
+        for (p, v) in crate::scm::so_amount_by_period(db, y0, y1)? {
+            m.insert(p, v.to_f64());
         }
         out.trends.push(trend(
             "销售",
@@ -464,13 +459,8 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             "元",
         ));
         let mut m: BTreeMap<i32, f64> = BTreeMap::new();
-        for p in &ps {
-            let list = crate::scm::po_list(db, *p, None)?;
-            let mut s = Money::ZERO;
-            for o in &list {
-                s += o.total_amount;
-            }
-            m.insert(p.ymm(), money_f64(s));
+        for (p, v) in crate::scm::po_amount_by_period(db, y0, y1)? {
+            m.insert(p, v.to_f64());
         }
         out.trends.push(trend(
             "采购",
