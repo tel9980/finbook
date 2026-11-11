@@ -796,6 +796,24 @@ pub fn so_payment_sums(db: &Db) -> DbResult<std::collections::HashMap<i64, Money
     Ok(map)
 }
 
+/// 每张销售订单的**最早发货日**（账龄起点）。
+///
+/// 只取 `so_shipment` 里的发货流水；没发过货的订单不在这张表里（账龄退回订单日期）。
+/// 退货（负数量）也记在同一张 `so_shipment`，但退货只可能发生在发货之后，所以
+/// `MIN(date)` 天然是第一次发货的那天。
+pub fn so_shipment_dates(db: &Db) -> DbResult<std::collections::HashMap<i64, String>> {
+    let mut st = db
+        .conn()
+        .prepare("SELECT so_id, MIN(date) FROM so_shipment GROUP BY so_id")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut map: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    for row in rows {
+        let (so_id, d) = row?;
+        map.insert(so_id, d);
+    }
+    Ok(map)
+}
+
 // ===========================================================================
 // 统计 / 执行跟踪 / 信用管理
 
@@ -985,6 +1003,7 @@ pub struct SoReceivable {
     pub so_id: i64,
     pub no: String,
     pub date: String,
+    pub ship_date: String,
     pub customer_code: String,
     pub customer_name: String,
     pub status: String,
@@ -999,8 +1018,9 @@ pub struct SoReceivable {
 ///
 /// 跨期间——上个月的单还没收完，这个月也要列出来；草稿订单不算数（还没承诺）。
 ///
-/// `overdue_days` 以**订单日期**起算账期（近似口径）：`max(0, 今天 − 订单日期 − 账期)`。
-/// 真正的到期日是「发货/开票日 + 账期」，订单日期是手里最接近的起点。
+/// `overdue_days` 以**发货日**起算账期（没发过货的退回订单日期）：
+/// `max(0, 今天 − 账龄起点 − 账期)`。真正的到期日是「发货/开票日 + 账期」，
+/// 发货日比订单日期更贴近真实到期日（下单到发货之间那几天不该算客户的账期）。
 pub fn so_receivable(db: &Db) -> DbResult<Vec<SoReceivable>> {
     so_receivable_as_of(db, chrono::Local::now().date_naive())
 }
@@ -1026,6 +1046,7 @@ fn so_receivable_as_of(db: &Db, today: chrono::NaiveDate) -> DbResult<Vec<SoRece
     })?;
     let pay_days_map = crate::settle::customer_pay_days_map(db)?;
     let sums = so_payment_sums(db)?;
+    let ship_dates = so_shipment_dates(db)?;
     let mut out = Vec::new();
     for row in rows {
         let (id, no, date, cc, cn, status, total) = row?;
@@ -1035,7 +1056,14 @@ fn so_receivable_as_of(db: &Db, today: chrono::NaiveDate) -> DbResult<Vec<SoRece
             continue; // 已经结清，不进「谁还欠我钱」这张表
         }
         let pay_days = pay_days_map.get(cc.trim()).copied().unwrap_or(0);
-        let age = chrono::NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d")
+        let ship_date = ship_dates.get(&id).cloned().unwrap_or_default();
+        // 账龄起点：发过货就从「最早发货日」起算，没发货退回订单日期。
+        let aging_start = if ship_date.is_empty() {
+            date.clone()
+        } else {
+            ship_date.clone()
+        };
+        let age = chrono::NaiveDate::parse_from_str(aging_start.trim(), "%Y-%m-%d")
             .map(|d| (today - d).num_days())
             .unwrap_or(0);
         let overdue_days = (age - pay_days).max(0);
@@ -1043,6 +1071,7 @@ fn so_receivable_as_of(db: &Db, today: chrono::NaiveDate) -> DbResult<Vec<SoRece
             so_id: id,
             no,
             date,
+            ship_date,
             customer_code: cc,
             customer_name: cn,
             status: crate::scm::status_from::<crate::scm::SoStatus>(&status)
@@ -1228,6 +1257,16 @@ mod tests {
         });
         let so1_id = crate::scm::so_save(&db, &mut so1).unwrap();
         crate::scm::so_set_status(&db, so1_id, crate::scm::SoStatus::Confirmed).unwrap();
+        // C01 发过一次货（01-10）：账龄应从发货日起算，而不是订单日期 01-05。
+        so_shipment_add(
+            &db,
+            so1_id,
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            m("60"),
+            "首批发货",
+        )
+        .unwrap();
         so_payment_add(
             &db,
             so1_id,
@@ -1350,8 +1389,9 @@ mod tests {
         c01.set_prop(fincore::auxiliary::prop::PAY_DAYS, "30");
         crate::auxs::insert(&db, &c01).unwrap();
 
-        // 固定「今天」= 2026-02-10：C01 订单 01-05（隔 36 天，扣账期 30 → 逾期 6 天），
-        // C02 订单 01-06（隔 35 天，无账期 → 逾期 35 天）
+        // 固定「今天」= 2026-02-10：
+        // C01 发货 01-10（隔 31 天，扣账期 30 → 逾期 1 天），ship_date 应为发货日；
+        // C02 没发过货（按订单日期 01-06，隔 35 天，无账期 → 逾期 35 天），ship_date 空。
         let today = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
         let rows = so_receivable_as_of(&db, today).unwrap();
         assert_eq!(rows.len(), 2, "只列已确认未结清的两张：{rows:?}");
@@ -1361,10 +1401,12 @@ mod tests {
         assert_eq!(rows[0].balance, m("800"));
         assert_eq!(rows[0].status, "已确认");
         assert_eq!(rows[0].pay_days, 30);
-        assert_eq!(rows[0].overdue_days, 6, "36 天 − 账期 30 = 逾期 6 天");
+        assert_eq!(rows[0].ship_date, "2026-01-10", "发过货就记发货日");
+        assert_eq!(rows[0].overdue_days, 1, "31 天 − 账期 30 = 逾期 1 天");
         assert_eq!(rows[1].customer_code, "C02");
         assert_eq!(rows[1].balance, m("500"));
         assert_eq!(rows[1].pay_days, 0, "没设账期按 0 天");
+        assert_eq!(rows[1].ship_date, "", "没发货不填发货日");
         assert_eq!(rows[1].overdue_days, 35, "35 天 − 账期 0 = 逾期 35 天");
     }
 

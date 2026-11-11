@@ -68,17 +68,17 @@ function soReceivableHtml(rows, outstanding) {
   const overdue = rows.filter((r) => Number(r.overdue_days) > 0).length;
   const overdue90 = rows.filter((r) => Number(r.overdue_days) > 90).length;
   const overdueCell = (r) => (Number(r.overdue_days) > 0
-    ? `<td class="warn"><b>逾期 ${r.overdue_days} 天</b></td>`
-    : `<td class="muted">—</td>`);
+    ? `<td class="warn"><b title="${esc(r.ship_date ? `账期从发货日 ${r.ship_date} 起算` : `未发货，账期从订单日 ${r.date} 起算`)}">逾期 ${r.overdue_days} 天</b></td>`
+    : `<td class="muted" title="${esc(r.ship_date ? `账期从发货日 ${r.ship_date} 起算` : `未发货，账期从订单日 ${r.date} 起算`)}">—</td>`);
   const dunCell = (r) => (canDun
     ? `<td class="row-actions"><button class="btn ghost sm" data-dun="${esc(JSON.stringify({ code: r.customer_code, name: r.customer_name }))}">催款函</button></td>`
     : "");
-  const tr = (r) => `<tr><td>${esc(r.no)}</td><td>${esc(r.customer_name)}</td><td class="muted">${esc(r.date)}</td><td class="num">${fmtMoney(r.total_amount)}</td><td class="num">${fmtMoney(r.collected)}</td><td class="num"><b>${fmtMoney(r.balance)}</b></td><td>${esc(r.status)}</td>${overdueCell(r)}${dunCell(r)}</tr>`;
+  const tr = (r) => `<tr><td>${esc(r.no)}</td><td>${esc(r.customer_name)}</td><td class="muted">${esc(r.date)}</td><td class="muted">${esc(r.ship_date || "未发货")}</td><td class="num">${fmtMoney(r.total_amount)}</td><td class="num">${fmtMoney(r.collected)}</td><td class="num"><b>${fmtMoney(r.balance)}</b></td><td>${esc(r.status)}</td>${overdueCell(r)}${dunCell(r)}</tr>`;
   const extra = overdue > 0
     ? `，其中 <b style="color:var(--warn)">${overdue}</b> 笔已逾期${overdue90 > 0 ? `、<b style="color:var(--err)">${overdue90}</b> 笔超 90 天` : ""}`
     : "";
   const summary = `<div class="muted" style="margin:4px 0">共 ${rows.length} 笔，未收合计 <b style="color:var(--warn)">${fmtMoney(outstanding)}</b>${extra}</div>`;
-  return `${summary}<table class="grid"><thead><tr><th>单号</th><th>客户</th><th>日期</th><th class="num">订单金额</th><th class="num">已收</th><th class="num">未收</th><th>状态</th><th>逾期</th>${canDun ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(tr).join("")}</tbody></table>`;
+  return `${summary}<table class="grid"><thead><tr><th>单号</th><th>客户</th><th>订单日</th><th>发货日</th><th class="num">订单金额</th><th class="num">已收</th><th class="num">未收</th><th>状态</th><th>逾期</th>${canDun ? "<th></th>" : ""}</tr></thead><tbody>${rows.map(tr).join("")}</tbody></table>`;
 }
 
 // 给某个客户生成一张催款函（复用了往来模块已有的催款单：从该客户未核销应收逐笔取数）。

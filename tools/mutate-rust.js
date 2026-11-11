@@ -2281,6 +2281,20 @@ const MUT = [
     to: "            .filter(|_r| true)\n            .count() as i64;\n        out.todos.push(todo(",
     cmd: ["test", "-p", "findb", "--lib", "workbench::tests::overdue_receivable_surfaces_as_a_todo"],
   },
+  {
+    name: "124 账龄起点退回订单日期（发货日没接上）",
+    file: "crates/findb/src/sales.rs",
+    from: "        let aging_start = if ship_date.is_empty() {\n            date.clone()\n        } else {\n            ship_date.clone()\n        };",
+    to: "        let aging_start = date.clone();",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
+  },
+  {
+    name: "125 没发货也拿空发货日当账龄起点（账龄变成 0）",
+    file: "crates/findb/src/sales.rs",
+    from: "        let aging_start = if ship_date.is_empty() {\n            date.clone()\n        } else {\n            ship_date.clone()\n        };",
+    to: "        let aging_start = ship_date.clone();",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
+  },
 
 ];
 

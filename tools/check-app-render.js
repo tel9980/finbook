@@ -621,17 +621,18 @@ const CASES = [
   },
   // 销售订单回款看板（v1.8.102）：谁还欠我钱，未收合计点出来。
   // v1.8.103 加了「逾期」列（看 overdue_days）和「催款函」按钮（要 voucher_new）。
+  // v1.8.105 加了「发货日」列，逾期从发货日起算（没发货退回订单日）。
   {
     fn: "soReceivableHtml",
     args: [
       [
-        { no: "XS2026010001", customer_name: "客户A", date: "2026-01-05", total_amount: "2000.00", collected: "1200.00", balance: "800.00", status: "已确认", overdue_days: 6, pay_days: 30 },
-        { no: "XS2026010002", customer_name: "客户B", date: "2026-01-06", total_amount: "500.00", collected: "0.00", balance: "500.00", status: "已确认", overdue_days: 0, pay_days: 0 },
+        { no: "XS2026010001", customer_name: "客户A", date: "2026-01-05", ship_date: "2026-01-10", total_amount: "2000.00", collected: "1200.00", balance: "800.00", status: "已确认", overdue_days: 1, pay_days: 30 },
+        { no: "XS2026010002", customer_name: "客户B", date: "2026-01-06", ship_date: "", total_amount: "500.00", collected: "0.00", balance: "500.00", status: "已确认", overdue_days: 0, pay_days: 0 },
       ],
       "1300.00",
     ],
     stubs: { esc: (s) => String(s == null ? "" : s), fmtMoney: (s) => String(s == null ? "" : s), can: () => true },
-    expect: ["共 2 笔", "未收合计", "1300.00", "逾期 6 天", "催款函", "笔已逾期", "订单金额", "已收", "未收", "逾期"],
+    expect: ["共 2 笔", "未收合计", "1300.00", "逾期 1 天", "催款函", "笔已逾期", "订单金额", "已收", "未收", "逾期", "发货日", "订单日", "2026-01-10", "未发货"],
     absent: ["笔超 90 天"],
   },
   {

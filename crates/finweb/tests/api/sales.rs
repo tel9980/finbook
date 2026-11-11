@@ -3412,4 +3412,6 @@ async fn so_receivable_endpoint_lists_unsettled() {
     assert!(rows[0]["overdue_days"].as_i64().unwrap() >= 0);
     assert!(v["overdue_count"].as_i64().unwrap() >= 0);
     assert!(v["overdue_90_count"].as_i64().unwrap() >= 0);
+    // v1.8.105：回款看板带上发货日（这里没记发货流水 → 空串，账龄退回订单日期）
+    assert_eq!(rows[0]["ship_date"].as_str().unwrap(), "");
 }
