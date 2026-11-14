@@ -33,7 +33,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 54;
+pub const SCHEMA_VERSION: i64 = 55;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -563,7 +563,6 @@ CREATE TABLE IF NOT EXISTS po_line (
     item_code   TEXT NOT NULL,
     item_name   TEXT NOT NULL DEFAULT '',
     qty_ordered TEXT NOT NULL DEFAULT '0',
-    qty_received TEXT NOT NULL DEFAULT '0',
     unit_price  TEXT NOT NULL DEFAULT '0',
     tax_rate    TEXT NOT NULL DEFAULT '0',
     amount      TEXT NOT NULL DEFAULT '0',
@@ -597,7 +596,6 @@ CREATE TABLE IF NOT EXISTS so_line (
     item_code   TEXT NOT NULL,
     item_name   TEXT NOT NULL DEFAULT '',
     qty_ordered TEXT NOT NULL DEFAULT '0',
-    qty_shipped TEXT NOT NULL DEFAULT '0',
     unit_price  TEXT NOT NULL DEFAULT '0',
     tax_rate    TEXT NOT NULL DEFAULT '0',
     amount      TEXT NOT NULL DEFAULT '0',
@@ -2041,7 +2039,6 @@ const MIGRATE_V6: &[(&str, &str, &str)] = &[
     ("po_line", "item_code", "TEXT NOT NULL"),
     ("po_line", "item_name", "TEXT NOT NULL DEFAULT ''"),
     ("po_line", "qty_ordered", "TEXT NOT NULL DEFAULT '0'"),
-    ("po_line", "qty_received", "TEXT NOT NULL DEFAULT '0'"),
     ("po_line", "unit_price", "TEXT NOT NULL DEFAULT '0'"),
     ("po_line", "tax_rate", "TEXT NOT NULL DEFAULT '0'"),
     ("po_line", "amount", "TEXT NOT NULL DEFAULT '0'"),
@@ -2122,7 +2119,6 @@ const MIGRATE_V6: &[(&str, &str, &str)] = &[
     ("so_line", "item_code", "TEXT NOT NULL"),
     ("so_line", "item_name", "TEXT NOT NULL DEFAULT ''"),
     ("so_line", "qty_ordered", "TEXT NOT NULL DEFAULT '0'"),
-    ("so_line", "qty_shipped", "TEXT NOT NULL DEFAULT '0'"),
     ("so_line", "unit_price", "TEXT NOT NULL DEFAULT '0'"),
     ("so_line", "tax_rate", "TEXT NOT NULL DEFAULT '0'"),
     ("so_line", "amount", "TEXT NOT NULL DEFAULT '0'"),
@@ -2544,6 +2540,9 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_generic(conn, MIGRATE_V52)?;
             // v54：报价单记下按什么算的价（纯加列）
             migrate_generic(conn, MIGRATE_V54)?;
+            // v55：删冗余列 so_line.qty_shipped / po_line.qty_received（建表后从未回写，
+            // 执行进度读时从 so_shipment / po_receipt 实时汇总）
+            migrate_v55(conn)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：
@@ -2593,6 +2592,21 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
 }
 
 /// v1 → v2：给既有表补列
+/// v54 → v55：删冗余列 `so_line.qty_shipped` / `po_line.qty_received`
+///
+/// 这两列建表后从未被任何代码回写（发货/收货只往 `so_shipment` / `po_receipt`
+/// 插行），读路径早已改为从这两张流水表实时汇总。留着只会让 `so_get`/`po_get`
+/// 这类单张读误以为能直接读列，返回 stale/0 的进度，进而让「未发量」校验失效。
+/// 幂等：列已不存在就跳过（全新账套 DDL 已不含这两列）。
+fn migrate_v55(conn: &Connection) -> Result<(), DbError> {
+    for (table, col) in [("so_line", "qty_shipped"), ("po_line", "qty_received")] {
+        if column_exists(conn, table, col)? {
+            conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {col}"), [])?;
+        }
+    }
+    Ok(())
+}
+
 fn migrate_v2(conn: &Connection) -> Result<(), DbError> {
     migrate_generic(conn, MIGRATE_V2)
 }
@@ -3015,5 +3029,50 @@ mod tests {
         for c in ["amends_id", "amended_by", "amend_reason"] {
             assert!(column_exists(&conn, "voucher", c).unwrap());
         }
+    }
+
+    /// 回归：v55 删冗余列 `so_line.qty_shipped` / `po_line.qty_received`。
+    /// 全新账套（DDL 已不含）幂等跳过；带旧列的存量账套升级后必须真的删掉。
+    #[test]
+    fn old_book_upgrade_drops_redundant_line_progress_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(DDL).unwrap();
+        // 造出「v54、仍带冗余列」的存量账套
+        conn.execute_batch(
+            "ALTER TABLE so_line ADD COLUMN qty_shipped TEXT NOT NULL DEFAULT '0';
+             ALTER TABLE po_line ADD COLUMN qty_received TEXT NOT NULL DEFAULT '0';
+             INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','54');",
+        )
+        .unwrap();
+        assert!(column_exists(&conn, "so_line", "qty_shipped").unwrap());
+        assert!(column_exists(&conn, "po_line", "qty_received").unwrap());
+
+        init(&conn).unwrap();
+
+        assert!(
+            !column_exists(&conn, "so_line", "qty_shipped").unwrap(),
+            "升级后必须删掉 so_line.qty_shipped（执行进度从 so_shipment 汇总）"
+        );
+        assert!(
+            !column_exists(&conn, "po_line", "qty_received").unwrap(),
+            "升级后必须删掉 po_line.qty_received（执行进度从 po_receipt 汇总）"
+        );
+        // 版本号要真的推进，否则下次打开还会再走一遍迁移
+        let v: String = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            v,
+            SCHEMA_VERSION.to_string(),
+            "版本号没推进 = 下次打开白跑一遍迁移"
+        );
+        // 幂等：再跑一次不报错
+        init(&conn).unwrap();
+        assert!(!column_exists(&conn, "so_line", "qty_shipped").unwrap());
+        assert!(!column_exists(&conn, "po_line", "qty_received").unwrap());
     }
 }

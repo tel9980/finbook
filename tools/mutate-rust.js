@@ -2408,6 +2408,20 @@ const MUT = [
     to: "    for (p, v) in rows {\n        *m.entry(p).or_insert(Money::ZERO) = v;\n    }\n    Ok(m)\n}\n\npub fn claim_get",
     cmd: ["test", "-p", "findb", "--lib", "business::tests::claim_amount_by_period_batches_across_periods"],
   },
+  {
+    name: "142 销售单进度改读冗余列（回退为不汇总，未发量又恒等于订购量）",
+    file: "crates/findb/src/scm.rs",
+    from: "    // 执行进度从 so_shipment 实时汇总，不读冗余列（与 so_list 同口径）。\n    let (shipped_qty, shipped_amount) = so_shipment_progress(db, &so)?;\n    so.shipped_amount = shipped_amount;\n    for l in so.lines.iter_mut() {\n        l.qty_shipped = shipped_qty;\n    }\n    Ok(Some(so))",
+    to: "    Ok(Some(so))",
+    cmd: ["test", "-p", "findb", "--lib", "scm::tests::so_set_status_keeps_concurrent_line_progress"],
+  },
+  {
+    name: "143 删冗余列迁移漏掉采购行（po_line.qty_received 没删）",
+    file: "crates/findb/src/schema.rs",
+    from: "    for (table, col) in [(\"so_line\", \"qty_shipped\"), (\"po_line\", \"qty_received\")] {",
+    to: "    for (table, col) in [(\"so_line\", \"qty_shipped\")] {",
+    cmd: ["test", "-p", "findb", "--lib", "schema::tests::old_book_upgrade_drops_redundant_line_progress_columns"],
+  },
 
 ];
 

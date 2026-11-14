@@ -135,7 +135,7 @@ pub fn po_get(db: &Db, id: i64) -> DbResult<Option<PurchaseOrder>> {
     };
     let mut po = po;
     let mut lstmt = db.conn().prepare(
-        "SELECT id, item_code, item_name, qty_ordered, qty_received,
+        "SELECT id, item_code, item_name, qty_ordered,
                 unit_price, tax_rate, amount, tax_amount, memo
          FROM po_line WHERE po_id=? ORDER BY id",
     )?;
@@ -147,15 +147,29 @@ pub fn po_get(db: &Db, id: i64) -> DbResult<Option<PurchaseOrder>> {
                 item_code: r.get(1)?,
                 item_name: r.get(2)?,
                 qty_ordered: Money::parse_or_zero(&r.get::<_, String>(3)?),
-                qty_received: Money::parse_or_zero(&r.get::<_, String>(4)?),
-                unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
-                tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
-                amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
-                tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                memo: r.get(9)?,
+                qty_received: Money::ZERO,
+                unit_price: Money::parse_or_zero(&r.get::<_, String>(4)?),
+                tax_rate: Money::parse_or_zero(&r.get::<_, String>(5)?),
+                amount: Money::parse_or_zero(&r.get::<_, String>(6)?),
+                tax_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                memo: r.get(8)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    // 执行进度从 po_receipt 实时汇总，不读冗余列（与 po_list 同口径）。
+    // 数量列按 TEXT 存，取回原始行 Rust 侧累加，避免 SUM 强转 Integer/Real。
+    let mut st = db
+        .conn()
+        .prepare("SELECT qty FROM po_receipt WHERE po_id=?1")?;
+    let rows = st.query_map([id], |r| r.get::<_, String>(0))?;
+    let mut recv_qty = Money::ZERO;
+    for r in rows {
+        recv_qty += Money::parse_or_zero(&r?);
+    }
+    po.received_amount = po_received_gross(&po, recv_qty);
+    for l in po.lines.iter_mut() {
+        l.qty_received = recv_qty;
+    }
     Ok(Some(po))
 }
 
@@ -462,15 +476,14 @@ pub fn po_save(db: &Db, po: &mut PurchaseOrder) -> DbResult<i64> {
     tx.execute("DELETE FROM po_line WHERE po_id=?", [id])?;
     for line in &po.lines {
         tx.execute(
-            "INSERT INTO po_line(po_id, item_code, item_name, qty_ordered, qty_received,
+            "INSERT INTO po_line(po_id, item_code, item_name, qty_ordered,
              unit_price, tax_rate, amount, tax_amount, memo)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             rusqlite::params![
                 id,
                 line.item_code,
                 line.item_name,
                 crate::exact_param(line.qty_ordered),
-                crate::exact_param(line.qty_received),
                 crate::exact_param(line.unit_price),
                 crate::exact_param(line.tax_rate),
                 crate::money_param(line.amount),
@@ -598,7 +611,7 @@ fn po_lines_by_order(
     period: Period,
 ) -> DbResult<std::collections::HashMap<i64, Vec<PoLine>>> {
     let mut st = db.conn().prepare(
-        "SELECT l.po_id, l.id, l.item_code, l.item_name, l.qty_ordered, l.qty_received,
+        "SELECT l.po_id, l.id, l.item_code, l.item_name, l.qty_ordered,
                 l.unit_price, l.tax_rate, l.amount, l.tax_amount, l.memo
          FROM po_line l JOIN purchase_order o ON o.id = l.po_id
          WHERE o.period=?1 ORDER BY l.po_id, l.id",
@@ -613,12 +626,12 @@ fn po_lines_by_order(
                 item_code: r.get(2)?,
                 item_name: r.get(3)?,
                 qty_ordered: Money::parse_or_zero(&r.get::<_, String>(4)?),
-                qty_received: Money::parse_or_zero(&r.get::<_, String>(5)?),
-                unit_price: Money::parse_or_zero(&r.get::<_, String>(6)?),
-                tax_rate: Money::parse_or_zero(&r.get::<_, String>(7)?),
-                amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                tax_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                memo: r.get(10)?,
+                qty_received: Money::ZERO,
+                unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
+                tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
+                amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
+                memo: r.get(9)?,
             },
         ))
     })?;
@@ -1026,15 +1039,14 @@ pub fn so_save(db: &Db, so: &mut SalesOrder) -> DbResult<i64> {
     tx.execute("DELETE FROM so_line WHERE so_id=?", [id])?;
     for line in &so.lines {
         tx.execute(
-            "INSERT INTO so_line(so_id, item_code, item_name, qty_ordered, qty_shipped,
+            "INSERT INTO so_line(so_id, item_code, item_name, qty_ordered,
              unit_price, tax_rate, amount, tax_amount, memo)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             rusqlite::params![
                 id,
                 line.item_code,
                 line.item_name,
                 crate::exact_param(line.qty_ordered),
-                crate::exact_param(line.qty_shipped),
                 crate::exact_param(line.unit_price),
                 crate::exact_param(line.tax_rate),
                 crate::money_param(line.amount),
@@ -1223,7 +1235,7 @@ fn so_lines_by_order(
     period: Period,
 ) -> DbResult<std::collections::HashMap<i64, Vec<SoLine>>> {
     let mut st = db.conn().prepare(
-        "SELECT l.so_id, l.id, l.item_code, l.item_name, l.qty_ordered, l.qty_shipped,
+        "SELECT l.so_id, l.id, l.item_code, l.item_name, l.qty_ordered,
                 l.unit_price, l.tax_rate, l.amount, l.tax_amount, l.memo
          FROM so_line l JOIN sales_order o ON o.id = l.so_id
          WHERE o.period=?1 ORDER BY l.so_id, l.id",
@@ -1238,12 +1250,12 @@ fn so_lines_by_order(
                 item_code: r.get(2)?,
                 item_name: r.get(3)?,
                 qty_ordered: Money::parse_or_zero(&r.get::<_, String>(4)?),
-                qty_shipped: Money::parse_or_zero(&r.get::<_, String>(5)?),
-                unit_price: Money::parse_or_zero(&r.get::<_, String>(6)?),
-                tax_rate: Money::parse_or_zero(&r.get::<_, String>(7)?),
-                amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                tax_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                memo: r.get(10)?,
+                qty_shipped: Money::ZERO,
+                unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
+                tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
+                amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
+                memo: r.get(9)?,
             },
         ))
     })?;
@@ -1279,14 +1291,17 @@ pub fn so_shipped_gross(so: &SalesOrder, shipped_qty: Money) -> Money {
 /// 「已确认收入+应收」天然一致，不会出现两个百分比对不上的情况。
 pub fn so_shipment_progress(db: &Db, so: &SalesOrder) -> DbResult<(Money, Money)> {
     let ordered: Money = so.lines.iter().map(|l| l.qty_ordered).sum();
-    // COALESCE 的默认值必须写 **TEXT 零** `'0'` 而不是 `0`：金额列全库按 TEXT 存，
-    // 写成整数会让整个表达式变成 Integer 类型，`get::<_, String>` 直接报
-    // InvalidColumnType —— 空表（还没发过货）时才触发，有数据时反而正常。
+    // 数量列全库按 TEXT 存，`SUM(qty)` 会把 TEXT 强转成 Integer/Real，`get::<String>`
+    // 直接报 InvalidColumnType —— 所以取回原始 TEXT 行、Rust 侧累加（与
+    // `so_shipment_qty_map` 同口径）。
     let mut st = db
         .conn()
-        .prepare("SELECT COALESCE(SUM(qty),'0') FROM so_shipment WHERE so_id=?1")?;
-    let shipped_qty: Money =
-        Money::parse_or_zero(&st.query_row([so.id], |r| r.get::<_, String>(0))?);
+        .prepare("SELECT qty FROM so_shipment WHERE so_id=?1")?;
+    let rows = st.query_map([so.id], |r| r.get::<_, String>(0))?;
+    let mut shipped_qty = Money::ZERO;
+    for r in rows {
+        shipped_qty += Money::parse_or_zero(&r?);
+    }
     if ordered.is_zero() || !shipped_qty.is_positive() {
         return Ok((shipped_qty, Money::ZERO));
     }
@@ -1329,7 +1344,7 @@ pub fn so_get(db: &Db, id: i64) -> DbResult<Option<SalesOrder>> {
     };
     let mut so = so;
     let mut lstmt = db.conn().prepare(
-        "SELECT id, item_code, item_name, qty_ordered, qty_shipped,
+        "SELECT id, item_code, item_name, qty_ordered,
                 unit_price, tax_rate, amount, tax_amount, memo
          FROM so_line WHERE so_id=? ORDER BY id",
     )?;
@@ -1341,15 +1356,21 @@ pub fn so_get(db: &Db, id: i64) -> DbResult<Option<SalesOrder>> {
                 item_code: r.get(1)?,
                 item_name: r.get(2)?,
                 qty_ordered: Money::parse_or_zero(&r.get::<_, String>(3)?),
-                qty_shipped: Money::parse_or_zero(&r.get::<_, String>(4)?),
-                unit_price: Money::parse_or_zero(&r.get::<_, String>(5)?),
-                tax_rate: Money::parse_or_zero(&r.get::<_, String>(6)?),
-                amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
-                tax_amount: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                memo: r.get(9)?,
+                qty_shipped: Money::ZERO,
+                unit_price: Money::parse_or_zero(&r.get::<_, String>(4)?),
+                tax_rate: Money::parse_or_zero(&r.get::<_, String>(5)?),
+                amount: Money::parse_or_zero(&r.get::<_, String>(6)?),
+                tax_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
+                memo: r.get(8)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
+    // 执行进度从 so_shipment 实时汇总，不读冗余列（与 so_list 同口径）。
+    let (shipped_qty, shipped_amount) = so_shipment_progress(db, &so)?;
+    so.shipped_amount = shipped_amount;
+    for l in so.lines.iter_mut() {
+        l.qty_shipped = shipped_qty;
+    }
     Ok(Some(so))
 }
 
@@ -2588,7 +2609,7 @@ mod tests {
 
     /// 回归：状态流转不得把明细整表读出再写回。
     /// 旧实现 `so_get → 改状态 → so_save`，`so_save` 会 DELETE+重插全部 so_line，
-    /// 期间并发记上的 qty_shipped 会被这轮回滚覆盖。
+    /// 期间并发发货（so_shipment）记上的进度会被这轮回滚覆盖。
     #[test]
     fn so_set_status_keeps_concurrent_line_progress() {
         let db = mem();
@@ -2616,11 +2637,11 @@ mod tests {
         });
         let id = so_save(&db, &mut so).unwrap();
         so_set_status(&db, id, SoStatus::Confirmed).unwrap();
-        // 模拟并发出货：直接写 qty_shipped（发货回写走 sales.rs，不在本文件）
+        // 模拟并发出货：往 so_shipment 插行（发货回写走 sales.rs，不在本文件）
         db.conn()
             .execute(
-                "UPDATE so_line SET qty_shipped=?2 WHERE so_id=?1",
-                rusqlite::params![id, "20"],
+                "INSERT INTO so_shipment(so_id, period, date, qty, memo) VALUES(?1,?2,?3,?4,'')",
+                rusqlite::params![id, p.ymm(), "2026-01-10", "20"],
             )
             .unwrap();
         so_set_status(&db, id, SoStatus::Cancelled).unwrap();
@@ -2629,7 +2650,7 @@ mod tests {
         assert_eq!(
             got.lines[0].qty_shipped,
             m("20"),
-            "状态流转不得回滚明细上的并发进度（回归前会被 so_save 清成 0）"
+            "状态流转不得回滚并发发货进度（进度从 so_shipment 实时汇总）"
         );
     }
 
@@ -2761,8 +2782,8 @@ mod tests {
         po_set_status(&db, id, PoStatus::Confirmed).unwrap();
         db.conn()
             .execute(
-                "UPDATE po_line SET qty_received=?2 WHERE po_id=?1",
-                rusqlite::params![id, "40"],
+                "INSERT INTO po_receipt(po_id, period, date, qty, memo) VALUES(?1,?2,?3,?4,'')",
+                rusqlite::params![id, p.ymm(), "2026-01-05", "40"],
             )
             .unwrap();
         po_set_status(&db, id, PoStatus::Cancelled).unwrap();
@@ -2771,7 +2792,7 @@ mod tests {
         assert_eq!(
             got.lines[0].qty_received,
             m("40"),
-            "状态流转不得回滚并发入库量"
+            "状态流转不得回滚并发入库量（进度从 po_receipt 实时汇总）"
         );
         // 终态不可复活；不存在的单据要报错
         assert!(po_set_status(&db, id, PoStatus::Draft).is_err());

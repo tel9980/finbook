@@ -732,22 +732,6 @@ pub fn fetch_lines_from_po(db: &Db, po_id: i64) -> DbResult<Vec<LcLine>> {
     Ok(out)
 }
 
-/// 某存货在指定期间的附加成本合计（差异表/存货分析用）
-pub fn landed_cost_sum(db: &Db, item: &str, period: Period) -> DbResult<Money> {
-    let mut total = Money::ZERO;
-    let mut st = db.conn().prepare(
-        "SELECT i.to_stock FROM landed_cost_item i JOIN landed_cost c ON c.id = i.lcv_id
-         WHERE i.item_code=?1 AND c.period=?2 AND c.status='posted'",
-    )?;
-    let rows = st.query_map(rusqlite::params![item, period.ymm()], |r| {
-        r.get::<_, String>(0)
-    })?;
-    for r in rows {
-        total += Money::parse_or_zero(&r?);
-    }
-    Ok(total)
-}
-
 /// 各存货到岸成本汇总（存货分析视图用）
 pub fn by_item(db: &Db, period: Period) -> DbResult<BTreeMap<String, Money>> {
     let mut map: BTreeMap<String, Money> = BTreeMap::new();
