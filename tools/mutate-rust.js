@@ -2471,6 +2471,13 @@ const MUT = [
     to: "        \"SELECT MAX(s.date) FROM so_shipment s",
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_uninvoiced_oldest_ship_returns_earliest_among_uninvoiced"],
   },
+  {
+    name: "151 采购执行进度汇总只取每单最后一笔收货（累加写成覆盖，净收货算错）",
+    file: "crates/findb/src/procurement.rs",
+    from: "        let (po_id, qty) = row?;\n        let e = map.entry(po_id).or_insert(Money::ZERO);\n        *e += m(&qty);",
+    to: "        let (po_id, qty) = row?;\n        let e = map.entry(po_id).or_insert(Money::ZERO);\n        *e = m(&qty);",
+    cmd: ["test", "-p", "findb", "--lib", "procurement::tests::po_receipt_sums_aggregates_across_orders"],
+  },
 
 ];
 

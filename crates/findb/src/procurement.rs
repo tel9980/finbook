@@ -504,6 +504,22 @@ pub fn po_receipt_sum(db: &Db, po_id: i64) -> DbResult<Money> {
     Ok(rows.iter().map(|s| m(s)).sum())
 }
 
+/// 一次性汇总所有采购订单的净收货量（替代逐单 `po_receipt_sum`，消除 N+1）。
+///
+/// `po_execution_track` 每跑一张采购单就查一次 `po_receipt`；这里只扫一遍表，
+/// 按 `po_id` 累加成一张表（退货行是负值，自然轧成净收货）。
+pub fn po_receipt_sums(db: &Db) -> DbResult<std::collections::HashMap<i64, Money>> {
+    let mut st = db.conn().prepare("SELECT po_id, qty FROM po_receipt")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut map: std::collections::HashMap<i64, Money> = std::collections::HashMap::new();
+    for row in rows {
+        let (po_id, qty) = row?;
+        let e = map.entry(po_id).or_insert(Money::ZERO);
+        *e += m(&qty);
+    }
+    Ok(map)
+}
+
 /// 质检单（对标金蝶来料检验）：不合格部分**自动按订单单价退货**（负到货+负入库同事务），
 /// 结论 pass/fail/partial 随不合格数推导。合格部分留库不动（到货已入库）。
 pub fn qc_save(
@@ -824,16 +840,14 @@ pub struct PoTrack {
 
 pub fn po_execution_track(db: &Db, period: Period) -> DbResult<Vec<PoTrack>> {
     let orders = crate::scm::po_list(db, period, None)?;
+    let sums = po_receipt_sums(db)?;
     let mut out = Vec::new();
     for o in orders {
         if matches!(o.status, crate::scm::PoStatus::Cancelled) {
             continue;
         }
         let ordered: Money = o.lines.iter().map(|l| l.qty_ordered).sum();
-        let mut received = Money::ZERO;
-        for rc in po_receipt_list(db, o.id)? {
-            received += rc.qty;
-        }
+        let received = sums.get(&o.id).copied().unwrap_or(Money::ZERO);
         let rate = if ordered.is_zero() {
             Money::ZERO
         } else {
@@ -958,6 +972,69 @@ mod tests {
         let stats = purchase_stats(&db, p).unwrap();
         assert_eq!(stats.len(), 1);
         assert_eq!(stats[0].amount, m("1000"));
+    }
+
+    #[test]
+    fn po_receipt_sums_aggregates_across_orders() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let mk_po = |supplier: &str| {
+            let mut po = crate::scm::PurchaseOrder::new(p, d, supplier, "供应商", "u");
+            po.no = crate::scm::po_next_no(&db, p).unwrap();
+            po.lines.push(crate::scm::PoLine {
+                id: 0,
+                po_id: 0,
+                item_code: "140301".into(),
+                item_name: "原料".into(),
+                qty_ordered: m("100"),
+                qty_received: m("0"),
+                unit_price: m("10"),
+                tax_rate: m("0"),
+                amount: m("1000"),
+                tax_amount: m("0"),
+                memo: String::new(),
+            });
+            crate::scm::po_save(&db, &mut po).unwrap()
+        };
+        let po1 = mk_po("S01");
+        let po2 = mk_po("S02");
+        let _po3 = mk_po("S03");
+
+        po_receipt_add(
+            &db,
+            &PoReceipt {
+                id: 0,
+                po_id: po1,
+                period: p,
+                date: d,
+                qty: m("70"),
+                memo: String::new(),
+                item_code: String::new(),
+                warehouse: String::new(),
+            },
+        )
+        .unwrap();
+        po_return_add(&db, po1, p, d, m("10"), "破损").unwrap(); // 净 60
+        po_receipt_add(
+            &db,
+            &PoReceipt {
+                id: 0,
+                po_id: po2,
+                period: p,
+                date: d,
+                qty: m("30"),
+                memo: String::new(),
+                item_code: String::new(),
+                warehouse: String::new(),
+            },
+        )
+        .unwrap();
+
+        let sums = po_receipt_sums(&db).unwrap();
+        assert_eq!(sums.get(&po1).copied().unwrap(), m("60"));
+        assert_eq!(sums.get(&po2).copied().unwrap(), m("30"));
+        assert_eq!(sums.len(), 2); // po3 没收货，不该出现
     }
 
     #[test]
