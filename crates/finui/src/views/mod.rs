@@ -40,6 +40,7 @@ pub mod reports;
 pub mod scm_deep;
 pub mod security;
 pub mod settle_view;
+pub mod tax_decl;
 pub mod template;
 pub mod users;
 pub mod voucher_edit;
@@ -94,6 +95,7 @@ pub struct Views {
     pub dim_profit: dim_profit::DimProfitView,
     pub month_brief: month_brief::MonthBriefView,
     pub profit_sheet: profit_sheet::ProfitSheetView,
+    pub tax_decl: tax_decl::TaxDeclView,
     pub arap_recon: arap_recon::ArapReconView,
     pub multi_column: advanced::MultiColumnView,
     pub summary_table: advanced::SummaryTableView,
@@ -156,6 +158,7 @@ impl Views {
         self.dim_profit.invalidate();
         self.month_brief.invalidate();
         self.profit_sheet.invalidate();
+        self.tax_decl.invalidate();
         self.arap_recon.invalidate();
         self.multi_column.invalidate();
         self.summary_table.invalidate();
@@ -276,6 +279,7 @@ impl Views {
                 NavItem::DimProfit => self.dim_profit.enter(ctx),
                 NavItem::MonthBrief => self.month_brief.enter(ctx),
                 NavItem::ProfitSheet => self.profit_sheet.enter(ctx),
+                NavItem::TaxDecl => self.tax_decl.enter(ctx),
                 NavItem::ArapRecon => self.arap_recon.enter(ctx),
                 NavItem::MultiColumn => self.multi_column.enter(ctx),
                 NavItem::SummaryTable => self.summary_table.enter(ctx),
@@ -344,6 +348,7 @@ impl Views {
             NavItem::DimProfit => self.dim_profit.show(ctx, ui),
             NavItem::MonthBrief => self.month_brief.show(ctx, ui),
             NavItem::ProfitSheet => self.profit_sheet.show(ctx, ui),
+            NavItem::TaxDecl => self.tax_decl.show(ctx, ui),
             NavItem::ArapRecon => self.arap_recon.show(ctx, ui),
             NavItem::MultiColumn => self.multi_column.show(ctx, ui),
             NavItem::SummaryTable => self.summary_table.show(ctx, ui),

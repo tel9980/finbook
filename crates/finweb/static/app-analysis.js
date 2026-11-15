@@ -736,14 +736,29 @@ async function viewMps(main) {
     mpsRows = rows || [];
     $("#mps-table").innerHTML = mpsRows.length
       ? `<table class="grid"><thead><tr><th>存货</th><th class="num">需求</th><th class="num">现有</th><th class="num">在制</th><th class="num">计划量</th><th>来源</th><th>建议交期</th><th>状态</th><th></th></tr></thead><tbody>${mpsRows.map((r) => `<tr><td>${esc(r.item_code)}</td><td class="num">${fmt(r.demand)}</td><td class="num">${fmt(r.on_hand)}</td><td class="num">${fmt(r.wip)}</td><td class="num"><b>${fmt(r.planned)}</b></td><td>${esc(r.source)}</td><td>${esc(r.due_date)}</td><td>${r.status === "open" ? '<span class="tag">待下达</span>' : '<span class="tag ok">已下达</span>'}</td>
-        <td class="row-actions">${r.status === "open" && Number(r.planned) > 0 ? `<button class="btn primary sm" data-mps-go="${r.id}">下达</button>` : ""}</td></tr>`).join("")}</tbody></table>`
+        <td class="row-actions">${r.status === "open" && Number(r.planned) > 0 ? `<button class="btn primary sm" data-mps-go="${r.id}" data-mps-go-item="${esc(r.item_code)}">下达</button>` : ""}</td></tr>`).join("")}</tbody></table>`
       : `<div class="muted">暂无结果（先运行 MPS）</div>`;
     $all("[data-mps-go]").forEach((b) => b.onclick = async () => {
-      try {
-        const r = await postJson(`/mps/${b.dataset.mpsGo}/convert`, {});
-        toast(`已下达 → 生产订单 ${r.order_no}（到「工序报工」开工/领料）`, "ok");
-        loadMps();
-      } catch (e) { toast(e.message, "err"); }
+      const id = b.dataset.mpsGo;
+      const item = b.dataset.mpsGoItem || "";
+      // 先拉该产品的工艺版本供选择（没维护工艺路线就只剩默认版本）
+      let vs = [];
+      if (item) {
+        try { vs = ((await api(`/routing/${encodeURIComponent(item)}/versions`)).versions || []).filter((v) => v); } catch (e) { /* 默认版本即可 */ }
+      }
+      const mask = modal(`<h3>下达生产订单 · ${esc(item)}</h3>
+        <div class="field"><label>工艺版本</label><select id="mps-ver" style="min-width:200px"><option value="">默认版本</option>${vs.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join("")}</select></div>
+        <p class="muted" style="font-size:12px;margin:6px 0 0">选哪一版，工序清单、报工与计件单价就按哪一版算；留空用默认版本。</p>
+        <div class="foot"><button class="btn primary" id="mps-go-save">下达</button><button class="btn ghost" id="mps-go-cancel">取消</button></div>`);
+      $("#mps-go-cancel", mask).onclick = closeModal;
+      $("#mps-go-save", mask).onclick = async () => {
+        try {
+          const r = await postJson(`/mps/${id}/convert`, { version: $("#mps-ver", mask).value });
+          toast(`已下达 → 生产订单 ${r.order_no}（到「工序报工」开工/领料）`, "ok");
+          closeModal();
+          loadMps();
+        } catch (e) { toast(e.message, "err"); }
+      };
     });
   };
   const loadMps = async () => {
@@ -828,11 +843,10 @@ async function viewMrp(main) {
   const load = (rows) => {
     $("#mrp-result").innerHTML = `<table><thead><tr><th>层级</th><th>物料</th><th>毛需求</th><th>现有库存</th><th>净需求</th><th>计划量</th><th>行动</th><th>来源</th><th></th></tr></thead>
       <tbody>${rows.map((x) => `<tr><td>${x.level}</td><td>${esc(x.item_code)}</td><td class="r">${fmt(x.gross_req)}</td><td class="r">${fmt(x.on_hand)}</td><td class="r">${fmt(x.net_req)}</td><td class="r">${fmt(x.planned_qty)}</td><td>${x.action === "produce" ? "生产" : x.action === "purchase" ? "采购" : "无"}</td><td>${esc(x.source)}</td><td>${x.action === "produce" ? `<button class="btn ghost sm" data-mrp-go-item="${esc(x.item_code)}" data-mrp-go-qty="${esc(String(x.planned_qty))}">下达</button>` : x.action === "purchase" ? `<button class="btn ghost sm" data-mrp-req="${x.id}">下推请购</button>` : ""}</td></tr>`).join("")}</tbody></table>`;
-    $all("[data-mrp-go-item]").forEach((b) => b.onclick = async () => {
-      try {
-        const r = await postJson("/prod", { item_code: b.dataset.mrpGoItem, qty: b.dataset.mrpGoQty });
-        toast(`已下达生产订单 ${r.no}（到「工序报工」开工/领料）`, "ok");
-      } catch (e) { toast(e.message, "err"); }
+    $all("[data-mrp-go-item]").forEach((b) => b.onclick = () => {
+      // 下达生产订单前先让用户选工艺版本（复用新建订单表单的版本下拉），
+      // 不然只能事后用接口 ?version= 补，默认版本可能不是这次排产想用的。
+      openProdOrderEditor(null, { item_code: b.dataset.mrpGoItem, qty: b.dataset.mrpGoQty });
     });
     $all("[data-mrp-req]").forEach((b) => b.onclick = async () => {
       try {
@@ -1077,10 +1091,11 @@ async function viewBudgetVersions(main) {
 
 // 新建生产订单：选存货后带出该存货的工艺版本，按选中的版本生成工序。
 // 版本不只是备注——报工流水会记下它，计件单价按版本算钱（见 findb::piecepay）。
-function openProdOrderEditor(reload) {
+function openProdOrderEditor(reload, preset) {
+  const p = preset || {};
   const mask = modal(`<h3>新建生产订单</h3>
-    <div class="field"><label>产品编码 *</label><input id="pno-item" placeholder="如 140501" /></div>
-    <div class="field"><label>数量 *</label><input id="pno-qty" value="1" /></div>
+    <div class="field"><label>产品编码 *</label><input id="pno-item" placeholder="如 140501" value="${esc(p.item_code || "")}" /></div>
+    <div class="field"><label>数量 *</label><input id="pno-qty" value="${esc(p.qty || "1")}" /></div>
     <div class="field"><label>日期</label><input type="date" id="pno-date" value="${today()}" /></div>
     <div class="field"><label>工艺版本</label><select id="pno-ver" style="min-width:200px"><option value="">默认版本</option></select></div>
     <p class="muted" style="font-size:12px;margin:6px 0 0">填了产品编码会自动带出该产品的工艺版本；选哪一版，工序清单就按哪一版生成，报工与计件单价也按这一版算。没有工艺路线时订单照建，工序留空。</p>
@@ -1097,6 +1112,7 @@ function openProdOrderEditor(reload) {
   };
   $("#pno-item", mask).onchange = loadVersions;
   $("#pno-item", mask).onblur = loadVersions;
+  if (p.item_code) loadVersions();
   $("#pno-save", mask).onclick = async () => {
     const item = $("#pno-item", mask).value.trim();
     const qty = $("#pno-qty", mask).value.trim();

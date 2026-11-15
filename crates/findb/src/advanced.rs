@@ -980,6 +980,7 @@ pub fn mps_convert_to_order(
     qty: Option<Money>,
     period: Period,
     who: &str,
+    version: &str,
 ) -> DbResult<(i64, String)> {
     let row = match db.conn().query_row(
         &format!("SELECT {MPS_COLS} FROM mps_plan WHERE id=?1"),
@@ -1028,7 +1029,7 @@ pub fn mps_convert_to_order(
         supplier_name: String::new(),
         plan_start: String::new(),
         plan_end: String::new(),
-        routing_version: String::new(),
+        routing_version: version.to_string(),
     };
     if order.item_name.is_empty() {
         order.item_name = order.item_code.clone();
@@ -3577,6 +3578,26 @@ mod tests {
         // 毛需求 7 + 安全库存 5 = 12 → 套批量 10 → 计划 20
         assert_eq!(rm.net_req, m("12"));
         assert_eq!(rm.planned_qty, m("20"));
+    }
+
+    #[test]
+    fn mps_convert_carries_routing_version() {
+        let db = tmpdb("mps_ver");
+        // 造一条 MPS 建议：FG01 手工需求 10
+        mps_run(
+            &db,
+            &[("FG01".into(), m("10"), "手工".into())],
+            Period::from_ymm(0),
+            "2026-01-31",
+        )
+        .unwrap();
+        let rows = mps_latest(&db).unwrap();
+        let row = rows.iter().find(|r| r.item_code == "FG01").unwrap();
+        // 下达时指定 V2 工艺版本 → 生产订单要原样带上（不然工序/报工/计件都按错版本）
+        let (oid, _no) =
+            mps_convert_to_order(&db, row.id, None, Period::from_ymm(202601), "u", "V2").unwrap();
+        let order = crate::scm::prod_get(&db, oid).unwrap().unwrap();
+        assert_eq!(order.routing_version, "V2");
     }
 
     #[test]

@@ -613,8 +613,14 @@ pub(super) async fn convert_mps(
     } else {
         Some(parse_money_checked(&req.qty)?)
     };
-    let (oid, no) =
-        advanced::mps_convert_to_order(db, id, q, current_period(&state, &user), user.username())?;
+    let (oid, no) = advanced::mps_convert_to_order(
+        db,
+        id,
+        q,
+        current_period(&state, &user),
+        user.username(),
+        &req.version,
+    )?;
     db.log(
         user.username(),
         "生产",
@@ -1486,6 +1492,9 @@ pub(super) struct MpsConvertReq {
     /// 空 = 用行净算计划量
     #[serde(default)]
     qty: String,
+    /// 工艺版本（空 = 默认版本）
+    #[serde(default)]
+    version: String,
 }
 
 #[derive(Deserialize)]

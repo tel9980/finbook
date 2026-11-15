@@ -2492,6 +2492,13 @@ const MUT = [
     to: "        // 快到期的应收：接下来 30 天内该收客户的钱（未核销应收按到期日归拢）\n        let ar_due_soon_rows: Vec<_> = due_rows\n            .iter()\n            .filter(|r| r.kind == \"ap\" && r.due_date >= today_s && r.due_date <= horizon)",
     cmd: ["test", "-p", "findb", "--lib", "workbench::tests::uninvoiced_orders_and_ap_due_soon_surface_as_todos"],
   },
+  {
+    name: "154 MPS 下达把工艺版本丢掉（version 参数没写进订单，全走默认版本）",
+    file: "crates/findb/src/advanced.rs",
+    from: "        routing_version: version.to_string(),",
+    to: "        routing_version: String::new(),",
+    cmd: ["test", "-p", "findb", "--lib", "advanced::tests::mps_convert_carries_routing_version"],
+  },
 
 ];
 

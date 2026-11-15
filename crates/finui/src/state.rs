@@ -60,6 +60,8 @@ pub enum NavItem {
     MonthBrief,
     /// 利润分析表（照抄厂里那张表的行）
     ProfitSheet,
+    /// 增值税一般纳税人申报表（只取数/算表/导出，不网报）
+    TaxDecl,
     /// 应收应付对账（先录对方金额、对好账再落账）
     ArapRecon,
     /// 资金管理（日报/票据/融资/盘点/支票簿/日记账/借支/预算/预测）
@@ -140,6 +142,7 @@ impl NavItem {
             NavItem::DimProfit => "多维损益".to_string(),
             NavItem::MonthBrief => "月度简报".to_string(),
             NavItem::ProfitSheet => "利润分析表".to_string(),
+            NavItem::TaxDecl => "纳税申报".to_string(),
             NavItem::ArapRecon => "应收应付对账".to_string(),
             NavItem::Funds => "资金管理".to_string(),
             NavItem::BudgetAnalysis => "预算分析".to_string(),
@@ -227,6 +230,7 @@ impl NavItem {
             | NavItem::Settle
             | NavItem::ArapRecon
             | NavItem::Invoice
+            | NavItem::TaxDecl
             | NavItem::Automation => "期末",
             NavItem::Inventory
             | NavItem::InventoryDeep
@@ -281,6 +285,7 @@ impl NavItem {
             | NavItem::MonthBrief
             | NavItem::ProfitSheet
             | NavItem::CustomReport
+            | NavItem::TaxDecl
             | NavItem::BudgetAnalysis => Some(Perm::Report),
             NavItem::Funds | NavItem::Cost => Some(Perm::Report),
             NavItem::MultiColumn
@@ -338,6 +343,7 @@ impl NavItem {
             NavItem::Settle,
             NavItem::ArapRecon,
             NavItem::Invoice,
+            NavItem::TaxDecl,
             NavItem::Automation,
             NavItem::Inventory,
             NavItem::InventoryDeep,
