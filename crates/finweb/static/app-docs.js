@@ -68,8 +68,8 @@ function soReceivableHtml(rows, outstanding) {
   const overdue = rows.filter((r) => Number(r.overdue_days) > 0).length;
   const overdue90 = rows.filter((r) => Number(r.overdue_days) > 90).length;
   const overdueCell = (r) => (Number(r.overdue_days) > 0
-    ? `<td class="warn"><b title="${esc(r.ship_date ? `账期从发货日 ${r.ship_date} 起算` : `未发货，账期从订单日 ${r.date} 起算`)}">逾期 ${r.overdue_days} 天</b></td>`
-    : `<td class="muted" title="${esc(r.ship_date ? `账期从发货日 ${r.ship_date} 起算` : `未发货，账期从订单日 ${r.date} 起算`)}">—</td>`);
+    ? `<td class="warn"><b title="${esc(`账期从 ${r.aging_start || r.date} 起算`)}">逾期 ${r.overdue_days} 天</b></td>`
+    : `<td class="muted" title="${esc(`账期从 ${r.aging_start || r.date} 起算`)}">—</td>`);
   const dunCell = (r) => (canDun
     ? `<td class="row-actions"><button class="btn ghost sm" data-dun="${esc(JSON.stringify({ code: r.customer_code, name: r.customer_name }))}">催款函</button></td>`
     : "");

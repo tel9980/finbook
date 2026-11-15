@@ -426,6 +426,39 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             overdue,
             "so-doc",
         ));
+        // 待开发票：已经发过货、但还没有任何有效销项发票的确认单
+        let uninvoiced = crate::sales::so_uninvoiced_count(db)?;
+        out.todos.push(todo(
+            "销售",
+            "so_uninvoiced",
+            "待开发票",
+            uninvoiced,
+            "invoices",
+        ));
+        // 快到期的应付：接下来 30 天内该付给供应商的钱（未核销应付按到期日归拢）
+        let opts = db.options();
+        let due_rows = crate::settle::ar_ap_due_schedule(
+            db,
+            &opts.biz_accounts.ar,
+            &opts.biz_accounts.ap,
+            cur,
+        )?;
+        let today = chrono::Local::now().date_naive();
+        let today_s = today.format("%Y-%m-%d").to_string();
+        let horizon = (today + chrono::Duration::days(30))
+            .format("%Y-%m-%d")
+            .to_string();
+        let ap_due_soon = due_rows
+            .iter()
+            .filter(|r| r.kind == "ap" && r.due_date >= today_s && r.due_date <= horizon)
+            .count() as i64;
+        out.todos.push(todo(
+            "采购",
+            "ap_due_soon",
+            "快到期的应付",
+            ap_due_soon,
+            "settle",
+        ));
     }
 
     // ---- 采购（订单权限，单据类型区分）----
@@ -926,6 +959,37 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             overdue,
             "so-doc",
         ));
+        let uninvoiced = crate::sales::so_uninvoiced_count(db)?;
+        todos.push(todo(
+            "销售",
+            "so_uninvoiced",
+            "待开发票",
+            uninvoiced,
+            "invoices",
+        ));
+        let opts = db.options();
+        let due_rows = crate::settle::ar_ap_due_schedule(
+            db,
+            &opts.biz_accounts.ar,
+            &opts.biz_accounts.ap,
+            cur,
+        )?;
+        let today = chrono::Local::now().date_naive();
+        let today_s = today.format("%Y-%m-%d").to_string();
+        let horizon = (today + chrono::Duration::days(30))
+            .format("%Y-%m-%d")
+            .to_string();
+        let ap_due_soon = due_rows
+            .iter()
+            .filter(|r| r.kind == "ap" && r.due_date >= today_s && r.due_date <= horizon)
+            .count() as i64;
+        todos.push(todo(
+            "采购",
+            "ap_due_soon",
+            "快到期的应付",
+            ap_due_soon,
+            "settle",
+        ));
     }
     // 仓管
     if user.can(Perm::Warehouse) {
@@ -1377,6 +1441,69 @@ mod tests {
         assert_eq!(t.label, "逾期应收待催收");
         assert_eq!(t.count, 1, "两张没结清，只有一张逾期，count 应为 1");
         assert_eq!(t.view, "so-doc", "点了该跳去销售单据页看谁还欠我钱");
+    }
+
+    #[test]
+    fn uninvoiced_orders_and_ap_due_soon_surface_as_todos() {
+        let db = mem();
+        let today = chrono::Local::now().date_naive();
+        let p = Period::from_date(today);
+        // 已发货但还没开票的确认单 → 待开发票
+        let mut so = crate::scm::SalesOrder::new(p, today, "C01", "客户甲", "u");
+        so.no = crate::scm::so_next_no(&db, p).unwrap();
+        so.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140501".into(),
+            item_name: "成品".into(),
+            qty_ordered: Money::parse("1").unwrap(),
+            qty_shipped: Money::ZERO,
+            unit_price: Money::parse("100").unwrap(),
+            tax_rate: Money::ZERO,
+            amount: Money::parse("100").unwrap(),
+            tax_amount: Money::ZERO,
+            memo: String::new(),
+        });
+        let so_id = crate::scm::so_save(&db, &mut so).unwrap();
+        crate::scm::so_set_status(&db, so_id, crate::scm::SoStatus::Confirmed).unwrap();
+        crate::sales::so_shipment_add(&db, so_id, p, today, Money::parse("1").unwrap(), "发")
+            .unwrap();
+        // 今天到期的应付（供应商没设账期 → 货到即付，到期日 = 单据日 = 今天）→ 快到期的应付
+        let mut v = fincore::voucher::Voucher::new(p, today, "记", 1);
+        let amt = Money::parse("500").unwrap();
+        v.push_entry(fincore::voucher::Entry {
+            debit: amt,
+            ..fincore::voucher::Entry::new(1, "660201", "采购办公费")
+        });
+        v.push_entry(fincore::voucher::Entry {
+            credit: amt,
+            aux: fincore::voucher::AuxRef {
+                supplier: Some("S01".into()),
+                ..Default::default()
+            },
+            ..fincore::voucher::Entry::new(2, "220201", "应付挂账")
+        });
+        let vid = crate::vouchers::save(&db, &mut v).unwrap();
+        crate::vouchers::post(&db, vid, "u").unwrap();
+
+        let admin = User::new("boss", "老板", Role::Admin);
+        let out = collect(&db, &admin, p, 6).unwrap();
+        let t1 = out
+            .todos
+            .iter()
+            .find(|t| t.key == "so_uninvoiced")
+            .expect("应有「待开发票」待办");
+        assert_eq!(t1.label, "待开发票");
+        assert_eq!(t1.count, 1, "已发货没开票的确认单只有一张");
+        assert_eq!(t1.view, "invoices", "点了该跳去发票管理页开票");
+        let t2 = out
+            .todos
+            .iter()
+            .find(|t| t.key == "ap_due_soon")
+            .expect("应有「快到期的应付」待办");
+        assert_eq!(t2.label, "快到期的应付");
+        assert_eq!(t2.count, 1, "今天到期的应付应算进 30 天窗口");
+        assert_eq!(t2.view, "settle", "点了该跳去往来核销页看该付谁的钱");
     }
 
     #[test]

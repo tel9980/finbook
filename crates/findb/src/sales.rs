@@ -830,6 +830,49 @@ pub fn so_shipment_dates(db: &Db) -> DbResult<std::collections::HashMap<i64, Str
     Ok(map)
 }
 
+/// 每张销售订单的**最早开票日**（账期起点可选口径）。
+///
+/// 开票记录不直接挂在订单上，而是通过 `docflow` 勾稽表关联：`so → invoice`。
+/// 只取销项发票、排除已作废的，`ORDER BY src_id, date` 后每个订单保留第一条即最早。
+/// 没开过票的订单不在这张表里（账期退回发货日，再退回订单日期）。
+pub fn so_invoice_dates(db: &Db) -> DbResult<std::collections::HashMap<i64, String>> {
+    let mut st = db.conn().prepare(
+        "SELECT dl.src_id, i.date FROM doc_link dl
+         JOIN invoice i ON i.id = dl.dst_id
+         WHERE dl.src_type = 'so' AND dl.dst_type = 'invoice'
+           AND i.kind = 'out' AND i.status != 'rejected'
+         ORDER BY dl.src_id, i.date",
+    )?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+    let mut map: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    for row in rows {
+        let (so_id, d) = row?;
+        map.entry(so_id).or_insert(d);
+    }
+    Ok(map)
+}
+
+/// 待开发票的销售订单数：已发货（至少发过一批）但还没有任何一张**有效销项发票**的确认单。
+///
+/// 发票与订单的关联在 docflow 勾稽表（`push_from_so` 下推发票时 `link_add("so",..,"invoice",..)`）；
+/// 「有效」= `kind='out'`（销项）且 `status!='rejected'`（作废的不算，得重新开）。
+/// 草稿/作废订单不发也不开票，直接排除。
+pub fn so_uninvoiced_count(db: &Db) -> DbResult<i64> {
+    let n = db.conn().query_row(
+        "SELECT COUNT(*) FROM sales_order o
+         WHERE o.status NOT IN ('Cancelled','Draft')
+           AND EXISTS (SELECT 1 FROM so_shipment s WHERE s.so_id = o.id)
+           AND NOT EXISTS (
+             SELECT 1 FROM doc_link dl JOIN invoice i ON i.id = dl.dst_id
+             WHERE dl.src_type = 'so' AND dl.src_id = o.id AND dl.dst_type = 'invoice'
+               AND i.kind = 'out' AND i.status != 'rejected'
+           )",
+        [],
+        |r| r.get::<_, i64>(0),
+    )?;
+    Ok(n)
+}
+
 // ===========================================================================
 // 统计 / 执行跟踪 / 信用管理
 
@@ -1021,6 +1064,7 @@ pub struct SoReceivable {
     pub no: String,
     pub date: String,
     pub ship_date: String,
+    pub aging_start: String,
     pub customer_code: String,
     pub customer_name: String,
     pub status: String,
@@ -1064,6 +1108,12 @@ fn so_receivable_as_of(db: &Db, today: chrono::NaiveDate) -> DbResult<Vec<SoRece
     let pay_days_map = crate::settle::customer_pay_days_map(db)?;
     let sums = so_payment_sums(db)?;
     let ship_dates = so_shipment_dates(db)?;
+    let use_invoice = db.options().ar_aging_start.trim() == "invoice";
+    let invoice_dates = if use_invoice {
+        so_invoice_dates(db)?
+    } else {
+        std::collections::HashMap::new()
+    };
     let mut out = Vec::new();
     for row in rows {
         let (id, no, date, cc, cn, status, total) = row?;
@@ -1074,8 +1124,16 @@ fn so_receivable_as_of(db: &Db, today: chrono::NaiveDate) -> DbResult<Vec<SoRece
         }
         let pay_days = pay_days_map.get(cc.trim()).copied().unwrap_or(0);
         let ship_date = ship_dates.get(&id).cloned().unwrap_or_default();
-        // 账龄起点：发过货就从「最早发货日」起算，没发货退回订单日期。
-        let aging_start = if ship_date.is_empty() {
+        // 账龄起点：开票日口径 → 发过票用「最早开票日」；否则发过货用「最早发货日」；
+        // 都没发生退回订单日期。
+        let aging_start = if use_invoice {
+            invoice_dates
+                .get(&id)
+                .cloned()
+                .filter(|d| !d.trim().is_empty())
+                .or_else(|| (!ship_date.is_empty()).then(|| ship_date.clone()))
+                .unwrap_or_else(|| date.clone())
+        } else if ship_date.is_empty() {
             date.clone()
         } else {
             ship_date.clone()
@@ -1089,6 +1147,7 @@ fn so_receivable_as_of(db: &Db, today: chrono::NaiveDate) -> DbResult<Vec<SoRece
             no,
             date,
             ship_date,
+            aging_start: aging_start.clone(),
             customer_code: cc,
             customer_name: cn,
             status: crate::scm::status_from::<crate::scm::SoStatus>(&status)
@@ -1500,6 +1559,249 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].pay_days, 30);
         assert_eq!(rows[0].overdue_days, 0, "账龄 2 天在账期 30 天内，不算逾期");
+    }
+
+    #[test]
+    fn so_invoice_dates_maps_earliest_valid_invoice_per_order() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mk = |code: &str| -> i64 {
+            let mut so = crate::scm::SalesOrder::new(
+                p,
+                NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                code,
+                "客户",
+                "u",
+            );
+            so.no = crate::scm::so_next_no(&db, p).unwrap();
+            so.lines.push(crate::scm::SoLine {
+                id: 0,
+                so_id: 0,
+                item_code: "140501".into(),
+                item_name: "成品".into(),
+                qty_ordered: m("1"),
+                qty_shipped: m("0"),
+                unit_price: m("100"),
+                tax_rate: m("0"),
+                amount: m("100"),
+                tax_amount: m("0"),
+                memo: String::new(),
+            });
+            let id = crate::scm::so_save(&db, &mut so).unwrap();
+            crate::scm::so_set_status(&db, id, crate::scm::SoStatus::Confirmed).unwrap();
+            id
+        };
+        let so1 = mk("C01");
+        let so2 = mk("C02");
+        let inv = |so_id: i64, date: &str, status: &str| -> i64 {
+            let inv = crate::invoices::Invoice {
+                id: 0,
+                kind: "out".into(),
+                code: String::new(),
+                number: format!("INV-{so_id}-{date}"),
+                date: date.into(),
+                buyer: String::new(),
+                seller: String::new(),
+                amount_tax: m("0"),
+                amount: m("0"),
+                tax: m("0"),
+                tax_rate: String::new(),
+                status: status.into(),
+                memo: String::new(),
+                attach_id: 0,
+                created_by: "t".into(),
+                created_at: String::new(),
+                updated_at: String::new(),
+            };
+            let id = crate::invoices::insert(&db, &inv, "t").unwrap();
+            crate::docflow::link_add(&db, "so", so_id, "invoice", id, "test").unwrap();
+            id
+        };
+        inv(so1, "2026-01-25", "pending");
+        inv(so1, "2026-01-15", "rejected"); // 作废的应被排除
+        inv(so1, "2026-01-20", "verified");
+        let map = so_invoice_dates(&db).unwrap();
+        assert_eq!(map.get(&so1).map(String::as_str), Some("2026-01-20"));
+        assert!(
+            !map.contains_key(&so2),
+            "没开过票的订单不该出现在开票日表里"
+        );
+    }
+
+    #[test]
+    fn so_uninvoiced_count_only_flags_shipped_orders_without_valid_invoice() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mk = |code: &str| -> i64 {
+            let mut so = crate::scm::SalesOrder::new(
+                p,
+                NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                code,
+                "客户",
+                "u",
+            );
+            so.no = crate::scm::so_next_no(&db, p).unwrap();
+            so.lines.push(crate::scm::SoLine {
+                id: 0,
+                so_id: 0,
+                item_code: "140501".into(),
+                item_name: "成品".into(),
+                qty_ordered: m("1"),
+                qty_shipped: m("0"),
+                unit_price: m("100"),
+                tax_rate: m("0"),
+                amount: m("100"),
+                tax_amount: m("0"),
+                memo: String::new(),
+            });
+            let id = crate::scm::so_save(&db, &mut so).unwrap();
+            crate::scm::so_set_status(&db, id, crate::scm::SoStatus::Confirmed).unwrap();
+            id
+        };
+        let ship = |so_id: i64| {
+            so_shipment_add(
+                &db,
+                so_id,
+                p,
+                NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+                m("1"),
+                "发",
+            )
+            .unwrap();
+        };
+        let inv = |so_id: i64, date: &str, status: &str| {
+            let inv = crate::invoices::Invoice {
+                id: 0,
+                kind: "out".into(),
+                code: String::new(),
+                number: format!("INV-{so_id}-{date}"),
+                date: date.into(),
+                buyer: String::new(),
+                seller: String::new(),
+                amount_tax: m("0"),
+                amount: m("0"),
+                tax: m("0"),
+                tax_rate: String::new(),
+                status: status.into(),
+                memo: String::new(),
+                attach_id: 0,
+                created_by: "t".into(),
+                created_at: String::new(),
+                updated_at: String::new(),
+            };
+            let id = crate::invoices::insert(&db, &inv, "t").unwrap();
+            crate::docflow::link_add(&db, "so", so_id, "invoice", id, "test").unwrap();
+            id
+        };
+        // so1：已发货、没开票 → 算待开发票
+        let so1 = mk("C01");
+        ship(so1);
+        // so2：已发货、只有一张作废发票 → 仍算待开发票（得重开）
+        let so2 = mk("C02");
+        ship(so2);
+        inv(so2, "2026-01-12", "rejected");
+        // so3：已发货、有有效发票 → 不算
+        let so3 = mk("C03");
+        ship(so3);
+        inv(so3, "2026-01-13", "verified");
+        // so4：没发货 → 不算（还没到开票那一步）
+        let _so4 = mk("C04");
+
+        assert_eq!(
+            so_uninvoiced_count(&db).unwrap(),
+            2,
+            "只有 so1 和 so2 待开发票"
+        );
+    }
+
+    #[test]
+    fn so_receivable_ages_from_invoice_when_configured() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mut opts = db.options();
+        opts.ar_aging_start = "invoice".to_string();
+        db.set_options(&opts).unwrap();
+
+        let mk = |code: &str, date: NaiveDate| -> i64 {
+            let mut so = crate::scm::SalesOrder::new(p, date, code, "客户", "u");
+            so.no = crate::scm::so_next_no(&db, p).unwrap();
+            so.lines.push(crate::scm::SoLine {
+                id: 0,
+                so_id: 0,
+                item_code: "140501".into(),
+                item_name: "成品".into(),
+                qty_ordered: m("10"),
+                qty_shipped: m("0"),
+                unit_price: m("10"),
+                tax_rate: m("0"),
+                amount: m("100"),
+                tax_amount: m("0"),
+                memo: String::new(),
+            });
+            let id = crate::scm::so_save(&db, &mut so).unwrap();
+            crate::scm::so_set_status(&db, id, crate::scm::SoStatus::Confirmed).unwrap();
+            id
+        };
+        // so1：有发货（01-10）也有开票（01-25）→ 从开票日 01-25 起算
+        let so1 = mk("C01", NaiveDate::from_ymd_opt(2026, 1, 5).unwrap());
+        so_shipment_add(
+            &db,
+            so1,
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            m("6"),
+            "发",
+        )
+        .unwrap();
+        let inv = crate::invoices::Invoice {
+            id: 0,
+            kind: "out".into(),
+            code: String::new(),
+            number: "INV-1".into(),
+            date: "2026-01-25".into(),
+            buyer: String::new(),
+            seller: String::new(),
+            amount_tax: m("0"),
+            amount: m("0"),
+            tax: m("0"),
+            tax_rate: String::new(),
+            status: "verified".into(),
+            memo: String::new(),
+            attach_id: 0,
+            created_by: "t".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let inv_id = crate::invoices::insert(&db, &inv, "t").unwrap();
+        crate::docflow::link_add(&db, "so", so1, "invoice", inv_id, "test").unwrap();
+
+        // so2：有发货（01-12）但没开票 → 退回发货日 01-12 起算
+        let so2 = mk("C02", NaiveDate::from_ymd_opt(2026, 1, 6).unwrap());
+        so_shipment_add(
+            &db,
+            so2,
+            p,
+            NaiveDate::from_ymd_opt(2026, 1, 12).unwrap(),
+            m("6"),
+            "发",
+        )
+        .unwrap();
+
+        // so3：既没发货也没开票 → 退回订单日 01-08 起算
+        let _so3 = mk("C03", NaiveDate::from_ymd_opt(2026, 1, 8).unwrap());
+
+        let today = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+        let rows = so_receivable_as_of(&db, today).unwrap();
+        let by_code = |code: &str| rows.iter().find(|r| r.customer_code == code).unwrap();
+        let r1 = by_code("C01");
+        assert_eq!(r1.aging_start, "2026-01-25");
+        assert_eq!(r1.overdue_days, 16, "02-10 − 01-25 = 16 天（无账期）");
+        let r2 = by_code("C02");
+        assert_eq!(r2.aging_start, "2026-01-12");
+        assert_eq!(r2.overdue_days, 29, "02-10 − 01-12 = 29 天");
+        let r3 = by_code("C03");
+        assert_eq!(r3.aging_start, "2026-01-08");
+        assert_eq!(r3.overdue_days, 33, "02-10 − 01-08 = 33 天");
     }
 
     #[test]

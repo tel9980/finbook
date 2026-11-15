@@ -321,6 +321,7 @@ pub fn build(path: &Path) {
         biz_accounts: Default::default(),
         budget_control: String::new(),
         doc_prefixes: Default::default(),
+        ar_aging_start: "ship".into(),
         require_audit: false,
         voucher_words: fincore::chart::default_voucher_words(),
         print: Default::default(),

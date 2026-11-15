@@ -733,6 +733,12 @@ pub struct BookOptions {
     /// 单据号前缀自定义（键：po/so/req/quo/prod；空/缺省用内置默认 CG/XS/QG/BJ/SC）
     #[serde(default)]
     pub doc_prefixes: std::collections::BTreeMap<String, String>,
+    /// 应收账款账龄起点口径：`ship`=发货日（默认，没发过货退回订单日）、
+    /// `invoice`=开票日（没开过票退回发货日，再退回订单日）。
+    ///
+    /// 旧账套没有该字段时按发货日处理（`#[serde(default)]`），不追溯改存量口径。
+    #[serde(default)]
+    pub ar_aging_start: String,
     /// 打印版式（纸张方向/字号/页边距/页码/落款）
     ///
     /// 存在账套参数里而不是本机配置：同一份报表在办公室和宿舍两台电脑上打出两种
@@ -799,6 +805,7 @@ impl Default for BookOptions {
             biz_accounts: BizAccounts::default(),
             budget_control: String::new(),
             doc_prefixes: std::collections::BTreeMap::new(),
+            ar_aging_start: "ship".to_string(),
             print: crate::print::PrintOptions::default(),
             voucher_words: vec!["记".to_string()],
         }
@@ -831,6 +838,7 @@ impl BookOptions {
         self.enable_production = false;
         self.budget_control = String::new();
         self.doc_prefixes.clear();
+        self.ar_aging_start = "ship".to_string();
         self.print = crate::print::PrintOptions::default();
     }
 
@@ -924,6 +932,13 @@ impl BookOptions {
             out.push(format!(
                 "预算控制只能是 关闭/warn/strong，当前是「{}」（认不出的值按关闭处理）",
                 self.budget_control.trim()
+            ));
+        }
+        if !matches!(self.ar_aging_start.trim(), "" | "ship" | "invoice") {
+            // 认不出的值会被当成「发货日」，用户以为开了开票日口径，其实一直没生效
+            out.push(format!(
+                "应收账款账龄起点只能是 发货日/开票日，当前是「{}」（认不出的值按发货日处理）",
+                self.ar_aging_start.trim()
             ));
         }
         const PREFIX_KEYS: [&str; 5] = ["po", "so", "req", "quo", "prod"];

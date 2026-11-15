@@ -556,6 +556,7 @@ impl LoginView {
             biz_accounts: Default::default(),
             budget_control: String::new(),
             doc_prefixes: Default::default(),
+            ar_aging_start: "ship".to_string(),
             require_audit: false, // 审核环节已移除（未记账 → 记账两态）
             print: Default::default(),
             voucher_words: fincore::chart::default_voucher_words(),

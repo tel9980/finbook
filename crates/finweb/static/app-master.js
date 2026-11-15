@@ -898,7 +898,7 @@ function openAuxEditor(main, ent, kind) {
     <h3>${isEdit ? "编辑档案" : "新增档案"}（${esc(AUX_KINDS.find((k) => k.code === kind).label)}）</h3>
     <div class="field"><label>编码 *</label><input id="au-code" value="${esc(e.code)}" /></div>
     <div class="field"><label>名称 *</label><input id="au-name" value="${esc(e.name)}" /></div>
-    ${kind === "customer" ? `<div class="field"><label>信用额度（0 = 不限；超出后订单「确认」被拒）</label><input id="au-credit" value="${esc((e.props && e.props.credit_limit) || "0")}" /></div><div class="field"><label>账期（天，留空 = 货到即付；到期按发货日起算）</label><input id="au-paydays" value="${esc((e.props && e.props.pay_days) || "")}" placeholder="如 30" /></div>` : ""}
+    ${kind === "customer" ? `<div class="field"><label>信用额度（0 = 不限；超出后订单「确认」被拒）</label><input id="au-credit" value="${esc((e.props && e.props.credit_limit) || "0")}" /></div><div class="field"><label>账期（天，留空 = 货到即付；到期按账套参数里的账龄起点算）</label><input id="au-paydays" value="${esc((e.props && e.props.pay_days) || "")}" placeholder="如 30" /></div>` : ""}
     ${kind === "item" ? `<div class="field"><label>保质期天数（0 = 不启用批次效期）</label><input id="au-shelf" value="${esc((e.props && e.props.shelf_life_days) || "0")}" /></div><div class="field"><label style="display:flex;gap:6px;align-items:center;font-weight:400"><input type="checkbox" id="au-qc" ${e.props && (e.props.qc_required === "1" || e.props.qc_required === "true") ? "checked" : ""} /> 启用来料检验（到货先入待检，质检转正后才可用）</label></div>
     <div class="field" style="display:flex;gap:12px;flex-wrap:wrap">
       <div><label>安全库存（低库存预警口径）</label><input id="au-safety" placeholder="0 = 不预警" style="width:130px" /></div>
@@ -1027,6 +1027,7 @@ async function viewOptions(main) {
         <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-cashier" ${o.require_cashier ? "checked" : ""} />出纳签字（涉及现金/银行的凭证记账前须签字）</label>
         <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-production" ${o.enable_production ? "checked" : ""} />启用生产制造（MRP / 排产 / 工序报工）</label>
         <label>预算控制 <select id="op-budget"><option value="" ${!o.budget_control ? "selected" : ""}>关闭</option><option value="warn" ${o.budget_control === "warn" ? "selected" : ""}>超预算提醒（放行）</option><option value="strong" ${o.budget_control === "strong" ? "selected" : ""}>超预算强控（拒绝保存）</option></select></label>
+        <label>应收账款账龄起点 <select id="op-aging-start"><option value="ship" ${(!o.ar_aging_start || o.ar_aging_start === "ship") ? "selected" : ""}>发货日（无发货退回订单日）</option><option value="invoice" ${o.ar_aging_start === "invoice" ? "selected" : ""}>开票日（无开票退回发货日）</option></select></label>
         <label>单据前缀 <input id="op-pfx-po" value="${esc(((o.doc_prefixes || {}).po) || "")}" placeholder="CG" title="采购订单" style="width:56px" /> <input id="op-pfx-so" value="${esc(((o.doc_prefixes || {}).so) || "")}" placeholder="XS" title="销售订单" style="width:56px" /> <input id="op-pfx-req" value="${esc(((o.doc_prefixes || {}).req) || "")}" placeholder="QG" title="请购单" style="width:56px" /> <input id="op-pfx-quo" value="${esc(((o.doc_prefixes || {}).quo) || "")}" placeholder="BJ" title="报价单" style="width:56px" /> <input id="op-pfx-prod" value="${esc(((o.doc_prefixes || {}).prod) || "")}" placeholder="SC" title="生产订单" style="width:56px" /></label>
       </div>
       <p class="muted" style="font-size:12px">启用期间与科目级长影响科目编码校验与凭证编号，修改请谨慎；已开账后不建议改动。</p>
@@ -1137,6 +1138,7 @@ async function viewOptions(main) {
       enable_production: $("#op-production").checked,
       require_cashier: $("#op-cashier").checked,
       budget_control: $("#op-budget").value,
+      ar_aging_start: $("#op-aging-start").value,
       doc_prefixes: {
         po: $("#op-pfx-po").value.trim(), so: $("#op-pfx-so").value.trim(),
         req: $("#op-pfx-req").value.trim(), quo: $("#op-pfx-quo").value.trim(),

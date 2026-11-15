@@ -2284,15 +2284,15 @@ const MUT = [
   {
     name: "124 账龄起点退回订单日期（发货日没接上）",
     file: "crates/findb/src/sales.rs",
-    from: "        let aging_start = if ship_date.is_empty() {\n            date.clone()\n        } else {\n            ship_date.clone()\n        };",
-    to: "        let aging_start = date.clone();",
+    from: "        } else if ship_date.is_empty() {\n            date.clone()\n        } else {\n            ship_date.clone()\n        };",
+    to: "        } else if ship_date.is_empty() {\n            date.clone()\n        } else {\n            date.clone()\n        };",
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
   },
   {
     name: "125 没发货也拿空发货日当账龄起点（账龄变成 0）",
     file: "crates/findb/src/sales.rs",
-    from: "        let aging_start = if ship_date.is_empty() {\n            date.clone()\n        } else {\n            ship_date.clone()\n        };",
-    to: "        let aging_start = ship_date.clone();",
+    from: "        } else if ship_date.is_empty() {\n            date.clone()\n        } else {\n            ship_date.clone()\n        };",
+    to: "        } else if false {\n            date.clone()\n        } else {\n            ship_date.clone()\n        };",
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_lists_unsettled_orders_by_balance"],
   },
   {
@@ -2421,6 +2421,34 @@ const MUT = [
     from: "    for (table, col) in [(\"so_line\", \"qty_shipped\"), (\"po_line\", \"qty_received\")] {",
     to: "    for (table, col) in [(\"so_line\", \"qty_shipped\")] {",
     cmd: ["test", "-p", "findb", "--lib", "schema::tests::old_book_upgrade_drops_redundant_line_progress_columns"],
+  },
+  {
+    name: "144 开票日表没排除作废发票（账龄起点用错到作废那张）",
+    file: "crates/findb/src/sales.rs",
+    from: "         WHERE dl.src_type = 'so' AND dl.dst_type = 'invoice'\n           AND i.kind = 'out' AND i.status != 'rejected'\n         ORDER BY dl.src_id, i.date\",",
+    to: "         WHERE dl.src_type = 'so' AND dl.dst_type = 'invoice'\n           AND i.kind = 'out'\n          ORDER BY dl.src_id, i.date\",",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_invoice_dates_maps_earliest_valid_invoice_per_order"],
+  },
+  {
+    name: "145 账龄起点设了开票日却退回发货日（开关没接上）",
+    file: "crates/findb/src/sales.rs",
+    from: "    let use_invoice = db.options().ar_aging_start.trim() == \"invoice\";",
+    to: "    let use_invoice = false;",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_receivable_ages_from_invoice_when_configured"],
+  },
+  {
+    name: "146 待开发票把没发货的也算进来（提前催开票）",
+    file: "crates/findb/src/sales.rs",
+    from: "         WHERE o.status NOT IN ('Cancelled','Draft')\n           AND EXISTS (SELECT 1 FROM so_shipment s WHERE s.so_id = o.id)\n           AND NOT EXISTS (",
+    to: "         WHERE o.status NOT IN ('Cancelled','Draft')\n           AND NOT EXISTS (",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_uninvoiced_count_only_flags_shipped_orders_without_valid_invoice"],
+  },
+  {
+    name: "147 快到期的应付把今天到期的漏掉（窗口不含今天）",
+    file: "crates/findb/src/workbench.rs",
+    from: "            .filter(|r| r.kind == \"ap\" && r.due_date >= today_s && r.due_date <= horizon)\n            .count() as i64;\n        out.todos.push(todo(",
+    to: "            .filter(|r| r.kind == \"ap\" && r.due_date > today_s && r.due_date <= horizon)\n            .count() as i64;\n        out.todos.push(todo(",
+    cmd: ["test", "-p", "findb", "--lib", "workbench::tests::uninvoiced_orders_and_ap_due_soon_surface_as_todos"],
   },
 
 ];
