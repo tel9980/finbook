@@ -1176,6 +1176,27 @@ pub(super) async fn get_credit_check(
     })))
 }
 
+/// 某客户某物料的历史成交参考价（上次成交价 + 历史最低价），报价单/订单开单带出。
+pub(super) async fn get_item_price_history(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::OrderOps)?;
+    let db = &user.db;
+    let customer = q.get("customer").cloned().unwrap_or_default();
+    let item = q.get("item").cloned().unwrap_or_default();
+    let found = findb::sales::customer_item_price_history(db, &customer, &item)?;
+    Ok(Json(match found {
+        Some((last, min)) => serde_json::json!({
+            "found": true,
+            "last_price": last.fmt_money(),
+            "min_price": min.fmt_money(),
+        }),
+        None => serde_json::json!({ "found": false }),
+    }))
+}
+
 pub(super) async fn get_so_track(
     State(state): State<Arc<WebState>>,
     user: CurrentUser,

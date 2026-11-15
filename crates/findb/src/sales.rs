@@ -1206,6 +1206,34 @@ pub fn customer_credit_limit(db: &Db, customer_code: &str) -> DbResult<Money> {
     Ok(map.get("credit_limit").map(|s| m(s)).unwrap_or(Money::ZERO))
 }
 
+/// 某客户买某物料的历史成交价（从**已确认**销售订单明细取，排除草稿和作废单）。
+/// 返回 `(上次成交价, 历史最低价)`；没有成交历史时返回 `None`。
+/// 供报价单/销售订单开单时带出参考价。
+pub fn customer_item_price_history(
+    db: &Db,
+    customer_code: &str,
+    item_code: &str,
+) -> DbResult<Option<(Money, Money)>> {
+    let mut st = db.conn().prepare(
+        "SELECT l.unit_price FROM so_line l JOIN sales_order o ON o.id = l.so_id \
+         WHERE o.customer_code = ?1 AND l.item_code = ?2 AND o.status NOT IN ('Cancelled','Draft') \
+         ORDER BY o.date DESC, o.id DESC",
+    )?;
+    let mut prices: Vec<Money> = Vec::new();
+    let rows = st.query_map([customer_code, item_code], |r| {
+        let s: String = r.get(0)?;
+        Ok(Money::parse_or_zero(&s))
+    })?;
+    for p in rows {
+        prices.push(p?);
+    }
+    let Some(last) = prices.first().copied() else {
+        return Ok(None);
+    };
+    let min = prices.iter().copied().min().unwrap_or(last);
+    Ok(Some((last, min)))
+}
+
 /// 信用检查：某客户**已确认**订单占用（订单总额 − 已收款）是否超额度。
 /// 对标金蝶：草稿订单不占用信用（可自由编辑/废弃），确认起才形成承诺；
 /// 返回 (累计占用, 信用额度, 是否超限)。
@@ -1955,6 +1983,102 @@ mod tests {
         assert_eq!(sums.get(&so1).copied(), Some(m("1500")));
         assert_eq!(sums.get(&so2).copied(), Some(m("500")));
         assert_eq!(sums.get(&so3), None, "没收过款的单不进汇总表");
+    }
+
+    #[test]
+    fn customer_item_price_history_returns_last_and_min() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mk = |code: &str, item: &str, price: &str, date: &str, status: crate::scm::SoStatus| {
+            let mut so = crate::scm::SalesOrder::new(
+                p,
+                NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(),
+                code,
+                "客户",
+                "u",
+            );
+            so.no = crate::scm::so_next_no(&db, p).unwrap();
+            so.lines.push(crate::scm::SoLine {
+                id: 0,
+                so_id: 0,
+                item_code: item.into(),
+                item_name: "成品".into(),
+                qty_ordered: m("1"),
+                qty_shipped: m("0"),
+                unit_price: m(price),
+                tax_rate: m("0"),
+                amount: m(price),
+                tax_amount: m("0"),
+                memo: String::new(),
+            });
+            let id = crate::scm::so_save(&db, &mut so).unwrap();
+            crate::scm::so_set_status(&db, id, status).unwrap();
+            id
+        };
+        // C01 买 140501 的历史：1-05 价 100、1-20 价 80（最低）、1-25 价 90（上次成交）
+        mk(
+            "C01",
+            "140501",
+            "100",
+            "2026-01-05",
+            crate::scm::SoStatus::Confirmed,
+        );
+        mk(
+            "C01",
+            "140501",
+            "80",
+            "2026-01-20",
+            crate::scm::SoStatus::Confirmed,
+        );
+        mk(
+            "C01",
+            "140501",
+            "90",
+            "2026-01-25",
+            crate::scm::SoStatus::Confirmed,
+        );
+        // 草稿和作废的不算成交
+        mk(
+            "C01",
+            "140501",
+            "5",
+            "2026-01-30",
+            crate::scm::SoStatus::Draft,
+        );
+        mk(
+            "C01",
+            "140501",
+            "5",
+            "2026-01-31",
+            crate::scm::SoStatus::Cancelled,
+        );
+        // 别的客户/别的物料不影响
+        mk(
+            "C02",
+            "140501",
+            "999",
+            "2026-01-25",
+            crate::scm::SoStatus::Confirmed,
+        );
+        mk(
+            "C01",
+            "140502",
+            "999",
+            "2026-01-25",
+            crate::scm::SoStatus::Confirmed,
+        );
+
+        let (last, min) = customer_item_price_history(&db, "C01", "140501")
+            .unwrap()
+            .expect("应有成交历史");
+        assert_eq!(last, m("90"), "上次成交价 = 最近一张已确认单");
+        assert_eq!(min, m("80"), "历史最低价 = 所有已确认单里的最小单价");
+        assert!(
+            customer_item_price_history(&db, "C03", "140501")
+                .unwrap()
+                .is_none(),
+            "没成交过的客户应返回 None"
+        );
     }
 
     #[test]

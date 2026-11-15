@@ -47,6 +47,27 @@ fn seed(db: &Db, n: i64) {
         let so_id = findb::scm::so_save(db, &mut so).unwrap();
         findb::scm::so_set_status(db, so_id, findb::scm::SoStatus::Confirmed).unwrap();
         findb::sales::so_shipment_add(db, so_id, p, d, Money::parse("6").unwrap(), "发").unwrap();
+        // 销售出库（存货收发存/成本结转的数据源）
+        findb::business::stock_insert(
+            db,
+            &findb::business::StockMove {
+                id: 0,
+                period: p,
+                biz_date: d,
+                kind: findb::business::StockKind::Sale,
+                item: "140501".into(),
+                warehouse: "主仓".into(),
+                batch_no: String::new(),
+                qty: Money::parse("-6").unwrap(),
+                price: Money::ZERO,
+                amount: Money::ZERO,
+                voucher_id: None,
+                memo: String::new(),
+            },
+        )
+        .unwrap();
+        // 销项发票（开票汇总的数据源）
+        findb::invoices::push_from_so(db, so_id, "u").unwrap();
         let mut v = Voucher::new(p, d, "记", (i + 1) as i32);
         v.push_entry(Entry {
             debit: Money::parse("1000").unwrap(),
@@ -85,6 +106,27 @@ fn seed(db: &Db, n: i64) {
         });
         let po_id = findb::scm::po_save(db, &mut po).unwrap();
         findb::scm::po_set_status(db, po_id, findb::scm::PoStatus::Confirmed).unwrap();
+        // 采购入库（存货收发存/成本结转的数据源）
+        findb::business::stock_insert(
+            db,
+            &findb::business::StockMove {
+                id: 0,
+                period: p,
+                biz_date: d,
+                kind: findb::business::StockKind::Purchase,
+                item: "140301".into(),
+                warehouse: "主仓".into(),
+                batch_no: String::new(),
+                qty: Money::parse("10").unwrap(),
+                price: Money::parse("80").unwrap(),
+                amount: Money::parse("800").unwrap(),
+                voucher_id: None,
+                memo: String::new(),
+            },
+        )
+        .unwrap();
+        // 进项发票（开票汇总的数据源）
+        findb::invoices::push_from_po(db, po_id, "u").unwrap();
         let mut v2 = Voucher::new(p, d, "记", (n + i + 1) as i32);
         v2.push_entry(Entry {
             debit: Money::parse("800").unwrap(),
@@ -166,12 +208,67 @@ fn bench_month_close(c: &mut Criterion) {
     });
 }
 
+/// 发票台账汇总（进项/销项金额与税额）—— 开票相关的报表热读。
+fn bench_invoice_summary(c: &mut Criterion) {
+    let db = Db::in_memory(&bench_opts()).unwrap();
+    seed(&db, 500);
+    c.bench_function("invoice_summary_500往来", |b| {
+        b.iter(|| black_box(findb::invoices::summary(black_box(&db)).unwrap()));
+    });
+}
+
+/// 存货收发存汇总（逐存货重放流水 + 计价）—— 库存报表热读。
+fn bench_stock_summary(c: &mut Criterion) {
+    let db = Db::in_memory(&bench_opts()).unwrap();
+    seed(&db, 500);
+    let p = Period::new(2026, 6).unwrap();
+    c.bench_function("stock_summary_500往来", |b| {
+        b.iter(|| {
+            black_box(
+                findb::business::stock_summary(
+                    black_box(&db),
+                    p,
+                    fincore::engine::CostMethod::MonthAverage,
+                )
+                .unwrap(),
+            )
+        });
+    });
+}
+
+/// 期末成本结转（逐存货算应结转成本与调整额）—— 成本结转报表热读。
+fn bench_period_end_cost(c: &mut Criterion) {
+    let db = Db::in_memory(&bench_opts()).unwrap();
+    seed(&db, 500);
+    let p = Period::new(2026, 6).unwrap();
+    c.bench_function("period_end_cost_500往来", |b| {
+        b.iter(|| black_box(findb::business::period_end_cost(black_box(&db), p, false).unwrap()));
+    });
+}
+
+/// 工作台全量在 5000 单规模 —— 专门用来暴露「数据量一大就 O(n²)」的隐性退化。
+fn bench_workbench_collect_5000(c: &mut Criterion) {
+    let db = Db::in_memory(&bench_opts()).unwrap();
+    seed(&db, 5000);
+    let p = Period::new(2026, 6).unwrap();
+    let admin = User::new("boss", "老板", Role::Admin);
+    c.bench_function("workbench_collect_5000往来", |b| {
+        b.iter(|| {
+            black_box(findb::workbench::collect(black_box(&db), black_box(&admin), p, 6).unwrap())
+        });
+    });
+}
+
 criterion_group!(
     hot_reads,
     bench_so_receivable,
     bench_aging,
     bench_due_schedule,
     bench_workbench_collect,
-    bench_month_close
+    bench_month_close,
+    bench_invoice_summary,
+    bench_stock_summary,
+    bench_period_end_cost,
+    bench_workbench_collect_5000
 );
 criterion_main!(hot_reads);

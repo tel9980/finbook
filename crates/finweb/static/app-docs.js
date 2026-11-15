@@ -283,6 +283,7 @@ async function viewSoDoc(main) {
       <label>工艺 <input id="sd-proc" style="width:88px" placeholder="硬质氧化" /></label>
       <label>数量 <input id="sd-qty" style="width:70px" /></label>
       <label>单价 <input id="sd-price" style="width:80px" /></label>
+      <span id="sd-price-history" class="muted" style="font-size:12px" title="该客户买该物料的历史成交参考"></span>
       <button class="btn ghost sm" id="sd-line" title="按价目表算这一行：规格折成计价数量、按数量挑档、不足起步价兜底">按价目表算</button>
       <button class="btn ghost sm" id="sd-quote" title="按「加工费规则」算价：面积×单价，不足最低收费兜底，加急另加">按规则报价</button>
       <button class="btn primary" id="sd-save">保存报价单</button>
@@ -388,6 +389,22 @@ async function viewSoDoc(main) {
   $("#so-new").onclick = () => openOrderEditor("so", main, null);
   $("#sn-reload").addEventListener("click", snLoad);
   snLoad();
+  // 历史成交参考价：客户 + 物料都填了就拉一下「上次成交 / 历史最低」，纯提示、不拦单。
+  const refreshPriceHistory = async () => {
+    const el = $("#sd-price-history");
+    if (!el) return;
+    const cust = $("#sd-cust").value.trim();
+    const item = $("#sd-item").value.trim();
+    if (!cust || !item) { el.textContent = ""; return; }
+    try {
+      const r = await api(`/sales/item-price-history?${new URLSearchParams({ customer: cust, item })}`);
+      el.textContent = r.found
+        ? `上次 ${fmtMoney(r.last_price)} · 最低 ${fmtMoney(r.min_price)}`
+        : "无成交历史";
+    } catch (e) { el.textContent = ""; }
+  };
+  $("#sd-cust").addEventListener("blur", refreshPriceHistory);
+  $("#sd-item").addEventListener("blur", refreshPriceHistory);
   // 加工费规则一键报价：计价口径在 findb::processfee（面积×单价 → 最低收费兜底 → 加急），
   // 界面只负责把结果填进单价框，不自己算——同一套规则在网页、桌面各算一遍早晚差一分钱。
   // 单价填「合计 / 数量」（保留 4 位），这样报价单金额正好等于规则算出来的合计；

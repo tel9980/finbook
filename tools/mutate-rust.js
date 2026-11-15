@@ -2478,6 +2478,20 @@ const MUT = [
     to: "        let (po_id, qty) = row?;\n        let e = map.entry(po_id).or_insert(Money::ZERO);\n        *e = m(&qty);",
     cmd: ["test", "-p", "findb", "--lib", "procurement::tests::po_receipt_sums_aggregates_across_orders"],
   },
+  {
+    name: "152 历史成交价把草稿/作废单也算进去（最低价被占位价拉低）",
+    file: "crates/findb/src/sales.rs",
+    from: "WHERE o.customer_code = ?1 AND l.item_code = ?2 AND o.status NOT IN ('Cancelled','Draft')",
+    to: "WHERE o.customer_code = ?1 AND l.item_code = ?2 AND 1=1",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::customer_item_price_history_returns_last_and_min"],
+  },
+  {
+    name: "153 快到期的应收把应收/应付筛反（ar 写成 ap，应收窗口读到应付的钱）",
+    file: "crates/findb/src/workbench.rs",
+    from: "        // 快到期的应收：接下来 30 天内该收客户的钱（未核销应收按到期日归拢）\n        let ar_due_soon_rows: Vec<_> = due_rows\n            .iter()\n            .filter(|r| r.kind == \"ar\" && r.due_date >= today_s && r.due_date <= horizon)",
+    to: "        // 快到期的应收：接下来 30 天内该收客户的钱（未核销应收按到期日归拢）\n        let ar_due_soon_rows: Vec<_> = due_rows\n            .iter()\n            .filter(|r| r.kind == \"ap\" && r.due_date >= today_s && r.due_date <= horizon)",
+    cmd: ["test", "-p", "findb", "--lib", "workbench::tests::uninvoiced_orders_and_ap_due_soon_surface_as_todos"],
+  },
 
 ];
 

@@ -488,6 +488,26 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             "settle",
             ap_detail,
         ));
+        // 快到期的应收：接下来 30 天内该收客户的钱（未核销应收按到期日归拢）
+        let ar_due_soon_rows: Vec<_> = due_rows
+            .iter()
+            .filter(|r| r.kind == "ar" && r.due_date >= today_s && r.due_date <= horizon)
+            .collect();
+        let ar_due_soon = ar_due_soon_rows.len() as i64;
+        let ar_detail = ar_due_soon_rows
+            .iter()
+            .map(|r| r.due_date.as_str())
+            .min()
+            .map(|d| format!("最早到期 {d}"))
+            .unwrap_or_default();
+        out.todos.push(todo_with_detail(
+            "销售",
+            "ar_due_soon",
+            "快到期的应收",
+            ar_due_soon,
+            "settle",
+            ar_detail,
+        ));
     }
 
     // ---- 采购（订单权限，单据类型区分）----
@@ -1032,6 +1052,26 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             "settle",
             ap_detail,
         ));
+        // 快到期的应收：接下来 30 天内该收客户的钱
+        let ar_due_soon_rows: Vec<_> = due_rows
+            .iter()
+            .filter(|r| r.kind == "ar" && r.due_date >= today_s && r.due_date <= horizon)
+            .collect();
+        let ar_due_soon = ar_due_soon_rows.len() as i64;
+        let ar_detail = ar_due_soon_rows
+            .iter()
+            .map(|r| r.due_date.as_str())
+            .min()
+            .map(|d| format!("最早到期 {d}"))
+            .unwrap_or_default();
+        todos.push(todo_with_detail(
+            "销售",
+            "ar_due_soon",
+            "快到期的应收",
+            ar_due_soon,
+            "settle",
+            ar_detail,
+        ));
     }
     // 仓管
     if user.can(Perm::Warehouse) {
@@ -1527,6 +1567,41 @@ mod tests {
         });
         let vid = crate::vouchers::save(&db, &mut v).unwrap();
         crate::vouchers::post(&db, vid, "u").unwrap();
+        // 今天到期的应收（客户没设账期 → 货到即付，到期日 = 单据日 = 今天）→ 快到期的应收
+        let mut ar = fincore::voucher::Voucher::new(p, today, "记", 2);
+        let aramt = Money::parse("800").unwrap();
+        ar.push_entry(fincore::voucher::Entry {
+            debit: aramt,
+            aux: fincore::voucher::AuxRef {
+                customer: Some("C01".into()),
+                ..Default::default()
+            },
+            ..fincore::voucher::Entry::new(1, "112201", "应收挂账")
+        });
+        ar.push_entry(fincore::voucher::Entry {
+            credit: aramt,
+            ..fincore::voucher::Entry::new(2, "600101", "销售主营")
+        });
+        let arvid = crate::vouchers::save(&db, &mut ar).unwrap();
+        crate::vouchers::post(&db, arvid, "u").unwrap();
+        // 第二个今天到期的应收（另一个客户）→ 应收窗口是 2 张，不是 1 张；
+        // 这样「应收/应付筛反」的变异能被 count 抓出来（筛反后应收窗口会读到应付那张，只剩 1）。
+        let mut ar2 = fincore::voucher::Voucher::new(p, today, "记", 3);
+        let ar2amt = Money::parse("300").unwrap();
+        ar2.push_entry(fincore::voucher::Entry {
+            debit: ar2amt,
+            aux: fincore::voucher::AuxRef {
+                customer: Some("C02".into()),
+                ..Default::default()
+            },
+            ..fincore::voucher::Entry::new(1, "112201", "应收挂账")
+        });
+        ar2.push_entry(fincore::voucher::Entry {
+            credit: ar2amt,
+            ..fincore::voucher::Entry::new(2, "600101", "销售主营")
+        });
+        let ar2vid = crate::vouchers::save(&db, &mut ar2).unwrap();
+        crate::vouchers::post(&db, ar2vid, "u").unwrap();
 
         let admin = User::new("boss", "老板", Role::Admin);
         let out = collect(&db, &admin, p, 6).unwrap();
@@ -1555,6 +1630,19 @@ mod tests {
             t2.detail,
             format!("最早到期 {}", today.format("%Y-%m-%d")),
             "快到期的应付应提示最早到期日期"
+        );
+        let t3 = out
+            .todos
+            .iter()
+            .find(|t| t.key == "ar_due_soon")
+            .expect("应有「快到期的应收」待办");
+        assert_eq!(t3.label, "快到期的应收");
+        assert_eq!(t3.count, 2, "今天到期的两张应收都应算进 30 天窗口");
+        assert_eq!(t3.view, "settle", "点了该跳去往来核销页看该收谁的钱");
+        assert_eq!(
+            t3.detail,
+            format!("最早到期 {}", today.format("%Y-%m-%d")),
+            "快到期的应收应提示最早到期日期"
         );
     }
 
