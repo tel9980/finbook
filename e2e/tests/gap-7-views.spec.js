@@ -232,8 +232,10 @@ test("MPS 排产：手工需求运算 → 下达成生产订单 → 粗排写回
   // 无库存无在制 → 计划量 = 需求 6
   await expect(page.locator("#mps-table")).toContainText("待下达", { timeout: 5_000 });
 
-  // 下达 → 生成生产订单，行状态变「已下达」，计划量转 MRP 才有东西可转
+  // 下达 → v1.8.119 起先弹「选工艺版本」模态框，确认后生成生产订单，行状态变「已下达」
   await page.locator("[data-mps-go]").first().click();
+  await expect(page.locator("#mps-go-save")).toBeVisible({ timeout: 15_000 });
+  await page.click("#mps-go-save");
   await expect(page.locator("#mps-table")).toContainText("已下达", { timeout: 15_000 });
   await expect(page.locator("#mps-table")).not.toContainText("待下达", { timeout: 5_000 });
 
