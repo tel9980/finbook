@@ -153,16 +153,99 @@ pub struct WipRow {
     pub total: Money,
 }
 
+/// 批量取多个生产订单的归集成本（材料/人工/制造费用），避免逐单查询的 N+1。
+///
+/// `get_prod_cost` 对每个订单跑 3 条 `GROUP_CONCAT`（material/labor/overhead 各一条），
+/// `wip_cost` 原来对有 N 个未完工订单的账套就是 3N 次查询。这里一条 `IN` 扫全、
+/// Rust 侧按 po_id + cost_type 累加，口径与 `get_prod_cost` 完全一致（都是把
+/// `prod_cost.amount` 解析成 Money 累加，不碰 TEXT 列的 SQL SUM）。
+fn prod_cost_summary(
+    db: &Db,
+    po_ids: &[i64],
+) -> DbResult<std::collections::HashMap<i64, (Money, Money, Money)>> {
+    let mut out = std::collections::HashMap::new();
+    if po_ids.is_empty() {
+        return Ok(out);
+    }
+    let ph = po_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("SELECT po_id, cost_type, amount FROM prod_cost WHERE po_id IN ({ph})");
+    let mut st = db.conn().prepare(&sql)?;
+    let ids: Vec<&dyn rusqlite::ToSql> = po_ids.iter().map(|i| i as &dyn rusqlite::ToSql).collect();
+    let rows = st.query_map(ids.as_slice(), |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+        ))
+    })?;
+    for row in rows {
+        let (po_id, cost_type, amount) = row?;
+        let (m, l, o) = out
+            .entry(po_id)
+            .or_insert((Money::ZERO, Money::ZERO, Money::ZERO));
+        let v = Money::parse_or_zero(&amount);
+        match cost_type.as_str() {
+            "material" => *m += v,
+            "labor" => *l += v,
+            "overhead" => *o += v,
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// 批量取多个生产订单在指定期间的报工工时，避免 `wip_cost` 逐单 `order_hours` 的 N+1。
+fn order_hours_map(
+    db: &Db,
+    po_ids: &[i64],
+    period: Period,
+) -> DbResult<std::collections::HashMap<i64, Money>> {
+    let mut out = std::collections::HashMap::new();
+    if po_ids.is_empty() {
+        return Ok(out);
+    }
+    let ph = po_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("SELECT po_id, hours FROM prod_op_log WHERE po_id IN ({ph}) AND period=?");
+    let mut st = db.conn().prepare(&sql)?;
+    let mut params: Vec<&dyn rusqlite::ToSql> =
+        po_ids.iter().map(|i| i as &dyn rusqlite::ToSql).collect();
+    let ymm = period.ymm();
+    params.push(&ymm);
+    let rows = st.query_map(params.as_slice(), |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (po_id, hours) = row?;
+        *out.entry(po_id).or_insert(Money::ZERO) += Money::parse_or_zero(&hours);
+    }
+    Ok(out)
+}
+
 /// 在制品汇总（按期间列未完工订单）
 pub fn wip_cost(db: &Db, period: Period) -> DbResult<Vec<WipRow>> {
     let orders = crate::scm::prod_list(db, period, None)?;
+    // 未完工订单一次筛出，再批量取归集成本与报工工时 —— 原来是逐单 4 次查询的 N+1。
+    let open_ids: Vec<i64> = orders
+        .iter()
+        .filter(|o| !matches!(o.status, ProdStatus::Completed | ProdStatus::Cancelled))
+        .map(|o| o.id)
+        .collect();
+    if open_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cost_map = prod_cost_summary(db, &open_ids)?;
+    let hours_map = order_hours_map(db, &open_ids, period)?;
     let mut out = Vec::new();
     for o in orders {
         if matches!(o.status, ProdStatus::Completed | ProdStatus::Cancelled) {
             continue;
         }
-        let (m, l, oh) = get_prod_cost(db, o.id)?;
-        let hours = order_hours(db, o.id, period)?;
+        let (m, l, oh) =
+            cost_map
+                .get(&o.id)
+                .copied()
+                .unwrap_or((Money::ZERO, Money::ZERO, Money::ZERO));
+        let hours = hours_map.get(&o.id).copied().unwrap_or(Money::ZERO);
         out.push(WipRow {
             po_id: o.id,
             no: o.no,
@@ -1507,6 +1590,82 @@ mod tests {
         );
         // 范围外不计入
         assert!(wip_total_by_period(&db, 202603, 202603).unwrap().is_empty());
+    }
+
+    /// wip_cost 批量取成本与工时：多张在制单一次 IN 取全，与逐单 get_prod_cost/order_hours 口径一致
+    #[test]
+    fn wip_cost_batches_cost_and_hours_without_n_plus_one() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+
+        // 两张在制单：材料/人工/制造费用各不相同
+        let o1 = order_in_progress(&db, p, "SC2026010001", "1001");
+        add_cost(&db, o1.id, CostType::Material, m("500"), "领料").unwrap();
+        add_cost(&db, o1.id, CostType::Labor, m("100"), "人工").unwrap();
+        add_cost(&db, o1.id, CostType::Overhead, m("50"), "制造费用").unwrap();
+        let o2 = order_in_progress(&db, p, "SC2026010002", "1002");
+        add_cost(&db, o2.id, CostType::Material, m("400"), "领料").unwrap();
+        add_cost(&db, o2.id, CostType::Overhead, m("300"), "制造费用").unwrap();
+
+        // 一张完工单：应被排除
+        let done_id = {
+            let tx = db.write_tx().unwrap();
+            let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            tx.execute(
+                "INSERT INTO production_order(period, no, date, item_code, item_name, planned_qty, completed_qty, status, work_center, prepared_by, memo, created_at, updated_at)
+                 VALUES(?1,?2,'2026-01-06','1003','成品','10','10','completed','WC01','u1','',?3,?3)",
+                rusqlite::params![p.ymm(), "SC2026010003", now],
+            )
+            .unwrap();
+            let id = tx.last_insert_rowid();
+            tx.commit().unwrap();
+            id
+        };
+        add_cost(&db, done_id, CostType::Material, m("999"), "领料").unwrap();
+
+        // 报工工时：o1 两笔（2+3=5）、o2 一笔 6；另一期间那条不该算进来
+        for (po_id, hours, period) in [
+            (o1.id, "2", p),
+            (o1.id, "3", p),
+            (o2.id, "6", p),
+            (o1.id, "9", p.next()),
+        ] {
+            db.conn()
+                .execute(
+                    "INSERT INTO prod_op_log(op_id,po_id,po_no,item_code,item_name,op_name,worker,period,date,qty,hours)
+                     VALUES(0,?1,'','140501','成品','氧化','张三',?2,'2026-01-05','10',?3)",
+                    rusqlite::params![po_id, period.ymm(), hours],
+                )
+                .unwrap();
+        }
+
+        let wip = wip_cost(&db, p).unwrap();
+        assert_eq!(wip.len(), 2, "完工单被排除");
+        let by_no: std::collections::HashMap<&str, &WipRow> =
+            wip.iter().map(|w| (w.no.as_str(), w)).collect();
+        assert_eq!(by_no["SC2026010001"].material, m("500"));
+        assert_eq!(by_no["SC2026010001"].labor, m("100"));
+        assert_eq!(by_no["SC2026010001"].overhead, m("50"));
+        assert_eq!(by_no["SC2026010001"].total, m("650"));
+        assert_eq!(by_no["SC2026010001"].hours, m("5"), "2+3，跨期间 9 不算");
+        assert_eq!(by_no["SC2026010002"].material, m("400"));
+        assert_eq!(by_no["SC2026010002"].labor, m("0"));
+        assert_eq!(by_no["SC2026010002"].overhead, m("300"));
+        assert_eq!(by_no["SC2026010002"].total, m("700"));
+        assert_eq!(by_no["SC2026010002"].hours, m("6"));
+
+        // 口径一致：批量 prod_cost_summary 与逐单 get_prod_cost 完全相等
+        let open_ids: Vec<i64> = vec![o1.id, o2.id];
+        let summary = prod_cost_summary(&db, &open_ids).unwrap();
+        for id in &open_ids {
+            let (m1, l1, oh1) = get_prod_cost(&db, *id).unwrap();
+            let (m2, l2, oh2) = summary.get(id).copied().unwrap();
+            assert_eq!(
+                (m1, l1, oh1),
+                (m2, l2, oh2),
+                "批量取数与逐单 get_prod_cost 口径一致"
+            );
+        }
     }
 
     /// 建一张"进行中"的生产订单（item_code 由调用方给）

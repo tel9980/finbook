@@ -2499,6 +2499,20 @@ const MUT = [
     to: "        routing_version: String::new(),",
     cmd: ["test", "-p", "findb", "--lib", "advanced::tests::mps_convert_carries_routing_version"],
   },
+  {
+    name: "155 在制品报工批量取数丢掉期间过滤（跨期间工时会算进本期）",
+    file: "crates/findb/src/manufacturing.rs",
+    from: "\"SELECT po_id, hours FROM prod_op_log WHERE po_id IN ({ph}) AND period=?\"",
+    to: "\"SELECT po_id, hours FROM prod_op_log WHERE po_id IN ({ph})\"",
+    cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::wip_cost_batches_cost_and_hours_without_n_plus_one"],
+  },
+  {
+    name: "156 在制品归集成本把材料累加到制造费用（material 漏记到 overhead）",
+    file: "crates/findb/src/manufacturing.rs",
+    from: "            \"material\" => *m += v,",
+    to: "            \"material\" => *o += v,",
+    cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::wip_cost_batches_cost_and_hours_without_n_plus_one"],
+  },
 
 ];
 
