@@ -1379,8 +1379,8 @@ mod tests {
         // 随便塞一条单据，对应域就该出现
         db.conn()
             .execute(
-                "INSERT INTO sales_order (period, no, date, customer_code, customer_name, status, total_amount, total_tax, shipped_amount)
-                 VALUES (202601, 'SO1', '2026-01-05', 'C01', '客户一', 'draft', '100.00', '0.00', '0.00')",
+                "INSERT INTO sales_order (period, no, date, customer_code, customer_name, status, total_amount, total_tax)
+                 VALUES (202601, 'SO1', '2026-01-05', 'C01', '客户一', 'draft', '100.00', '0.00')",
                 [],
             )
             .unwrap();

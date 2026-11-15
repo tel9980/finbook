@@ -33,7 +33,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 55;
+pub const SCHEMA_VERSION: i64 = 56;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -548,7 +548,6 @@ CREATE TABLE IF NOT EXISTS purchase_order (
     status          TEXT NOT NULL DEFAULT 'draft',
     total_amount    TEXT NOT NULL DEFAULT '0',
     total_tax       TEXT NOT NULL DEFAULT '0',
-    received_amount TEXT NOT NULL DEFAULT '0',
     prepared_by     TEXT NOT NULL DEFAULT '',
     memo            TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL DEFAULT '',
@@ -581,7 +580,6 @@ CREATE TABLE IF NOT EXISTS sales_order (
     status          TEXT NOT NULL DEFAULT 'draft',
     total_amount    TEXT NOT NULL DEFAULT '0',
     total_tax       TEXT NOT NULL DEFAULT '0',
-    shipped_amount  TEXT NOT NULL DEFAULT '0',
     prepared_by     TEXT NOT NULL DEFAULT '',
     memo            TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL DEFAULT '',
@@ -2024,11 +2022,6 @@ const MIGRATE_V6: &[(&str, &str, &str)] = &[
         "TEXT NOT NULL DEFAULT '0'",
     ),
     ("purchase_order", "total_tax", "TEXT NOT NULL DEFAULT '0'"),
-    (
-        "purchase_order",
-        "received_amount",
-        "TEXT NOT NULL DEFAULT '0'",
-    ),
     ("purchase_order", "prepared_by", "TEXT NOT NULL DEFAULT ''"),
     ("purchase_order", "memo", "TEXT NOT NULL DEFAULT ''"),
     ("purchase_order", "created_at", "TEXT NOT NULL DEFAULT ''"),
@@ -2108,7 +2101,6 @@ const MIGRATE_V6: &[(&str, &str, &str)] = &[
     ("sales_order", "status", "TEXT NOT NULL DEFAULT 'draft'"),
     ("sales_order", "total_amount", "TEXT NOT NULL DEFAULT '0'"),
     ("sales_order", "total_tax", "TEXT NOT NULL DEFAULT '0'"),
-    ("sales_order", "shipped_amount", "TEXT NOT NULL DEFAULT '0'"),
     ("sales_order", "prepared_by", "TEXT NOT NULL DEFAULT ''"),
     ("sales_order", "memo", "TEXT NOT NULL DEFAULT ''"),
     ("sales_order", "created_at", "TEXT NOT NULL DEFAULT ''"),
@@ -2543,6 +2535,9 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             // v55：删冗余列 so_line.qty_shipped / po_line.qty_received（建表后从未回写，
             // 执行进度读时从 so_shipment / po_receipt 实时汇总）
             migrate_v55(conn)?;
+            // v56：删订单级冗余列 sales_order.shipped_amount / purchase_order.received_amount
+            // （读路径早已实时汇总，落库值从未被用到）
+            migrate_v56(conn)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：
@@ -2600,6 +2595,24 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
 /// 幂等：列已不存在就跳过（全新账套 DDL 已不含这两列）。
 fn migrate_v55(conn: &Connection) -> Result<(), DbError> {
     for (table, col) in [("so_line", "qty_shipped"), ("po_line", "qty_received")] {
+        if column_exists(conn, table, col)? {
+            conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {col}"), [])?;
+        }
+    }
+    Ok(())
+}
+
+/// v55 → v56：删订单级冗余列 `sales_order.shipped_amount` / `purchase_order.received_amount`
+///
+/// 与 v55 删的两行级列同一个病根：这两个订单级列建表后虽会被 `so_save`/`po_save`
+/// 回写，但读路径（`so_list`/`so_get`/`po_list`/`po_get`）早已改为从 `so_shipment` /
+/// `po_receipt` 实时汇总后覆盖，落库值从未被真正用到。留着只会误导「单张读列」
+/// 的旧代码路径。幂等：列已不存在就跳过（全新账套 DDL 已不含这两列）。
+fn migrate_v56(conn: &Connection) -> Result<(), DbError> {
+    for (table, col) in [
+        ("sales_order", "shipped_amount"),
+        ("purchase_order", "received_amount"),
+    ] {
         if column_exists(conn, table, col)? {
             conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {col}"), [])?;
         }
@@ -3074,5 +3087,44 @@ mod tests {
         init(&conn).unwrap();
         assert!(!column_exists(&conn, "so_line", "qty_shipped").unwrap());
         assert!(!column_exists(&conn, "po_line", "qty_received").unwrap());
+    }
+
+    /// v55 → v56：删订单级冗余列 `sales_order.shipped_amount` / `purchase_order.received_amount`
+    #[test]
+    fn old_book_upgrade_drops_redundant_order_progress_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(DDL).unwrap();
+        // 造出「v55、仍带订单级冗余列」的存量账套
+        conn.execute_batch(
+            "ALTER TABLE sales_order ADD COLUMN shipped_amount TEXT NOT NULL DEFAULT '0';
+             ALTER TABLE purchase_order ADD COLUMN received_amount TEXT NOT NULL DEFAULT '0';
+             INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','55');",
+        )
+        .unwrap();
+        assert!(column_exists(&conn, "sales_order", "shipped_amount").unwrap());
+        assert!(column_exists(&conn, "purchase_order", "received_amount").unwrap());
+
+        init(&conn).unwrap();
+
+        assert!(
+            !column_exists(&conn, "sales_order", "shipped_amount").unwrap(),
+            "升级后必须删掉 sales_order.shipped_amount（执行进度从 so_shipment 汇总）"
+        );
+        assert!(
+            !column_exists(&conn, "purchase_order", "received_amount").unwrap(),
+            "升级后必须删掉 purchase_order.received_amount（执行进度从 po_receipt 汇总）"
+        );
+        let v: String = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION.to_string(), "版本号没推进");
+        // 幂等：再跑一次不报错
+        init(&conn).unwrap();
+        assert!(!column_exists(&conn, "sales_order", "shipped_amount").unwrap());
+        assert!(!column_exists(&conn, "purchase_order", "received_amount").unwrap());
     }
 }

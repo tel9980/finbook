@@ -108,7 +108,7 @@ impl PurchaseOrder {
 pub fn po_get(db: &Db, id: i64) -> DbResult<Option<PurchaseOrder>> {
     let mut stmt = db.conn().prepare(
         "SELECT id, period, no, date, supplier_code, supplier_name, status,
-                total_amount, total_tax, received_amount, prepared_by, memo
+                total_amount, total_tax, prepared_by, memo
          FROM purchase_order WHERE id=?1",
     )?;
     let po = stmt
@@ -123,9 +123,9 @@ pub fn po_get(db: &Db, id: i64) -> DbResult<Option<PurchaseOrder>> {
                 status: status_from(&r.get::<_, String>(6)?).unwrap_or(PoStatus::Draft),
                 total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
                 total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                received_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                prepared_by: r.get(10)?,
-                memo: r.get(11)?,
+                received_amount: Money::ZERO,
+                prepared_by: r.get(9)?,
+                memo: r.get(10)?,
                 lines: Vec::new(),
             })
         })
@@ -447,26 +447,40 @@ pub fn po_save(db: &Db, po: &mut PurchaseOrder) -> DbResult<i64> {
     let id = if po.id > 0 {
         tx.execute(
             "UPDATE purchase_order SET period=?, date=?, supplier_code=?, supplier_name=?,
-             status=?, total_amount=?, total_tax=?, received_amount=?, prepared_by=?, memo=?, updated_at=?
+             status=?, total_amount=?, total_tax=?, prepared_by=?, memo=?, updated_at=?
              WHERE id=?",
             rusqlite::params![
-                po.period.ymm(), po.date, po.supplier_code, po.supplier_name,
+                po.period.ymm(),
+                po.date,
+                po.supplier_code,
+                po.supplier_name,
                 serde_json::to_value(po.status)?.as_str().unwrap(),
-                crate::money_param(po.total_amount), crate::money_param(po.total_tax),
-                crate::money_param(po.received_amount), po.prepared_by, po.memo, now, po.id
+                crate::money_param(po.total_amount),
+                crate::money_param(po.total_tax),
+                po.prepared_by,
+                po.memo,
+                now,
+                po.id
             ],
         )?;
         po.id
     } else {
         tx.execute(
             "INSERT INTO purchase_order(period, no, date, supplier_code, supplier_name,
-             status, total_amount, total_tax, received_amount, prepared_by, memo, created_at, updated_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12)",
+             status, total_amount, total_tax, prepared_by, memo, created_at, updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11)",
             rusqlite::params![
-                po.period.ymm(), po.no, po.date, po.supplier_code, po.supplier_name,
+                po.period.ymm(),
+                po.no,
+                po.date,
+                po.supplier_code,
+                po.supplier_name,
                 serde_json::to_value(po.status)?.as_str().unwrap(),
-                crate::money_param(po.total_amount), crate::money_param(po.total_tax),
-                crate::money_param(po.received_amount), po.prepared_by, po.memo, now
+                crate::money_param(po.total_amount),
+                crate::money_param(po.total_tax),
+                po.prepared_by,
+                po.memo,
+                now
             ],
         )?;
         tx.last_insert_rowid()
@@ -508,12 +522,12 @@ pub fn po_delete(db: &Db, id: i64) -> DbResult<()> {
 pub fn po_list(db: &Db, period: Period, status: Option<PoStatus>) -> DbResult<Vec<PurchaseOrder>> {
     let sql = if status.is_some() {
         "SELECT id, period, no, date, supplier_code, supplier_name, status,
-             total_amount, total_tax, received_amount, prepared_by, memo
+             total_amount, total_tax, prepared_by, memo
              FROM purchase_order WHERE period=? AND status=? ORDER BY date DESC, id DESC"
             .to_string()
     } else {
         "SELECT id, period, no, date, supplier_code, supplier_name, status,
-             total_amount, total_tax, received_amount, prepared_by, memo
+             total_amount, total_tax, prepared_by, memo
              FROM purchase_order WHERE period=? ORDER BY date DESC, id DESC"
             .to_string()
     };
@@ -533,9 +547,9 @@ pub fn po_list(db: &Db, period: Period, status: Option<PoStatus>) -> DbResult<Ve
                     status: status_from(&r.get::<_, String>(6)?).unwrap_or(PoStatus::Draft),
                     total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
                     total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                    received_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                    prepared_by: r.get(10)?,
-                    memo: r.get(11)?,
+                    received_amount: Money::ZERO,
+                    prepared_by: r.get(9)?,
+                    memo: r.get(10)?,
                     lines: Vec::new(),
                 })
             },
@@ -553,9 +567,9 @@ pub fn po_list(db: &Db, period: Period, status: Option<PoStatus>) -> DbResult<Ve
                 status: status_from(&r.get::<_, String>(6)?).unwrap_or(PoStatus::Draft),
                 total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
                 total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                received_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                prepared_by: r.get(10)?,
-                memo: r.get(11)?,
+                received_amount: Money::ZERO,
+                prepared_by: r.get(9)?,
+                memo: r.get(10)?,
                 lines: Vec::new(),
             })
         })?
@@ -1010,26 +1024,40 @@ pub fn so_save(db: &Db, so: &mut SalesOrder) -> DbResult<i64> {
     let id = if so.id > 0 {
         tx.execute(
             "UPDATE sales_order SET period=?, date=?, customer_code=?, customer_name=?,
-             status=?, total_amount=?, total_tax=?, shipped_amount=?, prepared_by=?, memo=?, updated_at=?
+             status=?, total_amount=?, total_tax=?, prepared_by=?, memo=?, updated_at=?
              WHERE id=?",
             rusqlite::params![
-                so.period.ymm(), so.date, so.customer_code, so.customer_name,
+                so.period.ymm(),
+                so.date,
+                so.customer_code,
+                so.customer_name,
                 serde_json::to_value(so.status)?.as_str().unwrap(),
-                crate::money_param(so.total_amount), crate::money_param(so.total_tax),
-                crate::money_param(so.shipped_amount), so.prepared_by, so.memo, now, so.id
+                crate::money_param(so.total_amount),
+                crate::money_param(so.total_tax),
+                so.prepared_by,
+                so.memo,
+                now,
+                so.id
             ],
         )?;
         so.id
     } else {
         tx.execute(
             "INSERT INTO sales_order(period, no, date, customer_code, customer_name,
-             status, total_amount, total_tax, shipped_amount, prepared_by, memo, created_at, updated_at)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12)",
+             status, total_amount, total_tax, prepared_by, memo, created_at, updated_at)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11)",
             rusqlite::params![
-                so.period.ymm(), so.no, so.date, so.customer_code, so.customer_name,
+                so.period.ymm(),
+                so.no,
+                so.date,
+                so.customer_code,
+                so.customer_name,
                 serde_json::to_value(so.status)?.as_str().unwrap(),
-                crate::money_param(so.total_amount), crate::money_param(so.total_tax),
-                crate::money_param(so.shipped_amount), so.prepared_by, so.memo, now
+                crate::money_param(so.total_amount),
+                crate::money_param(so.total_tax),
+                so.prepared_by,
+                so.memo,
+                now
             ],
         )?;
         tx.last_insert_rowid()
@@ -1071,12 +1099,12 @@ pub fn so_delete(db: &Db, id: i64) -> DbResult<()> {
 pub fn so_list(db: &Db, period: Period, status: Option<SoStatus>) -> DbResult<Vec<SalesOrder>> {
     let sql = if status.is_some() {
         "SELECT id, period, no, date, customer_code, customer_name, status,
-             total_amount, total_tax, shipped_amount, prepared_by, memo
+             total_amount, total_tax, prepared_by, memo
              FROM sales_order WHERE period=? AND status=? ORDER BY date DESC, id DESC"
             .to_string()
     } else {
         "SELECT id, period, no, date, customer_code, customer_name, status,
-             total_amount, total_tax, shipped_amount, prepared_by, memo
+             total_amount, total_tax, prepared_by, memo
              FROM sales_order WHERE period=? ORDER BY date DESC, id DESC"
             .to_string()
     };
@@ -1096,9 +1124,9 @@ pub fn so_list(db: &Db, period: Period, status: Option<SoStatus>) -> DbResult<Ve
                     status: status_from(&r.get::<_, String>(6)?).unwrap_or(SoStatus::Draft),
                     total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
                     total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                    shipped_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                    prepared_by: r.get(10)?,
-                    memo: r.get(11)?,
+                    shipped_amount: Money::ZERO,
+                    prepared_by: r.get(9)?,
+                    memo: r.get(10)?,
                     lines: Vec::new(),
                 })
             },
@@ -1116,9 +1144,9 @@ pub fn so_list(db: &Db, period: Period, status: Option<SoStatus>) -> DbResult<Ve
                 status: status_from(&r.get::<_, String>(6)?).unwrap_or(SoStatus::Draft),
                 total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
                 total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                shipped_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                prepared_by: r.get(10)?,
-                memo: r.get(11)?,
+                shipped_amount: Money::ZERO,
+                prepared_by: r.get(9)?,
+                memo: r.get(10)?,
                 lines: Vec::new(),
             })
         })?
@@ -1317,7 +1345,7 @@ pub fn so_shipment_progress(db: &Db, so: &SalesOrder) -> DbResult<(Money, Money)
 pub fn so_get(db: &Db, id: i64) -> DbResult<Option<SalesOrder>> {
     let mut stmt = db.conn().prepare(
         "SELECT id, period, no, date, customer_code, customer_name, status,
-                total_amount, total_tax, shipped_amount, prepared_by, memo
+                total_amount, total_tax, prepared_by, memo
          FROM sales_order WHERE id=?1",
     )?;
     let so = stmt
@@ -1332,9 +1360,9 @@ pub fn so_get(db: &Db, id: i64) -> DbResult<Option<SalesOrder>> {
                 status: status_from(&r.get::<_, String>(6)?).unwrap_or(SoStatus::Draft),
                 total_amount: Money::parse_or_zero(&r.get::<_, String>(7)?),
                 total_tax: Money::parse_or_zero(&r.get::<_, String>(8)?),
-                shipped_amount: Money::parse_or_zero(&r.get::<_, String>(9)?),
-                prepared_by: r.get(10)?,
-                memo: r.get(11)?,
+                shipped_amount: Money::ZERO,
+                prepared_by: r.get(9)?,
+                memo: r.get(10)?,
                 lines: Vec::new(),
             })
         })

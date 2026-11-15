@@ -2450,6 +2450,20 @@ const MUT = [
     to: "            .filter(|r| r.kind == \"ap\" && r.due_date > today_s && r.due_date <= horizon)\n            .count() as i64;\n        out.todos.push(todo(",
     cmd: ["test", "-p", "findb", "--lib", "workbench::tests::uninvoiced_orders_and_ap_due_soon_surface_as_todos"],
   },
+  {
+    name: "148 删订单级冗余列迁移漏掉销售订单（sales_order.shipped_amount 没删）",
+    file: "crates/findb/src/schema.rs",
+    from: "    for (table, col) in [\n        (\"sales_order\", \"shipped_amount\"),\n        (\"purchase_order\", \"received_amount\"),\n    ] {",
+    to: "    for (table, col) in [\n        (\"purchase_order\", \"received_amount\"),\n    ] {",
+    cmd: ["test", "-p", "findb", "--lib", "schema::tests::old_book_upgrade_drops_redundant_order_progress_columns"],
+  },
+  {
+    name: "149 采购单执行进度改读冗余列（回退为不汇总，已收额恒为 0）",
+    file: "crates/findb/src/scm.rs",
+    from: "    // 执行进度从 po_receipt 实时汇总，不读冗余列（与 po_list 同口径）。\n    // 数量列按 TEXT 存，取回原始行 Rust 侧累加，避免 SUM 强转 Integer/Real。\n    let mut st = db\n        .conn()\n        .prepare(\"SELECT qty FROM po_receipt WHERE po_id=?1\")?;\n    let rows = st.query_map([id], |r| r.get::<_, String>(0))?;\n    let mut recv_qty = Money::ZERO;\n    for r in rows {\n        recv_qty += Money::parse_or_zero(&r?);\n    }\n    po.received_amount = po_received_gross(&po, recv_qty);\n    for l in po.lines.iter_mut() {\n        l.qty_received = recv_qty;\n    }\n    Ok(Some(po))",
+    to: "    Ok(Some(po))",
+    cmd: ["test", "-p", "findb", "--lib", "scm::tests::po_set_status_is_guarded_and_keeps_lines"],
+  },
 
 ];
 
