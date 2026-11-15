@@ -210,7 +210,7 @@ async function viewDashboard(main) {
     const todoHtml = todos.length ? `
       <div class="wb-sec"><h4 class="sec-title">我的待办</h4>
         <div class="u-row wrap">${todos.map((t) => `
-          <button class="btn ${t.count > 0 ? "primary" : "ghost"}" data-wb-go="${esc(t.view)}" ${t.count > 0 ? "" : "disabled"} style="display:inline-flex;gap:8px;align-items:center">${esc(t.label)}<b>${t.count}</b></button>`).join("")}
+          <button class="btn ${t.count > 0 ? "primary" : "ghost"}" data-wb-go="${esc(t.view)}" ${t.count > 0 ? "" : "disabled"} style="display:inline-flex;gap:8px;align-items:center">${esc(t.label)}<b>${t.count}</b>${t.detail ? `<span class="muted" style="font-size:12px">${esc(t.detail)}</span>` : ""}</button>`).join("")}
         </div>
       </div>` : "";
     const trendHtml = Object.keys(tg).map((dom) => `

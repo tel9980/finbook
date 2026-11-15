@@ -61,6 +61,8 @@ pub struct WbTodo {
     pub label: String,
     pub count: i64,
     pub view: String,
+    /// 一句补充说明（如「最早发货 2026-06-10」），让老板一眼知道有多急；空串则前端不渲染。
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,7 +155,21 @@ fn todo(domain: &str, key: &str, label: &str, count: i64, view: &str) -> WbTodo 
         label: label.to_string(),
         count,
         view: view.to_string(),
+        detail: String::new(),
     }
+}
+
+fn todo_with_detail(
+    domain: &str,
+    key: &str,
+    label: &str,
+    count: i64,
+    view: &str,
+    detail: String,
+) -> WbTodo {
+    let mut t = todo(domain, key, label, count, view);
+    t.detail = detail;
+    t
 }
 
 fn trend(
@@ -428,12 +444,17 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
         ));
         // 待开发票：已经发过货、但还没有任何有效销项发票的确认单
         let uninvoiced = crate::sales::so_uninvoiced_count(db)?;
-        out.todos.push(todo(
+        let uninvoiced_detail = match crate::sales::so_uninvoiced_oldest_ship(db)? {
+            Some(d) => format!("最早发货 {d}"),
+            None => String::new(),
+        };
+        out.todos.push(todo_with_detail(
             "销售",
             "so_uninvoiced",
             "待开发票",
             uninvoiced,
             "invoices",
+            uninvoiced_detail,
         ));
         // 快到期的应付：接下来 30 天内该付给供应商的钱（未核销应付按到期日归拢）
         let opts = db.options();
@@ -448,16 +469,24 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
         let horizon = (today + chrono::Duration::days(30))
             .format("%Y-%m-%d")
             .to_string();
-        let ap_due_soon = due_rows
+        let ap_due_soon_rows: Vec<_> = due_rows
             .iter()
             .filter(|r| r.kind == "ap" && r.due_date >= today_s && r.due_date <= horizon)
-            .count() as i64;
-        out.todos.push(todo(
+            .collect();
+        let ap_due_soon = ap_due_soon_rows.len() as i64;
+        let ap_detail = ap_due_soon_rows
+            .iter()
+            .map(|r| r.due_date.as_str())
+            .min()
+            .map(|d| format!("最早到期 {d}"))
+            .unwrap_or_default();
+        out.todos.push(todo_with_detail(
             "采购",
             "ap_due_soon",
             "快到期的应付",
             ap_due_soon,
             "settle",
+            ap_detail,
         ));
     }
 
@@ -960,12 +989,17 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             "so-doc",
         ));
         let uninvoiced = crate::sales::so_uninvoiced_count(db)?;
-        todos.push(todo(
+        let uninvoiced_detail = match crate::sales::so_uninvoiced_oldest_ship(db)? {
+            Some(d) => format!("最早发货 {d}"),
+            None => String::new(),
+        };
+        todos.push(todo_with_detail(
             "销售",
             "so_uninvoiced",
             "待开发票",
             uninvoiced,
             "invoices",
+            uninvoiced_detail,
         ));
         let opts = db.options();
         let due_rows = crate::settle::ar_ap_due_schedule(
@@ -979,16 +1013,24 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
         let horizon = (today + chrono::Duration::days(30))
             .format("%Y-%m-%d")
             .to_string();
-        let ap_due_soon = due_rows
+        let ap_due_soon_rows: Vec<_> = due_rows
             .iter()
             .filter(|r| r.kind == "ap" && r.due_date >= today_s && r.due_date <= horizon)
-            .count() as i64;
-        todos.push(todo(
+            .collect();
+        let ap_due_soon = ap_due_soon_rows.len() as i64;
+        let ap_detail = ap_due_soon_rows
+            .iter()
+            .map(|r| r.due_date.as_str())
+            .min()
+            .map(|d| format!("最早到期 {d}"))
+            .unwrap_or_default();
+        todos.push(todo_with_detail(
             "采购",
             "ap_due_soon",
             "快到期的应付",
             ap_due_soon,
             "settle",
+            ap_detail,
         ));
     }
     // 仓管
@@ -1496,6 +1538,11 @@ mod tests {
         assert_eq!(t1.label, "待开发票");
         assert_eq!(t1.count, 1, "已发货没开票的确认单只有一张");
         assert_eq!(t1.view, "invoices", "点了该跳去发票管理页开票");
+        assert_eq!(
+            t1.detail,
+            format!("最早发货 {}", today.format("%Y-%m-%d")),
+            "待开发票应提示最早发货日期"
+        );
         let t2 = out
             .todos
             .iter()
@@ -1504,6 +1551,11 @@ mod tests {
         assert_eq!(t2.label, "快到期的应付");
         assert_eq!(t2.count, 1, "今天到期的应付应算进 30 天窗口");
         assert_eq!(t2.view, "settle", "点了该跳去往来核销页看该付谁的钱");
+        assert_eq!(
+            t2.detail,
+            format!("最早到期 {}", today.format("%Y-%m-%d")),
+            "快到期的应付应提示最早到期日期"
+        );
     }
 
     #[test]

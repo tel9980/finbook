@@ -873,6 +873,26 @@ pub fn so_uninvoiced_count(db: &Db) -> DbResult<i64> {
     Ok(n)
 }
 
+/// 待开发票订单里**最早一批发货**的日期（`%Y-%m-%d`，无则 `None`）。
+///
+/// 与 `so_uninvoiced_count` 同一套「已发货 + 无有效销项发票」口径，只是这里多问一句
+/// 「最早发的是哪天」——工作台「待开发票」待办的 detail 用它提示紧迫程度（越早越该催）。
+pub fn so_uninvoiced_oldest_ship(db: &Db) -> DbResult<Option<String>> {
+    let s = db.conn().query_row(
+        "SELECT MIN(s.date) FROM so_shipment s
+         JOIN sales_order o ON o.id = s.so_id
+         WHERE o.status NOT IN ('Cancelled','Draft')
+           AND NOT EXISTS (
+             SELECT 1 FROM doc_link dl JOIN invoice i ON i.id = dl.dst_id
+             WHERE dl.src_type = 'so' AND dl.src_id = o.id AND dl.dst_type = 'invoice'
+               AND i.kind = 'out' AND i.status != 'rejected'
+           )",
+        [],
+        |r| r.get::<_, Option<String>>(0),
+    )?;
+    Ok(s)
+}
+
 // ===========================================================================
 // 统计 / 执行跟踪 / 信用管理
 
@@ -1711,6 +1731,98 @@ mod tests {
             so_uninvoiced_count(&db).unwrap(),
             2,
             "只有 so1 和 so2 待开发票"
+        );
+    }
+
+    #[test]
+    fn so_uninvoiced_oldest_ship_returns_earliest_among_uninvoiced() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mk = |code: &str| -> i64 {
+            let mut so = crate::scm::SalesOrder::new(
+                p,
+                NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                code,
+                "客户",
+                "u",
+            );
+            so.no = crate::scm::so_next_no(&db, p).unwrap();
+            so.lines.push(crate::scm::SoLine {
+                id: 0,
+                so_id: 0,
+                item_code: "140501".into(),
+                item_name: "成品".into(),
+                qty_ordered: m("1"),
+                qty_shipped: m("0"),
+                unit_price: m("100"),
+                tax_rate: m("0"),
+                amount: m("100"),
+                tax_amount: m("0"),
+                memo: String::new(),
+            });
+            let id = crate::scm::so_save(&db, &mut so).unwrap();
+            crate::scm::so_set_status(&db, id, crate::scm::SoStatus::Confirmed).unwrap();
+            id
+        };
+        let ship = |so_id: i64, date: &str| {
+            so_shipment_add(
+                &db,
+                so_id,
+                p,
+                NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(),
+                m("1"),
+                "发",
+            )
+            .unwrap();
+        };
+        // so1 1-10 发货、so2 1-08 发货，都没开票 → 最早发货是 1-08
+        let so1 = mk("C01");
+        ship(so1, "2026-01-10");
+        let so2 = mk("C02");
+        ship(so2, "2026-01-08");
+        assert_eq!(
+            so_uninvoiced_oldest_ship(&db).unwrap().as_deref(),
+            Some("2026-01-08"),
+            "应返回最早一批发货日期"
+        );
+        // 给 so2 补一张有效发票后，最早发货退回到 so1 的 1-10
+        let inv = crate::invoices::Invoice {
+            id: 0,
+            kind: "out".into(),
+            code: String::new(),
+            number: "INV-C02".into(),
+            date: "2026-01-20".into(),
+            buyer: String::new(),
+            seller: String::new(),
+            amount_tax: m("0"),
+            amount: m("0"),
+            tax: m("0"),
+            tax_rate: String::new(),
+            status: "verified".into(),
+            memo: String::new(),
+            attach_id: 0,
+            created_by: "t".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let iid = crate::invoices::insert(&db, &inv, "t").unwrap();
+        crate::docflow::link_add(&db, "so", so2, "invoice", iid, "test").unwrap();
+        assert_eq!(
+            so_uninvoiced_oldest_ship(&db).unwrap().as_deref(),
+            Some("2026-01-10"),
+            "so2 开票后最早发货退回 so1"
+        );
+        // 全开票后 → None
+        let inv2 = crate::invoices::Invoice {
+            number: "INV-C01".into(),
+            ..inv.clone()
+        };
+        let iid2 = crate::invoices::insert(&db, &inv2, "t").unwrap();
+        crate::docflow::link_add(&db, "so", so1, "invoice", iid2, "test").unwrap();
+        assert_eq!(
+            so_uninvoiced_oldest_ship(&db).unwrap(),
+            None,
+            "全开票后无待开发票订单"
         );
     }
 

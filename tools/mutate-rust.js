@@ -2446,8 +2446,8 @@ const MUT = [
   {
     name: "147 快到期的应付把今天到期的漏掉（窗口不含今天）",
     file: "crates/findb/src/workbench.rs",
-    from: "            .filter(|r| r.kind == \"ap\" && r.due_date >= today_s && r.due_date <= horizon)\n            .count() as i64;\n        out.todos.push(todo(",
-    to: "            .filter(|r| r.kind == \"ap\" && r.due_date > today_s && r.due_date <= horizon)\n            .count() as i64;\n        out.todos.push(todo(",
+    from: "            .filter(|r| r.kind == \"ap\" && r.due_date >= today_s && r.due_date <= horizon)\n            .collect();\n        let ap_due_soon = ap_due_soon_rows.len() as i64;\n        let ap_detail = ap_due_soon_rows\n            .iter()\n            .map(|r| r.due_date.as_str())\n            .min()\n            .map(|d| format!(\"最早到期 {d}\"))\n            .unwrap_or_default();\n        out.todos.push(todo_with_detail(",
+    to: "            .filter(|r| r.kind == \"ap\" && r.due_date > today_s && r.due_date <= horizon)\n            .collect();\n        let ap_due_soon = ap_due_soon_rows.len() as i64;\n        let ap_detail = ap_due_soon_rows\n            .iter()\n            .map(|r| r.due_date.as_str())\n            .min()\n            .map(|d| format!(\"最早到期 {d}\"))\n            .unwrap_or_default();\n        out.todos.push(todo_with_detail(",
     cmd: ["test", "-p", "findb", "--lib", "workbench::tests::uninvoiced_orders_and_ap_due_soon_surface_as_todos"],
   },
   {
@@ -2463,6 +2463,13 @@ const MUT = [
     from: "    // 执行进度从 po_receipt 实时汇总，不读冗余列（与 po_list 同口径）。\n    // 数量列按 TEXT 存，取回原始行 Rust 侧累加，避免 SUM 强转 Integer/Real。\n    let mut st = db\n        .conn()\n        .prepare(\"SELECT qty FROM po_receipt WHERE po_id=?1\")?;\n    let rows = st.query_map([id], |r| r.get::<_, String>(0))?;\n    let mut recv_qty = Money::ZERO;\n    for r in rows {\n        recv_qty += Money::parse_or_zero(&r?);\n    }\n    po.received_amount = po_received_gross(&po, recv_qty);\n    for l in po.lines.iter_mut() {\n        l.qty_received = recv_qty;\n    }\n    Ok(Some(po))",
     to: "    Ok(Some(po))",
     cmd: ["test", "-p", "findb", "--lib", "scm::tests::po_set_status_is_guarded_and_keeps_lines"],
+  },
+  {
+    name: "150 待开发票提醒取错最早发货（MIN 写成 MAX，detail 显示成最晚发货）",
+    file: "crates/findb/src/sales.rs",
+    from: "        \"SELECT MIN(s.date) FROM so_shipment s",
+    to: "        \"SELECT MAX(s.date) FROM so_shipment s",
+    cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_uninvoiced_oldest_ship_returns_earliest_among_uninvoiced"],
   },
 
 ];

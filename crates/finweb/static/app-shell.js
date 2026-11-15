@@ -536,7 +536,7 @@ function ntRender(r) {
   // 待办不画未读点：它不是「没读过的消息」，是自己的活儿。数量在右侧标签上。
   let html = todos.length
     ? `<div class="nt-sec">我的待办（点击处理）</div>` + todos.map((t) => `
-        <button class="nt-item" data-nt-view="${esc(t.view)}"><div class="nt-t"><b>${esc(t.label)}</b><span class="tag" style="margin-left:auto">${t.count}</span></div><div class="nt-m">${esc(t.domain)} · 直达处理页</div></button>`).join("")
+        <button class="nt-item" data-nt-view="${esc(t.view)}"><div class="nt-t"><b>${esc(t.label)}</b><span class="tag" style="margin-left:auto">${t.count}</span></div><div class="nt-m">${esc(t.detail || (t.domain + " · 直达处理页"))}</div></button>`).join("")
     : "";
   // 动态按服务端时钟分组：今天 / 昨天 / 更早
   const dayOf = (ts) => (ts || "").slice(0, 10);

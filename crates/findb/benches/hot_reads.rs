@@ -156,11 +156,22 @@ fn bench_workbench_collect(c: &mut Criterion) {
     });
 }
 
+/// 月结向导（结账检查清单）—— 余额快照 + 试算平衡 + 损益行，月末热读。
+fn bench_month_close(c: &mut Criterion) {
+    let db = Db::in_memory(&bench_opts()).unwrap();
+    seed(&db, 500);
+    let p = Period::new(2026, 6).unwrap();
+    c.bench_function("month_close_500往来", |b| {
+        b.iter(|| black_box(findb::month_close::report(black_box(&db), p).unwrap()));
+    });
+}
+
 criterion_group!(
     hot_reads,
     bench_so_receivable,
     bench_aging,
     bench_due_schedule,
-    bench_workbench_collect
+    bench_workbench_collect,
+    bench_month_close
 );
 criterion_main!(hot_reads);
