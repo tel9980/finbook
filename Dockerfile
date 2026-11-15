@@ -19,13 +19,14 @@ COPY crates/finui/Cargo.toml crates/finui/
 COPY crates/finbook/Cargo.toml crates/finbook/
 COPY crates/finweb/Cargo.toml crates/finweb/
 # 预取依赖（等价源码占位，让 cargo 缓存依赖编译产物）
-RUN mkdir -p crates/fincore/src crates/findb/src crates/finui/src crates/finbook/src crates/finweb/src \
+RUN mkdir -p crates/fincore/src crates/findb/src crates/finui/src crates/finbook/src crates/finweb/src crates/findb/benches \
  && echo '' > crates/fincore/src/lib.rs \
  && echo '' > crates/findb/src/lib.rs \
  && echo '' > crates/finui/src/lib.rs \
  && echo 'fn main() {}' > crates/finbook/src/main.rs \
  && echo 'fn main() {}' > crates/finbook/build.rs \
  && echo 'fn main() {}' > crates/finweb/src/main.rs \
+ && echo 'fn main() {}' > crates/findb/benches/hot_reads.rs \
  && cargo build --release --locked -p finweb
 # 拷贝真实源码并构建。
 # 注意：预取层留下的空占位库产物与指纹仍在 target 里，而 COPY 保留源文件
