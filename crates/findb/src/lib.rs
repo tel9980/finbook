@@ -80,7 +80,7 @@ use fincore::chart::{
 use fincore::report::cashflow::{default_cash_flow_items, CashFlowDirection, CashFlowGroup};
 use fincore::user::{AuditLog, User};
 use fincore::{BookOptions, FinError};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 pub use balances::BalanceSnapshot;
 
@@ -605,6 +605,9 @@ impl Db {
              UPDATE inv_count         SET voucher_id=NULL;
              UPDATE bill              SET voucher_id=NULL;
              UPDATE loan              SET voucher_id=NULL, settle_voucher_id=NULL;
+             -- 先解除记账状态，否则「已记账凭证不可删」的 DB 触发器会拦下清库。
+             -- 清库本就是重建账套，解除状态与整体 DELETE 同属一个事务，不留中间态。
+             UPDATE voucher SET status='draft';
              DELETE FROM voucher_entry;
              DELETE FROM voucher;
              DELETE FROM begin_balance;
@@ -747,6 +750,54 @@ pub fn doc_prefix(db: &Db, kind: &str, default: &str) -> String {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| default.to_string())
+}
+
+/// 按前缀取下一个序号（范围查询版，索引友好）。
+///
+/// 历史实现 `WHERE no LIKE '前缀%'` + `MAX(CAST(SUBSTR(no,N) AS INTEGER))` 会让
+/// SQLite 无法使用 `no` 上的 UNIQUE 索引，退化成全表扫 + 临时排序：批量导入
+/// N 张单据时每次取号 O(N)、整批 O(N²)（5000 单实测 105s）。这里改写成
+/// `no >= 前缀 AND no < 上界 + ORDER BY no DESC LIMIT 1` 直接吃索引，
+/// 后缀解析放到 Rust 侧（不在 SQL 里对金额/序号做 CAST 求和）。
+/// 上界取「前缀末字符 +1」（'9'→':' 仍大于 '9'，SQLite 按码点比字符串），
+/// 覆盖所有以 prefix 开头的字符串。
+/// 语义与 MAX 版一致：无匹配/后缀非数字均按 0 处理，返回 next = max+1。
+pub(crate) fn next_seq_by_prefix(
+    conn: &rusqlite::Connection,
+    table: &str,
+    prefix: &str,
+    suffix_start: usize,
+    period: Option<i32>,
+) -> DbResult<i64> {
+    let mut upper = prefix.to_string();
+    if let Some(last) = upper.pop() {
+        upper.push(char::from_u32(last as u32 + 1).unwrap_or('\u{10FFFF}'));
+    }
+    let period_clause = if period.is_some() {
+        " AND period=?3"
+    } else {
+        ""
+    };
+    let sql = format!(
+        "SELECT no FROM {table} WHERE no >= ?1 AND no < ?2{period_clause} ORDER BY no DESC LIMIT 1"
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+        vec![Box::new(prefix.to_string()), Box::new(upper)];
+    if let Some(p) = period {
+        params.push(Box::new(p));
+    }
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
+    let last_no: Option<String> = conn
+        .query_row(&sql, params_ref.as_slice(), |r| r.get(0))
+        .optional()?;
+    let max = last_no
+        .map(|s| {
+            s.get(suffix_start..)
+                .and_then(|x| x.parse::<i64>().ok())
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    Ok(max + 1)
 }
 
 /// 给报表 SQL 追加数据范围条件（科目区间 + 仅本人填制的凭证）。

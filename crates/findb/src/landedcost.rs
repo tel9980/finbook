@@ -192,13 +192,7 @@ pub fn next_no(db: &Db, period: Period) -> DbResult<String> {
         period.year(),
         period.month()
     );
-    let sql = format!(
-        "SELECT COALESCE(MAX(CAST(SUBSTR(no, {}) AS INTEGER)), 0) + 1 FROM landed_cost WHERE no LIKE ?",
-        prefix.len() + 1
-    );
-    let n: i64 = db
-        .conn()
-        .query_row(&sql, [format!("{prefix}%")], |r| r.get(0))?;
+    let n = crate::next_seq_by_prefix(db.conn(), "landed_cost", &prefix, prefix.len(), None)?;
     Ok(format!("{prefix}{n:04}"))
 }
 
@@ -763,6 +757,25 @@ mod tests {
     }
     fn p() -> Period {
         Period::new(2026, 1).unwrap()
+    }
+
+    /// 取号改范围查询后：连续、跨期独立、后缀按 4 位解析
+    #[test]
+    fn next_no_uses_index_friendly_range() {
+        let db = mem();
+        let p = p();
+        assert_eq!(next_no(&db, p).unwrap(), "LC2026010001");
+        db.conn()
+            .execute(
+                "INSERT INTO landed_cost(no,period,date) VALUES ('LC2026010007',202601,'2026-01-05')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(next_no(&db, p).unwrap(), "LC2026010008");
+        assert_eq!(
+            next_no(&db, Period::new(2026, 2).unwrap()).unwrap(),
+            "LC2026020001"
+        );
     }
 
     fn line(item: &str, qty: &str, amount: &str) -> LcLine {

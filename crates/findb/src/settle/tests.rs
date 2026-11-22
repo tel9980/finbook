@@ -1378,6 +1378,77 @@ fn ar_ap_due_schedule_groups_open_entries_by_due_month() {
     assert_eq!(rows[2].amount, m("800"));
 }
 
+/// 工作台「快到期」轻量投影：只数窗口内未核销笔数 + 最早到期日，口径与月表一致。
+#[test]
+fn due_soon_summary_counts_only_window_and_tracks_earliest() {
+    let db = tmpdb("due_soon_summary");
+    let p = Period::new(2026, 3).unwrap();
+
+    // 与月表用例同一份造数：C01 账期 30 天、C02 货到即付、S01 账期 60 天
+    for (kind, code, days) in [
+        (fincore::AuxKind::Customer, "C01", Some("30")),
+        (fincore::AuxKind::Customer, "C02", None),
+        (fincore::AuxKind::Supplier, "S01", Some("60")),
+    ] {
+        let mut c = fincore::AuxEntity::new(kind, code, "x");
+        if let Some(d) = days {
+            c.props.insert(
+                fincore::auxiliary::prop::PAY_DAYS.to_string(),
+                d.to_string(),
+            );
+        }
+        crate::auxs::insert(&db, &c).unwrap();
+    }
+    // 应收 C01：1/5 → 2/4 到期；C02：1/20 → 1/20 到期
+    ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        1,
+        "C01",
+        "1000",
+        true,
+        "600101",
+    );
+    ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+        2,
+        "C02",
+        "500",
+        true,
+        "600101",
+    );
+    // 应付 S01：1/10 → 3/11 到期
+    ap_voucher(
+        &db,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        3,
+        "S01",
+        "800",
+        "1001",
+    );
+
+    // 窗口 [1/1, 3/12]：应收两笔都在，最早 1/20；应付一笔 3/11
+    let today = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+    let (ar_n, ar_early) = due_soon_summary(&db, "1122", p, today, 70).unwrap();
+    assert_eq!(ar_n, 2);
+    assert_eq!(ar_early, "2026-01-20");
+    let (ap_n, ap_early) = due_soon_summary(&db, "2202", p, today, 70).unwrap();
+    assert_eq!(ap_n, 1);
+    assert_eq!(ap_early, "2026-03-11");
+
+    // 窄窗口 [2/1, 3/3]：应收只剩 C01（2/4），C02 已过期；应付 3/11 超窗
+    let today = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
+    let (ar_n, ar_early) = due_soon_summary(&db, "1122", p, today, 30).unwrap();
+    assert_eq!(ar_n, 1);
+    assert_eq!(ar_early, "2026-02-04");
+    let (ap_n, ap_early) = due_soon_summary(&db, "2202", p, today, 30).unwrap();
+    assert_eq!(ap_n, 0);
+    assert_eq!(ap_early, "");
+}
+
 #[test]
 fn bad_debt_provision_generates_voucher() {
     let db = tmpdb("baddebt");

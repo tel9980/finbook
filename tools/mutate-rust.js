@@ -2444,10 +2444,10 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::so_uninvoiced_count_only_flags_shipped_orders_without_valid_invoice"],
   },
   {
-    name: "147 快到期的应付把今天到期的漏掉（窗口不含今天）",
+    name: "147 快到期的应付读到应收科目（ap 写成 ar）",
     file: "crates/findb/src/workbench.rs",
-    from: "            .filter(|r| r.kind == \"ap\" && r.due_date >= today_s && r.due_date <= horizon)\n            .collect();\n        let ap_due_soon = ap_due_soon_rows.len() as i64;\n        let ap_detail = ap_due_soon_rows\n            .iter()\n            .map(|r| r.due_date.as_str())\n            .min()\n            .map(|d| format!(\"最早到期 {d}\"))\n            .unwrap_or_default();\n        out.todos.push(todo_with_detail(",
-    to: "            .filter(|r| r.kind == \"ap\" && r.due_date > today_s && r.due_date <= horizon)\n            .collect();\n        let ap_due_soon = ap_due_soon_rows.len() as i64;\n        let ap_detail = ap_due_soon_rows\n            .iter()\n            .map(|r| r.due_date.as_str())\n            .min()\n            .map(|d| format!(\"最早到期 {d}\"))\n            .unwrap_or_default();\n        out.todos.push(todo_with_detail(",
+    from: "        let (ap_due_soon, ap_detail) =\n            crate::settle::due_soon_summary(db, &opts.biz_accounts.ap, cur, today, 30)?;\n        out.todos.push(todo_with_detail(",
+    to: "        let (ap_due_soon, ap_detail) =\n            crate::settle::due_soon_summary(db, &opts.biz_accounts.ar, cur, today, 30)?;\n        out.todos.push(todo_with_detail(",
     cmd: ["test", "-p", "findb", "--lib", "workbench::tests::uninvoiced_orders_and_ap_due_soon_surface_as_todos"],
   },
   {
@@ -2486,10 +2486,10 @@ const MUT = [
     cmd: ["test", "-p", "findb", "--lib", "sales::tests::customer_item_price_history_returns_last_and_min"],
   },
   {
-    name: "153 快到期的应收把应收/应付筛反（ar 写成 ap，应收窗口读到应付的钱）",
+    name: "153 快到期的应收把应收/应付科目筛反（ar 写成 ap）",
     file: "crates/findb/src/workbench.rs",
-    from: "        // 快到期的应收：接下来 30 天内该收客户的钱（未核销应收按到期日归拢）\n        let ar_due_soon_rows: Vec<_> = due_rows\n            .iter()\n            .filter(|r| r.kind == \"ar\" && r.due_date >= today_s && r.due_date <= horizon)",
-    to: "        // 快到期的应收：接下来 30 天内该收客户的钱（未核销应收按到期日归拢）\n        let ar_due_soon_rows: Vec<_> = due_rows\n            .iter()\n            .filter(|r| r.kind == \"ap\" && r.due_date >= today_s && r.due_date <= horizon)",
+    from: "        let (ar_due_soon, ar_detail) =\n            crate::settle::due_soon_summary(db, &opts.biz_accounts.ar, cur, today, 30)?;\n        out.todos.push(todo_with_detail(",
+    to: "        let (ar_due_soon, ar_detail) =\n            crate::settle::due_soon_summary(db, &opts.biz_accounts.ap, cur, today, 30)?;\n        out.todos.push(todo_with_detail(",
     cmd: ["test", "-p", "findb", "--lib", "workbench::tests::uninvoiced_orders_and_ap_due_soon_surface_as_todos"],
   },
   {
@@ -2512,6 +2512,55 @@ const MUT = [
     from: "            \"material\" => *m += v,",
     to: "            \"material\" => *o += v,",
     cmd: ["test", "-p", "findb", "--lib", "manufacturing::tests::wip_cost_batches_cost_and_hours_without_n_plus_one"],
+  },
+  {
+    name: "157 取号范围上界算错（前缀末字符不 +1，跨期/跨前缀串号）",
+    file: "crates/findb/src/lib.rs",
+    from: "        upper.push(char::from_u32(last as u32 + 1).unwrap_or('\\u{10FFFF}'));",
+    to: "        upper.push(last);",
+    cmd: ["test", "-p", "findb", "--lib", "order_next_no_uses_index_friendly_range"],
+  },
+  {
+    name: "158 取号后缀解析漏掉（max 恒为 0，每次都从 0001 开始）",
+    file: "crates/findb/src/lib.rs",
+    from: "    Ok(max + 1)",
+    to: "    Ok(1)",
+    cmd: ["test", "-p", "findb", "--lib", "order_next_no_uses_index_friendly_range"],
+  },
+  {
+    name: "159 报销单取号丢掉期间过滤（旧号段串进本期）",
+    file: "crates/findb/src/business.rs",
+    from: "        Some(period.ymm()),",
+    to: "        None,",
+    cmd: ["test", "-p", "findb", "--lib", "claim_next_no_uses_index_friendly_range"],
+  },
+  {
+    name: "160 凭证不可变触发器失效（已记账凭证可被静默改摘要）",
+    file: "crates/findb/src/schema.rs",
+    from: "                     OR NEW.source<>OLD.source OR NEW.memo<>OLD.memo\n                 )",
+    to: "                     OR NEW.source<>OLD.source\n                 )",
+    cmd: ["test", "-p", "findb", "--lib", "db_triggers_block_silent_posted_voucher_rewrite"],
+  },
+  {
+    name: "161 分录不可变触发器失效（已记账分录可被静默改金额）",
+    file: "crates/findb/src/schema.rs",
+    from: "                 WHEN (SELECT status FROM voucher WHERE id=OLD.voucher_id)='posted'\n                 BEGIN SELECT RAISE(ABORT, '已记账凭证的分录不可修改，请先反记账'); END;",
+    to: "                 WHEN 0\n                 BEGIN SELECT RAISE(ABORT, '已记账凭证的分录不可修改，请先反记账'); END;",
+    cmd: ["test", "-p", "findb", "--lib", "db_triggers_block_silent_posted_voucher_rewrite"],
+  },
+  {
+    name: "162 快到期投影窗口失效（到期日下界写成上界）",
+    file: "crates/findb/src/settle/aging.rs",
+    from: "        if due >= today && due <= end {",
+    to: "        if due <= today && due <= end {",
+    cmd: ["test", "-p", "findb", "--lib", "due_soon_summary_counts_only_window_and_tracks_earliest"],
+  },
+  {
+    name: "163 快到期投影最早日取成最晚（min 写 max）",
+    file: "crates/findb/src/settle/aging.rs",
+    from: "            earliest = Some(earliest.map_or(due, |e| e.min(due)));",
+    to: "            earliest = Some(earliest.map_or(due, |e| e.max(due)));",
+    cmd: ["test", "-p", "findb", "--lib", "due_soon_summary_counts_only_window_and_tracks_earliest"],
   },
 
 ];

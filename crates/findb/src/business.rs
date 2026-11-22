@@ -1622,16 +1622,15 @@ pub fn claim_get(db: &Db, id: i64) -> DbResult<Option<Claim>> {
 
 /// 下一个单据号：`BX` + 期间 + 3 位序号
 pub fn claim_next_no(db: &Db, period: Period) -> DbResult<String> {
-    let max: i64 = db
-        .conn()
-        .query_row(
-            "SELECT COALESCE(MAX(CAST(SUBSTR(no,11) AS INTEGER)),0) FROM expense_claim
-             WHERE period=?1 AND no GLOB 'BX' || ?2 || '-[0-9]*'",
-            rusqlite::params![period.ymm(), period.ymm().to_string()],
-            |r| r.get(0),
-        )
-        .unwrap_or(0);
-    Ok(format!("BX{}-{:03}", period.ymm(), max + 1))
+    let prefix = format!("BX{}-", period.ymm());
+    let n = crate::next_seq_by_prefix(
+        db.conn(),
+        "expense_claim",
+        &prefix,
+        prefix.len(),
+        Some(period.ymm()),
+    )?;
+    Ok(format!("BX{}-{:03}", period.ymm(), n))
 }
 
 pub fn claim_insert(db: &Db, c: &Claim) -> DbResult<i64> {
@@ -1874,6 +1873,25 @@ mod tests {
     }
     fn d(y: i32, mo: u32, dd: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, mo, dd).unwrap()
+    }
+
+    /// 报销单取号改范围查询后：连续、跨期独立、保留 period 过滤（旧号段不影响新期）
+    #[test]
+    fn claim_next_no_uses_index_friendly_range() {
+        let db = tmpdb("claim_next_no_range");
+        let p = Period::new(2026, 1).unwrap();
+        assert_eq!(claim_next_no(&db, p).unwrap(), "BX202601-001");
+        db.conn().execute(
+            "INSERT INTO expense_claim(period,no,biz_date,applicant) VALUES (202601,'BX202601-009','2026-01-05','E01')",
+            [],
+        ).unwrap();
+        assert_eq!(claim_next_no(&db, p).unwrap(), "BX202601-010");
+        // 上一年的号段不能影响本期
+        db.conn().execute(
+            "INSERT INTO expense_claim(period,no,biz_date,applicant) VALUES (202512,'BX202512-099','2025-12-05','E01')",
+            [],
+        ).unwrap();
+        assert_eq!(claim_next_no(&db, p).unwrap(), "BX202601-010");
     }
 
     fn mv(period: Period, date: NaiveDate, kind: StockKind, qty: &str, price: &str) -> StockMove {

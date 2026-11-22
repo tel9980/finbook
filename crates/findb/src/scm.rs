@@ -407,14 +407,7 @@ pub fn po_next_no(db: &Db, period: Period) -> DbResult<String> {
         year,
         month
     );
-    let sql = format!(
-        "SELECT COALESCE(MAX(CAST(SUBSTR(no, {}) AS INTEGER)), 0) + 1 FROM purchase_order WHERE no LIKE ?",
-        prefix.len() + 1
-    );
-    let n: i64 = db
-        .conn()
-        .query_row(&sql, [format!("{}%", prefix)], |r| r.get(0))
-        .unwrap_or(0);
+    let n = crate::next_seq_by_prefix(db.conn(), "purchase_order", &prefix, prefix.len(), None)?;
     Ok(format!("{}{:04}", prefix, n))
 }
 
@@ -427,14 +420,7 @@ pub fn so_next_no(db: &Db, period: Period) -> DbResult<String> {
         year,
         month
     );
-    let sql = format!(
-        "SELECT COALESCE(MAX(CAST(SUBSTR(no, {}) AS INTEGER)), 0) + 1 FROM sales_order WHERE no LIKE ?",
-        prefix.len() + 1
-    );
-    let n: i64 = db
-        .conn()
-        .query_row(&sql, [format!("{}%", prefix)], |r| r.get(0))
-        .unwrap_or(0);
+    let n = crate::next_seq_by_prefix(db.conn(), "sales_order", &prefix, prefix.len(), None)?;
     Ok(format!("{}{:04}", prefix, n))
 }
 
@@ -1996,6 +1982,58 @@ mod tests {
 
     /// 工作台趋势按期间批量汇总，不逐期拉整表（防 N+1 回潮）。
     ///
+    /// 取号改范围查询后必须仍然连续、按前缀隔离期间。
+    ///
+    /// 回归背景：把 `no LIKE '前缀%'` + `MAX(CAST(SUBSTR...))` 改成
+    /// `no >= 前缀 AND no < 上界` 后，最怕的是上界算错（跨期串号）或
+    /// 后缀解析错位（从 1 开始又回到 0）。这里同时验证三种语义：
+    /// 同期间连号、跨期间独立、自定义前缀（doc_prefixes）下仍正确。
+    #[test]
+    fn order_next_no_uses_index_friendly_range() {
+        let db = mem();
+        let p1 = Period::new(2026, 1).unwrap();
+        let p2 = Period::new(2026, 2).unwrap();
+
+        assert_eq!(po_next_no(&db, p1).unwrap(), "CG2026010001");
+        db.conn()
+            .execute(
+                "INSERT INTO purchase_order(period,no,date) VALUES (202601,'CG2026010001','2026-01-05')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(po_next_no(&db, p1).unwrap(), "CG2026010002");
+        // 大量历史单据（非连续尾号）也要取到 max+1
+        db.conn()
+            .execute(
+                "INSERT INTO purchase_order(period,no,date) VALUES (202601,'CG2026010999','2026-01-06')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(po_next_no(&db, p1).unwrap(), "CG2026011000");
+        // 跨期间隔离：2 月从 1 开始
+        assert_eq!(po_next_no(&db, p2).unwrap(), "CG2026020001");
+        // 销售侧同款逻辑
+        assert_eq!(so_next_no(&db, p1).unwrap(), "XS2026010001");
+        db.conn()
+            .execute(
+                "INSERT INTO sales_order(period,no,date) VALUES (202601,'XS2026010020','2026-01-05')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(so_next_no(&db, p1).unwrap(), "XS2026010021");
+    }
+
+    /// 回归：只改 SQL 不改前缀来源，自定义前缀必须仍然生效
+    #[test]
+    fn order_next_no_respects_custom_doc_prefix() {
+        let db = mem();
+        let mut opts = db.options();
+        opts.doc_prefixes.insert("po".into(), "PO".into());
+        db.set_options(&opts).unwrap();
+        let p = Period::new(2026, 3).unwrap();
+        assert_eq!(po_next_no(&db, p).unwrap(), "PO2026030001");
+    }
+
     /// `so_amount_by_period` / `po_amount_by_period` 一条 `BETWEEN` 扫全、
     /// Rust 侧按期间累加，与逐期 `so_list`/`po_list` 累加 `total_amount` 同口径。
     #[test]
@@ -2933,14 +2971,7 @@ pub fn prod_next_no(db: &Db, period: Period) -> DbResult<String> {
         year,
         month
     );
-    let sql = format!(
-        "SELECT COALESCE(MAX(CAST(SUBSTR(no, {}) AS INTEGER)), 0) + 1 FROM production_order WHERE no LIKE ?",
-        prefix.len() + 1
-    );
-    let n: i64 = db
-        .conn()
-        .query_row(&sql, [format!("{}%", prefix)], |r| r.get(0))
-        .unwrap_or(0);
+    let n = crate::next_seq_by_prefix(db.conn(), "production_order", &prefix, prefix.len(), None)?;
     Ok(format!("{}{:04}", prefix, n))
 }
 

@@ -10,8 +10,9 @@
 //   2. 仓库卫生（CI 配置可解析、变异清单未过期、全仓编码无损坏）
 //   3. 工具脚本可移植性（不许写死本机路径 —— 本地绿、CI 红的第一大来源）
 //   4. 设计文档引用未漂移
-//   5. cargo fmt --check（Rust 侧唯一能在秒级判定的闸门）
-//   6. cargo check --workspace（只查类型，不跑测试；有增量缓存时通常十几秒）
+//   5. 金额与账号规范（SQL 里 SUM 金额列 / 科目代码用整数 / 金额用 f64）
+//   6. cargo fmt --check（Rust 侧唯一能在秒级判定的闸门）
+//   7. cargo check --workspace（只查类型，不跑测试；有增量缓存时通常十几秒）
 //
 // 判据一律看**退出码**，不看输出文字 —— 见 tools/check-js.js 头部的教训。
 //
@@ -33,6 +34,7 @@ const steps = [
   { name: "仓库卫生（CI 配置 / 变异清单 / 编码）", cmd: "node", args: ["tools/check-ci.js"] },
   { name: "工具脚本可移植性", cmd: "node", args: ["tools/check-portable.js"] },
   { name: "设计文档引用", cmd: "node", args: ["tools/check-design-doc.js"] },
+  { name: "金额与账号规范检查", cmd: "node", args: ["tools/check-money-discipline.js"] },
   {
     name: "Rust 格式",
     cmd: "cargo",

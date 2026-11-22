@@ -2571,6 +2571,40 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
                 "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version', ?1)",
                 rusqlite::params![SCHEMA_VERSION.to_string()],
             )?;
+
+            // ---- 已记账凭证不可静默改删（对标 accounted 的 enforcement triggers）----
+            // 应用层的 status.can_edit / validate_delete 是「正常路径」守卫；
+            // 这里是 DB 级最后防线：任何绕过应用直写 SQLite 的代码（导入、脚本、
+            // 插件、手工改账）都改不动已记账凭证的会计内容。
+            //
+            // 拦的是「会计内容」：期间/日期/字/附件/来源/摘要 + 分录金额科目。
+            // 放行的合法流转：反记账 status posted→draft/audited、更正链
+            // amends_id/amended_by/amend_reason、经办人字段 prepared_by/cashier/
+            // audited_by/posted_by（属生态归因元数据，数据范围/签字都要用）、
+            // 重排凭证号 no、作废/取消作废 status→void/void→draft、updated_at
+            // —— 这些都不改钱。
+            // clear_vouchers 清库前会先把 posted 改成 draft（见 lib.rs）。
+            // IF NOT EXISTS 幂等：老账套每次 init 都补装，不会重复建。
+            conn.execute_batch(
+                "CREATE TRIGGER IF NOT EXISTS trg_voucher_posted_update BEFORE UPDATE ON voucher
+                 WHEN OLD.status='posted' AND (
+                     NEW.period<>OLD.period OR NEW.date<>OLD.date OR NEW.word<>OLD.word
+                     OR NEW.attachments<>OLD.attachments
+                     OR NEW.source<>OLD.source OR NEW.memo<>OLD.memo
+                 )
+                 BEGIN SELECT RAISE(ABORT, '已记账凭证不可修改会计内容，请先反记账'); END;
+                 CREATE TRIGGER IF NOT EXISTS trg_voucher_posted_delete BEFORE DELETE ON voucher
+                 WHEN OLD.status='posted'
+                 BEGIN SELECT RAISE(ABORT, '已记账凭证不可删除，请先反记账'); END;
+                 CREATE TRIGGER IF NOT EXISTS trg_voucher_entry_posted_update
+                 BEFORE UPDATE ON voucher_entry
+                 WHEN (SELECT status FROM voucher WHERE id=OLD.voucher_id)='posted'
+                 BEGIN SELECT RAISE(ABORT, '已记账凭证的分录不可修改，请先反记账'); END;
+                 CREATE TRIGGER IF NOT EXISTS trg_voucher_entry_posted_delete
+                 BEFORE DELETE ON voucher_entry
+                 WHEN (SELECT status FROM voucher WHERE id=OLD.voucher_id)='posted'
+                 BEGIN SELECT RAISE(ABORT, '已记账凭证的分录不可删除，请先反记账'); END;",
+            )?;
         }
         Ok(())
     })();

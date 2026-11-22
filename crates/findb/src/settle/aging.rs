@@ -241,6 +241,48 @@ pub fn ar_ap_due_schedule(
     Ok(out)
 }
 
+/// 工作台「快到期」待办的轻量投影：只统计接下来 `days` 天内到期的未核销往来笔数，
+/// 并记录最早到期日 —— 不构造 `DueEntry`、不做全量字符串格式化、不排序。
+///
+/// 与 `ar_ap_due_schedule` 共用同一份取数（`aging_items` + `pay_days_map`），
+/// 到期日口径完全一致（单据日期 + 客商账期天数）；区别只在「按窗口裁剪」发生在
+/// 构造输出之前：账套有 5000 笔往来、窗口内只有 3 笔时，这里只做 3 次日期比较，
+/// 而调用 `ar_ap_due_schedule` 再过滤要构造并排序 5000 个 `DueEntry`。
+///
+/// `upto`/`today` 由调用方传入（工作台已经算过），便于测试用固定日期。
+/// 返回 `(笔数, 最早到期日 YYYY-MM-DD)`；笔数为 0 时日期为空串。
+pub fn due_soon_summary(
+    db: &Db,
+    account: &str,
+    upto: Period,
+    today: chrono::NaiveDate,
+    days: i64,
+) -> DbResult<(i64, String)> {
+    let (items, party) = aging_items(db, account, upto, None)?;
+    let days_map = pay_days_map(db, party)?;
+    let end = today + chrono::Duration::days(days);
+    let mut count = 0i64;
+    let mut earliest: Option<chrono::NaiveDate> = None;
+    for it in items {
+        let open = it.open();
+        if open.is_zero() {
+            continue;
+        }
+        let pay = days_map.get(it.key.trim()).copied().unwrap_or(0);
+        let due = it.date + chrono::Duration::days(pay);
+        if due >= today && due <= end {
+            count += 1;
+            earliest = Some(earliest.map_or(due, |e| e.min(due)));
+        }
+    }
+    Ok((
+        count,
+        earliest
+            .map(|d| d.format("%Y-%m-%d").to_string())
+            .unwrap_or_default(),
+    ))
+}
+
 /// 账期表：客商编码 → 账期天数
 ///
 /// 一次全读，不要在账龄循环里逐行查档案（几十个客户就是几十次查询）。

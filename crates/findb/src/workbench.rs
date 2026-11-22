@@ -456,57 +456,37 @@ pub fn collect(db: &Db, user: &User, cur: Period, n: i32) -> DbResult<WbOut> {
             "invoices",
             uninvoiced_detail,
         ));
-        // 快到期的应付：接下来 30 天内该付给供应商的钱（未核销应付按到期日归拢）
+        // 快到期的应付/应收：接下来 30 天内该付/该收的钱。
+        // 用轻量投影直接按窗口裁剪（不再先构造全量 DueEntry 再过滤）。
         let opts = db.options();
-        let due_rows = crate::settle::ar_ap_due_schedule(
-            db,
-            &opts.biz_accounts.ar,
-            &opts.biz_accounts.ap,
-            cur,
-        )?;
         let today = chrono::Local::now().date_naive();
-        let today_s = today.format("%Y-%m-%d").to_string();
-        let horizon = (today + chrono::Duration::days(30))
-            .format("%Y-%m-%d")
-            .to_string();
-        let ap_due_soon_rows: Vec<_> = due_rows
-            .iter()
-            .filter(|r| r.kind == "ap" && r.due_date >= today_s && r.due_date <= horizon)
-            .collect();
-        let ap_due_soon = ap_due_soon_rows.len() as i64;
-        let ap_detail = ap_due_soon_rows
-            .iter()
-            .map(|r| r.due_date.as_str())
-            .min()
-            .map(|d| format!("最早到期 {d}"))
-            .unwrap_or_default();
+        let (ap_due_soon, ap_detail) =
+            crate::settle::due_soon_summary(db, &opts.biz_accounts.ap, cur, today, 30)?;
         out.todos.push(todo_with_detail(
             "采购",
             "ap_due_soon",
             "快到期的应付",
             ap_due_soon,
             "settle",
-            ap_detail,
+            if ap_detail.is_empty() {
+                String::new()
+            } else {
+                format!("最早到期 {ap_detail}")
+            },
         ));
-        // 快到期的应收：接下来 30 天内该收客户的钱（未核销应收按到期日归拢）
-        let ar_due_soon_rows: Vec<_> = due_rows
-            .iter()
-            .filter(|r| r.kind == "ar" && r.due_date >= today_s && r.due_date <= horizon)
-            .collect();
-        let ar_due_soon = ar_due_soon_rows.len() as i64;
-        let ar_detail = ar_due_soon_rows
-            .iter()
-            .map(|r| r.due_date.as_str())
-            .min()
-            .map(|d| format!("最早到期 {d}"))
-            .unwrap_or_default();
+        let (ar_due_soon, ar_detail) =
+            crate::settle::due_soon_summary(db, &opts.biz_accounts.ar, cur, today, 30)?;
         out.todos.push(todo_with_detail(
             "销售",
             "ar_due_soon",
             "快到期的应收",
             ar_due_soon,
             "settle",
-            ar_detail,
+            if ar_detail.is_empty() {
+                String::new()
+            } else {
+                format!("最早到期 {ar_detail}")
+            },
         ));
     }
 
@@ -1022,55 +1002,35 @@ pub fn collect_todos(db: &Db, user: &User, cur: Period) -> DbResult<Vec<WbTodo>>
             uninvoiced_detail,
         ));
         let opts = db.options();
-        let due_rows = crate::settle::ar_ap_due_schedule(
-            db,
-            &opts.biz_accounts.ar,
-            &opts.biz_accounts.ap,
-            cur,
-        )?;
         let today = chrono::Local::now().date_naive();
-        let today_s = today.format("%Y-%m-%d").to_string();
-        let horizon = (today + chrono::Duration::days(30))
-            .format("%Y-%m-%d")
-            .to_string();
-        let ap_due_soon_rows: Vec<_> = due_rows
-            .iter()
-            .filter(|r| r.kind == "ap" && r.due_date >= today_s && r.due_date <= horizon)
-            .collect();
-        let ap_due_soon = ap_due_soon_rows.len() as i64;
-        let ap_detail = ap_due_soon_rows
-            .iter()
-            .map(|r| r.due_date.as_str())
-            .min()
-            .map(|d| format!("最早到期 {d}"))
-            .unwrap_or_default();
+        // 快到期的应付/应收：轻量投影直接按窗口裁剪，不再构造全量 DueEntry 再过滤
+        let (ap_due_soon, ap_detail) =
+            crate::settle::due_soon_summary(db, &opts.biz_accounts.ap, cur, today, 30)?;
         todos.push(todo_with_detail(
             "采购",
             "ap_due_soon",
             "快到期的应付",
             ap_due_soon,
             "settle",
-            ap_detail,
+            if ap_detail.is_empty() {
+                String::new()
+            } else {
+                format!("最早到期 {ap_detail}")
+            },
         ));
-        // 快到期的应收：接下来 30 天内该收客户的钱
-        let ar_due_soon_rows: Vec<_> = due_rows
-            .iter()
-            .filter(|r| r.kind == "ar" && r.due_date >= today_s && r.due_date <= horizon)
-            .collect();
-        let ar_due_soon = ar_due_soon_rows.len() as i64;
-        let ar_detail = ar_due_soon_rows
-            .iter()
-            .map(|r| r.due_date.as_str())
-            .min()
-            .map(|d| format!("最早到期 {d}"))
-            .unwrap_or_default();
+        let (ar_due_soon, ar_detail) =
+            crate::settle::due_soon_summary(db, &opts.biz_accounts.ar, cur, today, 30)?;
         todos.push(todo_with_detail(
             "销售",
             "ar_due_soon",
             "快到期的应收",
             ar_due_soon,
             "settle",
-            ar_detail,
+            if ar_detail.is_empty() {
+                String::new()
+            } else {
+                format!("最早到期 {ar_detail}")
+            },
         ));
     }
     // 仓管

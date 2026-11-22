@@ -2495,6 +2495,69 @@ mod tests {
         assert!(get(&db, id).unwrap().is_none());
     }
 
+    /// DB 触发器防线：绕过应用层直写 SQLite 也改不动已记账凭证的会计内容，
+    /// 但反记账 / 更正链 / 出纳签字 / 重排号 / 作废这些合法流转不受影响。
+    #[test]
+    fn db_triggers_block_silent_posted_voucher_rewrite() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let mut v = sample(p, 5, 1);
+        let id = save(&db, &mut v).unwrap();
+        post(&db, id, "张三").unwrap();
+
+        // 直改会计内容：摘要 / 日期 / 金额分录，全部被 DB 触发器拦下
+        assert!(db
+            .conn()
+            .execute("UPDATE voucher SET memo='偷改' WHERE id=?1", [id])
+            .is_err());
+        assert!(db
+            .conn()
+            .execute("UPDATE voucher SET date='2026-02-01' WHERE id=?1", [id])
+            .is_err());
+        let eid: i64 = db
+            .conn()
+            .query_row(
+                "SELECT id FROM voucher_entry WHERE voucher_id=?1 LIMIT 1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(db
+            .conn()
+            .execute("UPDATE voucher_entry SET debit='999' WHERE id=?1", [eid])
+            .is_err());
+        assert!(db
+            .conn()
+            .execute("DELETE FROM voucher_entry WHERE id=?1", [eid])
+            .is_err());
+        assert!(db
+            .conn()
+            .execute("DELETE FROM voucher WHERE id=?1", [id])
+            .is_err());
+
+        // 合法流转放行：先反记账（posted → draft），改钱以外的字段不受触发器管
+        unpost(&db, id).unwrap();
+        assert_eq!(get(&db, id).unwrap().unwrap().status, VoucherStatus::Draft);
+        post(&db, id, "王五").unwrap();
+
+        db.conn()
+            .execute(
+                "UPDATE voucher SET amended_by=?2, amend_reason='更正测试' WHERE id=?1",
+                rusqlite::params![id, 9999i64],
+            )
+            .unwrap();
+        db.conn()
+            .execute("UPDATE voucher SET cashier='李四' WHERE id=?1", [id])
+            .unwrap();
+        db.conn()
+            .execute("UPDATE voucher SET no=777 WHERE id=?1", [id])
+            .unwrap();
+        let v = get(&db, id).unwrap().unwrap();
+        assert_eq!(v.status, VoucherStatus::Posted); // 仍是记账状态
+        assert_eq!(v.no, 777);
+        assert_eq!(v.cashier.as_deref(), Some("李四"));
+    }
+
     #[test]
     fn blank_lines_dropped() {
         let db = mem();
