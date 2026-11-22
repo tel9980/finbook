@@ -40,4 +40,13 @@ ignore = [
     # rust_xlsxwriter 0.80 in finui）仍锁在旧版。
     # 解除条件：rust_xlsxwriter 升到 0.100+ 且 findb 的 zip 依赖升到 9 之后删除本条。
     "RUSTSEC-2026-0429",
+
+    # RUSTSEC-2026-0548 — zip「`ZipStreamReader` 按 local-header 名提取条目，
+    # 与 central directory 不一致」路径穿越。与上面 0367-0369/0429 同一类，
+    # 触发点同样是 `extract()`/解压写盘。全仓 grep 无 `.extract(` 调用（只有
+    # axum::extract 与 iterator 的 .zip），zip 只用于「读 .xlsx 归档结构」
+    # （ZipArchive::new + by_index + size）与「生成备份包」（ZipWriter），
+    # 从不解压落盘，攻击面不可达。补丁需 zip >= 9.0.0（升级路径同 0429）。
+    # 解除条件：rust_xlsxwriter 升到 0.100+ 且 findb 的 zip 依赖升到 9 之后删除本条。
+    "RUSTSEC-2026-0548",
 ]

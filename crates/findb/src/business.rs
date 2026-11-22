@@ -1886,9 +1886,16 @@ mod tests {
             [],
         ).unwrap();
         assert_eq!(claim_next_no(&db, p).unwrap(), "BX202601-010");
-        // 上一年的号段不能影响本期
+        // 上一年的号段不能影响本期（前缀不同，范围查询天然排除）
         db.conn().execute(
             "INSERT INTO expense_claim(period,no,biz_date,applicant) VALUES (202512,'BX202512-099','2025-12-05','E01')",
+            [],
+        ).unwrap();
+        assert_eq!(claim_next_no(&db, p).unwrap(), "BX202601-010");
+        // 号段前缀是本期、但期间字段是上期的脏数据：只有 period 过滤能排除它。
+        // 这条专门守变异 159（丢 period 过滤）——丢了就会把 -099 算进来变 -100。
+        db.conn().execute(
+            "INSERT INTO expense_claim(period,no,biz_date,applicant) VALUES (202512,'BX202601-099','2025-12-05','E01')",
             [],
         ).unwrap();
         assert_eq!(claim_next_no(&db, p).unwrap(), "BX202601-010");
