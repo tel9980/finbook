@@ -49,4 +49,14 @@ ignore = [
     # 从不解压落盘，攻击面不可达。补丁需 zip >= 9.0.0（升级路径同 0429）。
     # 解除条件：rust_xlsxwriter 升到 0.100+ 且 findb 的 zip 依赖升到 9 之后删除本条。
     "RUSTSEC-2026-0548",
+
+    # RUSTSEC-2026-0545 — zip「WinZip AES 条目在数据提前结束/为空时不校验 HMAC
+    # 认证码」（CVSS 6.5 完整性）。与上面 0367-0369/0429/0548 同属 zip 0.6.6 /
+    # 2.4.2 的两个实例。触发前提极窄：必须用密码读 AES 加密条目
+    # （`ZipArchive::by_name_decrypt`）且启用 `aes-crypto` feature。本项目 zip
+    # 只用于「读 .xlsx 归档结构」（ZipArchive::new + by_index + size）与
+    # 「生成备份包」（ZipWriter），既不按密码解密、也未启用 aes-crypto，攻击面
+    # 不可达。补丁需 zip >= 9.0.0（升级路径同 0429/0548）。
+    # 解除条件：rust_xlsxwriter 升到 0.100+ 且 findb 的 zip 依赖升到 9 之后删除本条。
+    "RUSTSEC-2026-0545",
 ]
