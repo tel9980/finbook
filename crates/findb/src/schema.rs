@@ -33,7 +33,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 56;
+pub const SCHEMA_VERSION: i64 = 57;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -1476,6 +1476,9 @@ CREATE TABLE IF NOT EXISTS ship_notice (
     qty        TEXT NOT NULL,
     date       TEXT NOT NULL DEFAULT '',
     status     TEXT NOT NULL DEFAULT 'pending', -- pending / shipped
+    -- 已按通知出库的数量：发货时按通知顺序逐条占用，占满才置 shipped。
+    -- 老账套升级后默认 '0'；历史已置 shipped 的通知由 v57 迁移补齐为 qty。
+    qty_done   TEXT NOT NULL DEFAULT '0',
     memo       TEXT NOT NULL DEFAULT '',
     created_by TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT ''
@@ -2538,6 +2541,8 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             // v56：删订单级冗余列 sales_order.shipped_amount / purchase_order.received_amount
             // （读路径早已实时汇总，落库值从未被用到）
             migrate_v56(conn)?;
+            // v57：发货通知加 qty_done（逐条数量对齐），历史 shipped 通知补齐
+            migrate_v57(conn)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：
@@ -2651,6 +2656,29 @@ fn migrate_v56(conn: &Connection) -> Result<(), DbError> {
             conn.execute(&format!("ALTER TABLE {table} DROP COLUMN {col}"), [])?;
         }
     }
+    Ok(())
+}
+
+/// v56 → v57：发货通知加 `qty_done`（逐条数量对齐）
+///
+/// 老账套的通知只有 pending/shipped 两态、没有「已发多少」。补列之后：
+/// - 仍在 pending 的通知：`qty_done` 留 `'0'`（还没发，语义正确）；
+/// - 已经是 shipped 的：老语义是「出库即完成整条通知」，所以 `qty_done = qty`，
+///   否则这些历史通知会显示成「已发货 0 / 10」，看着像数据坏了。
+///
+/// 幂等：列已存在就跳过补列，但补齐 `qty_done` 的 UPDATE 仍会跑——它只命中
+/// `qty_done='0' AND status='shipped'` 的行，重复执行无副作用。
+fn migrate_v57(conn: &Connection) -> Result<(), DbError> {
+    if !column_exists(conn, "ship_notice", "qty_done")? {
+        conn.execute(
+            "ALTER TABLE ship_notice ADD COLUMN qty_done TEXT NOT NULL DEFAULT '0'",
+            [],
+        )?;
+    }
+    conn.execute(
+        "UPDATE ship_notice SET qty_done=qty WHERE status='shipped' AND qty_done='0'",
+        [],
+    )?;
     Ok(())
 }
 
@@ -3160,5 +3188,59 @@ mod tests {
         init(&conn).unwrap();
         assert!(!column_exists(&conn, "sales_order", "shipped_amount").unwrap());
         assert!(!column_exists(&conn, "purchase_order", "received_amount").unwrap());
+    }
+
+    /// v57：发货通知补 `qty_done`，历史已发通知要补齐成「整条已发」，
+    /// 否则升级后老通知会显示成「已发货 0 / 10」，看着像数据丢了
+    #[test]
+    fn old_book_upgrade_backfills_ship_notice_qty_done() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(DDL).unwrap();
+        // 造出「v56、ship_notice 还没有 qty_done」的存量账套
+        conn.execute_batch(
+            "ALTER TABLE ship_notice DROP COLUMN qty_done;
+             INSERT INTO ship_notice(so_id,qty,date,status,memo,created_by,created_at)
+                 VALUES(1,'3','2026-01-05','shipped','老通知','u','');
+             INSERT INTO ship_notice(so_id,qty,date,status,memo,created_by,created_at)
+                 VALUES(1,'4','2026-01-06','pending','还没发','u','');
+             INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','56');",
+        )
+        .unwrap();
+        assert!(!column_exists(&conn, "ship_notice", "qty_done").unwrap());
+
+        init(&conn).unwrap();
+
+        assert!(
+            column_exists(&conn, "ship_notice", "qty_done").unwrap(),
+            "升级后必须补上 qty_done"
+        );
+        // 历史已发通知：qty_done 必须等于 qty（老语义是整条完成）
+        let done: String = conn
+            .query_row(
+                "SELECT qty_done FROM ship_notice WHERE status='shipped'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(done, "3", "已发通知要补齐成整条已发，不能留 0");
+        // 待发通知：还是 0，别凭空占数量
+        let pending_done: String = conn
+            .query_row(
+                "SELECT qty_done FROM ship_notice WHERE status='pending'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending_done, "0", "待发通知不该被补成已发");
+        // 幂等：再跑一次不报错、不重复加列
+        init(&conn).unwrap();
+        let v: String = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION.to_string());
     }
 }

@@ -2618,6 +2618,34 @@ const MUT = [
     to: "        let _ = &so;",
     cmd: ["test", "-p", "findb", "--lib", "prepay_gate_check_on_plain_shipment_path_too"],
   },
+  {
+    name: "172 发货通知又退回「出库即整条完成」（一次发 2 件吃掉 3 件的通知）",
+    file: "crates/findb/src/sales.rs",
+    from: "        let take = if left < remain { left } else { remain };",
+    to: "        let take = remain;",
+    cmd: ["test", "-p", "findb", "--lib", "notice_allocation_claims_partially_instead_of_whole_notice"],
+  },
+  {
+    name: "173 通知占满也不置已发（占满了还挂在待发列表里）",
+    file: "crates/findb/src/sales.rs",
+    from: "        let status = if now_done >= need {\n            \"shipped\"\n        } else {\n            \"pending\"\n        };",
+    to: "        let status = \"pending\";",
+    cmd: ["test", "-p", "findb", "--lib", "notice_allocation_rolls_forward_across_notices"],
+  },
+  {
+    name: "174 通知占用不跟着发货事务走（出库失败通知照样被吃掉）",
+    file: "crates/findb/src/sales.rs",
+    from: "    notice_allocate_on(&tx, so_id, eff)?;",
+    to: "    let _ = eff;",
+    cmd: ["test", "-p", "findb", "--lib", "notice_allocation_runs_inside_shipment_transaction"],
+  },
+  {
+    name: "175 纯流水发货入口不占用通知（桌面端发完通知一直挂着）",
+    file: "crates/findb/src/sales.rs",
+    from: "    notice_allocate_on(&tx, so_id, qty)?;",
+    to: "    let _ = qty;",
+    cmd: ["test", "-p", "findb", "--lib", "notice_allocation_runs_on_plain_shipment_path"],
+  },
 
 ];
 

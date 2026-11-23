@@ -381,7 +381,8 @@ pub fn so_shipment_add(
     if let Some(so) = crate::scm::so_get(db, so_id)? {
         prepay_gate_check_on(db.conn(), &so, qty, "")?;
     }
-    db.conn().execute(
+    let tx = db.write_tx()?;
+    tx.execute(
         "INSERT INTO so_shipment(so_id,period,date,qty,memo) VALUES(?1,?2,?3,?4,?5)",
         rusqlite::params![
             so_id,
@@ -391,7 +392,11 @@ pub fn so_shipment_add(
             memo
         ],
     )?;
-    Ok(db.conn().last_insert_rowid())
+    let rid = tx.last_insert_rowid();
+    // 纯流水入口同样按数量占用通知：桌面端走这条路发货，不占用的话通知会一直挂着
+    notice_allocate_on(&tx, so_id, qty)?;
+    tx.commit()?;
+    Ok(rid)
 }
 
 /// 销售退货：负发货记录
@@ -571,6 +576,9 @@ pub fn so_shipment_all(
         &format!("销售出库 {}", so.no),
         warehouse,
     )?;
+    // 发货通知按数量逐条占用，与出库**同一个事务**：通知是备货指令，占用了多少
+    // 必须和真出库的件数一致；分开提交会出现「货发了、通知还欠着」或反过来。
+    notice_allocate_on(&tx, so_id, eff)?;
     tx.commit()?;
     Ok((rid, ivid))
 }
@@ -687,6 +695,8 @@ pub struct ShipNotice {
     pub id: i64,
     pub so_id: i64,
     pub qty: Money,
+    /// 已按本条通知出库的数量（逐条对齐用）
+    pub qty_done: Money,
     pub date: String,
     /// pending / shipped
     pub status: String,
@@ -697,7 +707,7 @@ pub struct ShipNotice {
 /// 通知列表（待发优先，近期 50 条）
 pub fn notice_list(db: &Db) -> DbResult<Vec<ShipNotice>> {
     let mut st = db.conn().prepare(
-        "SELECT id,so_id,qty,date,status,memo,created_by FROM ship_notice
+        "SELECT id,so_id,qty,qty_done,date,status,memo,created_by FROM ship_notice
          ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, id DESC LIMIT 50",
     )?;
     let rows = st
@@ -706,10 +716,11 @@ pub fn notice_list(db: &Db) -> DbResult<Vec<ShipNotice>> {
                 id: r.get(0)?,
                 so_id: r.get(1)?,
                 qty: m(&r.get::<_, String>(2)?),
-                date: r.get(3)?,
-                status: r.get(4)?,
-                memo: r.get(5)?,
-                created_by: r.get(6)?,
+                qty_done: m(&r.get::<_, String>(3)?),
+                date: r.get(4)?,
+                status: r.get(5)?,
+                memo: r.get(6)?,
+                created_by: r.get(7)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -760,15 +771,71 @@ pub fn notice_create(
     Ok(db.conn().last_insert_rowid())
 }
 
-/// 发货成功后完成该订单最早一条待发通知（v1：通知=备货指令，出库即完成；
-/// 逐条数量对齐留待迭代）。返回是否有通知被完成。
-pub fn notice_fulfill_on_shipment(db: &Db, so_id: i64) -> DbResult<bool> {
-    let n = db.conn().execute(
-        "UPDATE ship_notice SET status='shipped'
-         WHERE id = (SELECT id FROM ship_notice WHERE so_id=?1 AND status='pending' ORDER BY id LIMIT 1)",
-        [so_id],
-    )?;
-    Ok(n > 0)
+/// 发货后按通知顺序逐条占用数量（数量对齐），返回本次被通知认领掉的数量。
+///
+/// 旧实现是「出库一次就把**最早一条**待发通知整条置 shipped」：通知 3+3+4、
+/// 先发 2 件，第一条 3 件的通知就被标成已发完——通知与实际出库对不上，剩下的
+/// 10 件在通知列表里凭空消失。备货指令和实际出库一旦脱钩，仓管就失去了「还欠
+/// 客户多少」的唯一线索。
+///
+/// 现在的口径：按通知创建顺序（id 升序）逐条占用本次发货量，占满一条才置
+/// `shipped`，占不满就只累加 `qty_done` 留在 pending。发货量超过所有待发通知
+/// 之和时，多出来的部分只是没有通知可认领，不影响发货本身（通知是备货指令，
+/// 不是发货的前置条件）。
+pub fn notice_fulfill_on_shipment(db: &Db, so_id: i64, qty: Money) -> DbResult<Money> {
+    let tx = db.write_tx()?;
+    let got = notice_allocate_on(&tx, so_id, qty)?;
+    tx.commit()?;
+    Ok(got)
+}
+
+/// 上面那条的**事务内**版本：发货链路在同一个事务里调它，出库与通知占用要么
+/// 一起成功、要么一起回滚，不会出现「货发了通知没动」。
+pub fn notice_allocate_on(conn: &rusqlite::Connection, so_id: i64, qty: Money) -> DbResult<Money> {
+    if !qty.is_positive() {
+        return Ok(Money::ZERO);
+    }
+    let mut pending: Vec<(i64, Money, Money)> = {
+        let mut st = conn.prepare(
+            "SELECT id, qty, qty_done FROM ship_notice
+             WHERE so_id=?1 AND status='pending' ORDER BY id",
+        )?;
+        let rows = st.query_map([so_id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                m(&r.get::<_, String>(1)?),
+                m(&r.get::<_, String>(2)?),
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    let mut left = qty;
+    let mut allocated = Money::ZERO;
+    for (id, need, done) in pending.drain(..) {
+        if !left.is_positive() {
+            break;
+        }
+        let remain = need - done;
+        if !remain.is_positive() {
+            // 数量已被占满但状态没跟上（历史脏数据）：顺手置 shipped，别卡住后面
+            conn.execute("UPDATE ship_notice SET status='shipped' WHERE id=?1", [id])?;
+            continue;
+        }
+        let take = if left < remain { left } else { remain };
+        let now_done = done + take;
+        let status = if now_done >= need {
+            "shipped"
+        } else {
+            "pending"
+        };
+        conn.execute(
+            "UPDATE ship_notice SET qty_done=?2, status=?3 WHERE id=?1",
+            rusqlite::params![id, crate::exact_param(now_done), status],
+        )?;
+        left -= take;
+        allocated += take;
+    }
+    Ok(allocated)
 }
 
 pub fn so_payment_add(
@@ -2414,6 +2481,113 @@ mod tests {
         assert!(so_shipment_add(&db, so_id, p, d, m("4"), "").is_err());
         so_payment_add(&db, so_id, p, d, m("452"), "预付").unwrap();
         assert!(so_shipment_add(&db, so_id, p, d, m("4"), "").is_ok());
+    }
+
+    /// 三条通知 3+3+4，先发 2 件：只该占掉第一条的 2/3，剩下两条一动不动。
+    /// 老实现会把第一条整条置 shipped，通知与实际出库从此脱钩。
+    #[test]
+    fn notice_allocation_claims_partially_instead_of_whole_notice() {
+        let db = mem();
+        let (so_id, _p, d) = prepay_fixture(&db);
+        let n1 = notice_create(&db, so_id, m("3"), d, "", "u").unwrap();
+        let n2 = notice_create(&db, so_id, m("3"), d, "", "u").unwrap();
+        let n3 = notice_create(&db, so_id, m("4"), d, "", "u").unwrap();
+
+        let got = notice_fulfill_on_shipment(&db, so_id, m("2")).unwrap();
+        assert_eq!(got, m("2"), "2 件全被通知认领");
+
+        let rows = notice_list(&db).unwrap();
+        let by_id = |id: i64| rows.iter().find(|n| n.id == id).unwrap().clone();
+        let a = by_id(n1);
+        assert_eq!(a.qty_done, m("2"), "第一条只占 2 件，不该整条完成");
+        assert_eq!(a.status, "pending", "没占满就必须还是待发");
+        assert_eq!(by_id(n2).qty_done, m("0"));
+        assert_eq!(by_id(n2).status, "pending");
+        assert_eq!(by_id(n3).status, "pending");
+    }
+
+    /// 继续发：占满第一条 → 置 shipped 并滚到第二条；跨通知的一次发货要拆开占用
+    #[test]
+    fn notice_allocation_rolls_forward_across_notices() {
+        let db = mem();
+        let (so_id, _p, d) = prepay_fixture(&db);
+        let n1 = notice_create(&db, so_id, m("3"), d, "", "u").unwrap();
+        let n2 = notice_create(&db, so_id, m("3"), d, "", "u").unwrap();
+        let n3 = notice_create(&db, so_id, m("4"), d, "", "u").unwrap();
+
+        notice_fulfill_on_shipment(&db, so_id, m("2")).unwrap();
+        // 再发 3 件：补满第一条 1 件，第二条吃 2 件
+        let got = notice_fulfill_on_shipment(&db, so_id, m("3")).unwrap();
+        assert_eq!(got, m("3"));
+
+        let rows = notice_list(&db).unwrap();
+        let by_id = |id: i64| rows.iter().find(|n| n.id == id).unwrap().clone();
+        assert_eq!(by_id(n1).qty_done, m("3"));
+        assert_eq!(by_id(n1).status, "shipped", "占满了才置已发");
+        assert_eq!(by_id(n2).qty_done, m("2"));
+        assert_eq!(by_id(n2).status, "pending");
+        assert_eq!(by_id(n3).qty_done, m("0"));
+
+        // 发满剩下 5 件：第二条补 1、第三条吃 4
+        assert_eq!(
+            notice_fulfill_on_shipment(&db, so_id, m("5")).unwrap(),
+            m("5")
+        );
+        let rows = notice_list(&db).unwrap();
+        let by_id = |id: i64| rows.iter().find(|n| n.id == id).unwrap().clone();
+        assert_eq!(by_id(n2).status, "shipped");
+        assert_eq!(by_id(n3).status, "shipped");
+        // 全部占满后再发，没有通知可认领，返回 0 而不是报错
+        assert_eq!(
+            notice_fulfill_on_shipment(&db, so_id, m("1")).unwrap(),
+            Money::ZERO
+        );
+    }
+
+    /// 出库与通知占用必须同事务：仓库不存在导致出库失败时，通知一件都不能被占
+    #[test]
+    fn notice_allocation_rolls_back_with_failed_shipment() {
+        let db = mem();
+        let (so_id, p, d) = prepay_fixture(&db);
+        let n1 = notice_create(&db, so_id, m("3"), d, "", "u").unwrap();
+
+        // 「不存在的仓」会让 stock_sale_in 报错，整笔事务回滚
+        let err = so_shipment_all(&db, so_id, p, d, m("2"), "", "不存在的仓", "u");
+        assert!(err.is_err(), "仓库不存在应当失败：{err:?}");
+
+        let rows = notice_list(&db).unwrap();
+        let a = rows.iter().find(|n| n.id == n1).unwrap();
+        assert_eq!(a.qty_done, m("0"), "出库失败时通知不能被占用");
+        assert_eq!(a.status, "pending");
+        // 发货流水同样不能留下
+        assert_eq!(so_shipment_sum(&db, so_id).unwrap(), Money::ZERO);
+    }
+
+    /// 桌面端走纯流水入口（so_shipment_add）发货时，通知同样要按数量占用。
+    /// 不占的话桌面端发完货、通知还一条条挂在待发列表里，仓管会重复备货。
+    #[test]
+    fn notice_allocation_runs_on_plain_shipment_path() {
+        let db = mem();
+        let (so_id, p, d) = prepay_fixture(&db);
+        let n1 = notice_create(&db, so_id, m("10"), d, "", "u").unwrap();
+        so_shipment_add(&db, so_id, p, d, m("3"), "桌面端发货").unwrap();
+        let rows = notice_list(&db).unwrap();
+        let a = rows.iter().find(|n| n.id == n1).unwrap();
+        assert_eq!(a.qty_done, m("3"), "纯流水入口也要占用通知");
+        assert_eq!(a.status, "pending", "10 件只发 3，不能置已发");
+    }
+
+    /// 走完整发货链路（so_shipment_all）时通知也会被占用，而不是只有直调函数生效
+    #[test]
+    fn notice_allocation_runs_inside_shipment_transaction() {
+        let db = mem();
+        let (so_id, p, d) = prepay_fixture(&db);
+        let n1 = notice_create(&db, so_id, m("10"), d, "", "u").unwrap();
+        so_shipment_all(&db, so_id, p, d, m("4"), "", "", "u").unwrap();
+        let rows = notice_list(&db).unwrap();
+        let a = rows.iter().find(|n| n.id == n1).unwrap();
+        assert_eq!(a.qty_done, m("4"), "全链路发货要占用通知");
+        assert_eq!(a.status, "pending", "10 件只发了 4，不能置已发");
     }
 
     #[test]

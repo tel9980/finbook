@@ -656,8 +656,8 @@ pub(super) async fn add_so_shipment(
         user.username(),
     )?;
     findb::scm::so_progress_update(db, req.so_id)?;
-    // 出库成功 → 完成该订单最早一条待发通知（备货指令闭环）
-    let _ = findb::sales::notice_fulfill_on_shipment(db, req.so_id)?;
+    // 发货通知的占用已经在 so_shipment_all 的事务里做掉了（与出库同事务）。
+    // 这里**不能**再调一次：那会把同一次出库重复认领给通知，qty_done 翻倍。
     Ok(Json(
         serde_json::json!({ "ok": true, "id": id, "voucher_id": ivid }),
     ))

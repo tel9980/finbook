@@ -98,8 +98,15 @@ async function snLoad() {
     const r = await api("/sales/notices");
     const rows = (r.rows || []).filter((n) => n.status === "pending");
     box.innerHTML = rows.length
-      ? `<table class="grid"><thead><tr><th>订单</th><th class="num">数量</th><th>通知日期</th><th>备注</th><th>通知人</th><th></th></tr></thead><tbody>${rows.map((n) => `<tr><td>#${n.so_id}</td><td class="num">${esc(String(n.qty))}</td><td>${esc(n.date)}</td><td>${esc(n.memo || "—")}</td><td>${esc(n.created_by)}</td>
-          <td class="row-actions"><button class="btn ghost sm" data-sn-go="${esc(JSON.stringify({ so: n.so_id, qty: n.qty }))}">去出库</button></td></tr>`).join("")}</tbody></table>`
+      ? `<table class="grid"><thead><tr><th>订单</th><th class="num">通知数量</th><th class="num">已发</th><th class="num">还欠</th><th>通知日期</th><th>备注</th><th>通知人</th><th></th></tr></thead><tbody>${rows.map((n) => {
+        // 通知按数量逐条占用：一次发 2 件不会把 3 件的通知整条标成已发，
+        // 所以「还欠」必须自己算出来，不能用通知总量
+        const need = Number(n.qty) || 0;
+        const done = Number(n.qty_done) || 0;
+        const left = Math.round((need - done) * 100) / 100;
+        return `<tr><td>#${n.so_id}</td><td class="num">${esc(String(n.qty))}</td><td class="num">${esc(String(n.qty_done || "0"))}</td><td class="num"><b>${esc(String(left))}</b></td><td>${esc(n.date)}</td><td>${esc(n.memo || "—")}</td><td>${esc(n.created_by)}</td>
+          <td class="row-actions"><button class="btn ghost sm" data-sn-go="${esc(JSON.stringify({ so: n.so_id, qty: left }))}">去出库</button></td></tr>`;
+      }).join("")}</tbody></table>`
       : `<div class="muted">暂无待发通知（销售订单行「通知」按钮创建）</div>`;
     $all("[data-sn-go]", box).forEach((b) => b.onclick = () => {
       const d = JSON.parse(b.dataset.snGo);
