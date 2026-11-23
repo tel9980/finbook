@@ -121,25 +121,45 @@ fn 演示账28张全已记账且试算平衡() {
     );
 
     // 8) 核销配对：凭证之间能配的配上（A 发票全额配平、B 票据等额、供应商 FIFO）；
-    //    期初三笔无分录、配不上——留在账龄里，余额照样轧平
-    let sum_open = |acct: &str| {
-        findb::settle::open_entries(&db, acct, p, false)
+    //    期初三笔参与核销（v1.8.125 起），被本月的收款吃掉，余额照样轧平。
+    //
+    // 净额要**两边一起算**：分录未清净额 + 期初未清净额。
+    //
+    // 曾经这里只加分录，注释写着「未清分录净额恒等于分录净发生」——那条断言在
+    // v1.8.125 之前成立，是因为配对的两边都在分录集合里。期初单参与核销之后
+    // 集合不再闭合：一笔收款被期初单吃掉 68000 后，它的 open 归零，而对侧
+    // （期初单）不在分录集合里，于是分录侧的净额凭空多出 68000
+    // （实测 -56160 → 11840，差额正好是期初单的金额）。
+    //
+    // 补上期初侧之后，不变量变成恒等式：**未清净额 == 科目余额**，
+    // 与下面 BalanceSnapshot 的口径对齐（112201 11840、220201 -44000）。
+    let open_net = |acct: &str| {
+        let sign = |e: &findb::settle::OpenEntry| {
+            // open() 是绝对值；净额要按原方向还原符号（与配对顺序无关）
+            let o = e.open();
+            if e.debit > Money::ZERO {
+                o
+            } else {
+                Money::ZERO - o
+            }
+        };
+        let entries: Money = findb::settle::open_entries(&db, acct, p, false)
             .expect("查未清")
             .iter()
-            .map(|e| {
-                // open() 是绝对值；净额要按原方向还原符号（与配对顺序无关）
-                let o = e.open();
-                if e.debit > Money::ZERO {
-                    o
-                } else {
-                    Money::ZERO - o
-                }
-            })
-            .fold(Money::ZERO, |a, b| a + b)
+            .map(sign)
+            .fold(Money::ZERO, |a, b| a + b);
+        let openings: Money = findb::settle::opening_open_entries(&db, acct, p)
+            .expect("查期初未清")
+            .iter()
+            .map(sign)
+            .fold(Money::ZERO, |a, b| a + b);
+        entries + openings
     };
-    // 未清分录净额恒等于分录净发生（配对只标配对关系，不改金额，顺序无关）
-    assert_eq!(sum_open("112201"), m("-56160"));
-    assert_eq!(sum_open("220201"), m("-6000"));
+    assert_eq!(open_net("112201"), m("11840"));
+    assert_eq!(open_net("220201"), m("-44000"));
+    // 与余额口径对齐：未清往来净额就是科目的期末余额
+    assert_eq!(end_of("112201"), (Direction::Debit, m("11840")));
+    assert_eq!(end_of("220201"), (Direction::Credit, m("44000")));
     assert!(
         !findb::settle::list(&db, "112201")
             .expect("查配对")
@@ -174,11 +194,14 @@ fn 演示账28张全已记账且试算平衡() {
     let as_of = chrono::NaiveDate::from_ymd_opt(2026, 11, 30).unwrap();
     let aging_ar = findb::settle::aging(&db, "112201", p, as_of, &buckets, None).expect("应收账龄");
     let ar_line = |key: &str| aging_ar.iter().find(|l| l.key == key);
-    // C01：期初单据 68000（配不上）躺在账龄里；本月发票全额配平，
-    // 两笔收款尾 25300＋40000 躺在预收栏；净额 2700＝余额
+    // C01：期初单据 68000 被本月收款吃掉（v1.8.125 起期初参与核销），
+    // 本月发票也全额配平，剩下的 2700 是发票尾款——预收栏因此清空。
+    //
+    // 改期初参与核销之前这里是 total 68000 / credit 65300：期初单配不上，
+    // 一直挂在账龄里，而同一笔 68000 的收款在它对面躺着当预收。
     let c01 = ar_line("C01").expect("C01 账龄行");
-    assert_eq!(c01.total, m("68000"));
-    assert_eq!(c01.credit_total, m("65300"));
+    assert_eq!(c01.total, m("2700"));
+    assert!(c01.credit_total.is_zero());
     // C02：预收 30000 不进账龄桶，只进预收栏
     let c02 = ar_line("C02").expect("C02 账龄行");
     assert!(c02.total.is_zero());

@@ -184,25 +184,39 @@ fn 一般纳税人演示账全已记账且试算平衡() {
             .is_empty(),
         "应付应有核销配对"
     );
-    // 未清分录净额恒等于分录净发生（配对只记关系，不改金额）
-    let sum_open = |acct: &str| {
-        findb::settle::open_entries(&db, acct, p, false)
+    // 未清净额要**两边一起算**：分录 + 期初单。
+    //
+    // 曾经这里只加分录，注释写着「未清分录净额恒等于分录净发生」——那条断言在
+    // v1.8.125 之前成立，是因为配对的两边都在分录集合里。期初单参与核销之后
+    // 集合不再闭合：一笔收款被期初单吃掉后它的 open 归零，而对侧（期初单）不在
+    // 分录集合里，分录侧净额就凭空多出期初的金额。
+    //
+    // 补上期初侧之后不变量变成恒等式：**未清净额 == 科目余额**，
+    // 与上面 `end_of` 的口径对齐（112201 借 160500、220201 贷 16130）。
+    let sign = |e: &findb::settle::OpenEntry| {
+        // open() 是绝对值；净额要按原方向还原符号（与配对顺序无关）
+        let o = e.open();
+        if e.debit > Money::ZERO {
+            o
+        } else {
+            Money::ZERO - o
+        }
+    };
+    let open_net = |acct: &str| {
+        let entries: Money = findb::settle::open_entries(&db, acct, p, false)
             .expect("查未清")
             .iter()
-            .map(|e| {
-                let o = e.open();
-                if e.debit > Money::ZERO {
-                    o
-                } else {
-                    Money::ZERO - o
-                }
-            })
-            .fold(Money::ZERO, |a, b| a + b)
+            .map(sign)
+            .fold(Money::ZERO, |a, b| a + b);
+        let openings: Money = findb::settle::opening_open_entries(&db, acct, p)
+            .expect("查期初未清")
+            .iter()
+            .map(sign)
+            .fold(Money::ZERO, |a, b| a + b);
+        entries + openings
     };
-    // 分录净额（不含期初，期初欠款没有分录）：160500 − 90000 期初 = 70500
-    assert_eq!(sum_open("112201"), m("70500"));
-    // 应付分录净额：−16130 − ( −64000 期初 ) = 47870
-    assert_eq!(sum_open("220201"), m("47870"));
+    assert_eq!(open_net("112201"), m("160500"));
+    assert_eq!(open_net("220201"), m("-16130"));
 
     // 9) 账龄按单位合计：期初单据（无分录、配不上）也在里面
     let buckets = vec![
@@ -238,15 +252,21 @@ fn 一般纳税人演示账全已记账且试算平衡() {
 
     let aging_ap = findb::settle::aging(&db, "220201", p, as_of, &buckets, None).expect("应付账龄");
     let ap_line = |key: &str| aging_ap.iter().find(|l| l.key == key);
-    // 恒信：期初 46000 单据 + 本月 49800 采购，被付 60000、背书 15000、抵账 20000、
-    // 尾款 800（抹零 20）正好冲平 —— 账龄行还在（期初单据永远配不上），净额为零
-    let s01 = ap_line("S01").expect("S01 账龄行");
-    assert_eq!(s01.total, m("46000"));
-    assert_eq!(s01.credit_total, m("46000"));
-    // 大发：期初 18000 + 喷砂 12000 + 拉丝 6180 − 付 30000 = 6180
+    // 恒信：期初 46000 + 本月 49800 采购，被付 60000、背书 15000、抵账 20000、
+    // 尾款 800（抹零 20）正好冲平。期初单据参与核销（v1.8.125 起）之后，那 46000
+    // 也被付款吃掉，整户一分不欠 —— 账龄里连行都不该有。
+    //
+    // 改期初参与核销之前这里是 total 46000 / credit 46000：期初配不上，一直挂在
+    // 账龄里，同一笔钱在「应付」和「预付」两栏各躺一遍。
+    assert!(
+        ap_line("S01").is_none(),
+        "恒信已全额付清（含期初），账龄里不该有行"
+    );
+    // 大发：期初 18000 + 喷砂 12000 + 拉丝 6180 − 付 30000；期初那 18000 先被
+    // 付款吃掉，剩 6180 是本期采购未清，预付款栏因此清空
     let s02 = ap_line("S02").expect("S02 账龄行");
-    assert_eq!(s02.total, m("18000"));
-    assert_eq!(s02.credit_total, m("11820"));
+    assert_eq!(s02.total, m("6180"));
+    assert_eq!(s02.credit_total, Money::ZERO);
     // 亮洁：除油剂 5000 + 封闭剂 4950 全挂着（抛光 3500 是现付，不进应付）
     assert_eq!(ap_line("S03").map(|l| l.total), Some(m("9950")));
 

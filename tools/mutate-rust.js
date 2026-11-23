@@ -2709,6 +2709,34 @@ const MUT = [
     to: "        (false, true) => opening_settle(db, -to, to, amount, who),",
     cmd: ["test", "-p", "findb", "--lib", "auto_settle_handles_payable_opening_on_credit_side"],
   },
+  {
+    name: "185 催款单按期初原额催收（不扣已核销）",
+    file: "crates/findb/src/settle/dunning.rs",
+    from: "        let left = o.amount - settled_map.get(&o.id).copied().unwrap_or(Money::ZERO);",
+    to: "        let left = o.amount;",
+    cmd: ["test", "-p", "findb", "--lib", "dunning_nets_out_settled_opening_amount"],
+  },
+  {
+    name: "186 期初核销干净的还留在催款单里",
+    file: "crates/findb/src/settle/dunning.rs",
+    from: "        if !left.is_positive() {\n            continue;\n        }",
+    to: "        if false {\n            continue;\n        }",
+    cmd: ["test", "-p", "findb", "--lib", "dunning_drops_fully_settled_opening"],
+  },
+  {
+    name: "187 合并报表只算第一个账套（并集漏账套）",
+    file: "crates/findb/src/consolidate.rs",
+    from: "    for s in sources {\n        let map = book_map(s.db, period)?;",
+    to: "    for s in sources.iter().take(1) {\n        let map = book_map(s.db, period)?;",
+    cmd: ["test", "-p", "findb", "--lib", "preview_unions_accounts_and_sums_across_books"],
+  },
+  {
+    name: "188 合并报表把零余额科目也列出来",
+    file: "crates/findb/src/consolidate.rs",
+    from: "        if end.is_zero() {\n            continue;\n        }",
+    to: "        if false {\n            continue;\n        }",
+    cmd: ["test", "-p", "findb", "--lib", "preview_skips_zero_balance_accounts_and_empty_sources"],
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

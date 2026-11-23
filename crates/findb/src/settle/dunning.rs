@@ -312,7 +312,14 @@ pub fn dunning_create(
             overdue_days: overdue_of(date, e.date, pay_days),
         });
     }
-    for o in arap_opening_list(db, Some(kind))? {
+    let openings = arap_opening_list(db, Some(kind))?;
+    // 期初明细从 v1.8.125 起参与核销，催款单必须扣掉已经收/付掉的那部分：
+    // 以前直接 `amount += o.amount`，期初被收款吃光后催款单还会照原额催一遍。
+    let settled_map = super::opening::opening_settled_map(
+        db,
+        &openings.iter().map(|o| o.id).collect::<Vec<_>>(),
+    )?;
+    for o in openings {
         if o.party_code != party {
             continue;
         }
@@ -321,9 +328,13 @@ pub fn dunning_create(
         if Period::from_date(d).ymm() > upto.ymm() {
             continue;
         }
+        let left = o.amount - settled_map.get(&o.id).copied().unwrap_or(Money::ZERO);
+        if !left.is_positive() {
+            continue;
+        }
         // 期初单据的金额入库时就要求为正、且方向由 kind 决定（ar=应收 / ap=应付），
         // 所以它恒在「对方欠我方」那一侧。
-        amount += o.amount;
+        amount += left;
         owed_count += 1;
         items.push(DunningItem {
             doc_no: format!(
@@ -336,7 +347,7 @@ pub fn dunning_create(
             ),
             date: o.doc_date.clone(),
             summary: "往来期初".to_string(),
-            amount: o.amount,
+            amount: left,
             direction: dunning_dir_label(kind, true).to_string(),
             overdue_days: overdue_of(date, d, pay_days),
         });

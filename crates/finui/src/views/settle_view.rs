@@ -275,6 +275,19 @@ impl SettleView {
             }
             entries.sort_by_key(|a| (a.date, a.no, a.line));
         }
+        // 往来期初明细也进这两张表（v1.8.125 起期初参与核销）：它们的 entry_id 是
+        // 负数，核销时原样回传，数据层按符号分派到 `opening_settle`。这样会计在
+        // 同一张表上就能把期初欠款和本期挂账一起勾掉，不用先去另一个页面。
+        //
+        // 跨单位互抵那一段不追加期初：互抵要出过渡凭证，期初单没有分录可挂。
+        let mut opening =
+            findb::settle::opening_open_entries(ctx.db(), &self.account, upto).unwrap_or_default();
+        if self.only_open {
+            opening.retain(|e| e.is_open());
+        }
+        entries.extend(opening);
+        entries.sort_by_key(|a| (a.date, a.no, a.line));
+
         self.entries = entries;
         self.records = findb::settle::list(ctx.db(), &self.account).unwrap_or_default();
         self.offsets = findb::offset::offset_list(ctx.db()).unwrap_or_default();
@@ -663,6 +676,24 @@ impl SettleView {
         };
         let who = ctx.user().display_name.clone();
         let diff_acct = self.diff_account.trim().to_string();
+        // 期初明细（entry_id 为负）走自己的核销表，且不支持差异核销：期初单没有
+        // 对应分录，差异凭证无处可挂。要抹零就先按实收金额核销，差额留在账上。
+        if f < 0 || t < 0 {
+            if diff.is_positive() {
+                ctx.error("期初明细不支持差异核销：请按实际收付金额核销，差额留在账上");
+                return;
+            }
+            match findb::settle::settle_pair(ctx.db(), f, t, amt, &who) {
+                Ok(_) => {
+                    ctx.log("往来", "期初核销", &format!("#{f} ↔ #{t} {amt}"));
+                    ctx.info(format!("已核销 {}", amt.fmt_money()));
+                    self.clear_sel();
+                    self.dirty = true;
+                }
+                Err(e) => ctx.error(e.to_string()),
+            }
+            return;
+        }
         // 数据层会拒掉自核自、跨科目、跨往来单位、超额与差异校验，这里只负责把错误说出来
         match findb::settle::settle_with_diff(ctx.db(), f, t, amt, diff, &diff_acct, &who) {
             Ok(r) => {

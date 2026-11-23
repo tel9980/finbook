@@ -17,6 +17,7 @@ pub mod begin_diag;
 pub mod budget;
 pub mod budget_alerts;
 pub mod claims;
+pub mod consolidate;
 pub mod custom_report;
 pub mod dashboard;
 pub mod dim_profit;
@@ -80,6 +81,7 @@ pub struct Views {
     pub ledger: ledger::LedgerView,
     pub balance_table: balance_table::BalanceTableView,
     pub reports: reports::ReportsView,
+    pub consolidate: consolidate::ConsolidateView,
     pub custom_report: custom_report::CustomReportView,
     pub period_end: period_end::PeriodEndView,
     pub budget: budget::BudgetView,
@@ -159,6 +161,7 @@ impl Views {
         self.month_brief.invalidate();
         self.profit_sheet.invalidate();
         self.tax_decl.invalidate();
+        self.consolidate.invalidate();
         self.arap_recon.invalidate();
         self.multi_column.invalidate();
         self.summary_table.invalidate();
@@ -254,6 +257,7 @@ impl Views {
                 NavItem::Ledger => self.ledger.enter(ctx, None),
                 NavItem::BalanceTable => self.balance_table.enter(ctx),
                 NavItem::Reports => self.reports.enter(ctx),
+                NavItem::Consolidate => self.consolidate.enter(ctx),
                 NavItem::CustomReport => self.custom_report.enter(ctx),
                 NavItem::PeriodEnd => self.period_end.enter(ctx),
                 NavItem::Assets => self.assets.enter(ctx),
@@ -349,6 +353,7 @@ impl Views {
             NavItem::MonthBrief => self.month_brief.show(ctx, ui),
             NavItem::ProfitSheet => self.profit_sheet.show(ctx, ui),
             NavItem::TaxDecl => self.tax_decl.show(ctx, ui),
+            NavItem::Consolidate => self.consolidate.show(ctx, ui),
             NavItem::ArapRecon => self.arap_recon.show(ctx, ui),
             NavItem::MultiColumn => self.multi_column.show(ctx, ui),
             NavItem::SummaryTable => self.summary_table.show(ctx, ui),

@@ -28,6 +28,8 @@ pub enum NavItem {
     BalanceTable,
     /// 会计报表
     Reports,
+    /// 合并报表（跨账套汇总，对标 Web 端 /api/consolidate/preview）
+    Consolidate,
     /// 期末处理（结转损益 / 结账）
     PeriodEnd,
     /// 固定资产
@@ -126,6 +128,7 @@ impl NavItem {
             NavItem::Ledger => "账簿查询".to_string(),
             NavItem::BalanceTable => "科目余额表".to_string(),
             NavItem::Reports => "会计报表".to_string(),
+            NavItem::Consolidate => "合并报表".to_string(),
             NavItem::PeriodEnd => "期末处理".to_string(),
             NavItem::Assets => "固定资产".to_string(),
             NavItem::BankRec => "银行对账".to_string(),
@@ -217,9 +220,11 @@ impl NavItem {
             NavItem::Template => "凭证", // TEMP
             NavItem::VoucherNew | NavItem::VoucherList => "凭证",
             NavItem::Account | NavItem::BeginBalance | NavItem::Aux(_) => "基础资料",
-            NavItem::Ledger | NavItem::BalanceTable | NavItem::Reports | NavItem::CustomReport => {
-                "账簿报表"
-            }
+            NavItem::Ledger
+            | NavItem::BalanceTable
+            | NavItem::Reports
+            | NavItem::Consolidate
+            | NavItem::CustomReport => "账簿报表",
             NavItem::MultiColumn
             | NavItem::SummaryTable
             | NavItem::Ratios
@@ -300,7 +305,9 @@ impl NavItem {
             NavItem::Options => Some(Perm::SysOption),
             NavItem::Backup => Some(Perm::Backup),
             NavItem::Logs => Some(Perm::AuditLog),
-            NavItem::Ledger | NavItem::BalanceTable | NavItem::Reports => Some(Perm::Report),
+            NavItem::Ledger | NavItem::BalanceTable | NavItem::Reports | NavItem::Consolidate => {
+                Some(Perm::Report)
+            }
             NavItem::ToolLedger => Some(Perm::ProductionOps),
             NavItem::Rework => Some(Perm::ProductionOps),
             _ => None,
@@ -332,6 +339,7 @@ impl NavItem {
             NavItem::Ledger,
             NavItem::BalanceTable,
             NavItem::Reports,
+            NavItem::Consolidate,
             NavItem::CustomReport,
             NavItem::MultiColumn,
             NavItem::SummaryTable,

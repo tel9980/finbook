@@ -97,6 +97,101 @@ fn dunning_counts_only_what_is_actually_owed() {
     assert!(d.detail.iter().any(|i| i.direction == "应收"));
 }
 
+/// 期初单被收款核销掉一部分后，催款单只能催**剩下的**那部分。
+///
+/// 回归：v1.8.125 让期初明细参与核销，但 `dunning_create` 仍按
+/// `amount += o.amount` 拿期初原额累加——期初 5000 已被收款吃掉 2000，
+/// 客户收到的催款单还是 5000，多催了 2000。
+#[test]
+fn dunning_nets_out_settled_opening_amount() {
+    let db = mem();
+    let p = Period::new(2026, 1).unwrap();
+    let oid = opening_ar(&db, "C01", "XS-OLD", "2025-11-01", "5000");
+    let (_vid, pay) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        1,
+        "C01",
+        "2000",
+        false,
+        "1001",
+    );
+    opening_settle(&db, oid, pay, m("2000"), "u").unwrap();
+
+    let d = dunning_create(
+        &db,
+        "ar",
+        "1122",
+        "C01",
+        "客户甲",
+        NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+        "",
+        "boss",
+    )
+    .unwrap();
+    assert_eq!(d.amount, m("3000"), "期初 5000 已收 2000，只能催 3000");
+    let op = d
+        .detail
+        .iter()
+        .find(|i| i.doc_no.starts_with("期初"))
+        .expect("期初行应在催款单里");
+    assert_eq!(op.amount, m("3000"), "明细行也要写剩余额，不能写原额");
+}
+
+/// 期初单被核销干净后，催款单里就不该再出现它——只剩本期那笔 800 要催。
+///
+/// 不能只断言「拒绝出单」：那样把「跳过已核销期初」删掉时，期初行会以 0 金额
+/// 混进来，`amount.is_zero()` 那条兜底照样报「不需要催款」，测试还是绿的。
+/// 所以这里留一笔本期欠款，逼催款单出得成，再逐行看期初有没有混进来。
+#[test]
+fn dunning_drops_fully_settled_opening() {
+    let db = mem();
+    let p = Period::new(2026, 1).unwrap();
+    let oid = opening_ar(&db, "C01", "XS-OLD", "2025-11-01", "5000");
+    // 期初 5000 被收款核销干净
+    let (_vid, pay) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        1,
+        "C01",
+        "5000",
+        false,
+        "1001",
+    );
+    opening_settle(&db, oid, pay, m("5000"), "u").unwrap();
+    // 本期又开了一张 800 的发票，只核销 0，这笔才是要催的
+    ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+        2,
+        "C01",
+        "800",
+        true,
+        "600101",
+    );
+
+    let d = dunning_create(
+        &db,
+        "ar",
+        "1122",
+        "C01",
+        "客户甲",
+        NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+        "",
+        "boss",
+    )
+    .unwrap();
+    assert_eq!(d.amount, m("800"), "只该催本期那张 800");
+    assert!(
+        !d.detail.iter().any(|i| i.doc_no.starts_with("期初")),
+        "期初已核销干净，不该再出现在催款单明细里：{:?}",
+        d.detail.iter().map(|i| &i.doc_no).collect::<Vec<_>>()
+    );
+}
+
 /// 催款函明细要逐单写「逾期几天」——客户对账时看的就是这一列
 ///
 /// 只给一个总数不行：客户手里有十几张单，得知道是哪一张超期、超了多久。

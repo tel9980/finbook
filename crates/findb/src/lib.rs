@@ -23,6 +23,7 @@ pub mod brief;
 pub mod business;
 pub mod claim;
 pub mod consign;
+pub mod consolidate;
 pub mod customers;
 pub mod docflow;
 pub mod exports;

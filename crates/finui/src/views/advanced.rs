@@ -4,6 +4,7 @@
 use egui::{RichText, Ui};
 use fincore::{AuxKind, Money, Period};
 use findb::advanced;
+use findb::manufacturing;
 
 use crate::state::AppCtx;
 use crate::theme::palette;
@@ -452,6 +453,8 @@ enum MfgTab {
     Routing,
     Mrp,
     Report,
+    /// 工序检验（对标 Web 端 /api/prod/:id/qc）
+    Qc,
 }
 
 pub struct ManufacturingView {
@@ -469,6 +472,13 @@ pub struct ManufacturingView {
     pub report_qty: String,
     pub report_hours: String,
     pub report_sel: Option<usize>,
+    // 工序检验
+    pub qc_insp: String,
+    pub qc_fail: String,
+    pub qc_disposition: String,
+    pub qc_date: String,
+    pub qc_memo: String,
+    pub qc_rows: Vec<manufacturing::ProdQc>,
     pub dirty: bool,
     key: String,
 }
@@ -489,6 +499,12 @@ impl Default for ManufacturingView {
             report_qty: String::new(),
             report_hours: String::new(),
             report_sel: None,
+            qc_insp: String::new(),
+            qc_fail: String::new(),
+            qc_disposition: "rework".into(),
+            qc_date: String::new(),
+            qc_memo: String::new(),
+            qc_rows: Vec::new(),
             dirty: true,
             key: String::new(),
         }
@@ -529,12 +545,14 @@ impl ManufacturingView {
             ui.selectable_value(&mut self.tab, MfgTab::Routing, "工艺路线");
             ui.selectable_value(&mut self.tab, MfgTab::Mrp, "MRP 运算");
             ui.selectable_value(&mut self.tab, MfgTab::Report, "工序报工");
+            ui.selectable_value(&mut self.tab, MfgTab::Qc, "工序检验");
         });
         ui.add_space(6.0);
         match self.tab {
             MfgTab::Routing => self.show_routing(ctx, ui),
             MfgTab::Mrp => self.show_mrp(ctx, ui),
             MfgTab::Report => self.show_report(ctx, ui),
+            MfgTab::Qc => self.show_qc(ctx, ui),
         }
     }
     fn show_routing(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
@@ -776,6 +794,190 @@ impl ManufacturingView {
             }
         });
         self.report_sel = sel;
+    }
+
+    /// 工序检验：录入合格/不合格数量与处置，列出该订单的检验单。
+    ///
+    /// 口径与 Web 端 `/api/prod/:id/qc` 完全一致（同一个 `manufacturing::prod_qc_save`）：
+    /// 仅「生产中」订单可录；有不合格必须选处置（返修/报废/让步接收）；报废会同步
+    /// 扣减计划量并留变更痕迹。桌面端只是换了个入口，不重写规则。
+    fn show_qc(&mut self, ctx: &mut AppCtx<'_>, ui: &mut Ui) {
+        widgets::toolbar(ui, |ui| {
+            ui.label("生产订单号");
+            let r = ui.add_sized([140.0, 22.0], egui::TextEdit::singleline(&mut self.po_no));
+            if r.changed() {
+                self.po_id = 0;
+                self.qc_rows.clear();
+            }
+            if ui.button("加载检验记录").clicked() {
+                self.load_qc(ctx);
+            }
+        });
+        ui.add_space(4.0);
+        widgets::toolbar(ui, |ui| {
+            ui.label("检验数量");
+            widgets::money_input(ui, &mut self.qc_insp, 80.0);
+            ui.label("不合格数");
+            widgets::money_input(ui, &mut self.qc_fail, 80.0);
+            ui.label("处置");
+            egui::ComboBox::from_id_salt("qc_dispo")
+                .selected_text(match self.qc_disposition.as_str() {
+                    "scrap" => "报废",
+                    "concession" => "让步接收",
+                    _ => "返修",
+                })
+                .width(90.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.qc_disposition, "rework".into(), "返修");
+                    ui.selectable_value(&mut self.qc_disposition, "scrap".into(), "报废");
+                    ui.selectable_value(&mut self.qc_disposition, "concession".into(), "让步接收");
+                });
+            ui.label("日期");
+            ui.add_sized([84.0, 22.0], egui::TextEdit::singleline(&mut self.qc_date));
+            ui.label("备注");
+            ui.add_sized([120.0, 22.0], egui::TextEdit::singleline(&mut self.qc_memo));
+            if ui.button("录入检验").clicked() {
+                self.do_qc(ctx);
+            }
+        });
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "仅「生产中」的订单可录检验；不合格必须选处置。选「报废」会同步扣减计划量并写订单变更。",
+            )
+            .weak(),
+        );
+        ui.add_space(6.0);
+        let rows = self.qc_rows.clone();
+        let cols = [
+            widgets::TCol::new("检验单号", 110.0),
+            widgets::TCol::new("日期", 90.0),
+            widgets::TCol::new("检验数量", 90.0).right(),
+            widgets::TCol::new("合格", 80.0).right(),
+            widgets::TCol::new("不合格", 80.0).right(),
+            widgets::TCol::new("处置", 90.0),
+            widgets::TCol::new("结论", 80.0),
+            widgets::TCol::new("检验员", 90.0),
+            widgets::TCol::new("备注", 160.0),
+        ];
+        widgets::grid(ui, "prod_qc", &cols, rows.len(), 24.0, |i, c, ui| {
+            let r = &rows[i];
+            match c {
+                0 => {
+                    ui.label(RichText::new(&r.no).monospace());
+                }
+                1 => {
+                    ui.label(&r.date);
+                }
+                2 => {
+                    ui.label(r.qty_insp.fmt_qty());
+                }
+                3 => {
+                    ui.label(r.qty_pass.fmt_qty());
+                }
+                4 => {
+                    ui.label(r.qty_fail.fmt_qty());
+                }
+                5 => {
+                    let (txt, color) = match r.disposition.as_str() {
+                        "rework" => ("返修", palette::WARN),
+                        "scrap" => ("报废", palette::CREDIT),
+                        "concession" => ("让步接收", palette::GRID),
+                        _ => ("—", palette::GRID),
+                    };
+                    ui.colored_label(color, txt);
+                }
+                6 => {
+                    let (txt, color) = match r.result.as_str() {
+                        "pass" => ("合格", palette::OK),
+                        "partial" => ("部分合格", palette::WARN),
+                        _ => ("不合格", palette::CREDIT),
+                    };
+                    ui.colored_label(color, txt);
+                }
+                7 => {
+                    ui.label(&r.inspector);
+                }
+                8 => {
+                    ui.label(RichText::new(&r.memo).weak());
+                }
+                _ => {}
+            }
+        });
+    }
+
+    fn load_qc(&mut self, ctx: &mut AppCtx<'_>) {
+        let no = self.po_no.trim().to_string();
+        if no.is_empty() {
+            ctx.error("请输入生产订单号");
+            return;
+        }
+        let orders = findb::scm::prod_list(ctx.db(), ctx.period(), None).unwrap_or_default();
+        let Some(order) = orders.into_iter().find(|o| o.no == no) else {
+            ctx.error(format!("未找到生产订单「{no}」"));
+            return;
+        };
+        self.po_id = order.id;
+        match manufacturing::prod_qc_list(ctx.db(), self.po_id) {
+            Ok(rows) => {
+                if rows.is_empty() {
+                    ctx.info("该订单暂无检验记录");
+                }
+                self.qc_rows = rows;
+            }
+            Err(e) => ctx.error(e.to_string()),
+        }
+    }
+
+    fn do_qc(&mut self, ctx: &mut AppCtx<'_>) {
+        if self.po_id == 0 {
+            ctx.error("请先加载生产订单");
+            return;
+        }
+        let insp = widgets::parse_money(&self.qc_insp);
+        let fail = widgets::parse_money(&self.qc_fail);
+        let date = if self.qc_date.trim().is_empty() {
+            chrono::Local::now().date_naive()
+        } else {
+            match chrono::NaiveDate::parse_from_str(self.qc_date.trim(), "%Y-%m-%d") {
+                Ok(d) => d,
+                Err(_) => {
+                    ctx.error("日期格式应为 YYYY-MM-DD");
+                    return;
+                }
+            }
+        };
+        let who = ctx
+            .st
+            .user
+            .as_ref()
+            .map(|u| u.username.clone())
+            .unwrap_or_default();
+        match manufacturing::prod_qc_save(
+            ctx.db(),
+            self.po_id,
+            insp,
+            fail,
+            &self.qc_disposition,
+            date,
+            self.qc_memo.trim(),
+            &who,
+        ) {
+            Ok((_id, no, result)) => {
+                let label = match result.as_str() {
+                    "pass" => "合格",
+                    "partial" => "部分合格",
+                    _ => "不合格",
+                };
+                ctx.info(format!("已录入检验单 {no}：{label}"));
+                self.qc_insp.clear();
+                self.qc_fail.clear();
+                self.qc_memo.clear();
+                self.qc_rows =
+                    manufacturing::prod_qc_list(ctx.db(), self.po_id).unwrap_or_default();
+            }
+            Err(e) => ctx.error(e.to_string()),
+        }
     }
 
     fn load_prod_ops(&mut self, ctx: &mut AppCtx<'_>) {
