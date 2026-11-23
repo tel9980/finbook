@@ -377,6 +377,10 @@ pub fn so_shipment_add(
     if qty.is_negative() || qty.is_zero() {
         return Err(fincore::FinError::msg("发货数量必须为正数").into());
     }
+    // 款到发货闸门（账套参数 prepay_gate）：默认关闭，老账套行为不变
+    if let Some(so) = crate::scm::so_get(db, so_id)? {
+        prepay_gate_check_on(db.conn(), &so, qty, "")?;
+    }
     db.conn().execute(
         "INSERT INTO so_shipment(so_id,period,date,qty,memo) VALUES(?1,?2,?3,?4,?5)",
         rusqlite::params![
@@ -500,6 +504,10 @@ pub fn so_shipment_all(
     let so = crate::scm::so_get(db, so_id)?
         .ok_or_else(|| fincore::FinError::not_found("销售订单不存在"))?;
     let item = first_so_line(&so)?.item_code.clone();
+    // 款到发货闸门：放在任何写入**之前**。放进事务里再回滚也能保证数据一致，
+    // 但用户会先看到「凭证已生成」的错觉；而且在事务里拒绝还得处理 last_insert_rowid
+    // 之类的残留状态，没有必要。
+    prepay_gate_check_on(db.conn(), &so, qty, who)?;
     let tx = db.write_tx()?;
     // 有效发货量**只算一次**，收入确认 / 发货流水 / 库存出库三处共用。
     //
@@ -785,13 +793,96 @@ pub fn so_payment_add(
 }
 
 pub fn so_payment_sum(db: &Db, so_id: i64) -> DbResult<Money> {
-    let mut st = db
-        .conn()
-        .prepare("SELECT amount FROM so_payment WHERE so_id=?1")?;
+    so_payment_sum_on(db.conn(), so_id)
+}
+
+/// 单张订单的已收款（事务内可用）。
+pub fn so_payment_sum_on(conn: &rusqlite::Connection, so_id: i64) -> DbResult<Money> {
+    let mut st = conn.prepare("SELECT amount FROM so_payment WHERE so_id=?1")?;
     let rows = st
         .query_map([so_id], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows.iter().map(|s| m(s)).sum())
+}
+
+/// 款到发货闸门：算「本次发货后累计应确认的含税收入」与「累计已收款」的缺口。
+///
+/// 返回 `Some((发货后累计含税收入, 累计已收款))` 表示收款不足；`None` 表示够了或无从判断
+/// （订单没有明细行 / 金额为零）。
+///
+/// ## 为什么按**累计**比，不按单次比
+/// 按单次比会漏掉「发一半、收一半，再发一半、一分没收」这种越拖越多的情形：
+/// 每次单看都只差一点点，累计起来客户已经欠了一整车的钱。累计口径下，
+/// 第二笔发货会立刻暴露缺口。
+///
+/// ## 为什么金额要含税
+/// `so_payment.amount` 是客户实付的**含税**收款额，而 `SalesOrder.total_amount` 是
+/// 不含税合计。拿不含税去比含税，会系统性地高估缺口、把正常订单拦下来。
+/// 摊分口径与 `so_income_voucher_in` 完全一致（按数量比例摊、`round2`），
+/// 否则闸门说的金额和凭证上的金额对不上，用户没法自己核。
+pub fn prepay_shortfall_on(
+    conn: &rusqlite::Connection,
+    so: &crate::scm::SalesOrder,
+    add_qty: Money,
+) -> DbResult<Option<(Money, Money)>> {
+    let total_qty: Money = so.lines.iter().map(|l| l.qty_ordered).sum();
+    if total_qty.is_zero() {
+        return Ok(None);
+    }
+    let gross_total = so.total_amount + so.total_tax;
+    if gross_total.is_zero() {
+        return Ok(None);
+    }
+    let shipped_now = so_shipment_sum_on(conn, so.id)?;
+    let after = shipped_now + add_qty;
+    if !after.is_positive() {
+        return Ok(None);
+    }
+    let ratio = after
+        .checked_div(total_qty)
+        .ok_or_else(|| fincore::FinError::state("订购总量为零"))?;
+    let shipped_gross = (gross_total * ratio).round2();
+    let paid = so_payment_sum_on(conn, so.id)?;
+    if shipped_gross > paid {
+        Ok(Some((shipped_gross, paid)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// 按账套参数 `prepay_gate` 执行款到发货闸门。
+///
+/// - `""` / `off`：不检查（默认，与老账套行为一致）
+/// - `warn`：收款不足只写审计日志放行
+/// - `strong`：收款不足直接拒绝，调用方拿到的是一句能照着做的话
+///
+/// 认不出的值按关闭处理（`BookOptions::validate` 会在保存参数时提示），
+/// 这里再兜一次是因为旧账套的 meta 可能是手改的。
+pub fn prepay_gate_check_on(
+    conn: &rusqlite::Connection,
+    so: &crate::scm::SalesOrder,
+    add_qty: Money,
+    who: &str,
+) -> DbResult<()> {
+    let mode = crate::options_of(conn).prepay_gate.trim().to_string();
+    if mode.is_empty() || mode == "off" {
+        return Ok(());
+    }
+    let Some((need, paid)) = prepay_shortfall_on(conn, so, add_qty)? else {
+        return Ok(());
+    };
+    let detail = format!(
+        "{} 收款不足：本次发货后累计应确认收入（含税）{need}，累计已收款 {paid}",
+        so.no
+    );
+    if mode == "strong" {
+        // 拒绝时把「差多少、差在哪」说清楚：只说「收款不足」用户还得自己算一遍
+        return Err(fincore::FinError::state(format!(
+            "{detail}；按「款到发货」策略拒绝发货，请先收款或调整账套参数"
+        ))
+        .into());
+    }
+    crate::log_on(conn, who, "销售", "款到发货提醒", &detail)
 }
 
 /// 一次性汇总所有订单的已收款（替代逐单 `so_payment_sum`，消除 N+1）。
@@ -2169,6 +2260,160 @@ mod tests {
         assert_eq!(r1.quo_amount, m("84.00"));
         assert_eq!(r1.so_amount, m("93.00"));
         assert_eq!(r1.diff_amount, m("9.00"));
+    }
+
+    /// 款到发货闸门：累计口径、含税口径、三档参数。
+    ///
+    /// 造一张 10 件 / 单价 100 / 税率 13% 的订单（含税 1130），
+    /// 用来验证「已收多少」与「已确认多少收入（含税）」的比较。
+    fn prepay_fixture(db: &Db) -> (i64, Period, NaiveDate) {
+        let p = Period::new(2026, 1).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        let mut so = crate::scm::SalesOrder::new(p, d, "C01", "客户A", "u");
+        so.no = crate::scm::so_next_no(db, p).unwrap();
+        so.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140501".into(),
+            item_name: "成品".into(),
+            qty_ordered: m("10"),
+            qty_shipped: m("0"),
+            unit_price: m("100"),
+            tax_rate: m("13"),
+            amount: m("1000"),
+            tax_amount: m("130"),
+            memo: String::new(),
+        });
+        let id = crate::scm::so_save(db, &mut so).unwrap();
+        crate::scm::so_set_status(db, id, crate::scm::SoStatus::Confirmed).unwrap();
+        (id, p, d)
+    }
+
+    fn set_gate(db: &Db, v: &str) {
+        let mut o = db.options();
+        o.prepay_gate = v.to_string();
+        db.set_options(&o).unwrap();
+    }
+
+    #[test]
+    fn prepay_gate_off_by_default_lets_everything_through() {
+        let db = mem();
+        let (so_id, p, d) = prepay_fixture(&db);
+        // 一分钱没收，默认（空串）也该放行
+        assert_eq!(db.options().prepay_gate, "");
+        let (rid, _) = so_shipment_all(&db, so_id, p, d, m("4"), "", "", "u").unwrap();
+        assert!(rid > 0);
+        // 显式 off 同样放行
+        set_gate(&db, "off");
+        assert!(so_shipment_all(&db, so_id, p, d, m("4"), "", "", "u").is_ok());
+    }
+
+    #[test]
+    fn prepay_gate_strong_blocks_shipment_until_paid() {
+        let db = mem();
+        let (so_id, p, d) = prepay_fixture(&db);
+        set_gate(&db, "strong");
+        // 4 件 = 含税 452，一分没收 → 拒绝
+        let err = so_shipment_all(&db, so_id, p, d, m("4"), "", "", "u").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("收款不足"), "错误信息应说清原因：{msg}");
+        assert!(msg.contains("452"), "应报出本次要确认的含税金额：{msg}");
+        // 拒绝时**不该**留下任何写入：既没发货行，也没凭证
+        assert!(so_shipment_sum(&db, so_id).unwrap().is_zero());
+        // 收 452 → 够发了
+        so_payment_add(&db, so_id, p, d, m("452"), "预付").unwrap();
+        let (rid, ivid) = so_shipment_all(&db, so_id, p, d, m("4"), "", "", "u").unwrap();
+        assert!(rid > 0);
+        assert!(ivid.is_some(), "收款够了就该正常确认收入");
+    }
+
+    #[test]
+    fn prepay_gate_is_cumulative_not_per_shipment() {
+        let db = mem();
+        let (so_id, p, d) = prepay_fixture(&db);
+        set_gate(&db, "strong");
+        // 先收 226（= 2 件的含税），发 2 件 —— 单次比也是够的
+        so_payment_add(&db, so_id, p, d, m("226"), "预付1").unwrap();
+        so_shipment_all(&db, so_id, p, d, m("2"), "", "", "u").unwrap();
+        // 再发 2 件：单次看只要 226，已收 226 —— 按单次比会放行；
+        // 但累计已确认 452、已收 226，缺口 226，必须拦
+        let err = so_shipment_all(&db, so_id, p, d, m("2"), "", "", "u").unwrap_err();
+        assert!(err.to_string().contains("收款不足"), "{err}");
+        assert_eq!(
+            so_shipment_sum(&db, so_id).unwrap(),
+            m("2"),
+            "被拦下的不该记发货"
+        );
+    }
+
+    #[test]
+    fn prepay_gate_warn_logs_but_lets_through() {
+        let db = mem();
+        let (so_id, p, d) = prepay_fixture(&db);
+        set_gate(&db, "warn");
+        let (rid, _) = so_shipment_all(&db, so_id, p, d, m("4"), "", "", "u").unwrap();
+        assert!(rid > 0, "warn 档必须放行");
+        let logs = db.recent_logs(20).unwrap();
+        assert!(
+            logs.iter()
+                .any(|l| l.action == "款到发货提醒" && l.detail.contains("收款不足")),
+            "warn 档要留一条审计日志，实际：{:?}",
+            logs.iter().map(|l| &l.action).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn prepay_gate_compares_tax_inclusive_amounts() {
+        let db = mem();
+        let (so_id, p, d) = prepay_fixture(&db);
+        set_gate(&db, "strong");
+        // 不含税要 4 件 = 400，含税 452。只收 400 时按不含税比会放行，
+        // 按含税比必须拦——收款额是客户实付的含税钱。
+        so_payment_add(&db, so_id, p, d, m("400"), "预付").unwrap();
+        let err = so_shipment_all(&db, so_id, p, d, m("4"), "", "", "u").unwrap_err();
+        assert!(
+            err.to_string().contains("452"),
+            "应按含税 452 报缺口：{err}"
+        );
+    }
+
+    #[test]
+    fn prepay_gate_ignores_order_without_amount() {
+        let db = mem();
+        let p = Period::new(2026, 1).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        // 金额为零的订单（赠品/样品）没有「收多少钱」的概念，不能拦
+        let mut so = crate::scm::SalesOrder::new(p, d, "C01", "客户A", "u");
+        so.no = crate::scm::so_next_no(&db, p).unwrap();
+        so.lines.push(crate::scm::SoLine {
+            id: 0,
+            so_id: 0,
+            item_code: "140501".into(),
+            item_name: "样品".into(),
+            qty_ordered: m("2"),
+            qty_shipped: m("0"),
+            unit_price: m("0"),
+            tax_rate: m("0"),
+            amount: m("0"),
+            tax_amount: m("0"),
+            memo: String::new(),
+        });
+        let id = crate::scm::so_save(&db, &mut so).unwrap();
+        crate::scm::so_set_status(&db, id, crate::scm::SoStatus::Confirmed).unwrap();
+        set_gate(&db, "strong");
+        assert!(so_shipment_all(&db, id, p, d, m("2"), "", "", "u").is_ok());
+    }
+
+    #[test]
+    fn prepay_gate_check_on_plain_shipment_path_too() {
+        let db = mem();
+        let (so_id, p, d) = prepay_fixture(&db);
+        set_gate(&db, "strong");
+        // 桌面端走的是 so_shipment_add（纯流水、不出凭证），闸门同样要生效，
+        // 否则「换个入口就能绕过风控」
+        assert!(so_shipment_add(&db, so_id, p, d, m("4"), "").is_err());
+        so_payment_add(&db, so_id, p, d, m("452"), "预付").unwrap();
+        assert!(so_shipment_add(&db, so_id, p, d, m("4"), "").is_ok());
     }
 
     #[test]

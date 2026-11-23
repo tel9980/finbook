@@ -265,6 +265,7 @@ fn main() {
         budget_control: String::new(),
         doc_prefixes: Default::default(),
         ar_aging_start: "ship".into(),
+        prepay_gate: String::new(),
         voucher_words: fincore::chart::default_voucher_words(),
         print: Default::default(),
     };

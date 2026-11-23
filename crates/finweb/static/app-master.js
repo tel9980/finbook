@@ -1028,6 +1028,7 @@ async function viewOptions(main) {
         <label style="display:inline-flex;align-items:center;gap:4px"><input type="checkbox" id="op-production" ${o.enable_production ? "checked" : ""} />启用生产制造（MRP / 排产 / 工序报工）</label>
         <label>预算控制 <select id="op-budget"><option value="" ${!o.budget_control ? "selected" : ""}>关闭</option><option value="warn" ${o.budget_control === "warn" ? "selected" : ""}>超预算提醒（放行）</option><option value="strong" ${o.budget_control === "strong" ? "selected" : ""}>超预算强控（拒绝保存）</option></select></label>
         <label>应收账款账龄起点 <select id="op-aging-start"><option value="ship" ${(!o.ar_aging_start || o.ar_aging_start === "ship") ? "selected" : ""}>发货日（无发货退回订单日）</option><option value="invoice" ${o.ar_aging_start === "invoice" ? "selected" : ""}>开票日（无开票退回发货日）</option></select></label>
+        <label>款到发货 <select id="op-prepay"><option value="" ${!o.prepay_gate ? "selected" : ""}>关闭</option><option value="warn" ${o.prepay_gate === "warn" ? "selected" : ""}>收款不足提醒（放行）</option><option value="strong" ${o.prepay_gate === "strong" ? "selected" : ""}>收款不足强控（拒绝发货）</option></select></label>
         <label>单据前缀 <input id="op-pfx-po" value="${esc(((o.doc_prefixes || {}).po) || "")}" placeholder="CG" title="采购订单" style="width:56px" /> <input id="op-pfx-so" value="${esc(((o.doc_prefixes || {}).so) || "")}" placeholder="XS" title="销售订单" style="width:56px" /> <input id="op-pfx-req" value="${esc(((o.doc_prefixes || {}).req) || "")}" placeholder="QG" title="请购单" style="width:56px" /> <input id="op-pfx-quo" value="${esc(((o.doc_prefixes || {}).quo) || "")}" placeholder="BJ" title="报价单" style="width:56px" /> <input id="op-pfx-prod" value="${esc(((o.doc_prefixes || {}).prod) || "")}" placeholder="SC" title="生产订单" style="width:56px" /></label>
       </div>
       <p class="muted" style="font-size:12px">启用期间与科目级长影响科目编码校验与凭证编号，修改请谨慎；已开账后不建议改动。</p>
@@ -1139,6 +1140,7 @@ async function viewOptions(main) {
       require_cashier: $("#op-cashier").checked,
       budget_control: $("#op-budget").value,
       ar_aging_start: $("#op-aging-start").value,
+      prepay_gate: $("#op-prepay").value,
       doc_prefixes: {
         po: $("#op-pfx-po").value.trim(), so: $("#op-pfx-so").value.trim(),
         req: $("#op-pfx-req").value.trim(), quo: $("#op-pfx-quo").value.trim(),

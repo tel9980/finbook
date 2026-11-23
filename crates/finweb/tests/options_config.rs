@@ -63,6 +63,8 @@ async fn exported_config_covers_every_field() {
         "require_audit",
         "biz_accounts",
         "budget_control",
+        "prepay_gate",
+        "ar_aging_start",
         "doc_prefixes",
         "print",
         "voucher_words",

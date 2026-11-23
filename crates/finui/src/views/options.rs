@@ -194,6 +194,18 @@ impl OptionsView {
                 });
                 ui.end_row();
 
+                ui.label("款到发货");
+                ui.horizontal(|ui| {
+                    for (val, label) in [
+                        ("", "关闭"),
+                        ("warn", "收款不足提醒（放行）"),
+                        ("strong", "收款不足强控（拒绝发货）"),
+                    ] {
+                        ui.radio_value(&mut o.prepay_gate, val.to_string(), label);
+                    }
+                });
+                ui.end_row();
+
                 ui.label("单据前缀");
                 ui.horizontal(|ui| {
                     for (key, hint) in [

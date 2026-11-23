@@ -2583,6 +2583,41 @@ const MUT = [
     to: "        Box::new(suffix_start as i64),",
     cmd: ["test", "-p", "findb", "--lib", "next_seq_by_prefix_matches_max_semantics"],
   },
+  {
+    name: "167 款到发货闸门在发货全链路上被跳过（开了 strong 也照发）",
+    file: "crates/findb/src/sales.rs",
+    from: "    prepay_gate_check_on(db.conn(), &so, qty, who)?;",
+    to: "    let _ = &who;",
+    cmd: ["test", "-p", "findb", "--lib", "prepay_gate_strong_blocks_shipment_until_paid"],
+  },
+  {
+    name: "168 款到发货改成按单次比而非累计比（发一半收一半能一直发下去）",
+    file: "crates/findb/src/sales.rs",
+    from: "    let after = shipped_now + add_qty;",
+    to: "    let after = add_qty;\n    let _ = shipped_now;",
+    cmd: ["test", "-p", "findb", "--lib", "prepay_gate_is_cumulative_not_per_shipment"],
+  },
+  {
+    name: "169 款到发货拿不含税金额去比含税收款（正常订单被误拦）",
+    file: "crates/findb/src/sales.rs",
+    from: "    let gross_total = so.total_amount + so.total_tax;",
+    to: "    let gross_total = so.total_amount;",
+    cmd: ["test", "-p", "findb", "--lib", "prepay_gate_compares_tax_inclusive_amounts"],
+  },
+  {
+    name: "170 款到发货 strong 档退化成 warn（说好强控却照发）",
+    file: "crates/findb/src/sales.rs",
+    from: "    if mode == \"strong\" {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "prepay_gate_strong_blocks_shipment_until_paid"],
+  },
+  {
+    name: "171 纯流水发货入口绕过款到发货闸门（换个入口就能绕风控）",
+    file: "crates/findb/src/sales.rs",
+    from: "        prepay_gate_check_on(db.conn(), &so, qty, \"\")?;",
+    to: "        let _ = &so;",
+    cmd: ["test", "-p", "findb", "--lib", "prepay_gate_check_on_plain_shipment_path_too"],
+  },
 
 ];
 

@@ -739,6 +739,13 @@ pub struct BookOptions {
     /// 旧账套没有该字段时按发货日处理（`#[serde(default)]`），不追溯改存量口径。
     #[serde(default)]
     pub ar_aging_start: String,
+    /// 款到发货（先款后货）：off/空=关闭（默认）、warn=收款不足仅提醒放行、strong=收款不足拒绝发货
+    ///
+    /// 判断口径是**累计**的：本次发货后累计应确认的收入金额（按订单含税总额比例摊），
+    /// 必须 ≤ 该订单累计已收款。按单次比会漏掉「发一半收一半、再发一半没收」这种
+    /// 越拖越多的情形。
+    #[serde(default)]
+    pub prepay_gate: String,
     /// 打印版式（纸张方向/字号/页边距/页码/落款）
     ///
     /// 存在账套参数里而不是本机配置：同一份报表在办公室和宿舍两台电脑上打出两种
@@ -806,6 +813,7 @@ impl Default for BookOptions {
             budget_control: String::new(),
             doc_prefixes: std::collections::BTreeMap::new(),
             ar_aging_start: "ship".to_string(),
+            prepay_gate: String::new(),
             print: crate::print::PrintOptions::default(),
             voucher_words: vec!["记".to_string()],
         }
@@ -839,6 +847,7 @@ impl BookOptions {
         self.budget_control = String::new();
         self.doc_prefixes.clear();
         self.ar_aging_start = "ship".to_string();
+        self.prepay_gate = String::new();
         self.print = crate::print::PrintOptions::default();
     }
 
@@ -939,6 +948,13 @@ impl BookOptions {
             out.push(format!(
                 "应收账款账龄起点只能是 发货日/开票日，当前是「{}」（认不出的值按发货日处理）",
                 self.ar_aging_start.trim()
+            ));
+        }
+        if !matches!(self.prepay_gate.trim(), "" | "off" | "warn" | "strong") {
+            // 认不出的值会被当成「关闭」，用户以为款到发货开着，其实一直没拦
+            out.push(format!(
+                "款到发货只能是 关闭/warn/strong，当前是「{}」（认不出的值按关闭处理）",
+                self.prepay_gate.trim()
             ));
         }
         const PREFIX_KEYS: [&str; 5] = ["po", "so", "req", "quo", "prod"];
@@ -1075,6 +1091,8 @@ mod tests {
         // 这些是要被恢复的
         o.enable_production = true;
         o.budget_control = "warn".into();
+        o.prepay_gate = "strong".into();
+        o.ar_aging_start = "invoice".into();
         o.doc_prefixes.insert("po".into(), "CG".into());
         o.print.orientation = "landscape".into();
         o.print.font_pt = 13;
@@ -1092,6 +1110,8 @@ mod tests {
 
         assert!(!o.enable_production);
         assert_eq!(o.budget_control, "");
+        assert_eq!(o.prepay_gate, "", "款到发货是偏好，恢复默认要关掉");
+        assert_eq!(o.ar_aging_start, "ship");
         assert!(o.doc_prefixes.is_empty());
         assert_eq!(
             o.print,
@@ -1149,6 +1169,17 @@ mod tests {
 
         o.budget_control = "warning".into();
         assert!(o.validate().iter().any(|x| x.contains("warning")));
+
+        // 款到发货拼错同理：认不出就按关闭，用户以为开着其实一直没拦
+        o.budget_control = String::new();
+        o.prepay_gate = "on".into();
+        assert!(
+            o.validate().iter().any(|x| x.contains("款到发货")),
+            "{:?}",
+            o.validate()
+        );
+        o.prepay_gate = "strong".into();
+        assert!(o.validate().is_empty(), "{:?}", o.validate());
 
         o.budget_control = "strong".into();
         o.doc_prefixes.insert("purchase".into(), "CG".into());
