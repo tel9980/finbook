@@ -1231,7 +1231,7 @@ async function viewSettle(main) {
     } catch (e) { $("#st-sum", main).textContent = e.message; }
   }
 
-  // 往来期初明细（迁移数据）：列表 + 合计 + 修改 / 删除；「账龄分析」自动包含期初行（影子挂账）
+  // 往来期初明细（迁移数据）：列表 + 合计 + 修改 / 删除；「账龄分析」自动包含期初行，且参与核销
   // v1.8.83：导错不必删掉重录，点「改」直接改。校验口径与 CSV 导入一致，全在服务端。
   const openArapEditor = (o) => {
     const m = modal(`<h3>修改往来期初明细</h3>
@@ -1270,7 +1270,7 @@ async function viewSettle(main) {
       $("#arap-list").innerHTML = arows.length
         ? `<table class="grid"><thead><tr><th>类型</th><th>客商</th><th>名称</th><th>单据号</th><th>单据日期</th><th class="num">金额</th><th>备注</th><th>录入</th><th></th></tr></thead><tbody>${arows.map((o) => `<tr><td>${o.kind === "ar" ? '<span class="tag">应收</span>' : '<span class="tag warn">应付</span>'}</td><td>${esc(o.party_code)}</td><td>${esc(o.party_name || "—")}</td><td>${esc(o.doc_no)}</td><td>${esc(o.doc_date)}</td><td class="num">${fmt(o.amount)}</td><td>${esc(o.memo || "")}</td><td>${esc(o.created_by)}</td>
             <td class="row-actions">${can("voucher_new") ? `<button class="btn ghost sm" data-arap-edit="${o.id}">改</button><button class="btn ghost sm" data-arap-del="${o.id}">删</button>` : ""}</td></tr>`).join("")}</tbody></table>
-          <p class="muted" style="font-size:12px;margin-top:6px">期初明细为影子挂账：进入「账龄分析」（单据号标「期初」），暂不参与自动核销（核销 v2）；金额总额仍以科目期初为准。</p>`
+          <p class="muted" style="font-size:12px;margin-top:6px">期初明细进入「账龄分析」（单据号标「期初」），并<b>参与核销</b>：核销页里它们排在最前（单据号前带「期初」），可直接与收款/付款分录勾对；金额总额仍以科目期初为准。</p>`
         : `<div class="muted">暂无往来期初（点「去导入」按单据批量迁移）</div>`;
       $all("[data-arap-edit]", main).forEach((b) => b.onclick = () => openArapEditor(arows.find((o) => String(o.id) === b.dataset.arapEdit)));
       $all("[data-arap-del]", main).forEach((b) => b.onclick = async () => {

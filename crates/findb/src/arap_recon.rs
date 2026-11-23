@@ -471,7 +471,10 @@ pub fn book_balances(
     } else {
         "ar"
     };
-    for o in crate::settle::arap_opening_list(db, Some(want))? {
+    let opening_rows = crate::settle::arap_opening_list(db, Some(want))?;
+    let opening_ids: Vec<i64> = opening_rows.iter().map(|o| o.id).collect();
+    let opening_settled = crate::settle::opening_settled_map(db, &opening_ids)?;
+    for o in opening_rows {
         if Period::from_date(
             chrono::NaiveDate::parse_from_str(&o.doc_date, "%Y-%m-%d").unwrap_or_else(|_| {
                 chrono::NaiveDate::from_ymd_opt(1970, 1, 1).expect("基准日期必然合法")
@@ -482,7 +485,10 @@ pub fn book_balances(
         {
             continue;
         }
-        *out.entry(o.party_code.clone()).or_insert(Money::ZERO) += o.amount;
+        // v1.8.125 起扣减已核销额：期初单参与核销后，对账也要按未核销额比，
+        // 否则客户已付掉的期初欠款还会留在对账余额里。
+        *out.entry(o.party_code.clone()).or_insert(Money::ZERO) +=
+            o.amount - opening_settled.get(&o.id).copied().unwrap_or(Money::ZERO);
     }
     let names = crate::auxs::name_map(db, kind)?;
     Ok(out

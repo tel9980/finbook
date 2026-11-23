@@ -35,7 +35,13 @@ pub fn auto_settle(
     who: &str,
 ) -> DbResult<AutoSettleResult> {
     let mut res = AutoSettleResult::default();
-    let all = open_entries(db, account, upto, false)?;
+    let mut all = open_entries(db, account, upto, false)?;
+    // 期初明细也参与（v1.8.125）：用负 entry_id 当占位，与真分录同池排序，
+    // FIFO 时自然当「最老的单据」先被吃掉。见 `opening_open_entries` 的说明。
+    all.extend(opening_open_entries(db, account, upto)?);
+    // 统一按日期排一次：FIFO 的语义就是「最老的先吃」，而期初行是追加进来的，
+    // 不排序的话它们会排在所有本期分录之后，反而最后才被核销。
+    all.sort_by(|a, b| a.date.cmp(&b.date).then(a.entry_id.cmp(&b.entry_id)));
 
     // 按往来单位分组
     let mut groups: std::collections::BTreeMap<String, Vec<OpenEntry>> =
@@ -66,7 +72,7 @@ pub fn auto_settle(
                 } else {
                     (g[j].entry_id, g[i].entry_id)
                 };
-                let id = settle(db, from, to, amt, who)?;
+                let id = settle_pair(db, from, to, amt, who)?;
                 let _ = id;
                 res.pairs += 1;
                 res.exact += 1;
@@ -104,7 +110,7 @@ pub fn auto_settle(
             if amt.is_zero() {
                 break;
             }
-            let id = settle(db, d.entry_id, c.entry_id, amt, who)?;
+            let id = settle_pair(db, d.entry_id, c.entry_id, amt, who)?;
             let _ = id;
             res.pairs += 1;
             res.amount += amt;
@@ -122,7 +128,7 @@ pub fn auto_settle(
                         // 尾数抹平是「尽力而为」：失败不阻断整批，但也绝不能计数——
                         // 旧写法丢弃错误后照样 pairs/amount +=，界面显示"已核销 N 笔"
                         // 而库里一条核销记录都没有。
-                        match settle(db, id, other.entry_id, left, who) {
+                        match settle_pair(db, id, other.entry_id, left, who) {
                             Ok(_) => {
                                 res.pairs += 1;
                                 res.written_off += 1;
@@ -147,6 +153,33 @@ fn open_entries_of(db: &Db, old: &[OpenEntry]) -> DbResult<Vec<OpenEntry>> {
     let ids: Vec<i64> = old.iter().map(|o| o.entry_id).collect();
     let sm = settled_map(db, &ids)?;
     let mut out = Vec::with_capacity(old.len());
+    // 期初行（负 id）没有凭证分录，SQL 查不到；它们只在核销后金额变化，
+    // 所以先按 id 建个表，循环里遇到负 id 就按「期初金额 − 已核销」重算。
+    let opening_ids: Vec<i64> = ids.iter().copied().filter(|i| *i < 0).map(|i| -i).collect();
+    let opening_settled = opening_settled_map(db, &opening_ids)?;
+    let mut opening_amt: std::collections::HashMap<i64, Money> = std::collections::HashMap::new();
+    if !opening_ids.is_empty() {
+        let ph = opening_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut st = db.conn().prepare(&format!(
+            "SELECT id, amount FROM arap_opening WHERE id IN ({ph})"
+        ))?;
+        let rows = st
+            .query_map(
+                &opening_ids
+                    .iter()
+                    .map(|i| i as &dyn rusqlite::ToSql)
+                    .collect::<Vec<_>>()[..],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (id, amt) in rows {
+            opening_amt.insert(id, Money::parse_or_zero(&amt));
+        }
+    }
     let mut st = db.conn().prepare(
         "SELECT e.id, v.id, v.period, v.date, v.word, v.no, e.line, e.summary,
                 e.account_code, e.aux_key, COALESCE(e.settle_no,''), e.debit, e.credit,
@@ -154,6 +187,19 @@ fn open_entries_of(db: &Db, old: &[OpenEntry]) -> DbResult<Vec<OpenEntry>> {
          FROM voucher_entry e JOIN voucher v ON v.id=e.voucher_id WHERE e.id=?1",
     )?;
     for id in ids {
+        if id < 0 {
+            let oid = -id;
+            if let Some(prev) = old.iter().find(|o| o.entry_id == id) {
+                let total = opening_amt.get(&oid).copied().unwrap_or(Money::ZERO);
+                let done = opening_settled.get(&oid).copied().unwrap_or(Money::ZERO);
+                let mut e = prev.clone();
+                e.settled = done;
+                let _ = total;
+                out.push(e);
+                continue;
+            }
+            continue;
+        }
         let mut e: OpenEntry = st.query_row(rusqlite::params![id], |r| {
             let d: String = r.get(3)?;
             let status: String = r.get(13)?;

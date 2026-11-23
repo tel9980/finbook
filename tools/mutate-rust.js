@@ -1504,8 +1504,8 @@ const MUT = [
     // 往来期初的旧账不计入账面：系统上线前的欠款一律对不上，逼着人整个月手工找。
     name: "㊾ 对账不算往来期初的老账",
     file: "crates/findb/src/arap_recon.rs",
-    from: "        *out.entry(o.party_code.clone()).or_insert(Money::ZERO) += o.amount;",
-    to: "        let _ = o;",
+    from: "        *out.entry(o.party_code.clone()).or_insert(Money::ZERO) +=\n            o.amount - opening_settled.get(&o.id).copied().unwrap_or(Money::ZERO);",
+    to: "        let _ = &o;",
     cmd: ["test", "-p", "findb", "--lib", "arap_recon::tests::往来期初的旧账也计入账面余额"],
   },
   {
@@ -2646,7 +2646,69 @@ const MUT = [
     to: "    let _ = qty;",
     cmd: ["test", "-p", "findb", "--lib", "notice_allocation_runs_on_plain_shipment_path"],
   },
-
+  {
+    name: "176 期初核销漏掉「核销方必须已记账」（拿草稿凭证核销期初欠款）",
+    file: "crates/findb/src/settle/opening.rs",
+    from: "    if !e.posted {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "opening_settle_requires_posted_entry_and_same_party"],
+  },
+  {
+    name: "177 期初核销不看往来单位（拿张三的收款核销李四的欠款）",
+    file: "crates/findb/src/settle/opening.rs",
+    from: "    if e.aux_key != want_key {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "opening_settle_requires_posted_entry_and_same_party"],
+  },
+  {
+    name: "178 期初核销不做超额校验（一张 1000 的单被核销掉 1000.01）",
+    file: "crates/findb/src/settle/opening.rs",
+    from: "    if amount > open_o {",
+    to: "    if false {",
+    cmd: ["test", "-p", "findb", "--lib", "opening_settle_rejects_over_amount"],
+  },
+  {
+    name: "179 账龄里的期初行不扣已核销额（收掉的钱还挂在账龄上）",
+    file: "crates/findb/src/settle/aging.rs",
+    from: "                settled: settled_map.get(&o.id).copied().unwrap_or(Money::ZERO),",
+    to: "                settled: Money::ZERO,",
+    cmd: ["test", "-p", "findb", "--lib", "opening_settles_against_payment_and_aging_reflects_it"],
+  },
+  {
+    name: "180 自动核销不排日期（期初单排在所有本期分录之后，FIFO 反着来）",
+    file: "crates/findb/src/settle/auto.rs",
+    from: "    all.sort_by(|a, b| a.date.cmp(&b.date).then(a.entry_id.cmp(&b.entry_id)));",
+    to: "    let _ = &mut all;",
+    cmd: ["test", "-p", "findb", "--lib", "auto_settle_consumes_opening_before_current_entries"],
+  },
+  {
+    name: "181 已核销额漏算期初核销（同一笔收款被核销两次）",
+    file: "crates/findb/src/settle/core.rs",
+    from: "SELECT amount FROM settle_record WHERE from_entry=?1 OR to_entry=?1\n         UNION ALL\n         SELECT amount FROM opening_settle WHERE to_entry=?1",
+    to: "         SELECT amount FROM settle_record WHERE from_entry=?1 OR to_entry=?1",
+    cmd: ["test", "-p", "findb", "--lib", "opening_settle_counts_toward_the_payment_side_so_it_cannot_be_used_twice"],
+  },
+  {
+    name: "182 客户余额不扣已核销的期初欠款（收掉的钱还挂在客户头上）",
+    file: "crates/findb/src/customers.rs",
+    from: "        sum += o.amount - settled.get(&o.id).copied().unwrap_or(Money::ZERO);",
+    to: "        sum += o.amount;",
+    cmd: ["test", "-p", "findb", "--lib", "customer_balance_nets_out_settled_opening"],
+  },
+  {
+    name: "183 期初单按父级科目查不到（核销页按 1122 查，期初一条都不出现）",
+    file: "crates/findb/src/settle/opening.rs",
+    from: "        !c.is_empty() && (account == c || account.starts_with(c) || c.starts_with(account))",
+    to: "        !c.is_empty() && (account == c || account.starts_with(c))",
+    cmd: ["test", "-p", "findb", "--lib", "auto_settle_consumes_opening_before_current_entries"],
+  },
+  {
+    name: "184 应付期初核销把参数照搬（贷方的期初单当成核销方）",
+    file: "crates/findb/src/settle/opening.rs",
+    from: "        (false, true) => opening_settle(db, -to, from, amount, who),",
+    to: "        (false, true) => opening_settle(db, -to, to, amount, who),",
+    cmd: ["test", "-p", "findb", "--lib", "auto_settle_handles_payable_opening_on_credit_side"],
+  },
 ];
 
 /** 对换行不敏感地套用变异（源码是 CRLF，变异串按 LF 写） */

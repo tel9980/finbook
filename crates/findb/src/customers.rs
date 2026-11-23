@@ -94,12 +94,16 @@ pub fn summary_of(db: &Db, code: &str, period: Period) -> DbResult<CustomerSumma
 /// 期初挂账（应收方向）余额。
 ///
 /// 这部分**不在** open_entries 里 —— open_entries 只读凭证分录。
-/// 而 settle::aging 会把 arap_opening 当影子行加进来，所以账龄里能看到、
-/// open_entries 里看不到。两者口径不同是有意的（影子行不参与 FIFO 核销），
 /// 所以这里必须**单独取并标出来**，不能悄悄加进 balance。
+///
+/// v1.8.125 起扣减已核销额（`opening_settle`）：期初单参与核销后，
+/// 这里再按原金额算就会把已经收掉的欠款重复算一遍。
 fn opening_balance(db: &Db, code: &str, period: Period) -> DbResult<Money> {
+    let rows = settle::arap_opening_list(db, Some("ar"))?;
+    let ids: Vec<i64> = rows.iter().map(|o| o.id).collect();
+    let settled = settle::opening_settled_map(db, &ids)?;
     let mut sum = Money::ZERO;
-    for o in settle::arap_opening_list(db, Some("ar"))? {
+    for o in rows {
         if o.party_code.trim() != code.trim() {
             continue;
         }
@@ -111,7 +115,7 @@ fn opening_balance(db: &Db, code: &str, period: Period) -> DbResult<Money> {
         if period != Period::ZERO && p_of_doc > period {
             continue;
         }
-        sum += o.amount;
+        sum += o.amount - settled.get(&o.id).copied().unwrap_or(Money::ZERO);
     }
     Ok(sum)
 }
@@ -188,6 +192,8 @@ pub fn list(
     // 一次性加载所有应收期初挂账，按客户编码聚合，避免在下面循环里
     // 对每个客户都跑一次 `arap_opening_list`（原代码 N+1：60+ 客户就查 60+ 次）。
     let openings = settle::arap_opening_list(db, Some("ar"))?;
+    let opening_ids: Vec<i64> = openings.iter().map(|o| o.id).collect();
+    let opening_settled = settle::opening_settled_map(db, &opening_ids)?;
     let mut opening_by_party: std::collections::BTreeMap<String, Money> =
         std::collections::BTreeMap::new();
     for o in &openings {
@@ -201,7 +207,9 @@ pub fn list(
         if period != Period::ZERO && p_of_doc > period {
             continue;
         }
-        *opening_by_party.entry(code.to_string()).or_default() += o.amount;
+        // 扣掉已核销额（v1.8.125）：客户已付掉的期初欠款不该继续挂在余额上
+        *opening_by_party.entry(code.to_string()).or_default() +=
+            o.amount - opening_settled.get(&o.id).copied().unwrap_or(Money::ZERO);
     }
 
     let ents = crate::auxs::list(db, &AuxQuery::kind(AuxKind::Customer))?;
@@ -276,7 +284,10 @@ pub fn detail(db: &Db, code: &str, period: Period) -> DbResult<Option<CustomerDe
     // 于是「这个客户有 3000 期初欠款」在正常查询下显示不出来，
     // 而汇总字段 opening_balance 却有值 —— 界面上会出现
     // 「顶部写着 3000、明细里一条都没有」。
-    for o in settle::arap_opening_list(db, Some("ar"))? {
+    let opening_rows = settle::arap_opening_list(db, Some("ar"))?;
+    let opening_ids: Vec<i64> = opening_rows.iter().map(|o| o.id).collect();
+    let opening_settled = settle::opening_settled_map(db, &opening_ids)?;
+    for o in opening_rows {
         if o.party_code.trim() != code.trim() {
             continue;
         }
@@ -287,7 +298,8 @@ pub fn detail(db: &Db, code: &str, period: Period) -> DbResult<Option<CustomerDe
             continue;
         }
         lines.push(OpenEntry {
-            entry_id: 0,
+            // 负 entry_id = 期初单（与 settle::opening_open_entries 同一约定）
+            entry_id: -o.id,
             voucher_id: 0,
             period: p_of_doc,
             date: dt,
@@ -304,7 +316,7 @@ pub fn detail(db: &Db, code: &str, period: Period) -> DbResult<Option<CustomerDe
             settle_no: String::new(),
             debit: o.amount,
             credit: Money::ZERO,
-            settled: Money::ZERO,
+            settled: opening_settled.get(&o.id).copied().unwrap_or(Money::ZERO),
             posted: true,
         });
     }
@@ -316,7 +328,7 @@ pub fn detail(db: &Db, code: &str, period: Period) -> DbResult<Option<CustomerDe
             voucher_id: e.voucher_id,
             period: e.period.ymm(),
             date: e.date.format("%Y-%m-%d").to_string(),
-            doc_no: if e.entry_id == 0 {
+            doc_no: if e.entry_id <= 0 {
                 e.summary.clone()
             } else {
                 format!("{}-{}", e.word, e.no)
@@ -328,7 +340,7 @@ pub fn detail(db: &Db, code: &str, period: Period) -> DbResult<Option<CustomerDe
             open: e.open(),
             settle_no: e.settle_no.clone(),
             posted: e.posted,
-            from_opening: e.entry_id == 0,
+            from_opening: e.entry_id <= 0,
         })
         .collect();
 

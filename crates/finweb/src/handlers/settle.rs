@@ -352,6 +352,36 @@ pub(super) async fn manual_settle_endpoint(
         parse_money_checked(&req.diff)?
     };
     let db = &user.db;
+    // 期初明细（from_entry < 0）没有凭证分录，走 `opening_settle`；
+    // 期初单恒为「被核销的欠款单」，所以只会出现在 from 位。
+    // 差异核销（抹零要生成过渡凭证）只对真分录开放——期初单没有可挂的凭证行，
+    // 硬要抹零会让凭证与期初台账对不上，所以这里直接拒绝。
+    if req.from_entry < 0 {
+        if diff.is_positive() {
+            return Err(AppError::bad_request(
+                "期初明细不支持差异核销：请按实际收款金额核销，差额留在账上",
+            ));
+        }
+        let id = findb::settle::opening_settle(
+            db,
+            -req.from_entry,
+            req.to_entry,
+            amount,
+            user.username(),
+        )?;
+        db.log(
+            user.username(),
+            "往来",
+            "期初核销",
+            &format!(
+                "期初#{:?} ↔ 分录#{} {}",
+                -req.from_entry,
+                req.to_entry,
+                amount.fmt_money()
+            ),
+        )?;
+        return Ok(Json(json!({ "id": id, "diff_voucher_id": null })));
+    }
     // 差异为 0 时 settle_with_diff 内部退化成普通核销，不必分支
     let r = findb::settle::settle_with_diff(
         db,
@@ -1439,6 +1469,14 @@ pub(super) async fn get_settle_open(
     if !include_all {
         rows.retain(|e| e.is_open());
     }
+    // 期初明细也进这张列表（v1.8.125）：它们的 entry_id 是负数，核销时前端原样回传，
+    // 后端按符号分派到 `opening_settle`。这样会计在一张表上就能把期初欠款和
+    // 本期挂账一起勾掉，不用先去另一个页面。
+    let mut opening_rows = findb::settle::opening_open_entries(db, account.trim(), upto)?;
+    if let Some(p) = party_filter {
+        opening_rows.retain(|e| e.aux_key == p);
+    }
+    rows.extend(opening_rows);
     if let Some(kw) = kw.as_deref() {
         rows.retain(|e| {
             e.settle_no.to_lowercase().contains(kw)

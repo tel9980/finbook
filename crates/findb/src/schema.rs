@@ -33,7 +33,7 @@ use crate::DbError;
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 57;
+pub const SCHEMA_VERSION: i64 = 58;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -280,6 +280,24 @@ CREATE TABLE IF NOT EXISTS settle_record (
     UNIQUE(from_entry, to_entry)
 );
 CREATE INDEX IF NOT EXISTS idx_settle_entry ON settle_record(from_entry, to_entry);
+
+-- 期初明细的核销记录（v58）：往来期初明细（arap_opening）是台账行，没有凭证分录，
+-- 塞进 settle_record 会违反 from_entry 的外键，所以单开一张表。
+-- 口径与 settle_record 对齐：opening_id 是「被核销方」（期初欠款单），
+-- to_entry 是「核销方」（收款/付款分录）。金额在库里是 TEXT，Rust 侧定点累加。
+CREATE TABLE IF NOT EXISTS opening_settle (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    period       INTEGER NOT NULL,
+    account_code TEXT NOT NULL,
+    aux_key      TEXT NOT NULL DEFAULT '',
+    opening_id   INTEGER NOT NULL REFERENCES arap_opening(id) ON DELETE CASCADE,
+    to_entry     INTEGER NOT NULL REFERENCES voucher_entry(id) ON DELETE CASCADE,
+    amount       TEXT NOT NULL,
+    settled_by   TEXT NOT NULL DEFAULT '',
+    settled_at   TEXT NOT NULL DEFAULT '',
+    UNIQUE(opening_id, to_entry)
+);
+CREATE INDEX IF NOT EXISTS idx_opening_settle_entry ON opening_settle(to_entry);
 
 -- 固定资产卡片
 CREATE TABLE IF NOT EXISTS fixed_asset (
@@ -2543,6 +2561,8 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_v56(conn)?;
             // v57：发货通知加 qty_done（逐条数量对齐），历史 shipped 通知补齐
             migrate_v57(conn)?;
+            // v58：期初明细核销表 opening_settle（表由 DDL 建，这里只兜底旧账套）
+            migrate_v58(conn)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：
@@ -2679,6 +2699,33 @@ fn migrate_v57(conn: &Connection) -> Result<(), DbError> {
         "UPDATE ship_notice SET qty_done=qty WHERE status='shipped' AND qty_done='0'",
         [],
     )?;
+    Ok(())
+}
+
+/// v57 → v58：期初明细参与核销。
+///
+/// 新表由 DDL 建（`CREATE TABLE IF NOT EXISTS` 对旧账套同样生效），这里只需要
+/// 兜住一种情况：旧账套已经建过 `arap_opening`，但没有 `opening_settle`——
+/// DDL 会在 `init` 里补上，所以本函数保持幂等空转即可。留着它是为了迁移链完整
+/// （每一步都有名字，出问题能定位是哪一版）。
+fn migrate_v58(conn: &Connection) -> Result<(), DbError> {
+    if !column_exists(conn, "opening_settle", "opening_id")? {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS opening_settle (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                period       INTEGER NOT NULL,
+                account_code TEXT NOT NULL,
+                aux_key      TEXT NOT NULL DEFAULT '',
+                opening_id   INTEGER NOT NULL REFERENCES arap_opening(id) ON DELETE CASCADE,
+                to_entry     INTEGER NOT NULL REFERENCES voucher_entry(id) ON DELETE CASCADE,
+                amount       TEXT NOT NULL,
+                settled_by   TEXT NOT NULL DEFAULT '',
+                settled_at   TEXT NOT NULL DEFAULT '',
+                UNIQUE(opening_id, to_entry)
+             );
+             CREATE INDEX IF NOT EXISTS idx_opening_settle_entry ON opening_settle(to_entry);",
+        )?;
+    }
     Ok(())
 }
 
@@ -3233,6 +3280,67 @@ mod tests {
             .unwrap();
         assert_eq!(pending_done, "0", "待发通知不该被补成已发");
         // 幂等：再跑一次不报错、不重复加列
+        init(&conn).unwrap();
+        let v: String = conn
+            .query_row(
+                "SELECT value FROM meta WHERE key='schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION.to_string());
+    }
+
+    /// v57 → v58：旧账套没有 `opening_settle` 表，升级后必须补上，
+    /// 而且已有数据（期初单、核销记录）不能丢。
+    #[test]
+    fn old_book_upgrade_creates_opening_settle_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(DDL).unwrap();
+        // 造出「v57、还没有 opening_settle」的存量账套
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS opening_settle;
+             INSERT INTO arap_opening(kind,party_code,party_name,doc_no,doc_date,amount,memo,
+                 created_by,created_at)
+                 VALUES('ar','C01','客户甲','XS-OLD','2025-11-01','5000','','u','');
+             INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','57');",
+        )
+        .unwrap();
+        assert!(!column_exists(&conn, "opening_settle", "opening_id").unwrap());
+
+        init(&conn).unwrap();
+
+        assert!(
+            column_exists(&conn, "opening_settle", "opening_id").unwrap(),
+            "升级后必须建出 opening_settle 表"
+        );
+        // 期初单不能丢
+        let n: i64 = conn
+            .query_row("SELECT COUNT(*) FROM arap_opening", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "升级不能动已有期初明细");
+        // 表结构要带齐外键与唯一约束：外键保证「期初单/分录删了核销记录跟着走」，
+        // 唯一约束保证同一对（期初单, 分录）只有一条累加记录。
+        let ddl: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='opening_settle'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            ddl.contains("REFERENCES arap_opening(id) ON DELETE CASCADE"),
+            "opening_id 必须挂到 arap_opening 且级联删除：{ddl}"
+        );
+        assert!(
+            ddl.contains("REFERENCES voucher_entry(id) ON DELETE CASCADE"),
+            "to_entry 必须挂到 voucher_entry 且级联删除：{ddl}"
+        );
+        assert!(
+            ddl.contains("UNIQUE(opening_id, to_entry)"),
+            "同一对（期初单, 分录）只能有一条记录：{ddl}"
+        );
+        // 幂等
         init(&conn).unwrap();
         let v: String = conn
             .query_row(

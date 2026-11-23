@@ -84,7 +84,7 @@ pub fn aging(
 /// `aging` 与 `ar_ap_due_schedule` 共用这一份取数：往来维度判定、方向翻转、
 /// 期初影子行的口径只该有一个定义点，两处各自重写就会像历史那样「账龄有、
 /// 到期表没有」。
-fn aging_items(
+pub(super) fn aging_items(
     db: &Db,
     account: &str,
     upto: Period,
@@ -148,10 +148,14 @@ fn aging_items(
         let k = key.trim();
         items.retain(|i| i.key.trim() == k);
     }
-    // 往来期初明细（迁移数据，影子行）：按科目方向取对应类型（1开头=应收 / 2开头=应付），
-    // 单据日期期间不晚于 upto；**只进账龄展示、不参与 FIFO 核销**（核销 v2，避免伪 entry 外键）。
+    // 往来期初明细：按科目方向取对应类型（1开头=应收 / 2开头=应付），
+    // 单据日期期间不晚于 upto。v1.8.125 起**参与核销**——已核销额从 `opening_settle`
+    // 批量取（一次查询，不按行 N+1），账龄按「期初金额 − 已核销」算。
     if let Some(w) = want {
-        for o in arap_opening_list(db, Some(w))? {
+        let rows = arap_opening_list(db, Some(w))?;
+        let ids: Vec<i64> = rows.iter().map(|o| o.id).collect();
+        let settled_map = opening_settled_map(db, &ids)?;
+        for o in rows {
             let d = NaiveDate::parse_from_str(&o.doc_date, "%Y-%m-%d")
                 .unwrap_or_else(|_| NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
             if Period::from_date(d).ymm() > upto.ymm() {
@@ -164,7 +168,7 @@ fn aging_items(
                 // 应付翻转只在分录侧做一次 —— 这里若再按 kind 取反，
                 // 翻两次就回到负数，整张应付账龄又掉回预付栏。
                 amount: o.amount,
-                settled: Money::ZERO,
+                settled: settled_map.get(&o.id).copied().unwrap_or(Money::ZERO),
                 doc_no: format!(
                     "期初 {}",
                     if o.doc_no.is_empty() {

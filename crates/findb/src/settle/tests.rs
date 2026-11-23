@@ -1871,3 +1871,302 @@ fn arap_opening_update_validates_and_keeps_creator() {
         .to_string();
     assert!(err.contains("未找到"), "期望提示未找到，实际：{err}");
 }
+
+// ---------------- 期初明细参与核销（v1.8.125，schema v58） ----------------
+
+/// 造一张应收期初单，返回 id
+fn opening_ar(db: &Db, party: &str, doc: &str, date: &str, amount: &str) -> i64 {
+    arap_opening_insert(
+        db,
+        &ArapOpening {
+            id: 0,
+            kind: "ar".into(),
+            party_code: party.into(),
+            party_name: "客户".into(),
+            doc_no: doc.into(),
+            doc_date: date.into(),
+            amount: m(amount),
+            memo: String::new(),
+            created_by: "u".into(),
+        },
+        "u",
+    )
+    .unwrap()
+}
+
+/// 同一笔收款被拿去核销期初之后，它自己就算「已用掉」——再拿它去核销第二张
+/// 期初单必须被拦下。`settled_of` 只读 `settle_record` 时会漏掉 `opening_settle`，
+/// 这条收款看起来还没用过，于是同一笔钱被核销两次（实测吃掉 1800）。
+#[test]
+fn opening_settle_counts_toward_the_payment_side_so_it_cannot_be_used_twice() {
+    let db = mem();
+    let p = Period::new(2026, 1).unwrap();
+    let o1 = opening_ar(&db, "C01", "XS-OLD-1", "2025-11-01", "5000");
+    let o2 = opening_ar(&db, "C01", "XS-OLD-2", "2025-12-01", "5000");
+    // 2026-01-10 只收 2000
+    let (_vid, pay) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        1,
+        "C01",
+        "2000",
+        false,
+        "100201",
+    );
+
+    opening_settle(&db, o1, pay, m("2000"), "u").unwrap();
+    // 这 2000 已经用光了，不能再核销第二张期初单
+    let err = opening_settle(&db, o2, pay, m("1000"), "u")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("超过核销方未核销额"),
+        "同一笔收款不能重复核销，期望提示超过核销方未核销额，实际：{err}"
+    );
+}
+
+/// 期初单能被收款分录核销，核销后账龄里那笔的已核销额跟着变。
+#[test]
+fn opening_settles_against_payment_and_aging_reflects_it() {
+    let db = mem();
+    let p = Period::new(2026, 1).unwrap();
+    let oid = opening_ar(&db, "C01", "XS-OLD", "2025-11-01", "5000");
+    // 2026-01-10 收 2000
+    let (_vid, pay) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        1,
+        "C01",
+        "2000",
+        false,
+        "100201",
+    );
+
+    let id = opening_settle(&db, oid, pay, m("2000"), "u").unwrap();
+    assert!(id > 0);
+    assert_eq!(opening_settled_of(db.conn(), oid).unwrap(), m("2000"));
+
+    // 账龄：期初那笔剩 3000，收款那笔剩 0（全额核销掉）
+    let (items, _) = aging_items(&db, "1122", p, None).unwrap();
+    let op = items
+        .iter()
+        .find(|i| i.doc_no.starts_with("期初"))
+        .expect("期初行应在账龄里");
+    assert_eq!(op.amount, m("5000"));
+    assert_eq!(op.settled, m("2000"));
+    assert_eq!(op.open(), m("3000"));
+}
+
+/// 核销金额超过期初单未核销额 → 拒绝（不能把一张 5000 的单核销掉 6000）
+#[test]
+fn opening_settle_rejects_over_amount() {
+    let db = mem();
+    let p = Period::new(2026, 1).unwrap();
+    let oid = opening_ar(&db, "C01", "XS-OLD", "2025-11-01", "1000");
+    let (_v, pay) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        1,
+        "C01",
+        "5000",
+        false,
+        "100201",
+    );
+    let err = opening_settle(&db, oid, pay, m("1000.01"), "u")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("超过期初单未核销额"), "实际：{err}");
+}
+
+/// 核销方必须是**已记账**的往来分录，且往来单位要一致。
+#[test]
+fn opening_settle_requires_posted_entry_and_same_party() {
+    let db = mem();
+    let oid = opening_ar(&db, "C01", "XS-OLD", "2025-11-01", "1000");
+    let p = Period::new(2026, 1).unwrap();
+    // 别的客户的收款
+    let (_v, other) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        1,
+        "C02",
+        "1000",
+        false,
+        "100201",
+    );
+    let err = opening_settle(&db, oid, other, m("100"), "u")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("往来单位与期初单不一致"), "实际：{err}");
+
+    // 草稿凭证（未记账）。对方科目用 1001（现金，不要求辅助核算），
+    // 免得被 100201 的「必须填银行账户」校验先拦下来。
+    let (_v2, draft) = ar_voucher_draft(
+        &db,
+        NaiveDate::from_ymd_opt(2026, 1, 12).unwrap(),
+        2,
+        "C01",
+        "1000",
+        false,
+        "1001",
+    );
+    let err2 = opening_settle(&db, oid, draft, m("100"), "u")
+        .unwrap_err()
+        .to_string();
+    assert!(err2.contains("已记账"), "实际：{err2}");
+}
+
+/// 自动核销把期初单当最老的单据先吃掉（FIFO）。
+#[test]
+fn auto_settle_consumes_opening_before_current_entries() {
+    let db = mem();
+    let p = Period::new(2026, 1).unwrap();
+    let oid = opening_ar(&db, "C01", "XS-OLD", "2025-11-01", "800");
+    // 本期又挂 1200（2026-01-05）
+    let (_v1, _cur) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+        1,
+        "C01",
+        "1200",
+        true,
+        "600101",
+    );
+    // 本期收 1000（2026-01-20）
+    let (_v2, _pay) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 20).unwrap(),
+        2,
+        "C01",
+        "1000",
+        false,
+        "100201",
+    );
+
+    let r = auto_settle(&db, "1122", p, Money::ZERO, "u").unwrap();
+    // 收款 1000 分两笔吃：先吃期初 800，再吃本期挂账 200
+    assert_eq!(r.pairs, 2, "1000 要分两笔才吃得完（期初 800 + 本期 200）");
+    assert_eq!(r.amount, m("1000"));
+    // 期初（2025-11-01）比本期挂账早，FIFO 先吃它：800 全清 + 本期挂账被吃掉 200
+    assert_eq!(opening_settled_of(db.conn(), oid).unwrap(), m("800"));
+
+    let (items, _) = aging_items(&db, "1122", p, None).unwrap();
+    let op = items.iter().find(|i| i.doc_no.starts_with("期初")).unwrap();
+    assert_eq!(op.open(), Money::ZERO, "期初应被全额核销");
+    let cur = items
+        .iter()
+        .find(|i| !i.doc_no.starts_with("期初") && i.amount == m("1200"))
+        .unwrap();
+    assert_eq!(cur.open(), m("1000"), "本期挂账还剩 1000");
+}
+
+/// 应付侧：期初单在贷方，`settle_pair` 要把参数翻过来。
+#[test]
+fn auto_settle_handles_payable_opening_on_credit_side() {
+    let db = mem();
+    let p = Period::new(2026, 1).unwrap();
+    let oid = arap_opening_insert(
+        &db,
+        &ArapOpening {
+            id: 0,
+            kind: "ap".into(),
+            party_code: "S01".into(),
+            party_name: "供应商".into(),
+            doc_no: "CG-OLD".into(),
+            doc_date: "2025-12-01".into(),
+            amount: m("600"),
+            memo: String::new(),
+            created_by: "u".into(),
+        },
+        "u",
+    )
+    .unwrap();
+    // 2026-01-15 付款 600（借 220201 / 贷 1001）
+    let d = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+    let mut v = Voucher::new(p, d, "记", 1);
+    v.push_entry(Entry {
+        debit: m("600"),
+        aux: AuxRef {
+            supplier: Some("S01".into()),
+            ..Default::default()
+        },
+        ..Entry::new(1, "220201", "付款")
+    });
+    v.push_entry(Entry {
+        credit: m("600"),
+        ..Entry::new(2, "1001", "付款")
+    });
+    let vid = crate::vouchers::save(&db, &mut v).unwrap();
+    crate::vouchers::post(&db, vid, "u").unwrap();
+
+    let r = auto_settle(&db, "2202", p, Money::ZERO, "u").unwrap();
+    assert_eq!(r.pairs, 1);
+    assert_eq!(r.amount, m("600"));
+    assert_eq!(opening_settled_of(db.conn(), oid).unwrap(), m("600"));
+}
+
+/// 撤销期初核销后金额回到未核销。
+#[test]
+fn opening_unsettle_restores_the_amount() {
+    let db = mem();
+    let p = Period::new(2026, 1).unwrap();
+    let oid = opening_ar(&db, "C01", "XS-OLD", "2025-11-01", "500");
+    let (_v, pay) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        1,
+        "C01",
+        "500",
+        false,
+        "100201",
+    );
+    let sid = opening_settle(&db, oid, pay, m("500"), "u").unwrap();
+    assert_eq!(opening_settled_of(db.conn(), oid).unwrap(), m("500"));
+    opening_unsettle(&db, sid).unwrap();
+    assert_eq!(opening_settled_of(db.conn(), oid).unwrap(), Money::ZERO);
+}
+
+/// 客户余额 / 对账余额也要扣掉已核销的期初欠款。
+#[test]
+fn customer_balance_nets_out_settled_opening() {
+    let db = mem();
+    let p = Period::new(2026, 1).unwrap();
+    crate::auxs::insert(
+        &db,
+        &fincore::AuxEntity::new(fincore::AuxKind::Customer, "C01", "客户甲"),
+    )
+    .unwrap();
+    let oid = opening_ar(&db, "C01", "XS-OLD", "2025-11-01", "1000");
+    let (_v, pay) = ar_voucher(
+        &db,
+        p,
+        NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+        1,
+        "C01",
+        "400",
+        false,
+        "100201",
+    );
+    opening_settle(&db, oid, pay, m("400"), "u").unwrap();
+
+    let d = crate::customers::detail(&db, "C01", p).unwrap().unwrap();
+    assert_eq!(
+        d.summary.opening_balance,
+        m("600"),
+        "期初挂账余额要扣掉已核销的 400"
+    );
+    let op_line = d
+        .lines
+        .iter()
+        .find(|l| l.from_opening)
+        .expect("明细里要有期初行");
+    assert_eq!(op_line.settled, m("400"));
+    assert_eq!(op_line.open, m("600"));
+}

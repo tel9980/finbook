@@ -69,9 +69,17 @@ pub fn list_for_entry(db: &Db, entry_id: i64) -> DbResult<Vec<SettleRecord>> {
 /// 收 `&Connection` 而非 `&Db`：核销要在同一事务里「读未核销额 → 校验 → 写回」，
 /// 需要能借给事务句柄（`Transaction` 会 Deref 到 `Connection`）。
 pub fn settled_of(conn: &Connection, entry_id: i64) -> DbResult<Money> {
-    // 金额在库里是 TEXT，SUM 会走浮点，精度不可控；这里取行在 Rust 侧用定点累加
-    let mut st =
-        conn.prepare("SELECT amount FROM settle_record WHERE from_entry=?1 OR to_entry=?1")?;
+    // 金额在库里是 TEXT，SUM 会走浮点，精度不可控；这里取行在 Rust 侧用定点累加。
+    //
+    // v1.8.125 起**把期初核销也算进来**：一条收款分录如果被用来核销期初明细
+    // （`opening_settle.to_entry`），它同样已经用掉了。只读 `settle_record` 会让
+    // 这笔收款看起来还没核销，自动核销第二轮就把它再配一次 —— 实测同一笔
+    // 1000 的收款被吃掉 1800。
+    let mut st = conn.prepare(
+        "SELECT amount FROM settle_record WHERE from_entry=?1 OR to_entry=?1
+         UNION ALL
+         SELECT amount FROM opening_settle WHERE to_entry=?1",
+    )?;
     let rows = st
         .query_map(rusqlite::params![entry_id], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -90,11 +98,15 @@ pub fn settled_map(db: &Db, entry_ids: &[i64]) -> DbResult<std::collections::Has
     }
     let ph = entry_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     // 同样不能用 SUM()：TEXT 列求和会走 REAL，分位精度不可控
+    // 期初核销（opening_settle）只挂在 to_entry 上：被核销的期初单不是分录。
+    // 同 `settled_of` 的理由，这里也要并进来，否则同一笔收款会被重复核销。
     let sql = format!(
         "SELECT k, amount FROM (
             SELECT from_entry AS k, id, amount FROM settle_record WHERE from_entry IN ({ph})
             UNION ALL
             SELECT to_entry AS k, id, amount FROM settle_record WHERE to_entry IN ({ph})
+            UNION ALL
+            SELECT to_entry AS k, id, amount FROM opening_settle WHERE to_entry IN ({ph})
          ) ORDER BY k"
     );
     let mut st = db.conn().prepare(&sql)?;
@@ -104,6 +116,7 @@ pub fn settled_map(db: &Db, entry_ids: &[i64]) -> DbResult<std::collections::Has
     // 自动核销第二轮就去重复配，被超额校验拦下（"超过核销方未核销额 0.00"）。
     let ids2: Vec<&dyn rusqlite::ToSql> = entry_ids
         .iter()
+        .chain(entry_ids.iter())
         .chain(entry_ids.iter())
         .map(|i| i as &dyn rusqlite::ToSql)
         .collect();
@@ -327,6 +340,12 @@ fn guard_not_closed(tx: &rusqlite::Transaction, rec: &SettleRecord) -> DbResult<
 
 /// 清除某分录的全部核销（删改凭证时用）
 pub fn unsettle_entry(db: &Db, entry_id: i64) -> DbResult<usize> {
+    // 期初核销也要跟着清：删改凭证时这条分录可能正是某张期初单的核销方，
+    // 留下孤儿记录会让期初单显示「已核销」而对应的收款凭证已经没了。
+    db.conn().execute(
+        "DELETE FROM opening_settle WHERE to_entry=?1",
+        rusqlite::params![entry_id],
+    )?;
     Ok(db.conn().execute(
         "DELETE FROM settle_record WHERE from_entry=?1 OR to_entry=?1",
         rusqlite::params![entry_id],
