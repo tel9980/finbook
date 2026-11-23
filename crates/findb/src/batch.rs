@@ -86,14 +86,20 @@ pub fn shelf_life_days(db: &Db, item: &str) -> i64 {
 }
 
 /// 自动批号：BT + yymmdd + 3 位当日序号
+///
+/// 索引友好取号 + 撞号顺延：删批次后 COUNT 变小会把已存在的号再发一次，
+/// 撞 `UNIQUE(item,batch_no)` 时报错（同批次删了重建就是这个场景）。
 fn next_batch_no(db: &Db, date: NaiveDate) -> DbResult<String> {
     let prefix = format!("BT{}", date.format("%y%m%d"));
-    let n: i64 = db.conn().query_row(
-        "SELECT COUNT(*) FROM stock_batch WHERE batch_no LIKE ?1",
-        [format!("{prefix}%")],
-        |r| r.get(0),
-    )?;
-    Ok(format!("{prefix}{:03}", n + 1))
+    crate::next_no_by_prefix(
+        db.conn(),
+        "stock_batch",
+        "batch_no",
+        &prefix,
+        prefix.len(),
+        None,
+        |n| format!("{prefix}{n:03}"),
+    )
 }
 
 /// 批次余额（库存流水按 item+batch 汇总）

@@ -80,7 +80,7 @@ use fincore::chart::{
 use fincore::report::cashflow::{default_cash_flow_items, CashFlowDirection, CashFlowGroup};
 use fincore::user::{AuditLog, User};
 use fincore::{BookOptions, FinError};
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 pub use balances::BalanceSnapshot;
 
@@ -756,9 +756,8 @@ pub fn doc_prefix(db: &Db, kind: &str, default: &str) -> String {
 ///
 /// 历史实现 `WHERE no LIKE '前缀%'` + `MAX(CAST(SUBSTR(no,N) AS INTEGER))` 会让
 /// SQLite 无法使用 `no` 上的 UNIQUE 索引，退化成全表扫 + 临时排序：批量导入
-/// N 张单据时每次取号 O(N)、整批 O(N²)（5000 单实测 105s）。这里改写成
-/// `no >= 前缀 AND no < 上界 + ORDER BY no DESC LIMIT 1` 直接吃索引，
-/// 后缀解析放到 Rust 侧（不在 SQL 里对金额/序号做 CAST 求和）。
+/// N 张单据时每次取号 O(N)、整批 O(N²)（5000 单实测 105s）。这里把 WHERE 改成
+/// `no >= 前缀 AND no < 上界` 直接吃索引。
 /// 上界取「前缀末字符 +1」（'9'→':' 仍大于 '9'，SQLite 按码点比字符串），
 /// 覆盖所有以 prefix 开头的字符串。
 /// 语义与 MAX 版一致：无匹配/后缀非数字均按 0 处理，返回 next = max+1。
@@ -769,35 +768,90 @@ pub(crate) fn next_seq_by_prefix(
     suffix_start: usize,
     period: Option<i32>,
 ) -> DbResult<i64> {
+    next_seq_by_prefix_col(conn, table, "no", prefix, suffix_start, period)
+}
+
+/// 同 `next_seq_by_prefix`，但单号列名可指定（`stock_batch` 用 `batch_no`）。
+pub(crate) fn next_seq_by_prefix_col(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    prefix: &str,
+    suffix_start: usize,
+    period: Option<i32>,
+) -> DbResult<i64> {
     let mut upper = prefix.to_string();
     if let Some(last) = upper.pop() {
         upper.push(char::from_u32(last as u32 + 1).unwrap_or('\u{10FFFF}'));
     }
     let period_clause = if period.is_some() {
-        " AND period=?3"
+        " AND period=?4"
     } else {
         ""
     };
+    // 为什么是「范围过滤 + 数值 MAX」而不是「ORDER BY no DESC LIMIT 1」：
+    // 后者看着更快，但拿的是**字典序**最大。两个坑：①后缀脏（`-ABC`、手改的号）
+    // 排在数字后面，会被当成 0，号从头重发；②超过 999 之后 `{n:03}` 变成 4 位，
+    // '1000' 字典序小于 '999'，取到的仍是 999，下一个号就撞了。
+    // CAST 成整数取 MAX 与历史上的 `MAX(CAST(SUBSTR(no,N) AS INTEGER))` 完全同义，
+    // 而 WHERE 换成范围后能吃 `no` 上的 UNIQUE 索引，不再全表扫（这才是原来的病根）。
+    // 注意：CAST 的是**单号序号**，不是金额——金额一律 TEXT 存储、Rust 侧 Decimal 累加。
     let sql = format!(
-        "SELECT no FROM {table} WHERE no >= ?1 AND no < ?2{period_clause} ORDER BY no DESC LIMIT 1"
+        "SELECT MAX(CAST(SUBSTR({column}, ?3) AS INTEGER)) FROM {table} \
+         WHERE {column} >= ?1 AND {column} < ?2{period_clause}"
     );
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-        vec![Box::new(prefix.to_string()), Box::new(upper)];
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+        Box::new(prefix.to_string()),
+        Box::new(upper),
+        Box::new(suffix_start as i64 + 1), // SQLite 的 SUBSTR 从 1 开始
+    ];
     if let Some(p) = period {
         params.push(Box::new(p));
     }
     let params_ref: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-    let last_no: Option<String> = conn
-        .query_row(&sql, params_ref.as_slice(), |r| r.get(0))
-        .optional()?;
-    let max = last_no
-        .map(|s| {
-            s.get(suffix_start..)
-                .and_then(|x| x.parse::<i64>().ok())
-                .unwrap_or(0)
-        })
-        .unwrap_or(0);
-    Ok(max + 1)
+    let max: Option<i64> = conn.query_row(&sql, params_ref.as_slice(), |r| r.get(0))?;
+    Ok(max.unwrap_or(0) + 1)
+}
+
+/// 取下一个单号，**并保证不与已有单号撞号**（索引友好 + 撞号顺延）。
+///
+/// 这是「COUNT(*) 取号」的正确替代品。COUNT 版有两个病：
+///
+/// 1. **O(n²)**：`WHERE no LIKE '前缀%'` 用不上索引，每次取号全表扫。
+/// 2. **删单后撞号**：COUNT 少了 1，`count+1` 就会重新发出一个**已经存在**的号，
+///    撞上 `no ... UNIQUE` 抛「保存失败」——用户看到的是报错，而不是自动跳号。
+///    有顺延循环的几个（催款单/返工单/工序检验）早就绕开了，没有的这 5 个
+///    （请购/报价/盘点/资产盘点/批次）一直是个坑。
+///
+/// 做法：先用范围查询取真·最大号（吃索引），再逐个验空；不空就 +1 继续。
+/// 顺延上限 1000 次——真到这个量级说明数据本身有问题，宁可报错也不死循环。
+///
+/// `format` 负责把序号拼成单号（各表位数/分隔符不同），撞号检查用拼好的整串。
+pub(crate) fn next_no_by_prefix(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    prefix: &str,
+    suffix_start: usize,
+    period: Option<i32>,
+    format: impl Fn(i64) -> String,
+) -> DbResult<String> {
+    let start = next_seq_by_prefix_col(conn, table, column, prefix, suffix_start, period)?;
+    for n in start..start + 1000 {
+        let cand = format(n);
+        let taken: i64 = conn.query_row(
+            &std::format!("SELECT COUNT(*) FROM {table} WHERE {column}=?1"),
+            rusqlite::params![&cand],
+            |r| r.get(0),
+        )?;
+        if taken == 0 {
+            return Ok(cand);
+        }
+    }
+    Err(FinError::msg(std::format!(
+        "{table} 的 {column} 连续 1000 个候选号都被占用（前缀 {prefix}），请检查数据"
+    ))
+    .into())
 }
 
 /// 给报表 SQL 追加数据范围条件（科目区间 + 仅本人填制的凭证）。
@@ -896,6 +950,210 @@ pub(crate) mod tests {
     /// 测试用账套：不内置管理员，用于「首次登录即管理员」流程测试
     pub(crate) fn mem_no_admin() -> Db {
         Db::in_memory_no_admin(&test_opts()).unwrap()
+    }
+
+    /// 取号的**核心约定**：删单之后绝不能把已存在的号再发一次。
+    ///
+    /// 这条守的是用户能直接撞见的现象：录 3 张请购单（001/002/003），删掉 002，
+    /// 再录一张 —— 老实现 `COUNT(*)+1` 算出 3，重新发出 `QG202601-003`，
+    /// 撞 `purchase_req.no UNIQUE`，用户看到的是「保存失败」，而不是自动跳到 004。
+    /// 同款坑在报价单/盘点单/资产盘点/批次五个取号点上都有。
+    ///
+    /// 现在统一走 `next_no_by_prefix`：先范围查询取真·最大号（吃索引），
+    /// 再逐个验空、不空就顺延。
+    #[test]
+    fn next_no_skips_gaps_left_by_deleted_docs() {
+        let db = mem();
+        let p = fincore::Period::new(2026, 1).unwrap();
+        let prefix = format!("QG{:04}{:02}", 2026, 1);
+        // 造 001/002/003，然后删掉中间的 002
+        for n in 1..=3 {
+            db.conn()
+                .execute(
+                    "INSERT INTO purchase_req(no,period,date,item_code) VALUES(?1,?2,?3,'140301')",
+                    rusqlite::params![format!("{prefix}-{n:03}"), p.ymm(), "2026-01-05"],
+                )
+                .unwrap();
+        }
+        db.conn()
+            .execute(
+                "DELETE FROM purchase_req WHERE no=?1",
+                rusqlite::params![format!("{prefix}-002")],
+            )
+            .unwrap();
+        // COUNT 只剩 2 → 老实现会发 003（已存在）；现在必须发 004
+        let no = procurement::pr_next_no(&db, p).unwrap();
+        assert_eq!(
+            no,
+            format!("{prefix}-004"),
+            "删单后必须跳号，不能重发已存在的号"
+        );
+        // 顺延出来的号要能真的存进去（这才是「用户点保存能成功」的实证）
+        let mut r = procurement::PurchaseReq {
+            id: 0,
+            no: no.clone(),
+            period: p,
+            date: NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+            item_code: "140301".into(),
+            item_name: "原料".into(),
+            qty: fincore::Money::parse_or_zero("10"),
+            status: "draft".into(),
+            requester: "张三".into(),
+            memo: String::new(),
+        };
+        assert!(
+            procurement::pr_save(&db, &mut r).is_ok(),
+            "跳号取到的号必须能落库"
+        );
+        assert_eq!(
+            procurement::pr_next_no(&db, p).unwrap(),
+            format!("{prefix}-005")
+        );
+    }
+
+    /// 顺延不能只跳一格：中间被占满时要继续往后找。
+    ///
+    /// 场景是「批量删 + 批量补录」：001..010 删掉 003..010（COUNT=2），
+    /// 老实现发 003（空位，碰巧对），但补上 003 之后老实现会一直发 003 撞号。
+    /// 新实现每次都从真·最大号出发逐个验空。
+    #[test]
+    fn next_no_walks_past_a_run_of_occupied_numbers() {
+        let db = mem();
+        let p = fincore::Period::new(2026, 1).unwrap();
+        let prefix = format!("BJ{:04}{:02}", 2026, 1);
+        for n in 1..=10 {
+            db.conn()
+                .execute(
+                    "INSERT INTO quotation(no,period,date,item_code) VALUES(?1,?2,?3,'140501')",
+                    rusqlite::params![format!("{prefix}-{n:03}"), p.ymm(), "2026-01-05"],
+                )
+                .unwrap();
+        }
+        for n in 3..=10 {
+            db.conn()
+                .execute(
+                    "DELETE FROM quotation WHERE no=?1",
+                    rusqlite::params![format!("{prefix}-{n:03}")],
+                )
+                .unwrap();
+        }
+        // 只剩 001/002，003..010 是真空位 → 下一个是 003
+        assert_eq!(sales::quo_next_no(&db, p).unwrap(), format!("{prefix}-003"));
+        // 把 003 补上，下一条必须跳到 004（不能撞）
+        db.conn()
+            .execute(
+                "INSERT INTO quotation(no,period,date,item_code) VALUES(?1,?2,?3,'140501')",
+                rusqlite::params![format!("{prefix}-003"), p.ymm(), "2026-01-05"],
+            )
+            .unwrap();
+        assert_eq!(sales::quo_next_no(&db, p).unwrap(), format!("{prefix}-004"));
+    }
+
+    /// 范围查询取号必须与原 `MAX(CAST(SUBSTR(...)))` 语义完全一致。
+    ///
+    /// 改写取号是为了吃索引（LIKE 全表扫 → 范围扫），但**语义不能变**：
+    /// 前缀不匹配的不算、后缀非数字的忽略、跨期间互不干扰。
+    /// 这几条只要有一样漂了，用户就会看到号从头开始或者跳一大截。
+    #[test]
+    fn next_seq_by_prefix_matches_max_semantics() {
+        let db = mem();
+        let conn = db.conn();
+        // 空表 → 1
+        assert_eq!(
+            next_seq_by_prefix(conn, "asset_count", "ZCPD202601", 11, None).unwrap(),
+            1
+        );
+        // 三个正常号
+        for n in [1, 2, 7] {
+            conn.execute(
+                "INSERT INTO asset_count(no,period,date) VALUES(?1,202601,'2026-01-05')",
+                rusqlite::params![format!("ZCPD202601-{n:03}")],
+            )
+            .unwrap();
+        }
+        // 后缀非数字：原 MAX 版忽略它（CAST 成 0），这里也必须忽略
+        conn.execute(
+            "INSERT INTO asset_count(no,period,date) VALUES('ZCPD202601-ABC',202601,'2026-01-05')",
+            [],
+        )
+        .unwrap();
+        // 别的前缀：不能串进来
+        conn.execute(
+            "INSERT INTO asset_count(no,period,date) VALUES('ZCPD202699-042',202699,'2026-12-05')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            next_seq_by_prefix(conn, "asset_count", "ZCPD202601", 11, None).unwrap(),
+            8,
+            "应取本前缀下最大数字 007 再 +1；'ZCPD202601-ABC' 与 ZCPD202699 段都不能算进来"
+        );
+        // 期间过滤：前缀相同但期间不匹配的行必须被排除。
+        // 若取号漏了期间条件，就会看到 202601 那条的 005，多跳一格。
+        conn.execute(
+            "INSERT INTO asset_count(no,period,date) VALUES('ZCPD202602-005',202601,'2026-01-05')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO asset_count(no,period,date) VALUES('ZCPD202602-003',202602,'2026-02-05')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            next_seq_by_prefix(conn, "asset_count", "ZCPD202602", 11, Some(202602)).unwrap(),
+            4,
+            "限定 202602 期间时只该看到 -003；-005 那条期间是 202601，不能算"
+        );
+        assert_eq!(
+            next_seq_by_prefix(conn, "asset_count", "ZCPD202602", 11, None).unwrap(),
+            6,
+            "不限定期间时两条都算，取 -005 再 +1"
+        );
+    }
+
+    /// 撞号顺延的兜底分支：候选号被占时必须往后找，不能直接发出去。
+    ///
+    /// 触发路径是「取最大号时被期间过滤挡住、但单号唯一性跨期间」：
+    /// 202602 期间最大号是 003，算出候选 004；可 004 这个号已被一条
+    /// **期间写成 202601** 的行占着（导入历史数据时期间填错就会这样）。
+    /// 若不验空，直接把 004 发出去，落库时撞 UNIQUE —— 又回到「保存失败」。
+    ///
+    /// 生产调用点目前都传 `period=None`（前缀里已含年月，天然按期间隔离），
+    /// 所以这条分支是**兜底**：防脏数据，也防将来真有按期间取号的调用方。
+    #[test]
+    fn next_no_by_prefix_skips_candidate_taken_in_another_period() {
+        let db = mem();
+        let conn = db.conn();
+        let prefix = "ZCPD202602";
+        for (no, period) in [
+            ("ZCPD202602-001", 202602),
+            ("ZCPD202602-002", 202602),
+            ("ZCPD202602-003", 202602),
+            // 脏数据：号是 202602 段的，期间却填成 202601
+            ("ZCPD202602-004", 202601),
+        ] {
+            conn.execute(
+                "INSERT INTO asset_count(no,period,date) VALUES(?1,?2,'2026-02-05')",
+                rusqlite::params![no, period],
+            )
+            .unwrap();
+        }
+        // 限定 202602：MAX 只看到 003 → 候选 004，但 004 已被占 → 必须顺延到 005
+        let no = next_no_by_prefix(conn, "asset_count", "no", prefix, 11, Some(202602), |n| {
+            format!("{prefix}-{n:03}")
+        })
+        .unwrap();
+        assert_eq!(
+            no, "ZCPD202602-005",
+            "候选号被别的期间占着时必须顺延，不能撞号"
+        );
+        // 不限定期间时 MAX 已看到 004，直接给 005，同样是 005
+        let no = next_no_by_prefix(conn, "asset_count", "no", prefix, 11, None, |n| {
+            format!("{prefix}-{n:03}")
+        })
+        .unwrap();
+        assert_eq!(no, "ZCPD202602-005");
     }
 
     #[test]

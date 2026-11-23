@@ -2523,7 +2523,7 @@ const MUT = [
   {
     name: "158 取号后缀解析漏掉（max 恒为 0，每次都从 0001 开始）",
     file: "crates/findb/src/lib.rs",
-    from: "    Ok(max + 1)",
+    from: "    Ok(max.unwrap_or(0) + 1)",
     to: "    Ok(1)",
     cmd: ["test", "-p", "findb", "--lib", "order_next_no_uses_index_friendly_range"],
   },
@@ -2561,6 +2561,27 @@ const MUT = [
     from: "            earliest = Some(earliest.map_or(due, |e| e.min(due)));",
     to: "            earliest = Some(earliest.map_or(due, |e| e.max(due)));",
     cmd: ["test", "-p", "findb", "--lib", "due_soon_summary_counts_only_window_and_tracks_earliest"],
+  },
+  {
+    name: "164 取号不再撞号顺延（跳过验空，删单后重发已存在的号）",
+    file: "crates/findb/src/lib.rs",
+    from: "        if taken == 0 {\n            return Ok(cand);\n        }",
+    to: "        return Ok(cand);\n        #[allow(unreachable_code)]\n        if taken == 0 {}",
+    cmd: ["test", "-p", "findb", "--lib", "next_no_by_prefix_skips_candidate_taken_in_another_period"],
+  },
+  {
+    name: "165 请购单取号退回 COUNT 语义（删单后重发已存在的号）",
+    file: "crates/findb/src/procurement.rs",
+    from: "    crate::next_no_by_prefix(db.conn(), \"purchase_req\", \"no\", &prefix, sep, None, |n| {\n        format!(\"{prefix}-{n:03}\")\n    })",
+    to: "    let _ = sep;\n    let n: i64 = db.conn().query_row(\n        \"SELECT COUNT(*) FROM purchase_req WHERE no LIKE ?1\",\n        rusqlite::params![format!(\"{prefix}%\")],\n        |r| r.get(0),\n    )?;\n    Ok(format!(\"{prefix}-{:03}\", n + 1))",
+    cmd: ["test", "-p", "findb", "--lib", "next_no_skips_gaps_left_by_deleted_docs"],
+  },
+  {
+    name: "166 取号后缀起点错一位（SUBSTR 从 0 基算，序号全被截成脏值）",
+    file: "crates/findb/src/lib.rs",
+    from: "        Box::new(suffix_start as i64 + 1), // SQLite 的 SUBSTR 从 1 开始",
+    to: "        Box::new(suffix_start as i64),",
+    cmd: ["test", "-p", "findb", "--lib", "next_seq_by_prefix_matches_max_semantics"],
   },
 
 ];

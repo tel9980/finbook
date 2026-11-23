@@ -386,22 +386,11 @@ pub fn move_delete(db: &Db, id: i64) -> DbResult<()> {
 /// 单号自增：GJ-G-202601-001
 fn next_no(tx: &rusqlite::Transaction, kind: &str, period: Period) -> DbResult<String> {
     let prefix = format!("{}-{}", no_prefix(kind), period.ymm());
-    let n: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM tool_move WHERE no LIKE ?1 || '-%'",
-        [&prefix],
-        |r| r.get(0),
-    )?;
-    let mut seq = n + 1;
-    loop {
-        let no = format!("{prefix}-{seq:03}");
-        let taken: Option<i64> = tx
-            .query_row("SELECT id FROM tool_move WHERE no=?1", [&no], |r| r.get(0))
-            .optional()?;
-        if taken.is_none() {
-            return Ok(no);
-        }
-        seq += 1;
-    }
+    // 索引友好取号 + 撞号顺延（原 `COUNT(*) ... LIKE` 每次全表扫，删单后还会重发已存在的号）。
+    let sep = prefix.len() + 1;
+    crate::next_no_by_prefix(tx, "tool_move", "no", &prefix, sep, None, |n| {
+        format!("{prefix}-{n:03}")
+    })
 }
 
 // ============================ 结存 ============================

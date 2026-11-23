@@ -1070,12 +1070,11 @@ pub struct AssetCount {
 
 pub fn ac_next_no(db: &Db, period: Period) -> DbResult<String> {
     let prefix = format!("ZCPD{:04}{:02}", period.year(), period.month());
-    let n: i64 = db.conn().query_row(
-        "SELECT COUNT(*) FROM asset_count WHERE no LIKE ?1",
-        rusqlite::params![format!("{prefix}%")],
-        |r| r.get(0),
-    )?;
-    Ok(format!("{prefix}-{:03}", n + 1))
+    // 索引友好取号 + 撞号顺延（删单后 COUNT 变小会重发已存在的号 → UNIQUE 报错）
+    let sep = prefix.len() + 1;
+    crate::next_no_by_prefix(db.conn(), "asset_count", "no", &prefix, sep, None, |n| {
+        format!("{prefix}-{n:03}")
+    })
 }
 
 pub fn ac_save(db: &Db, c: &mut AssetCount) -> DbResult<i64> {

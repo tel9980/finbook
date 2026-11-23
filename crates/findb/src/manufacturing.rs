@@ -1160,23 +1160,17 @@ pub fn prod_qc_required(db: &Db, item_code: &str) -> DbResult<bool> {
 }
 
 fn prod_qc_next_no(db: &Db, period: Period) -> DbResult<String> {
-    let mut n: i64 = db.conn().query_row(
-        "SELECT COUNT(*) FROM prod_qc WHERE no LIKE ?1",
-        rusqlite::params![format!("QC{}%", period.ymm())],
-        |r| r.get(0),
-    )?;
-    loop {
-        n += 1;
-        let no = format!("QC{}{:03}", period.ymm(), n);
-        let exists: i64 = db.conn().query_row(
-            "SELECT COUNT(*) FROM prod_qc WHERE no=?1",
-            rusqlite::params![no],
-            |r| r.get(0),
-        )?;
-        if exists == 0 {
-            return Ok(no);
-        }
-    }
+    // 索引友好取号 + 撞号顺延（原 `COUNT(*) ... LIKE` 每次全表扫）
+    let prefix = format!("QC{}", period.ymm());
+    crate::next_no_by_prefix(
+        db.conn(),
+        "prod_qc",
+        "no",
+        &prefix,
+        prefix.len(),
+        None,
+        |n| format!("{prefix}{n:03}"),
+    )
 }
 
 /// 录入工序检验：仅「生产中」订单；不合格必须选处置；**报废同步扣减计划量**

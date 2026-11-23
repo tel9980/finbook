@@ -59,12 +59,12 @@ pub fn pr_next_no(db: &Db, period: Period) -> DbResult<String> {
         period.year(),
         period.month()
     );
-    let n: i64 = db.conn().query_row(
-        "SELECT COUNT(*) FROM purchase_req WHERE no LIKE ?1",
-        rusqlite::params![format!("{prefix}%")],
-        |r| r.get(0),
-    )?;
-    Ok(format!("{prefix}-{:03}", n + 1))
+    // 索引友好取号 + 撞号顺延：删单后 COUNT 变小会把已存在的号再发一次，
+    // 撞 `no UNIQUE` 时报「保存失败」而不是自动跳号（见 next_no_by_prefix）。
+    let sep = prefix.len() + 1;
+    crate::next_no_by_prefix(db.conn(), "purchase_req", "no", &prefix, sep, None, |n| {
+        format!("{prefix}-{n:03}")
+    })
 }
 
 pub fn pr_save(db: &Db, r: &mut PurchaseReq) -> DbResult<i64> {

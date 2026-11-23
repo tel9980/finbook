@@ -466,26 +466,11 @@ fn map_cost(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReworkCost> {
 fn next_no(tx: &rusqlite::Transaction<'_>, period: Period) -> DbResult<String> {
     // 用 ymm（202601）而不是 label()（2026年01期）：单号要能被 LIKE 前缀稳定匹配
     let prefix = format!("RG-{}", period.ymm());
-    let n: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM rework_order WHERE no LIKE ?1 || '-%'",
-        rusqlite::params![prefix],
-        |r| r.get(0),
-    )?;
-    let mut seq = n + 1;
-    loop {
-        let no = format!("{prefix}-{seq:03}");
-        let hit: Option<i64> = tx
-            .query_row(
-                "SELECT id FROM rework_order WHERE no=?1",
-                rusqlite::params![no],
-                |r| r.get(0),
-            )
-            .optional()?;
-        if hit.is_none() {
-            return Ok(no);
-        }
-        seq += 1;
-    }
+    // 索引友好取号 + 撞号顺延（原 `COUNT(*) ... LIKE` 每次全表扫，删单后还会重发已存在的号）。
+    let sep = prefix.len() + 1;
+    crate::next_no_by_prefix(tx, "rework_order", "no", &prefix, sep, None, |n| {
+        format!("{prefix}-{n:03}")
+    })
 }
 
 /// 期间已结账就不许再动（与工资表那道闸同一个理由：凭证已出，改了就与账不符）

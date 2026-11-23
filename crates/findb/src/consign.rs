@@ -459,22 +459,11 @@ fn next_no(tx: &rusqlite::Transaction<'_>, kind: &str, period: Period) -> DbResu
         _ => "SH",
     };
     let head = format!("{prefix}-{}", period.ymm());
-    let mut seq: i64 = tx.query_row(
-        "SELECT COUNT(*) FROM consign_doc WHERE no LIKE ?1 || '-%'",
-        [&head],
-        |r| r.get(0),
-    )?;
-    loop {
-        seq += 1;
-        let no = format!("{head}-{seq:03}");
-        let exists: i64 =
-            tx.query_row("SELECT COUNT(*) FROM consign_doc WHERE no=?1", [&no], |r| {
-                r.get(0)
-            })?;
-        if exists == 0 {
-            return Ok(no);
-        }
-    }
+    // 索引友好取号 + 撞号顺延（原 `COUNT(*) ... LIKE` 每次全表扫）
+    let sep = head.len() + 1;
+    crate::next_no_by_prefix(tx, "consign_doc", "no", &head, sep, None, |n| {
+        format!("{head}-{n:03}")
+    })
 }
 
 /// 一行「带单据头信息」的原始行，用于在 Rust 侧聚合

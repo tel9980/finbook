@@ -95,12 +95,11 @@ const C_COLS: &str = "id,no,period,date,warehouse,status,prepared_by,memo,create
 
 pub fn sc_next_no(db: &Db, period: Period) -> DbResult<String> {
     let prefix = format!("PD{:04}{:02}", period.year(), period.month());
-    let n: i64 = db.conn().query_row(
-        "SELECT COUNT(*) FROM stock_count WHERE no LIKE ?1",
-        rusqlite::params![format!("{prefix}%")],
-        |r| r.get(0),
-    )?;
-    Ok(format!("{prefix}-{:03}", n + 1))
+    // 索引友好取号 + 撞号顺延（删单后 COUNT 变小会重发已存在的号 → UNIQUE 报错）
+    let sep = prefix.len() + 1;
+    crate::next_no_by_prefix(db.conn(), "stock_count", "no", &prefix, sep, None, |n| {
+        format!("{prefix}-{n:03}")
+    })
 }
 
 pub fn sc_save(db: &Db, c: &mut StockCount) -> DbResult<i64> {
