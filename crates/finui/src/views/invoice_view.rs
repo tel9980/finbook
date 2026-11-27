@@ -403,6 +403,7 @@ impl InvoiceView {
             attach_id: 0,
             created_by: String::new(),
             created_at: String::new(),
+            parse: Default::default(),
             updated_at: String::new(),
         };
         if inv.number.is_empty() {

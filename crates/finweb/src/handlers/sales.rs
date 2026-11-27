@@ -115,6 +115,99 @@ pub(super) async fn create_invoice(
     Ok(Json(json!({ "id": id })))
 }
 
+/// 发票识别：上传一个文件，返回一张待确认的发票草稿（**不落库**）。
+///
+/// 为什么"解析"和"保存"分成两个接口：识别结果必须让人看一眼再入账。
+/// 自动入库的话，一张识别错的票会直接进台账、参与认证与抵扣计算，
+/// 事后没人知道错在哪一步。这里只给草稿，前端填好用户点保存才 POST /api/invoices。
+///
+/// 解析本身是纯 CPU 活（XML/PDF/图片解码），放 `spawn_blocking`，
+/// 不占 tokio 的异步工作线程 —— 与 `import_analyze` 同一套理由。
+pub(super) async fn invoice_parse(
+    State(_state): State<Arc<WebState>>,
+    user: CurrentUser,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    user.require(Perm::VoucherNew)?;
+    let company = user.company.clone();
+
+    let mut filename = String::new();
+    let mut data: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::bad_request(format!("上传解析失败：{e}")))?
+    {
+        if field.name() == Some("file") {
+            filename = field.file_name().unwrap_or("").to_string();
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::bad_request(format!("读取上传内容失败：{e}")))?;
+            data = Some(bytes.to_vec());
+            break;
+        }
+    }
+    let data = data.ok_or_else(|| AppError::bad_request("缺少文件字段 file"))?;
+    if data.is_empty() {
+        return Err(AppError::bad_request("上传文件为空"));
+    }
+    if data.len() > findb::attach::MAX_FILE_SIZE {
+        return Err(AppError::bad_request("文件超过 10MB 上限"));
+    }
+    if !findb::invoice_import::is_supported(&filename) {
+        return Err(AppError::bad_request(
+            "不支持的文件类型：请上传 PDF / XML / JSON / 图片（png/jpg/bmp/gif）或文本文件",
+        ));
+    }
+
+    let parsed = tokio::task::spawn_blocking(move || {
+        findb::invoice_import::parse(&filename, &data, &company)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("发票识别任务失败：{e}")))??;
+
+    // 顺手查一下同号发票是否已登记：让用户在选择"保存"前就知道会撞号。
+    let duplicate =
+        findb::invoices::find_by_number(&user.db, &parsed.invoice.kind, &parsed.invoice.number)?
+            .map(|e| {
+                json!({
+                    "id": e.id,
+                    "number": e.number,
+                    "date": e.date,
+                    "amount_tax": e.amount_tax.fmt_money(),
+                    "seller": e.seller,
+                })
+            });
+
+    let inv = &parsed.invoice;
+    Ok(Json(json!({
+        "draft": {
+            "kind": inv.kind,
+            "code": inv.code,
+            "number": inv.number,
+            "date": inv.date,
+            "buyer": inv.buyer,
+            "seller": inv.seller,
+            "amount_tax": inv.amount_tax.fmt_money(),
+            "amount": inv.amount.fmt_money(),
+            "tax": inv.tax.fmt_money(),
+            "tax_rate": inv.tax_rate,
+            "memo": inv.memo,
+            "parse_channel": parsed.channel,
+            "raw_text": inv.parse.raw_text,
+            "engine": parsed.engine,
+            "confidence": parsed.confidence,
+            "needs_review": parsed.needs_review,
+            "buyer_tax_no": inv.parse.buyer_tax_no,
+            "seller_tax_no": inv.parse.seller_tax_no,
+            "item_summary": inv.parse.item_summary,
+        },
+        "warnings": parsed.warnings,
+        "duplicate": duplicate,
+    })))
+}
+
 pub(super) async fn invoice_set_status(
     State(_state): State<Arc<WebState>>,
     user: CurrentUser,
@@ -1292,6 +1385,11 @@ pub(super) async fn update_invoice(
     inv.attach_id = existing.attach_id;
     inv.created_by = existing.created_by.clone();
     inv.created_at = existing.created_at.clone();
+    // 识别留痕属于「这张票打哪来的」的元数据，编辑表单不填它 —— 表单里空着
+    // 就用库里已有的，避免用户改一下摘要就把「识别通道/原文」洗掉了。
+    if inv.parse.channel.is_empty() {
+        inv.parse = existing.parse.clone();
+    }
     if inv.status != existing.status {
         // 状态变更走专用接口（带状态机校验），此处不接受表单覆盖
         inv.status = existing.status.clone();

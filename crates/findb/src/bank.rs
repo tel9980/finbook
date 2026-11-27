@@ -295,6 +295,11 @@ pub struct Statement {
     pub entry_id: Option<i64>,
     pub matched_at: Option<String>,
     pub matched_by: Option<String>,
+    /// 行内容指纹（「科目|日期|摘要|结算号|借方|贷方」的 sha256）。
+    ///
+    /// 用途只有一个：重复导入同一份对账单（或两份月份重叠的回单）时识别出重复行，
+    /// 不重复登记。它不参与任何业务计算，也不随勾对状态变化。
+    pub statement_hash: String,
 }
 
 impl Statement {
@@ -346,11 +351,12 @@ fn map_stmt(r: &rusqlite::Row) -> rusqlite::Result<Statement> {
         entry_id: r.get(9)?,
         matched_at: r.get(10)?,
         matched_by: r.get(11)?,
+        statement_hash: r.get(12)?,
     })
 }
 
 const COLS: &str = "id,period,account_code,biz_date,summary,settle_no,debit,credit,balance,
-     entry_id,matched_at,matched_by";
+     entry_id,matched_at,matched_by,statement_hash";
 
 pub fn list(c: &impl crate::AsConn, period: Period, account: &str) -> DbResult<Vec<Statement>> {
     let mut st = c.conn_ref().prepare(&format!(
@@ -375,8 +381,8 @@ pub fn count(c: &impl crate::AsConn, period: Period, account: &str) -> DbResult<
 pub fn insert(c: &impl crate::AsConn, s: &Statement) -> DbResult<i64> {
     c.conn_ref().execute(
         "INSERT INTO bank_statement(period,account_code,biz_date,summary,settle_no,
-            debit,credit,balance,entry_id,matched_at,matched_by)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            debit,credit,balance,entry_id,matched_at,matched_by,statement_hash)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         rusqlite::params![
             s.period.ymm(),
             s.account_code,
@@ -388,7 +394,8 @@ pub fn insert(c: &impl crate::AsConn, s: &Statement) -> DbResult<i64> {
             crate::money_param(s.balance),
             s.entry_id,
             s.matched_at,
-            s.matched_by
+            s.matched_by,
+            s.statement_hash
         ],
     )?;
     Ok(c.conn_ref().last_insert_rowid())
@@ -822,6 +829,46 @@ pub fn import_template() -> fincore::batch::Template {
         ],
     }
 }
+
+/// 一行流水的内容指纹：「科目|日期|摘要|结算号|借方|贷方」的 sha256。
+///
+/// 刻意**不含**余额与勾对状态：余额会因后续流水变化，勾对状态会随人工操作变化，
+/// 两者都不该影响「这行是不是同一笔业务」的判断。也不含期间 —— 期间由查询条件
+/// 限定，同一份回单跨期重叠时仍应被认出是同一笔。
+fn stmt_hash(
+    account: &str,
+    date: NaiveDate,
+    summary: &str,
+    settle_no: &str,
+    debit: Money,
+    credit: Money,
+) -> String {
+    let payload = format!(
+        "{}|{}|{}|{}|{}|{}",
+        account,
+        date.format("%Y-%m-%d"),
+        summary.trim(),
+        settle_no.trim(),
+        debit.fmt_plain(),
+        credit.fmt_plain()
+    );
+    crate::sha256_hex(payload.as_bytes())
+}
+
+/// 读某科目某期间已存在的行指纹。旧账套（v58 之前导入的）指纹是空串，忽略不计。
+fn existing_hashes(db: &Db, period: Period, account: &str) -> DbResult<Vec<String>> {
+    let mut st = db.conn().prepare(
+        "SELECT statement_hash FROM bank_statement
+         WHERE period=?1 AND account_code=?2 AND statement_hash<>''",
+    )?;
+    let rows = st
+        .query_map(rusqlite::params![period.ymm(), account], |r| {
+            r.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 pub fn import_csv(
     db: &Db,
     period: Period,
@@ -832,6 +879,10 @@ pub fn import_csv(
     // 先把能解析的行全部解析出来，再一次事务写库：逐行自动提交的话，导入中途
     // 失败会留下半份对账单，重新导入同一文件就会重复。
     let mut rows: Vec<Statement> = Vec::new();
+    // 已存在的行指纹：把同一科目同一期间的历史流水先读进集合，导入时逐行比对。
+    // 这样「同一个月导两次」「两个月的回单有重叠日」都不会重复登记。
+    let mut seen: std::collections::HashSet<String> =
+        existing_hashes(db, period, account)?.into_iter().collect();
     for (i, raw) in text.lines().enumerate() {
         let line = raw.trim().trim_start_matches('\u{feff}');
         if line.is_empty() {
@@ -876,6 +927,12 @@ pub fn import_csv(
             continue;
         }
 
+        let statement_hash = stmt_hash(account, date, &summary, &settle_no, debit, credit);
+        if !seen.insert(statement_hash.clone()) {
+            warns.push(format!("第 {} 行：与已导入流水重复，已跳过", i + 1));
+            continue;
+        }
+
         rows.push(Statement {
             id: 0,
             period,
@@ -889,6 +946,7 @@ pub fn import_csv(
             entry_id: None,
             matched_at: None,
             matched_by: None,
+            statement_hash,
         });
     }
     let n = rows.len();
@@ -924,6 +982,7 @@ mod tests {
             entry_id: None,
             matched_at: None,
             matched_by: None,
+            statement_hash: String::new(),
         }
     }
 
@@ -1064,6 +1123,7 @@ mod tests {
             entry_id: None,
             matched_at: None,
             matched_by: None,
+            statement_hash: String::new(),
         }
     }
 
@@ -1145,6 +1205,40 @@ mod tests {
         assert_eq!(rec.diff(), Money::parse("100000").unwrap());
 
         let _ = vid;
+    }
+
+    /// 同一份对账单导两次：第二次必须整行为重复跳过，不能把余额翻倍。
+    ///
+    /// 这是「重复导入」最典型的现场：出纳第一次导完发现忘记勾对，又重新导一次；
+    /// 或者两个月的回单有重叠日期。以前没有内容指纹时，重复行会静默入库，
+    /// 期末余额对不上才反过来查，代价很大。
+    #[test]
+    fn import_same_file_twice_skips_duplicates() {
+        let db = tmpdb("dup");
+        let p = Period::new(2026, 1).unwrap();
+        let csv = "2026-01-06,收到货款,SN001,1000.00,0.00,101000.00\n\
+                   2026-01-20,支付手续费,SN002,0.00,15.00,100985.00\n";
+        let (n1, w1) = import_csv(&db, p, "100201", csv).unwrap();
+        assert_eq!(n1, 2, "{w1:?}");
+        assert_eq!(count(&db, p, "100201").unwrap(), 2);
+
+        // 第二次导入同一份：一行都不新增，两行都报重复。
+        let (n2, w2) = import_csv(&db, p, "100201", csv).unwrap();
+        assert_eq!(n2, 0, "重复导入不应新增行：{w2:?}");
+        assert!(w2.iter().all(|w| w.contains("重复")), "{w2:?}");
+        assert_eq!(count(&db, p, "100201").unwrap(), 2, "总数必须还是 2");
+    }
+
+    /// 内容不同但金额相同（摘要不同）不是重复；金额相同、摘要相同但结算号不同也不是重复。
+    #[test]
+    fn import_distinguishes_rows_by_content_not_amount() {
+        let db = tmpdb("dup2");
+        let p = Period::new(2026, 1).unwrap();
+        let csv = "2026-01-06,收到货款,SN001,1000.00,0.00,101000.00\n\
+                   2026-01-06,收到货款,SN009,1000.00,0.00,102000.00\n\
+                   2026-01-06,收到尾款,SN001,1000.00,0.00,103000.00\n";
+        let (n, w) = import_csv(&db, p, "100201", csv).unwrap();
+        assert_eq!(n, 3, "三行内容各不相同，都该入库：{w:?}");
     }
 
     #[test]

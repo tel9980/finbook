@@ -333,6 +333,24 @@ pub struct InvoiceReq {
     pub tax_rate: String,
     pub status: String,
     pub memo: String,
+    // —— 识别留痕（可选）。前端从「导入发票」拿到草稿后原样回传，
+    //    否则重新录入的发票会丢掉「这张票是识别来的、原文是什么」的线索。——
+    #[serde(default)]
+    pub parse_channel: String,
+    #[serde(default)]
+    pub raw_text: String,
+    #[serde(default)]
+    pub engine: String,
+    #[serde(default)]
+    pub confidence: String,
+    #[serde(default)]
+    pub needs_review: bool,
+    #[serde(default)]
+    pub buyer_tax_no: String,
+    #[serde(default)]
+    pub seller_tax_no: String,
+    #[serde(default)]
+    pub item_summary: String,
 }
 
 /// 发票状态流转请求

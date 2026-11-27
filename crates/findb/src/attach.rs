@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use fincore::FinError;
 use rusqlite::OptionalExtension;
-use sha2::{Digest, Sha256};
 
 use crate::{Db, DbResult};
 
@@ -297,10 +296,7 @@ pub fn stat(db: &Db) -> DbResult<AttachStat> {
 
 /// 附件校验用 SHA-256（基于 sha2 crate，硬件可加速）；只是防止误删，不是防篡改。
 fn sha256(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let result = hasher.finalize();
-    result.iter().map(|b| format!("{b:02x}")).collect()
+    crate::sha256_hex(data)
 }
 
 /// 导出到临时目录的路径（"打开附件"时先把内容落地，再交给系统默认程序）

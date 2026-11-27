@@ -3415,3 +3415,185 @@ async fn so_receivable_endpoint_lists_unsettled() {
     // v1.8.105：回款看板带上发货日（这里没记发货流水 → 空串，账龄退回订单日期）
     assert_eq!(rows[0]["ship_date"].as_str().unwrap(), "");
 }
+
+// ---------------------------------------------------------------------------
+// 发票识别（v1.8.127）
+// ---------------------------------------------------------------------------
+
+/// 造一个 multipart 上传请求（发票识别是文件上传，不是 JSON）。
+fn parse_upload(sid: &str, filename: &str, data: &[u8]) -> Request<Body> {
+    let boundary = "----finbookinvoiceparse";
+    let mut payload = Vec::new();
+    payload.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    payload.extend_from_slice(data);
+    payload.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    Request::builder()
+        .method("POST")
+        .uri("/api/invoices/parse")
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(header::COOKIE, sid)
+        .body(Body::from(payload))
+        .unwrap()
+}
+
+/// 上传 JSON 发票 → 返回草稿（不落库）。断言金额、通道、方向都对。
+#[tokio::test]
+async fn invoice_parse_json_returns_draft_without_saving() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    let body = r#"{"InvoiceNumber":"99887766","InvoiceCode":"044001900111",
+        "InvoiceDate":"2026-02-11","SellerName":"测试公司","BuyerName":"外部客户",
+        "TotalAmount":"226.00","TaxAmount":"26.00","AmountWithoutTax":"200.00",
+        "ItemName":"服务费"}"#;
+    let resp = handlers::router(state.clone())
+        .oneshot(parse_upload(&sid, "inv.json", body.as_bytes()))
+        .await
+        .unwrap();
+    let st = resp.status();
+    let b = body_string(resp).await;
+    assert_eq!(st, StatusCode::OK, "识别应成功：{b}");
+    let v: serde_json::Value = serde_json::from_str(&b).unwrap();
+    let d = &v["draft"];
+    assert_eq!(d["number"], "99887766", "{b}");
+    assert_eq!(d["amount_tax"], "226.00", "{b}");
+    assert_eq!(d["amount"], "200.00", "{b}");
+    assert_eq!(d["tax"], "26.00", "{b}");
+    assert_eq!(d["parse_channel"], "json", "{b}");
+    // 销售方是本企业（测试公司）→ 销项
+    assert_eq!(d["kind"], "out", "销售方=本企业应为销项：{b}");
+    assert_eq!(
+        v["duplicate"],
+        serde_json::Value::Null,
+        "首次导入不该撞号：{b}"
+    );
+
+    // 关键：解析只是草稿，库里必须还是 0 张
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/invoices", &sid))
+        .await
+        .unwrap();
+    let r: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    assert_eq!(
+        r["rows"].as_array().unwrap().len(),
+        0,
+        "识别不得自动入库：{r}"
+    );
+}
+
+/// 识别出的草稿带重复提示：先把同号发票录进去，再识别同一张，duplicate 必须回填。
+#[tokio::test]
+async fn invoice_parse_flags_duplicate_number() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    // 先手工建一张号 12345678 的进项票
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/invoices",
+            &sid,
+            serde_json::json!({
+                "id": 0, "kind": "in", "code": "044001900111", "number": "12345678",
+                "date": "2026-02-01", "buyer": "测试公司", "seller": "供应商甲",
+                "amount_tax": "113.00", "amount": "100.00", "tax": "13.00",
+                "tax_rate": "0.13", "status": "pending", "memo": ""
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = r#"{"invoice_no":"12345678","total_amount":"113.00","tax_amount":"13.00",
+        "seller_name":"供应商甲","buyer_name":"测试公司"}"#;
+    let resp = handlers::router(state.clone())
+        .oneshot(parse_upload(&sid, "dup.json", body.as_bytes()))
+        .await
+        .unwrap();
+    let st = resp.status();
+    let b = body_string(resp).await;
+    assert_eq!(st, StatusCode::OK, "识别应成功：{b}");
+    let v: serde_json::Value = serde_json::from_str(&b).unwrap();
+    assert_eq!(v["draft"]["kind"], "in", "{b}");
+    assert!(
+        !v["duplicate"].is_null(),
+        "同号已存在时必须回报 duplicate：{b}"
+    );
+    assert_eq!(v["duplicate"]["number"], "12345678", "{b}");
+}
+
+/// 抽不到发票号码的文件必须明确失败（没有号码的草稿进台账等于制造垃圾数据）。
+#[tokio::test]
+async fn invoice_parse_rejects_file_without_number() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    let body = br#"{"TotalAmount":"113.00","TaxAmount":"13.00"}"#;
+    let resp = handlers::router(state.clone())
+        .oneshot(parse_upload(&sid, "nonum.json", body))
+        .await
+        .unwrap();
+    let st = resp.status();
+    let b = body_string(resp).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "无号码应 400：{b}");
+    assert!(b.contains("发票号码"), "错误信息要点明缺什么：{b}");
+}
+
+/// 不支持的文件类型（如 docx）在进入解析前就被拦下。
+#[tokio::test]
+async fn invoice_parse_rejects_unsupported_type() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    let resp = handlers::router(state.clone())
+        .oneshot(parse_upload(&sid, "note.docx", b"whatever"))
+        .await
+        .unwrap();
+    let st = resp.status();
+    let b = body_string(resp).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "不支持类型应 400：{b}");
+    assert!(b.contains("不支持"), "应说明类型不支持：{b}");
+}
+
+/// 保存带识别留痕的发票：parse_* 字段要能存进去、读回来。
+#[tokio::test]
+async fn invoice_saves_parse_provenance() {
+    let (state, _bd, _dir) = test_state();
+    let sid = boss_in_b1(&state).await;
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_post(
+            "/api/invoices",
+            &sid,
+            serde_json::json!({
+                "id": 0, "kind": "in", "code": "044001900111", "number": "55667788",
+                "date": "2026-02-02", "buyer": "测试公司", "seller": "供应商乙",
+                "amount_tax": "113.00", "amount": "100.00", "tax": "13.00",
+                "tax_rate": "0.13", "status": "pending", "memo": "识别导入",
+                "parse_channel": "pdf", "engine": "pdf", "confidence": "1",
+                "needs_review": false, "raw_text": "价税合计 113.00",
+                "buyer_tax_no": "91110000TEST000001", "seller_tax_no": "91330000X",
+                "item_summary": "办公用品"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "带留痕保存应成功");
+
+    let resp = handlers::router(state.clone())
+        .oneshot(authed_get("/api/invoices", &sid))
+        .await
+        .unwrap();
+    let r: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+    let row = &r["rows"].as_array().unwrap()[0];
+    assert_eq!(row["parse_channel"], "pdf", "{r}");
+    assert_eq!(row["item_summary"], "办公用品", "{r}");
+    assert_eq!(row["seller_tax_no"], "91330000X", "{r}");
+}

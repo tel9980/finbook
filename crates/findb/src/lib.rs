@@ -31,6 +31,7 @@ pub mod fixture;
 pub mod funds;
 pub mod imports;
 pub mod inventory2;
+pub mod invoice_import;
 pub mod invoices;
 pub mod landedcost;
 pub mod manufacturing;
@@ -888,6 +889,21 @@ pub(crate) fn push_report_scope(
 #[inline]
 pub fn exact_param(m: fincore::Money) -> String {
     m.fmt_exact()
+}
+
+/// SHA-256 十六进制摘要（小写，64 字符）。
+///
+/// 附件去重与银行流水内容指纹共用这一份实现：两处都只需要「同一串字节得到同一串
+/// 文本」的稳定性，不用于任何安全用途（不防篡改、不做签名）。
+pub fn sha256_hex(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// LIKE 转义：把 `\`、`%`、`_` 逐个加 `\` 前缀，配合 `ESCAPE '\'` 使用。

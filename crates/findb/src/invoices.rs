@@ -2,11 +2,34 @@
 //!
 //! 记录发票代码、号码、日期、购销双方、金额/税额/税价合计与认证状态。
 //! 不校验真伪（需对接税局），仅做台账登记与状态流转。
+//!
+//! v59 起还记「这张票是怎么进账里的」：解析通道、原文、识别引擎、置信度、
+//! 是否需人工复核（`InvoiceParse`）。手工录入时这一组全是空/默认值，
+//! 所以它对既有调用方是纯附加，不改变任何原有语义。
 
 use fincore::{FinError, Money};
 use rusqlite::OptionalExtension;
 
 use crate::{read_money, Db, DbResult};
+
+/// 发票识别留痕（v59）。手工录入的发票这一组保持默认值。
+#[derive(Clone, Debug, Default)]
+pub struct InvoiceParse {
+    /// 解析通道：xml / json / pdf / text / qr / image / manual
+    pub channel: String,
+    /// 解析时的原文（已截断，仅作诊断与人工复核参考）
+    pub raw_text: String,
+    /// 实际生效的识别引擎：xml / json / pdf / qr / qr+ocr / none
+    pub engine: String,
+    /// 置信度，十进制字符串 0~1（按全库约定不用浮点存储）
+    pub confidence: String,
+    /// 置信度不足或缺交易对手 → 需人工复核
+    pub needs_review: bool,
+    pub buyer_tax_no: String,
+    pub seller_tax_no: String,
+    /// 货物/项目名称汇总
+    pub item_summary: String,
+}
 
 /// 发票记录
 #[derive(Clone, Debug)]
@@ -34,6 +57,8 @@ pub struct Invoice {
     pub created_by: String,
     pub created_at: String,
     pub updated_at: String,
+    /// 识别留痕（手工录入时默认值）
+    pub parse: InvoiceParse,
 }
 
 impl Invoice {
@@ -47,7 +72,8 @@ impl Invoice {
 }
 
 const COLS: &str = "id,kind,code,number,date,buyer,seller,amount_tax,amount,tax,tax_rate,\
-     status,memo,attach_id,created_by,created_at,updated_at";
+     status,memo,attach_id,created_by,created_at,updated_at,\
+     parse_channel,raw_text,engine,confidence,needs_review,buyer_tax_no,seller_tax_no,item_summary";
 
 fn map(r: &rusqlite::Row) -> rusqlite::Result<Invoice> {
     Ok(Invoice {
@@ -68,6 +94,16 @@ fn map(r: &rusqlite::Row) -> rusqlite::Result<Invoice> {
         created_by: r.get(14)?,
         created_at: r.get(15)?,
         updated_at: r.get(16)?,
+        parse: InvoiceParse {
+            channel: r.get(17)?,
+            raw_text: r.get(18)?,
+            engine: r.get(19)?,
+            confidence: r.get(20)?,
+            needs_review: r.get(21)?,
+            buyer_tax_no: r.get(22)?,
+            seller_tax_no: r.get(23)?,
+            item_summary: r.get(24)?,
+        },
     })
 }
 
@@ -152,8 +188,10 @@ pub fn insert(db: &Db, inv: &Invoice, who: &str) -> DbResult<i64> {
     let t = now();
     db.conn().execute(
         "INSERT INTO invoice(kind,code,number,date,buyer,seller,amount_tax,amount,tax,tax_rate,
-            status,memo,attach_id,created_by,created_at,updated_at)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+            status,memo,attach_id,created_by,created_at,updated_at,
+            parse_channel,raw_text,engine,confidence,needs_review,buyer_tax_no,seller_tax_no,item_summary)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,
+            ?17,?18,?19,?20,?21,?22,?23,?24)",
         rusqlite::params![
             inv.kind,
             inv.code,
@@ -175,6 +213,18 @@ pub fn insert(db: &Db, inv: &Invoice, who: &str) -> DbResult<i64> {
             who,
             t,
             t,
+            inv.parse.channel,
+            inv.parse.raw_text,
+            inv.parse.engine,
+            if inv.parse.confidence.is_empty() {
+                "0"
+            } else {
+                &inv.parse.confidence
+            },
+            inv.parse.needs_review as i64,
+            inv.parse.buyer_tax_no,
+            inv.parse.seller_tax_no,
+            inv.parse.item_summary,
         ],
     )?;
     let id = db.conn().last_insert_rowid();
@@ -185,6 +235,23 @@ pub fn insert(db: &Db, inv: &Invoice, who: &str) -> DbResult<i64> {
         &format!("#{id} {}{}", inv.kind, inv.number),
     )?;
     Ok(id)
+}
+
+/// 按发票号码 + 类型查一张发票（识别导入前的查重用）。
+///
+/// 号码不是唯一索引（历史上有跨年重号、也允许手填），所以这里返回**最新一条**
+/// 而不是要求唯一；导入流程据此判定「这张票是否已经在台账里」。
+pub fn find_by_number(db: &Db, kind: &str, number: &str) -> DbResult<Option<Invoice>> {
+    db.conn()
+        .query_row(
+            &format!(
+                "SELECT {COLS} FROM invoice WHERE kind=?1 AND number=?2 ORDER BY id DESC LIMIT 1"
+            ),
+            rusqlite::params![kind, number],
+            map,
+        )
+        .optional()
+        .map_err(Into::into)
 }
 
 /// 更新发票字段与状态
@@ -301,6 +368,7 @@ pub fn push_from_po(db: &Db, po_id: i64, who: &str) -> DbResult<i64> {
         created_by: who.to_string(),
         created_at: String::new(),
         updated_at: String::new(),
+        parse: InvoiceParse::default(),
     };
     let id = insert(db, &inv, who)?;
     crate::docflow::link_add(db, "po", po_id, "invoice", id, "采购订单下推发票")?;
@@ -333,6 +401,7 @@ pub fn push_from_so(db: &Db, so_id: i64, who: &str) -> DbResult<i64> {
         created_by: who.to_string(),
         created_at: String::new(),
         updated_at: String::new(),
+        parse: InvoiceParse::default(),
     };
     let id = insert(db, &inv, who)?;
     crate::docflow::link_add(db, "so", so_id, "invoice", id, "销售订单下推发票")?;
@@ -423,6 +492,7 @@ mod tests {
             created_by: "测试".to_string(),
             created_at: String::new(),
             updated_at: String::new(),
+            parse: InvoiceParse::default(),
         }
     }
 

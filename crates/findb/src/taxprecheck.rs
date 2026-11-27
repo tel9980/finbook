@@ -421,6 +421,7 @@ mod tests {
                 attach_id: 0,
                 created_by: "李会计".into(),
                 created_at: "2026-01-01 00:00:00".into(),
+                parse: Default::default(),
                 updated_at: "2026-01-01 00:00:00".into(),
             },
             "李会计",

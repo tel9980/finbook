@@ -1816,6 +1816,7 @@ mod tests {
                 attach_id: 0,
                 created_by: "t".into(),
                 created_at: String::new(),
+                parse: Default::default(),
                 updated_at: String::new(),
             };
             let id = crate::invoices::insert(&db, &inv, "t").unwrap();
@@ -1892,6 +1893,7 @@ mod tests {
                 attach_id: 0,
                 created_by: "t".into(),
                 created_at: String::new(),
+                parse: Default::default(),
                 updated_at: String::new(),
             };
             let id = crate::invoices::insert(&db, &inv, "t").unwrap();
@@ -1988,6 +1990,7 @@ mod tests {
             attach_id: 0,
             created_by: "t".into(),
             created_at: String::new(),
+            parse: Default::default(),
             updated_at: String::new(),
         };
         let iid = crate::invoices::insert(&db, &inv, "t").unwrap();
@@ -2067,6 +2070,7 @@ mod tests {
             attach_id: 0,
             created_by: "t".into(),
             created_at: String::new(),
+            parse: Default::default(),
             updated_at: String::new(),
         };
         let inv_id = crate::invoices::insert(&db, &inv, "t").unwrap();

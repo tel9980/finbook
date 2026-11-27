@@ -27,13 +27,15 @@ use crate::DbError;
 /// v34：凭证更正链（voucher.amends_id / amended_by / amend_reason）
 /// v35：收货分行（po_receipt.item_code / warehouse）
 /// v48：应收应付对账批次（arap_recon_batch / arap_recon_line）
+/// v59：发票识别留痕（invoice.parse_* / raw_text / needs_review）+ 银行流水内容指纹
+///     （bank_statement.statement_hash，重复导入同一段流水不再重复入账）
 ///
 /// 抬版本号不是形式主义：`init` 的早退条件是
 /// `version >= SCHEMA_VERSION && tables_complete`，而 `tables_complete`
 /// **只核对表名、不核对列**。给老表加列时 `CREATE TABLE IF NOT EXISTS` 不生效，
 /// 唯一出路就是让 `init` 走进迁移分支。漏了这一步：全新账套一切正常（DDL 里
 /// 已含新列），只有**升级上来的旧账套**会在第一次用到新列时报 no such column。
-pub const SCHEMA_VERSION: i64 = 58;
+pub const SCHEMA_VERSION: i64 = 59;
 
 /// 建表语句
 const DDL: &str = r#"
@@ -259,7 +261,11 @@ CREATE TABLE IF NOT EXISTS bank_statement (
     -- 勾对上的凭证分录 id。分录被重写/删除时自动置空，避免留下悬空勾对
     entry_id    INTEGER REFERENCES voucher_entry(id) ON DELETE SET NULL,
     matched_at  TEXT,
-    matched_by  TEXT
+    matched_by  TEXT,
+    -- v59：行内容指纹（sha256，取「科目|日期|摘要|结算号|借方|贷方」）。
+    -- 银行导出的流水常带重叠区间，同一段重复导入不应重复入账；比对指纹比
+    -- 逐字段比日期/摘要可靠（同一笔业务的摘要措辞常被银行微调）。
+    statement_hash TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_stmt_period ON bank_statement(period, account_code);
 CREATE INDEX IF NOT EXISTS idx_stmt_entry  ON bank_statement(entry_id);
@@ -548,6 +554,15 @@ CREATE TABLE IF NOT EXISTS invoice (
     status      TEXT NOT NULL DEFAULT 'pending', -- pending=待认证 / verified=已认证 / rejected=已作废
     memo        TEXT NOT NULL DEFAULT '',
     attach_id   INTEGER NOT NULL DEFAULT 0,      -- 关联凭证附件（可选）
+    -- 下列 8 列为 v59 发票识别留痕（手工录入时全为空/默认值）
+    parse_channel TEXT NOT NULL DEFAULT '',      -- xml/json/pdf/text/qr/image/manual
+    raw_text    TEXT NOT NULL DEFAULT '',        -- 解析时的原文（截断，仅诊断用）
+    engine      TEXT NOT NULL DEFAULT '',        -- 识别引擎：xml/json/pdf/qr/qr+ocr/none
+    confidence  TEXT NOT NULL DEFAULT '0',       -- 识别置信度 0~1（TEXT 存十进制，不用 REAL）
+    needs_review INTEGER NOT NULL DEFAULT 0,     -- 1=置信度不足或缺交易对手，需人工复核
+    buyer_tax_no  TEXT NOT NULL DEFAULT '',      -- 购买方纳税人识别号
+    seller_tax_no TEXT NOT NULL DEFAULT '',      -- 销售方纳税人识别号
+    item_summary  TEXT NOT NULL DEFAULT '',      -- 货物/项目名称汇总
     created_by  TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL DEFAULT '',
     updated_at  TEXT NOT NULL DEFAULT ''
@@ -2005,6 +2020,35 @@ const MIGRATE_V54: &[(&str, &str, &str)] = &[
     ("quotation", "rule_id", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
+/// v59：发票识别留痕 + 银行流水内容指纹。
+///
+/// 背景：电子发票（PDF / XML / 图片二维码）与银行流水（CSV）都从外部文件带进来，
+/// 以前只能靠人手誊一遍。补齐这两组列之后：
+/// - 发票知道「这条记录是解析来的还是手填的、原文是什么、识别引擎和置信度多少、
+///   要不要人工复核」，出问题时能回溯，不用怀疑账里凭空多了张票；
+/// - 银行流水有了内容指纹，重叠区间重复导入同一段流水不会重复入账（银行导出
+///   常常带前后几天重叠）。
+///
+/// 全部是纯加列，没有索引引用它们——所以 `MIGRATE_V59` 放 `migrate_generic` 里
+/// 照常补列即可，不需要在 `init` 里另建索引。
+///
+/// 幂等：列已存在就跳过（全新账套 DDL 已含这些列）。
+const MIGRATE_V59: &[(&str, &str, &str)] = &[
+    ("invoice", "parse_channel", "TEXT NOT NULL DEFAULT ''"),
+    ("invoice", "raw_text", "TEXT NOT NULL DEFAULT ''"),
+    ("invoice", "engine", "TEXT NOT NULL DEFAULT ''"),
+    ("invoice", "confidence", "TEXT NOT NULL DEFAULT '0'"),
+    ("invoice", "needs_review", "INTEGER NOT NULL DEFAULT 0"),
+    ("invoice", "buyer_tax_no", "TEXT NOT NULL DEFAULT ''"),
+    ("invoice", "seller_tax_no", "TEXT NOT NULL DEFAULT ''"),
+    ("invoice", "item_summary", "TEXT NOT NULL DEFAULT ''"),
+    (
+        "bank_statement",
+        "statement_hash",
+        "TEXT NOT NULL DEFAULT ''",
+    ),
+];
+
 const MIGRATE_V45: &[(&str, &str, &str)] = &[
     ("consign_doc", "so_id", "INTEGER NOT NULL DEFAULT 0"),
     ("consign_doc", "so_no", "TEXT NOT NULL DEFAULT ''"),
@@ -2563,6 +2607,8 @@ pub fn init(conn: &Connection) -> Result<(), DbError> {
             migrate_v57(conn)?;
             // v58：期初明细核销表 opening_settle（表由 DDL 建，这里只兜底旧账套）
             migrate_v58(conn)?;
+            // v59：发票识别留痕 + 银行流水内容指纹（纯加列，无索引引用）
+            migrate_generic(conn, MIGRATE_V59)?;
             // ↓↓↓ 引用 MIGRATE_V35 新增列的索引一律放这里 ↓↓↓
             //
             // 两条教训，都是生产事故级的：
@@ -2936,6 +2982,7 @@ mod tests {
             .chain(MIGRATE_V42.iter())
             .chain(MIGRATE_V44.iter())
             .chain(MIGRATE_V45.iter())
+            .chain(MIGRATE_V59.iter())
         {
             // DROP COLUMN 不允许还有索引指着该列，先摘掉相关索引
             for idx in indexes_of(&conn, table) {
@@ -2969,6 +3016,7 @@ mod tests {
             .chain(MIGRATE_V42.iter())
             .chain(MIGRATE_V44.iter())
             .chain(MIGRATE_V45.iter())
+            .chain(MIGRATE_V59.iter())
         {
             assert!(
                 column_exists(&conn, table, col).unwrap(),

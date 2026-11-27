@@ -196,6 +196,7 @@ fn t91_bank_reconcile_loop() {
             entry_id: None,
             matched_at: None,
             matched_by: None,
+            statement_hash: String::new(),
         },
     )
     .unwrap();

@@ -593,6 +593,7 @@ function renderInvoices(main, d) {
       </select>
       <button class="btn" id="inv-query">查询</button>
       <div class="spacer"></div>
+      ${can("voucher_new") ? `<button class="btn" id="inv-import">导入发票</button>` : ""}
       ${can("voucher_new") ? `<button class="btn primary" id="inv-new">新增发票</button>` : ""}
     </div>
     <div class="panel" style="padding:0;overflow:hidden">
@@ -629,6 +630,7 @@ function renderInvoices(main, d) {
     renderInvoices(main, d2);
   });
   if ($("#inv-new")) $("#inv-new").addEventListener("click", () => openInvoiceEditor(main, null));
+  if ($("#inv-import")) $("#inv-import").addEventListener("click", () => openInvoiceImport(main));
   $all("[data-inv-chain]", main).forEach((b) => b.addEventListener("click", () => openDocChain("invoice", parseInt(b.dataset.invChain, 10), "发票")));
   $all("[data-act]", main).forEach((b) => b.addEventListener("click", async () => {
     const id = parseInt(b.dataset.id, 10);
@@ -655,10 +657,85 @@ function renderInvoices(main, d) {
   }));
 }
 
-function openInvoiceEditor(main, inv) {
-  const isEdit = !!inv;
+// 识别草稿携带的解析留痕。放在模块级变量里而不是 DOM data-* 上：
+// raw_text 可能有几千字，塞进属性会撑坏 HTML，也可能被转义搞乱。
+let invoiceParseCarry = null;
+
+/// 导入发票：选文件 → 调 /invoices/parse → 把草稿交给编辑弹窗确认后才保存。
+///
+/// 刻意"不自动入账"：识别结果必须让人核一眼。识别错一张票直接进台账的话，
+/// 它会参与认证与抵扣计算，事后很难定位是哪张错的。所以这里只做「填好表单」，
+/// 用户点保存才真正 POST。
+function openInvoiceImport(main) {
+  invoiceParseCarry = null;
   const mask = modal(`
-    <h3>${isEdit ? "编辑发票" : "新增发票"}</h3>
+    <h3>导入发票</h3>
+    <div class="muted" style="margin-bottom:10px;line-height:1.6">
+      支持 PDF（电子发票原件）、XML / JSON（税务导出）、图片（二维码，png/jpg/bmp/gif）与文本文件。<br />
+      解析在本地完成，不会上传到任何第三方。识别结果只是草稿，需你确认后才会保存。
+    </div>
+    <div class="field"><label>选择文件</label><input type="file" id="inv-file" /></div>
+    <div class="foot">
+      <button class="btn ghost" id="inv-imp-close">取消</button>
+      <button class="btn primary" id="inv-imp-go">识别</button>
+    </div>
+  `, true);
+  $("#inv-imp-close").addEventListener("click", closeModal);
+  $("#inv-imp-go").addEventListener("click", async () => {
+    const f = $("#inv-file").files && $("#inv-file").files[0];
+    if (!f) { toast("请先选择文件", "err"); return; }
+    const fd = new FormData();
+    fd.append("file", f);
+    $("#inv-imp-go").disabled = true;
+    $("#inv-imp-go").textContent = "识别中…";
+    try {
+      const res = await api("/invoices/parse", { method: "POST", body: fd });
+      if (!res || !res.draft) throw new Error("识别失败");
+      closeModal();
+      const d = res.draft;
+      if (res.duplicate) {
+        toast(`注意：发票号 ${d.number} 已登记过（#${res.duplicate.id}），保存前请确认是否重复`, "err");
+      }
+      if ((res.warnings || []).length) {
+        toast("已识别，有 " + res.warnings.length + " 条提示，请核对：" + res.warnings[0], "warn");
+      } else {
+        toast("已识别，请核对后保存", "ok");
+      }
+      invoiceParseCarry = {
+        parse_channel: d.parse_channel,
+        raw_text: d.raw_text,
+        engine: d.engine,
+        confidence: d.confidence,
+        needs_review: d.needs_review,
+        buyer_tax_no: d.buyer_tax_no,
+        seller_tax_no: d.seller_tax_no,
+        item_summary: d.item_summary,
+      };
+      openInvoiceEditor(main, {
+        kind: d.kind,
+        code: d.code,
+        number: d.number,
+        date: d.date,
+        buyer: d.buyer,
+        seller: d.seller,
+        amount_tax: d.amount_tax,
+        amount: d.amount,
+        tax: d.tax,
+        tax_rate: d.tax_rate,
+        memo: d.memo,
+      }, /* fromImport */ true);
+    } catch (e) {
+      toast(e.message, "err");
+    } finally {
+      if ($("#inv-imp-go")) { $("#inv-imp-go").disabled = false; $("#inv-imp-go").textContent = "识别"; }
+    }
+  });
+}
+
+function openInvoiceEditor(main, inv, fromImport) {
+  const isEdit = !!inv && !!inv.id;
+  const mask = modal(`
+    <h3>${isEdit ? "编辑发票" : (fromImport ? "确认导入（请逐项核对）" : "新增发票")}</h3>
     <div class="field"><label>类型</label>
       <select id="inv-kind2">
         <option value="in" ${!isEdit || inv.kind === "in" ? "selected" : ""}>进项</option>
@@ -699,6 +776,8 @@ function openInvoiceEditor(main, inv) {
       status: isEdit ? inv.status : "pending",
       memo: $("#inv-memo").value.trim(),
     };
+    // 识别导入的草稿：把解析留痕一并带上，保存后仍能追到"这张票是怎么进来的"。
+    if (!isEdit && invoiceParseCarry) Object.assign(body, invoiceParseCarry);
     try {
       if (isEdit) {
         await api(`/invoices/${inv.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -707,6 +786,7 @@ function openInvoiceEditor(main, inv) {
         await api("/invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
         toast("已新增", "ok");
       }
+      invoiceParseCarry = null;
       closeModal();
       if (state.view === "invoices") renderInvoices(main, await loadInvoices());
     } catch (e) { toast(e.message, "err"); }

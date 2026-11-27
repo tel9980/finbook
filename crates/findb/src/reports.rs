@@ -1324,6 +1324,7 @@ mod tests {
             attach_id: 0,
             created_by: String::new(),
             created_at: String::new(),
+            parse: Default::default(),
             updated_at: String::new(),
         };
         invoices::insert(&db, &inv, "张三").unwrap();

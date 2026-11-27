@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/fincore", "crates/findb", "crates/finui", "crates/finbook", "crates/finweb"]
 
 [workspace.package]
-version = "1.8.126"
+version = "1.8.127"
 edition = "2021"
 license = "MIT"
 authors = ["FinBook"]
@@ -28,6 +28,23 @@ tower = "0.4"
 tower-http = { version = "0.5", features = ["fs", "trace", "catch-panic", "compression-gzip"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.8"
+# 发票识别（findb::invoice_import）
+#
+# quick-xml：电子发票 XML（含税务 UKey / 全电发票）解析。0.42 已是 edition 2024，
+# 与仓库既有 lock 里的 0.30/0.41 并存（各自被不同上游钉死版本，互不影响）。
+quick-xml = "0.42"
+# pdf-extract：PDF 文本层抽取。只吃「电子发票 PDF」这一种带文本层的文件；
+# 扫描件没有文本层，走二维码/OCR 通道，不在这里兜底。
+# 它依赖 lopdf 0.42（已修 RUSTSEC-2026-0187 的无界递归栈溢出）；仓库里
+# printpdf 仍带 lopdf 0.31，所以该 advisory 的 ignore 不能删。
+pdf-extract = "0.12"
+# rqrr：纯 Rust 二维码识别。故意关掉默认的 img feature —— 让库只接受灰度像素，
+# 由 findb 用 image 自己解码（这样 image 的编解码特性由我们把控，不让 rqrr 拉一整套默认格式）。
+rqrr = { version = "0.11", default-features = false }
+# image：只开增值税电子发票实际会遇到的四种位图（PNG / JPEG / BMP / GIF），
+# 不开 avif/webp/exr 等重格式，避免把一个多 MB 的解码器链拖进 12MB 的单文件 exe。
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif"] }
+
 # 开放 API 密钥哈希：快哈希（sha2）而非 argon2。
 # 密钥是 32 字节随机熵，没有低熵口令可「猜」；慢哈希的存在意义是拖慢暴力破解，
 # 用在这里只会让**每个 API 请求**都付 ~100ms，与外部系统对接的吞吐直接冲突。

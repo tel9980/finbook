@@ -342,6 +342,8 @@ pub fn router(state: Arc<WebState>) -> Router {
         .route("/api/cost/material-variance", get(get_cost_variance))
         .route("/api/invoices/from-po", post(invoice_from_po))
         .route("/api/invoices/from-so", post(invoice_from_so))
+        // 发票识别：上传 PDF/XML/JSON/图片，本地解析成草稿（不落库，前端确认后走 POST /api/invoices）
+        .route("/api/invoices/parse", post(invoice_parse))
         .route(
             "/api/invoices/:id",
             put(update_invoice).delete(delete_invoice),
@@ -1766,6 +1768,14 @@ fn invoice_json(inv: &findb::invoices::Invoice) -> serde_json::Value {
         "memo": inv.memo,
         "attach_id": inv.attach_id,
         "created_by": inv.created_by,
+        "parse_channel": inv.parse.channel,
+        "raw_text": inv.parse.raw_text,
+        "engine": inv.parse.engine,
+        "confidence": inv.parse.confidence,
+        "needs_review": inv.parse.needs_review,
+        "buyer_tax_no": inv.parse.buyer_tax_no,
+        "seller_tax_no": inv.parse.seller_tax_no,
+        "item_summary": inv.parse.item_summary,
     })
 }
 
@@ -1795,6 +1805,20 @@ fn invoice_from_req(r: &InvoiceReq) -> Result<findb::invoices::Invoice, AppError
         attach_id: 0,
         created_by: String::new(),
         created_at: String::new(),
+        parse: findb::invoices::InvoiceParse {
+            channel: r.parse_channel.clone(),
+            raw_text: r.raw_text.clone(),
+            engine: r.engine.clone(),
+            confidence: if r.confidence.is_empty() {
+                "0".to_string()
+            } else {
+                r.confidence.clone()
+            },
+            needs_review: r.needs_review,
+            buyer_tax_no: r.buyer_tax_no.clone(),
+            seller_tax_no: r.seller_tax_no.clone(),
+            item_summary: r.item_summary.clone(),
+        },
         updated_at: String::new(),
     })
 }

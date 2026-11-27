@@ -222,6 +222,7 @@ fn invoice(
         attach_id: 0,
         created_by: "李会计".into(),
         created_at: String::new(),
+        parse: Default::default(),
         updated_at: String::new(),
     }
 }

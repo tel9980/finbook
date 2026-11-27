@@ -625,6 +625,7 @@ mod tests {
                 attach_id: 0,
                 created_by: "测试".into(),
                 created_at: String::new(),
+                parse: Default::default(),
                 updated_at: String::new(),
             },
             "测试",

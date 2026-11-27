@@ -18,6 +18,13 @@ rusqlite = { version = "0.41", features = ["bundled", "chrono", "serde_json"] }
 calamine = "0.38"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 rust_xlsxwriter = { workspace = true }
+# 发票识别：XML / PDF 文本层 / 二维码通道
+quick-xml = { workspace = true }
+pdf-extract = { workspace = true }
+rqrr = { workspace = true }
+image = { workspace = true }
+# 纯文本 / PDF 文本层的字段抽取用正则（lock 里已有 1.13，不新增包）
+regex = "1"
 
 [dev-dependencies]
 criterion = "0.5"
